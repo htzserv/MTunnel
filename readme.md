@@ -20,4 +20,4 @@ A professional, high-performance tunneling and port-mapping solution designed fo
 To deploy the suite on your server, run the following one-liner:
 
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh) -o /usr/bin/mgre && chmod +x /usr/bin/mgre && mgre
+curl -fsSL https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh -o mgre && chmod +x mgre && ./mgre

@@ -20,4 +20,4 @@ A professional, high-performance tunneling and port-mapping solution designed fo
 To deploy the suite on your server, run the following one-liner:
 
 ```bash
-wget -qO mgre https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh && chmod +x mgre && ./mgre
+wget -4 -qO mgre https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh && chmod +x mgre && ./mgre

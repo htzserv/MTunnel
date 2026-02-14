@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# --- MGRE & MapRoxy v5.0.0 | MDesign Ultimate Unified Suite ---
-# Developed with MDesign Language Standards
+# --- MGRE & MapRoxy v5.1.0 | MDesign Ultimate (Wget Edition) ---
 
 # Colors
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;36m'; W='\033[1;37m'; NC='\033[0m'
@@ -12,18 +11,18 @@ CONF_FILE="/etc/mahan_tunnel.conf"
 SERVICE_FILE="/etc/systemd/system/mgre.service"
 STATE_FILE="/etc/mlocalip.state"
 H_CONF="/etc/haproxy/haproxy.cfg"
-# آدرس گیت‌هاب خودت را اینجا جایگزین کن
+# لینک گیت‌هاب خود را اینجا قرار دهید
 REPO_URL="https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/mgre.sh"
 
-# --- AUTO INSTALLER LOGIC ---
-if [[ "$(readlink -f "$0")" != "$INSTALL_PATH" ]]; then
-    echo -e "${Y}[*] Installing MGRE to System Path...${NC}"
-    cp "$0" "$INSTALL_PATH" 2>/dev/null || sudo cp "$0" "$INSTALL_PATH"
-    chmod +x "$INSTALL_PATH" 2>/dev/null || sudo chmod +x "$INSTALL_PATH"
-    echo -e "${G}[✓] Installed! You can now run it by typing 'mgre' from anywhere.${NC}"
+# --- FAST-BOOT & AUTO-INSTALL ---
+if [[ "$1" != "--apply" ]]; then
+    # بررسی سریع نصب در سیستم بدون ایجاد تاخیر
+    if [[ ! -x "$INSTALL_PATH" ]]; then
+        cp "$0" "$INSTALL_PATH" 2>/dev/null && chmod +x "$INSTALL_PATH" 2>/dev/null
+    fi
 fi
 
-# --- CORE MGRE LOGIC ---
+# --- CORE FUNCTIONS ---
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
@@ -99,10 +98,9 @@ show_mgre_monitor() {
     echo -e "${B}└──────┴──────────────────────┴──────────────────────┴──────────────┴──────────────┘${NC}"
 }
 
-# --- MAPROXY FUNCTIONS (UNTOUCHED LOGIC) ---
+# --- MAPROXY FUNCTIONS ---
 mproxy_fix_install() {
-    echo -e "${Y}[*] Optimizing & Installing HAProxy...${NC}"
-    sysctl -w fs.file-max=2000000 >/dev/null
+    echo -e "${Y}[*] Installing HAProxy via apt...${NC}"
     apt-get update && apt-get install -y haproxy socat
     mproxy_base_conf
     systemctl enable haproxy && systemctl restart haproxy
@@ -124,7 +122,7 @@ mproxy_smart_map() {
         target_ip=$(echo ${map_ips[$((RANDOM % ${#map_ips[@]}))]} | cut -d'.' -f1-3).2
         echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check" >> "$H_CONF"
     done
-    systemctl restart haproxy && echo -e "${G}Mapped.${NC}"
+    systemctl restart haproxy && echo -e "${G}Mapped.${NC}"; sleep 1
 }
 
 mproxy_main_menu() {
@@ -141,18 +139,18 @@ mproxy_main_menu() {
     done
 }
 
-# --- SYSTEM UPDATE LOGIC ---
+# --- UPDATE LOGIC (WGET) ---
 update_script() {
-    echo -e "${Y}[*] Checking for updates from GitHub...${NC}"
-    curl -fsSL "$REPO_URL" -o /tmp/mgre_update
+    echo -e "${Y}[*] Fetching update from GitHub via wget...${NC}"
+    wget -qO /tmp/mgre_new "$REPO_URL"
     if [ $? -eq 0 ]; then
-        mv /tmp/mgre_update "$INSTALL_PATH"
+        mv /tmp/mgre_new "$INSTALL_PATH"
         chmod +x "$INSTALL_PATH"
-        echo -e "${G}[✓] Successfully updated to the latest version! Restarting...${NC}"
-        sleep 2
+        echo -e "${G}[✓] Update applied successfully!${NC}"
+        sleep 1
         exec mgre
     else
-        echo -e "${R}[!] Update failed. Check connection or URL.${NC}"
+        echo -e "${R}[!] Update failed. Check URL/Connection.${NC}"
         sleep 2
     fi
 }
@@ -166,7 +164,7 @@ while true; do
     printf "  ${Y}[2]${NC} ${W}%-35s${NC}\n" "Generate Sync Virtual IPs"
     printf "  ${Y}[3]${NC} ${C}%-35s${NC} ${G}(MapRoxy)${NC}\n" "Manage Port Mappings"
     printf "  ${Y}[4]${NC} ${W}%-35s${NC}\n" "Live Advanced Monitoring"
-    printf "  ${Y}[5]${NC} ${B}%-35s${NC} ${Y}(Update)${NC}\n" "Update Script from GitHub"
+    printf "  ${Y}[5]${NC} ${B}%-35s${NC} ${Y}(Update)${NC}\n" "Update Script (Wget)"
     printf "  ${Y}[6]${NC} ${R}%-35s${NC}\n" "HARD UNINSTALL (Nuclear)"
     printf "  ${Y}[0]${NC} ${W}%-35s${NC}\n" "Exit"
     echo -ne "\n${B}Command >> ${NC}"
@@ -179,6 +177,7 @@ while true; do
            cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=MGRE MDesign Service
+After=network.target
 [Service]
 ExecStart=$INSTALL_PATH --apply
 Type=oneshot
@@ -187,20 +186,20 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 EOF
            systemctl daemon-reload && systemctl enable mgre.service >/dev/null 2>&1
-           echo -e "${G}Done.${NC}"; sleep 1 ;;
+           echo -e "${G}Tunnel Established.${NC}"; sleep 1 ;;
         2) source "$CONF_FILE"
-           echo -ne "${G}Count: ${NC}"; read n; echo -ne "${G}Key: ${NC}"; read k
+           echo -ne "${G}IP Count: ${NC}"; read n; echo -ne "${G}Sync Key: ${NC}"; read k
            echo -e "TYPE=$TYPE\nLOCAL_PUB=$LOCAL_PUB\nREMOTE_PUB=$REMOTE_PUB\nMAX_IPS=$n\nSYNC_KEY=$k" > "$CONF_FILE"
-           apply_tunnel; echo -e "${G}IPs Ready.${NC}"; sleep 1 ;;
+           apply_tunnel; echo -e "${G}$n Sync IPs Generated.${NC}"; sleep 1 ;;
         3) mproxy_main_menu ;;
-        4) while true; do draw_mgre_header; show_mgre_monitor; sleep 5; done ;;
+        4) while true; do draw_mgre_header; show_mgre_monitor; echo -e "${Y}Refreshing... CTRL+C to back.${NC}"; sleep 5; done ;;
         5) update_script ;;
-        6) echo -ne "${R}Are you sure? (y/n): ${NC}"; read confirm
+        6) echo -ne "${R}Nuclear Wipe? (y/n): ${NC}"; read confirm
            if [[ "$confirm" == "y" ]]; then
                systemctl stop mgre.service >/dev/null 2>&1; systemctl disable mgre.service >/dev/null 2>&1
                ip tunnel del greir >/dev/null 2>&1; ip tunnel del grekh >/dev/null 2>&1
                rm -f "$SERVICE_FILE" "$CONF_FILE" "$STATE_FILE" "$INSTALL_PATH"
-               echo -e "${G}System Cleaned.${NC}"; exit 0
+               echo -e "${G}System Purged.${NC}"; exit 0
            fi ;;
         0) exit 0 ;;
     esac

@@ -1,233 +1,207 @@
 #!/bin/bash
 
-# --- MGRE v3.0.1 | MDesign Tunneling Suite (Full Auto) ---
+# --- MGRE & MapRoxy v5.0.0 | MDesign Ultimate Unified Suite ---
+# Developed with MDesign Language Standards
 
+# Colors
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;36m'; W='\033[1;37m'; NC='\033[0m'
 
 # Paths
-
 INSTALL_PATH="/usr/bin/mgre"
-
 CONF_FILE="/etc/mahan_tunnel.conf"
-
 SERVICE_FILE="/etc/systemd/system/mgre.service"
+STATE_FILE="/etc/mlocalip.state"
+H_CONF="/etc/haproxy/haproxy.cfg"
+# آدرس گیت‌هاب خودت را اینجا جایگزین کن
+REPO_URL="https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main/mgre.sh"
 
-# --- 1. CORE LOGIC ---
+# --- AUTO INSTALLER LOGIC ---
+if [[ "$(readlink -f "$0")" != "$INSTALL_PATH" ]]; then
+    echo -e "${Y}[*] Installing MGRE to System Path...${NC}"
+    cp "$0" "$INSTALL_PATH" 2>/dev/null || sudo cp "$0" "$INSTALL_PATH"
+    chmod +x "$INSTALL_PATH" 2>/dev/null || sudo chmod +x "$INSTALL_PATH"
+    echo -e "${G}[✓] Installed! You can now run it by typing 'mgre' from anywhere.${NC}"
+fi
 
+# --- CORE MGRE LOGIC ---
 get_local_ip() {
-
-    local ip=$(hostname -I | awk '{print $1}')
-
+    local ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+')
+    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
-
 }
 
 apply_tunnel() {
-
-    [ ! -f "$CONF_FILE" ] && return
-
+    [ ! -s "$CONF_FILE" ] && return
     source "$CONF_FILE"
-
-    
-
     local t_name=$([ "$TYPE" == "1" ] && echo "greir" || echo "grekh")
-
     local local_tun=$([ "$TYPE" == "1" ] && echo "10.76.76.1" || echo "10.76.76.2")
-
     local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
-
     
-
-    # Clean up old interfaces
-
     ip tunnel del greir >/dev/null 2>&1; ip tunnel del grekh >/dev/null 2>&1
-
-    
-
-    # Establish Tunnel
+    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o greir -j TCPMSS --set-mss 1396 >/dev/null 2>&1
+    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o grekh -j TCPMSS --set-mss 1436 >/dev/null 2>&1
 
     ip tunnel add "$t_name" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255
-
     ip link set "$t_name" up
-
     ip addr add "$local_tun"/30 dev "$t_name"
-
     ip link set dev "$t_name" mtu "$mtu_val"
-
-    
-
-    # MSS Clamping (Prevention of fragmentation)
-
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$t_name" -j TCPMSS --set-mss $((mtu_val - 40)) >/dev/null 2>&1
-
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$t_name" -j TCPMSS --set-mss $((mtu_val - 40))
 
-}
-
-# --- 2. AUTO-INSTALL SERVICE ---
-
-install_service() {
-
-    if [[ ! -f "$SERVICE_FILE" ]]; then
-
-        cat <<EOF > "$SERVICE_FILE"
-
-[Unit]
-
-Description=MGRE MDesign Persistence
-
-After=network.target
-
-[Service]
-
-ExecStart=$INSTALL_PATH --apply
-
-Type=oneshot
-
-RemainAfterExit=yes
-
-[Install]
-
-WantedBy=multi-user.target
-
-EOF
-
-        systemctl daemon-reload
-
-        systemctl enable mgre.service >/dev/null 2>&1
-
+    if [[ "$MAX_IPS" -gt 0 ]]; then
+        echo "0" > "$STATE_FILE"
+        for ((i=1; i<=MAX_IPS; i++)); do
+            idx=$(cat "$STATE_FILE")
+            hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum)
+            o2=$(( (0x${hash:0:2} % 254) + 1 )); o3=$(( (0x${hash:2:2} % 254) + 1 ))
+            last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
+            nip="10.$o2.$o3.$last_octet"
+            ip addr add "$nip/30" dev "$t_name" label "$t_name:m" 2>/dev/null
+            echo $((idx + 1)) > "$STATE_FILE"
+        done
     fi
-
 }
 
-# Daemon Trigger for Boot
-
-if [[ "$1" == "--apply" ]]; then
-
-    apply_tunnel
-
-    exit 0
-
-fi
-
-# --- 3. UI LOGIC ---
-
-draw_header() {
-
+draw_mgre_header() {
     [ -f "$CONF_FILE" ] && source "$CONF_FILE"
-
     local s_ip=$(get_local_ip)
-
-    local active_if="None"; local remote_pub="N/A"; local status="${R}Offline${NC}"
-
-    
-
-    if ip link show greir >/dev/null 2>&1; then 
-
-        active_if="greir"; remote_pub=$(ip tunnel show greir | awk '{print $4}'); status="${G}Online${NC}"
-
-    elif ip link show grekh >/dev/null 2>&1; then 
-
-        active_if="grekh"; remote_pub=$(ip tunnel show grekh | awk '{print $4}'); status="${G}Online${NC}"
-
-    fi
-
+    local active_if="None"; local status="${R}Offline${NC}"
+    local s_key="${Y}${SYNC_KEY:-"N/A"}${NC}"
+    if ip link show greir >/dev/null 2>&1; then active_if="greir"; status="${G}Online${NC}";
+    elif ip link show grekh >/dev/null 2>&1; then active_if="grekh"; status="${G}Online${NC}"; fi
     clear
-
     echo -e "${B}┌────────────────────────────────────────────────────────────────────────────────────────┐${NC}"
-
-    echo -e "${B}│${NC} ${G}LOCAL IP:${NC} ${Y}${s_ip}${NC} | ${G}REMOTE:${NC} ${Y}${remote_pub}${NC} | ${G}IF:${NC} ${Y}${active_if}${NC} | ${G}STATUS:${NC} ${status} ${B}│${NC}"
-
+    echo -e "${B}│${NC} ${G}IP:${NC} ${Y}${s_ip}${NC} | ${G}IF:${NC} ${Y}${active_if}${NC} | ${G}KEY:${NC} ${s_key} | ${G}V-IPS:${NC} ${Y}${MAX_IPS:-0}${NC} | ${G}STATUS:${NC} ${status} ${B}│${NC}"
     echo -e "${B}└────────────────────────────────────────────────────────────────────────────────────────┘${NC}"
-
 }
 
-# Start Service Engine
+show_mgre_monitor() {
+    source "$CONF_FILE"
+    local t_name=$([ "$TYPE" == "1" ] && echo "greir" || echo "grekh")
+    echo -e "\n${C}MDesign Live Monitoring (CTRL+C to Stop)${NC}"
+    echo -e "${B}┌──────┬──────────────────────┬──────────────────────┬──────────────┬──────────────┐${NC}"
+    echo -e "${B}│${NC}${W}  ID  ${NC}${B}│${NC}${W}      LOCAL IP        ${NC}${B}│${NC}${W}      TARGET IP       ${NC}${B}│${NC}${W}     LAT      ${NC}${B}│${NC}${W}    STATUS    ${NC}${B}│${NC}"
+    echo -e "${B}├──────┼──────────────────────┼──────────────────────┼──────────────┼──────────────┤${NC}"
+    mapfile -t v_ips < <(ip -4 addr show dev "$t_name" label "$t_name:m" | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+    for ((idx=0; idx<${#v_ips[@]}; idx++)); do
+        lip="${v_ips[$idx]}"
+        base_ip=$(echo "$lip" | cut -d'.' -f1-3)
+        last=$(echo "$lip" | cut -d'.' -f4)
+        tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
+        ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            lat=$(echo "$ping_res" | grep -oP 'time=\K\S+')
+            p_lat="${Y}${lat}ms${NC}"; p_stat="${G}ONLINE${NC}"
+        else
+            p_lat="${R}---${NC}"; p_stat="${R}OFFLINE${NC}"
+        fi
+        printf "${B}│${NC} %-4s ${B}│${NC} %-20s ${B}│${NC} %-20s ${B}│${NC} %-23b ${B}│${NC} %-22b ${B}│${NC}\n" "$((idx+1))" "$lip" "$tip" "$p_lat" "$p_stat"
+    done
+    echo -e "${B}└──────┴──────────────────────┴──────────────────────┴──────────────┴──────────────┘${NC}"
+}
 
-install_service
+# --- MAPROXY FUNCTIONS (UNTOUCHED LOGIC) ---
+mproxy_fix_install() {
+    echo -e "${Y}[*] Optimizing & Installing HAProxy...${NC}"
+    sysctl -w fs.file-max=2000000 >/dev/null
+    apt-get update && apt-get install -y haproxy socat
+    mproxy_base_conf
+    systemctl enable haproxy && systemctl restart haproxy
+    echo -e "${G}[✓] MapRoxy Core Ready.${NC}"; sleep 2
+}
+
+mproxy_base_conf() {
+    mkdir -p /etc/haproxy
+    echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
+}
+
+mproxy_smart_map() {
+    local map_ips=($(ip -o -4 addr show greir 2>/dev/null | awk '{print $4}' | cut -d/ -f1))
+    if [ ${#map_ips[@]} -eq 0 ]; then
+        echo -e "${R}No active IPs found!${NC}"; return
+    fi
+    echo -ne "${G}Enter Local Ports (e.g. 80,443): ${NC}"; read raw_ports
+    for p in $(echo "$raw_ports" | tr ',' ' '); do
+        target_ip=$(echo ${map_ips[$((RANDOM % ${#map_ips[@]}))]} | cut -d'.' -f1-3).2
+        echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check" >> "$H_CONF"
+    done
+    systemctl restart haproxy && echo -e "${G}Mapped.${NC}"
+}
+
+mproxy_main_menu() {
+    while true; do
+        clear
+        echo -e "${C}MapRoxy v6.0 Management${NC}"
+        printf "  ${Y}[1]${NC} Install Core  |  ${Y}[2]${NC} Add Mapping  |  ${Y}[0]${NC} Back\n"
+        read -p ">> " mo
+        case $mo in
+            1) mproxy_fix_install ;;
+            2) mproxy_smart_map ;;
+            0) break ;;
+        esac
+    done
+}
+
+# --- SYSTEM UPDATE LOGIC ---
+update_script() {
+    echo -e "${Y}[*] Checking for updates from GitHub...${NC}"
+    curl -fsSL "$REPO_URL" -o /tmp/mgre_update
+    if [ $? -eq 0 ]; then
+        mv /tmp/mgre_update "$INSTALL_PATH"
+        chmod +x "$INSTALL_PATH"
+        echo -e "${G}[✓] Successfully updated to the latest version! Restarting...${NC}"
+        sleep 2
+        exec mgre
+    else
+        echo -e "${R}[!] Update failed. Check connection or URL.${NC}"
+        sleep 2
+    fi
+}
+
+# --- MAIN DASHBOARD ---
+if [[ "$1" == "--apply" ]]; then apply_tunnel; exit 0; fi
 
 while true; do
-
-    draw_header
-
-    printf "  ${Y}[1]${NC} ${W}%-35s${NC}\n" "Establish/Update Tunnel"
-
-    printf "  ${Y}[2]${NC} ${W}%-35s${NC}\n" "Detailed Latency Check"
-
-    printf "  ${Y}[3]${NC} ${W}%-35s${NC}\n" "System Status & Uptime"
-
-    printf "  ${Y}[4]${NC} ${W}%-35s${NC}\n" "Factory Reset & Delete"
-
-    printf "  ${Y}[5]${NC} ${W}%-35s${NC}\n" "Exit"
-
+    draw_mgre_header
+    printf "  ${Y}[1]${NC} ${W}%-35s${NC}\n" "Configure Standard Tunnel"
+    printf "  ${Y}[2]${NC} ${W}%-35s${NC}\n" "Generate Sync Virtual IPs"
+    printf "  ${Y}[3]${NC} ${C}%-35s${NC} ${G}(MapRoxy)${NC}\n" "Manage Port Mappings"
+    printf "  ${Y}[4]${NC} ${W}%-35s${NC}\n" "Live Advanced Monitoring"
+    printf "  ${Y}[5]${NC} ${B}%-35s${NC} ${Y}(Update)${NC}\n" "Update Script from GitHub"
+    printf "  ${Y}[6]${NC} ${R}%-35s${NC}\n" "HARD UNINSTALL (Nuclear)"
+    printf "  ${Y}[0]${NC} ${W}%-35s${NC}\n" "Exit"
     echo -ne "\n${B}Command >> ${NC}"
-
-    read -t 30 opt
-
-    [ $? -gt 128 ] && exit 0
-
+    read opt
     case $opt in
-
-        1)
-
-            echo -ne "${G}Mode [1:Iran | 2:Abroad]: ${NC}"; read s_type
-
-            local_ip=$(get_local_ip)
-
-            echo -ne "${G}Remote Public IP: ${NC}"; read remote_ip
-
-            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$remote_ip" > "$CONF_FILE"
-
-            apply_tunnel
-
-            systemctl start mgre.service 2>/dev/null
-
-            echo -e "${G}Tunnel deployed successfully!${NC}"; sleep 1 ;;
-
-        2)
-
-            active_if=$([ -d /sys/class/net/greir ] && echo "greir" || echo "grekh")
-
-            target_ip=$([[ "$active_if" == "greir" ]] && echo "10.76.76.2" || echo "10.76.76.1")
-
-            echo -e "\n${C}Testing Latency to Peer ($target_ip)...${NC}"
-
-            ping -c 4 "$target_ip" || echo -e "${R}Peer Unreachable!${NC}"
-
-            read -p "Press Enter to return..." ;;
-
-        3)
-
-            echo -e "\n${C}System Info:${NC}"
-
-            echo -e "${W}Uptime: ${Y}$(uptime -p)${NC}"
-
-            echo -e "${W}Load:   ${Y}$(awk '{print $1, $2, $3}' /proc/loadavg)${NC}"
-
-            read -p "Press Enter to return..." ;;
-
-        4)
-
-            echo -ne "${R}Are you sure you want to wipe everything? (y/n): ${NC}"; read confirm
-
-            if [[ "$confirm" == "y" ]]; then
-
-                ip tunnel del greir >/dev/null 2>&1; ip tunnel del grekh >/dev/null 2>&1
-
-                iptables -t mangle -F FORWARD >/dev/null 2>&1
-
-                rm -f "$CONF_FILE"
-
-                systemctl disable mgre.service >/dev/null 2>&1; rm -f "$SERVICE_FILE"
-
-                systemctl daemon-reload
-
-                echo -e "${R}All wiped.${NC}"; sleep 1
-
-            fi ;;
-
-        5) exit 0 ;;
-
+        1) echo -ne "${G}Mode [1:IR | 2:KH]: ${NC}"; read s_type
+           echo -ne "${G}Remote IP: ${NC}"; read r_ip
+           echo -e "TYPE=$s_type\nLOCAL_PUB=$(get_local_ip)\nREMOTE_PUB=$r_ip\nMAX_IPS=0" > "$CONF_FILE"
+           apply_tunnel
+           cat <<EOF > "$SERVICE_FILE"
+[Unit]
+Description=MGRE MDesign Service
+[Service]
+ExecStart=$INSTALL_PATH --apply
+Type=oneshot
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+           systemctl daemon-reload && systemctl enable mgre.service >/dev/null 2>&1
+           echo -e "${G}Done.${NC}"; sleep 1 ;;
+        2) source "$CONF_FILE"
+           echo -ne "${G}Count: ${NC}"; read n; echo -ne "${G}Key: ${NC}"; read k
+           echo -e "TYPE=$TYPE\nLOCAL_PUB=$LOCAL_PUB\nREMOTE_PUB=$REMOTE_PUB\nMAX_IPS=$n\nSYNC_KEY=$k" > "$CONF_FILE"
+           apply_tunnel; echo -e "${G}IPs Ready.${NC}"; sleep 1 ;;
+        3) mproxy_main_menu ;;
+        4) while true; do draw_mgre_header; show_mgre_monitor; sleep 5; done ;;
+        5) update_script ;;
+        6) echo -ne "${R}Are you sure? (y/n): ${NC}"; read confirm
+           if [[ "$confirm" == "y" ]]; then
+               systemctl stop mgre.service >/dev/null 2>&1; systemctl disable mgre.service >/dev/null 2>&1
+               ip tunnel del greir >/dev/null 2>&1; ip tunnel del grekh >/dev/null 2>&1
+               rm -f "$SERVICE_FILE" "$CONF_FILE" "$STATE_FILE" "$INSTALL_PATH"
+               echo -e "${G}System Cleaned.${NC}"; exit 0
+           fi ;;
+        0) exit 0 ;;
     esac
-
 done

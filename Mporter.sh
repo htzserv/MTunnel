@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MPorter v4.0 | MDesign Professional Interface (Final Smart Shield Edition) ---
+# --- MPorter v3.8.1 | MDesign 3 Synchronized Edition (UI Patch) ---
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 H_CONF="/etc/haproxy/haproxy.cfg"
 G_CONF="/etc/gost/config.json"
@@ -110,8 +110,9 @@ get_stats() {
     server_ip=$(ip -4 route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
     if [ -z "$server_ip" ]; then server_ip=$(hostname -I | awk '{print $1}'); fi
     [ -z "$server_ip" ] && server_ip="UNKNOWN"
+    server_ip=$(echo "$server_ip" | cut -c 1-15) # Safe-guard for extra long IPs
 
-    if systemctl is-active --quiet haproxy; then hap_stat="${G}●${NC}"; raw_hap="●"
+    if systemctl is-active --quiet haproxy; then hap_stat="${C}●${NC}"; raw_hap="●"
     else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
 
     if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"
@@ -120,8 +121,7 @@ get_stats() {
     local h_ports=0; local g_ports=0
     if [ -f "$H_CONF" ]; then
         h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null)
-        ((h_ports--))
-        [ "$h_ports" -lt 0 ] && h_ports=0
+        ((h_ports--)); [ "$h_ports" -lt 0 ] && h_ports=0
     fi
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
         g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null)
@@ -145,13 +145,13 @@ draw_header() {
     clear
     echo ""
     
-    # MDesign Padding Engine
-    raw_text=" MPorter 4.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 3.8.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 93 - ${#raw_text} ))
+    [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 3.8.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬─────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-31s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼─────────────────────────────────┤${NC}"
@@ -163,7 +163,8 @@ draw_header() {
     local ip_port_counts=$(echo -e "$h_map\n$g_map" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
 
     if [ -z "$ip_port_counts" ] || [ "$ip_port_counts" == "|" ]; then
-        printf "  ${B}│${NC} ${DIM}%-89s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route."
+        # BUG FIX: Locked columns for empty state
+        printf "  ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC} ${DIM}%-31s${NC} ${B}│${NC}\n" "-" "No active mappings. Ready to route." "-"
     else
         declare -A iface_ips_arr
         declare -A iface_ports_arr
@@ -189,6 +190,17 @@ draw_header() {
 # --- Features & Actions ---
 smart_map() {
     draw_header
+    
+    local manual_ip=""
+    local selected_ips=()
+    local selected_if=""
+    local fwd_engine=""
+    local raw_ports=""
+    local clean_ports=""
+    local conflict_found=false
+    local conflict_reason=""
+    local conflict_port=""
+
     echo -e "\n  ${DIM}┌─[ FORWARDING ENGINE ]${NC}"
     echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC}"
     echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC}"
@@ -236,6 +248,28 @@ smart_map() {
     echo -ne "\n  ${C}●${NC} ${W}Enter Local Ports (e.g. 80,443,1080): ${NC}"; read raw_ports
     clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
     
+    for p in $clean_ports; do
+        if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then
+            conflict_found=true; conflict_reason="System Service (OS)"; conflict_port="$p"; break
+        fi
+        if grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then 
+            conflict_found=true; conflict_reason="HAProxy Core"; conflict_port="$p"; break
+        fi
+        if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
+            if jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then
+                conflict_found=true; conflict_reason="Gost Core"; conflict_port="$p"; break
+            fi
+        fi
+    done
+
+    if [ "$conflict_found" = true ]; then
+        echo -e "\n  ${R}● MAPPING ABORTED! Strict Port Conflict Detected.${NC}"
+        echo -e "  ${DIM}╰─❯${NC} ${W}Port [${Y}$conflict_port${W}] is actively used by: ${C}${conflict_reason}${NC}"
+        echo -e "  ${DIM}╰─❯${NC} ${DIM}No changes were made. Please release the port or choose another.${NC}"
+        echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
+        return
+    fi
+
     echo -e "\n  ${Y}● Applying Mappings...${NC}"
     echo -e "  ${B}╭──────────────┬─────────┬────────────────────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "Local Port" "Engine" "Assigned Target IP"
@@ -245,24 +279,6 @@ smart_map() {
         target_ip=$(echo ${selected_ips[$((RANDOM % ${#selected_ips[@]}))]} | cut -d'.' -f1-3).2
         [ -n "$manual_ip" ] && target_ip="$manual_ip"
         
-        # Smart Skip Checks (System-Wide Scan)
-        local skip_reason=""
-        if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then
-            skip_reason="OS/System"
-        elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then 
-            skip_reason="HAProxy"
-        elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-            if jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then
-                skip_reason="Gost"
-            fi
-        fi
-
-        if [ -n "$skip_reason" ]; then
-            printf "  ${B}│${NC} ${R}%-12s${NC} ${B}│${NC} ${DIM}%-7s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "$p" "-" "Skipped (Used by $skip_reason)"
-            continue
-        fi
-        
-        # Proceed with mapping
         if [ "$fwd_engine" == "1" ]; then
             echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$target_ip (on $selected_if)"
@@ -291,7 +307,8 @@ show_table() {
     
     local mappings=$(echo -e "$h_map\n$g_map" | grep -v '^$')
     if [ -z "$mappings" ]; then 
-        printf "  ${B}│${NC} ${DIM}%-89s${NC} ${B}│${NC}\n" "  No active mappings."
+        # BUG FIX: Locked columns for empty state
+        printf "  ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC} ${DIM}%-31s${NC} ${B}│${NC}\n" "-" "No active mappings." "-"
     else
         declare -A ip_ports_arr
         while read -r p_num d_ip; do
@@ -393,7 +410,7 @@ while true; do
                 systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
                 crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab -
                 rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service
-                apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
+                apt-get purge -y haproxy jq 2>/dev/null; systemctl daemon-reload
                 echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
             fi ;;
         7) auto_restart_cron ;;

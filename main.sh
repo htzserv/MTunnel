@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.7.2 (Audited) ---
+# --- MDesign Master Core | Central Dashboard v1.8 (Dynamic Engine) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -64,31 +64,56 @@ while true; do
         4) 
            echo -e "\n  ${Y}● Fetching latest Core Modules from Repository...${NC}"
            CACHE_BUST=$(date +%s)
-           wget --timeout=10 --tries=2 -qO /tmp/main_new "$REPO_BASE/main.sh?v=$CACHE_BUST"
-           wget --timeout=10 --tries=2 -qO /tmp/mgre_new "$REPO_BASE/mgre.sh?v=$CACHE_BUST"
-           wget --timeout=10 --tries=2 -qO /tmp/mporter_new "$REPO_BASE/mporter.sh?v=$CACHE_BUST"
-           wget --timeout=10 --tries=2 -qO /tmp/mdiag_new "$REPO_BASE/mdiag.sh?v=$CACHE_BUST"
            
-           # بررسی یکپارچگی دانلود هر ۴ ماژول به صورت همزمان
-           if [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ] && [ -s /tmp/mdiag_new ]; then
-               echo -e "  ${DIM}├─ Applying updates to system core...${NC}"
-               [ -w "$MTUNNEL_PATH" ] && cat /tmp/main_new > "$MTUNNEL_PATH"
-               [ -w "$MGRE_MODULE" ] && cat /tmp/mgre_new > "$MGRE_MODULE"
-               [ -w "$MPORTER_MODULE" ] && cat /tmp/mporter_new > "$MPORTER_MODULE"
-               [ -w "$MDIAG_MODULE" ] && cat /tmp/mdiag_new > "$MDIAG_MODULE"
+           echo -e "  ${DIM}├─ Scanning remote repository files...${NC}"
+           sh_files=$(curl -sL --connect-timeout 10 "https://api.github.com/repos/htzserv/MTunnel/contents/?v=$CACHE_BUST" | grep -oP '"name": "\K[^"]+\.sh')
+           
+           if [ -z "$sh_files" ]; then
+               echo -e "  ${Y}● API restricted. Using Core Fallback list...${NC}"
+               sh_files="main.sh mgre.sh mporter.sh mdiag.sh"
+           fi
+           
+           local download_success=true
+           for file in $sh_files; do
+               echo -e "  ${DIM}├─ Downloading $file...${NC}"
+               wget --timeout=10 --tries=2 -qO "/tmp/${file}_new" "$REPO_BASE/${file}?v=$CACHE_BUST"
+               if [ ! -s "/tmp/${file}_new" ]; then
+                   echo -e "  ${R}● Error: Failed to download $file${NC}"
+                   download_success=false
+                   break
+               fi
+           done
+           
+           if [ "$download_success" = true ]; then
+               echo -e "  ${DIM}├─ Purging old configurations & deploying updates...${NC}"
                
-               [ -f "./main.sh" ] && cat /tmp/main_new > "./main.sh"
-               [ -f "./mgre.sh" ] && cat /tmp/mgre_new > "./mgre.sh"
-               [ -f "./mporter.sh" ] && cat /tmp/mporter_new > "./mporter.sh"
-               [ -f "./mdiag.sh" ] && cat /tmp/mdiag_new > "./mdiag.sh"
-               
-               cat /tmp/main_new > "$0"
-               chmod +x "$MTUNNEL_PATH" "$MGRE_MODULE" "$MPORTER_MODULE" "$MDIAG_MODULE" "$0" 2>/dev/null
-               rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new /tmp/mdiag_new
-               echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"; sleep 1.5; exec "$0"
-           else 
-               echo -e "  ${R}● Update failed! Check network connection or repository files.${NC}"
-               rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new /tmp/mdiag_new; sleep 2
+               for file in $sh_files; do
+                   # جایگذاری در پوشه محلی جاری
+                   cat "/tmp/${file}_new" > "./$file" 2>/dev/null
+                   chmod +x "./$file" 2>/dev/null
+                   
+                   if [[ "$file" == "main.sh" ]]; then
+                       cat "/tmp/main.sh_new" > "$MTUNNEL_PATH" 2>/dev/null
+                       chmod +x "$MTUNNEL_PATH" 2>/dev/null
+                       cat "/tmp/main.sh_new" > "$0"
+                   else
+                       local mod_name="${file%.sh}"
+                       local mod_path="/usr/bin/$mod_name"
+                       # اگر ماژول قبلاً در سیستم لود شده بود، با نسخه جدید بازنویسی اش کن
+                       if [ -f "$mod_path" ] || [ -f "/usr/bin/mtunnel" ]; then
+                           touch "$mod_path" 2>/dev/null
+                           cat "/tmp/${file}_new" > "$mod_path" 2>/dev/null
+                           chmod +x "$mod_path" 2>/dev/null
+                       fi
+                   fi
+                   rm -f "/tmp/${file}_new"
+               done
+               echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"
+               sleep 1.5; exec "$0"
+           else
+               echo -e "  ${R}● Update aborted due to network errors.${NC}"
+               for file in $sh_files; do rm -f "/tmp/${file}_new"; done
+               sleep 2
            fi ;;
         5) 
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL tunnels and scripts? (y/n): ${NC}"; read del_confirm

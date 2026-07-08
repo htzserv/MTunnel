@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.0 (Core IP Sync Fix) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1 (Dynamic Core Subnets) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -24,7 +24,10 @@ apply_tunnel() {
     local conf="$1"
     [ ! -s "$conf" ] && return
     source "$conf"
-    local local_tun=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.1" || echo "10.76.${TUN_ID}.2")
+    
+    # پشتیبانی از تانل‌های جدید با ساب‌نت رندوم و تانل‌های قدیمی
+    local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+    local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
     
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 >/dev/null 2>&1
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1436 >/dev/null 2>&1
@@ -78,7 +81,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.0 "
+    local str1=" MGRE Core 4.1 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -106,8 +109,9 @@ show_mgre_monitor() {
         printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
         echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
 
-        local main_tip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.2" || echo "10.76.${TUN_ID}.1")
-        local main_lip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.1" || echo "10.76.${TUN_ID}.2")
+        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+        local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         
         ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         if [ $? -eq 0 ]; then
@@ -226,7 +230,6 @@ while true; do
                    if [[ "$s_type" == "1" ]]; then local_ip6="${pfx}::1"; remote_ip6="${pfx}::2"; else local_ip6="${pfx}::2"; remote_ip6="${pfx}::1"; fi
                fi
                
-               # منطق جدید و ایمن برای ساخت آیدی تانل
                echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250) ${DIM}[Must be exactly same on both servers]${W}: ${NC}"; read -t 30 user_tun_id
                if [[ -z "$user_tun_id" ]] || [[ ! "$user_tun_id" =~ ^[0-9]+$ ]] || [ "$user_tun_id" -lt 1 ] || [ "$user_tun_id" -gt 250 ]; then
                    echo -e "  ${Y}● Invalid ID. Auto-generating random ID...${NC}"
@@ -239,12 +242,20 @@ while true; do
                done
                tun_id=$user_tun_id
                
-               conf_path="$CONF_DIR/${t_name}.conf"
-               echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
-               apply_tunnel "$conf_path"; setup_service
-               echo -e "  ${G}● Tunnel [${t_name}] created!${NC}"
+               # منطق تولید ساب‌نت رندوم برای هسته تانل (بر اساس هشِ آیدی)
+               hash_c=$(echo -n "core_${tun_id}" | sha256sum)
+               r_sel=$(( 0x${hash_c:0:2} % 3 ))
+               if [[ "$r_sel" == "0" ]]; then c1="10"; elif [[ "$r_sel" == "1" ]]; then c1="172"; else c1="192"; fi
+               c2=$(( (0x${hash_c:2:2} % 254) + 1 ))
+               c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+               core_sub="${c1}.${c2}.${c3}"
                
-               remote_tun=$([ "$s_type" == "1" ] && echo "10.76.${tun_id}.2" || echo "10.76.${tun_id}.1")
+               conf_path="$CONF_DIR/${t_name}.conf"
+               echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
+               apply_tunnel "$conf_path"; setup_service
+               echo -e "  ${G}● Tunnel [${t_name}] created! (Core Subnet: ${C}${core_sub}.x${G})${NC}"
+               
+               remote_tun=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
                echo -ne "\n  ${DIM}┌─${NC} ${W}Run ping test to remote endpoint ($remote_tun)? (y/n): ${NC}"; read -t 10 run_ping
                if [[ "$run_ping" == "y" ]]; then
                    echo -e "  ${DIM}│${NC}"

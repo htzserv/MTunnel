@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | HAProxy Manager v5.0 (Failover Edition) ---
+# --- MDesign Modular Core (mporter.sh) | HAProxy Manager v5.0.1 (Failover Audited) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -88,6 +88,13 @@ wipe_all_mappings() {
     echo -e "  ${G}● All Engine Mappings Wiped Clean.${NC}"; sleep 1.5
 }
 
+get_iface_for_ip() {
+    local target_ip=$1
+    local subnet=$(echo "$target_ip" | cut -d'.' -f1-3)
+    local iface=$(ip -o -4 addr show 2>/dev/null | grep "$subnet" | awk '{print $2}' | head -n 1)
+    if [ -z "$iface" ]; then echo "Unknown"; else echo "$iface"; fi
+}
+
 get_stats() {
     server_ip=$(get_local_ip)
     if systemctl is-active --quiet haproxy; then hap_stat="${G}●${NC}"; raw_hap="●"; else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
@@ -111,13 +118,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 5.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 5.0.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 93 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 5.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 5.0.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}╰─────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -130,11 +137,10 @@ smart_map() {
     
     if [ "$fwd_engine" != "1" ] && [ "$fwd_engine" != "2" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
     
-    # Load Balancing Mode Selection
     local is_lb=false
     echo -e "\n  ${DIM}┌─[ ROUTING MODE ]${NC}"
     echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Single Target IP${NC} ${DIM}(Standard)${NC}"
-    echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Load-Balancing / Failover${NC} ${DIM}(Distribute across multiple IPs)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Load-Balancing / Failover${NC}"
     echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read route_mode
     if [ "$route_mode" == "2" ]; then is_lb=true; fi
 
@@ -158,8 +164,7 @@ smart_map() {
             selected_if="${gre_ifs[$if_choice]}"
             local map_ips=($(ip -o -4 addr show "$selected_if" 2>/dev/null | awk '{print $4}' | cut -d/ -f1))
             if [ ${#map_ips[@]} -eq 0 ]; then
-                echo -e "  ${R}● No IPs on ${selected_if}!${NC}"
-                return
+                echo -e "  ${R}● No IPs on ${selected_if}!${NC}"; return
             else
                 echo -e "\n  ${B}╭────────────────── IPs on ${selected_if} ──────────────────╮${NC}"
                 for i in "${!map_ips[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${G}%-50s${NC} ${B}│${NC}\n" "$i" "${map_ips[$i]}"; done
@@ -197,7 +202,6 @@ smart_map() {
     echo -e "  ${B}├──────────────┼─────────┼────────────────────────────────────────────┤${NC}"
     
     for p in $clean_ports; do
-        # Create processed IP list
         local target_list=()
         for sip in "${selected_ips[@]}"; do
             if [[ "$selected_if" == "Manual" ]]; then target_list+=("$sip")
@@ -235,10 +239,8 @@ smart_map() {
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$disp_targets"
         elif [ "$fwd_engine" == "2" ]; then
             local g_targets=""
-            for tip in "${target_list[@]}"; do
-                g_targets="${g_targets}${tip}:$p,"
-            done
-            g_targets="${g_targets%,}" # remove trailing comma
+            for tip in "${target_list[@]}"; do g_targets="${g_targets}${tip}:$p,"; done
+            g_targets="${g_targets%,}"
             jq --arg node "tcp://:$p/$g_targets" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${M}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "Gost" "$disp_targets"
         fi
@@ -259,7 +261,8 @@ show_table() {
     
     local has_data=false
     if [ -f "$H_CONF" ]; then
-        local h_ports=$(grep "frontend ft_" "$H_CONF" | awk -F'_' '{print $2}')
+        # تفکیک پورت‌ها با فیلتر sort -u جهت جلوگیری از تکرار فیلدها در جدول رندر
+        local h_ports=$(grep "frontend ft_" "$H_CONF" | awk -F'_' '{print $2}' | sort -u)
         for p in $h_ports; do
             local targets=$(grep "server srv_${p}_" "$H_CONF" | awk '{print $3}' | cut -d':' -f1 | paste -sd ", " -)
             if [ ${#targets} -gt 40 ]; then targets="${targets:0:37}..."; fi
@@ -296,9 +299,7 @@ while true; do
         3) show_table ;;
         4) echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm; [[ "$confirm" == "y" ]] && wipe_all_mappings ;;
         5) auto_restart_cron ;;
-        6) 
-            systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
-            echo -e "\n  ${G}● Services restarted.${NC}"; sleep 1.5 ;;
+        6) systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; echo -e "\n  ${G}● Services restarted.${NC}"; sleep 1.5 ;;
         0) clear; exit 0 ;;
     esac
 done

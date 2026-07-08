@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v2.1.0 (Live Services Header) ---
+# --- MDesign Master Core | Central Dashboard v2.1.1 (Execution Fix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -26,39 +26,25 @@ get_local_ip() {
 draw_main_header() {
     local s_ip=$(get_local_ip)
     
-    # 1. Check Tunnels Status (Active if any config exists)
     local st_mgre="○"; local c_mgre="${DIM}"
-    if [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ]; then
-        st_mgre="●"; c_mgre="${G}"
-    fi
+    if [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ]; then st_mgre="●"; c_mgre="${G}"; fi
 
-    # 2. Check HAProxy Status (Active if process is running)
     local st_hap="○"; local c_hap="${DIM}"
-    if pgrep -x "haproxy" >/dev/null 2>&1; then
-        st_hap="●"; c_hap="${G}"
-    fi
+    if pgrep -x "haproxy" >/dev/null 2>&1; then st_hap="●"; c_hap="${G}"; fi
 
-    # 3. Check Gost Status (Active if process is running)
     local st_gost="○"; local c_gost="${DIM}"
-    if pgrep -x "gost" >/dev/null 2>&1; then
-        st_gost="●"; c_gost="${G}"
-    fi
+    if pgrep -x "gost" >/dev/null 2>&1; then st_gost="●"; c_gost="${G}"; fi
 
-    # 4. Check Shield Status (Active if ping-drop rule exists)
     local st_shld="○"; local c_shld="${DIM}"
-    if iptables -C INPUT -p icmp --icmp-type echo-request -j DROP 2>/dev/null; then
-        st_shld="●"; c_shld="${G}"
-    fi
+    if iptables -C INPUT -p icmp --icmp-type echo-request -j DROP 2>/dev/null; then st_shld="●"; c_shld="${G}"; fi
 
     clear; echo ""
-    # ساختار محاسبه طول کادر اول (عنوان و آی‌پی)
-    local title=" MDesign Master Core v2.1 "
+    local title=" MDesign Master Core v2.1.1 "
     local ip_str=" IP: $s_ip "
     local pad1=$(( 94 - ${#title} - 1 - ${#ip_str} ))
     [ "$pad1" -lt 0 ] && pad1=0
     local spc1=$(printf '%*s' "$pad1" "")
 
-    # ساختار محاسبه طول کادر دوم (مانیتورینگ سرویس‌ها)
     local srv_str=" Tunnels: ●   HAProxy: ●   Gost: ●   Shield: ● "
     local pad2=$(( 94 - ${#srv_str} ))
     [ "$pad2" -lt 0 ] && pad2=0
@@ -87,16 +73,17 @@ while true; do
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}"
     echo ""
-    echo -ne "  ${C}CORE ❯❯ ${NC}"; read -t 60 opt
+    echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
     
+    # تغییر نحوه اجرای ماژول‌ها برای دور زدن محدودیت‌های دسترسی لینوکس
     case $opt in
-        1) [ -x "$MGRE_MODULE" ] && $MGRE_MODULE || (echo -e "\n  ${R}● Module missing!${NC}"; sleep 1.5) ;;
-        2) [ -x "$MPORTER_MODULE" ] && $MPORTER_MODULE || (echo -e "\n  ${R}● Module missing!${NC}"; sleep 1.5) ;;
-        3) [ -x "$MINTERFACE_MODULE" ] && $MINTERFACE_MODULE || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
-        4) [ -x "$MDIAG_MODULE" ] && $MDIAG_MODULE || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
-        5) [ -x "$MSHIELD_MODULE" ] && $MSHIELD_MODULE || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
-        6) [ -x "$MSTATS_MODULE" ] && $MSTATS_MODULE || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
-        7) [ -x "$MHEALER_MODULE" ] && $MHEALER_MODULE || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        1) [ -f "$MGRE_MODULE" ] && bash "$MGRE_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        2) [ -f "$MPORTER_MODULE" ] && bash "$MPORTER_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        3) [ -f "$MINTERFACE_MODULE" ] && bash "$MINTERFACE_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        4) [ -f "$MDIAG_MODULE" ] && bash "$MDIAG_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        5) [ -f "$MSHIELD_MODULE" ] && bash "$MSHIELD_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        6) [ -f "$MSTATS_MODULE" ] && bash "$MSTATS_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+        7) [ -f "$MHEALER_MODULE" ] && bash "$MHEALER_MODULE" || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
         8) 
            echo -e "\n  ${Y}● Syncing components from GitHub Repository...${NC}"
            CACHE_BUST=$(date +%s)
@@ -112,10 +99,10 @@ while true; do
                    if [[ "$file" == "main.sh" ]]; then
                        cat "/tmp/main.sh_new" > "$MTUNNEL_PATH" 2>/dev/null; chmod +x "$MTUNNEL_PATH" 2>/dev/null
                        cat "/tmp/main.sh_new" > "$0"
-                   elif [[ "$file" == "mgre.sh" ]]; then cat "/tmp/mgre.sh_new" > "$MGRE_MODULE" 2>/dev/null
-                   elif [[ "$file" == "mporter.sh" ]]; then cat "/tmp/mporter.sh_new" > "$MPORTER_MODULE" 2>/dev/null
+                   elif [[ "$file" == "mgre.sh" ]]; then cat "/tmp/mgre.sh_new" > "$MGRE_MODULE" 2>/dev/null; chmod +x "$MGRE_MODULE" 2>/dev/null
+                   elif [[ "$file" == "mporter.sh" ]]; then cat "/tmp/mporter.sh_new" > "$MPORTER_MODULE" 2>/dev/null; chmod +x "$MPORTER_MODULE" 2>/dev/null
                    elif [[ "$file" == "minterface.sh" ]]; then cat "/tmp/minterface.sh_new" > "$MINTERFACE_MODULE" 2>/dev/null; chmod +x "$MINTERFACE_MODULE" 2>/dev/null
-                   elif [[ "$file" == "mdiag.sh" ]]; then cat "/tmp/mdiag.sh_new" > "$MDIAG_MODULE" 2>/dev/null
+                   elif [[ "$file" == "mdiag.sh" ]]; then cat "/tmp/mdiag.sh_new" > "$MDIAG_MODULE" 2>/dev/null; chmod +x "$MDIAG_MODULE" 2>/dev/null
                    elif [[ "$file" == "mshield.sh" ]]; then cat "/tmp/mshield.sh_new" > "$MSHIELD_MODULE" 2>/dev/null; chmod +x "$MSHIELD_MODULE" 2>/dev/null
                    elif [[ "$file" == "mstats.sh" ]]; then cat "/tmp/mstats.sh_new" > "$MSTATS_MODULE" 2>/dev/null; chmod +x "$MSTATS_MODULE" 2>/dev/null
                    elif [[ "$file" == "mhealer.sh" ]]; then cat "/tmp/mhealer.sh_new" > "$MHEALER_MODULE" 2>/dev/null; chmod +x "$MHEALER_MODULE" 2>/dev/null

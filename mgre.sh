@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.8 (vIP Registry Listing) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.9 (Network ID in Registry) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.8 "
+    local str1=" MGRE Core 4.2.9 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -144,6 +144,7 @@ show_tunnel_details() {
         local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
         local s_key="${SYNC_KEY:-[ NOT SET ]}"
         local t_sec="${TUN_SECRET:-[ NOT SAVED ]}"
+        local t_id="${TUN_ID:-[ NOT SET ]}"
         
         local proto_lbl="IPv4 GRE"
         if [[ "$TUN_PROTO" == "6to4" ]]; then 
@@ -163,9 +164,10 @@ show_tunnel_details() {
         local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
         echo -e "  ${B}│${NC} ${M}vIP Sync Key :${NC} ${W}${s_key}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
         
-        local l2="Tunnel Secret: ${t_sec}"
-        local pad2=$(( 90 - ${#l2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}Tunnel Secret:${NC} ${W}${t_sec}${NC}${sp2} ${B}│${NC}"
+        # در این بخش Network ID اضافه شد
+        local l2="Tunnel Secret: ${t_sec}"; local r2="Network ID: ${t_id}"
+        local pad2=$(( 89 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+        echo -e "  ${B}│${NC} ${C}Tunnel Secret:${NC} ${W}${t_sec}${NC}${sp2} ${DIM}Network ID:${NC} ${W}${t_id}${NC} ${B}│${NC}"
         
         local l3="Public IPs   : ${LOCAL_PUB} -> ${REMOTE_PUB}"
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
@@ -196,11 +198,11 @@ show_tunnel_details() {
                 if [ "$idx" -eq 0 ]; then
                     local l_str="Virtual IPs  : ${v_lip} -> ${v_tip}"
                     local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
-                    echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${G}${v_lip}${NC} ${DIM}->${NC} ${Y}${v_tip}${NC}${p_sp} ${B}│${NC}"
+                    echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${M}${v_lip}${NC} ${DIM}->${NC} ${M}${v_tip}${NC}${p_sp} ${B}│${NC}"
                 else
                     local l_str="               ${v_lip} -> ${v_tip}"
                     local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
-                    echo -e "  ${B}│${NC} ${DIM}               ${G}${v_lip}${NC} ${DIM}->${NC} ${Y}${v_tip}${NC}${p_sp} ${B}│${NC}"
+                    echo -e "  ${B}│${NC} ${DIM}               ${M}${v_lip}${NC} ${DIM}->${NC} ${M}${v_tip}${NC}${p_sp} ${B}│${NC}"
                 fi
             done
         else

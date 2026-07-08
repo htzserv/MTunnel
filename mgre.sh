@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.0 (Smart Deterministic Subnets) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.1 (Index Conflict Fix + Delete ALL) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -42,7 +42,6 @@ apply_tunnel() {
         iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40))
     fi
 
-    # اصلاح باگ امنیتی RFC 1918 در تولید vIPها
     if [[ "$MAX_IPS" -gt 0 ]]; then
         local s_file="${STATE_DIR}/${T_NAME}.state"
         echo "0" > "$s_file"
@@ -78,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.0 "
+    local str1=" MGRE Core 4.2.1 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -136,17 +135,17 @@ edit_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
     
-    echo -e "\n  ${B}╭────────────────── Select Tunnel to Edit ──────────────────╮${NC}"
+    echo -e "\n  ${B}╭────────────────── Select Tunnel to Edit ───────────────────╮${NC}"
     for i in "${!configs[@]}"; do
         local conf_name=$(basename "${configs[$i]}" .conf)
-        printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-55s${NC} ${B}│${NC}\n" "$i" "$conf_name"
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
     done
-    echo -e "  ${B}├───────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}  ${R}0${NC} ${C}❯${NC} ${DIM}Cancel and Return${NC}                                        ${B}│${NC}"
-    echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
-    echo -ne "  ${C}●${NC} ${W}Select Tunnel Index or 0: ${NC}"; read t_idx
+    echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
+    printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Return"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo -ne "  ${C}●${NC} ${W}Select Tunnel Index or 'q': ${NC}"; read t_idx
     
-    [[ "$t_idx" == "0" || -z "$t_idx" ]] && return
+    [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
         local sel_conf="${configs[$t_idx]}"; source "$sel_conf"
@@ -183,14 +182,14 @@ while true; do
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
-           echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}\n  ${DIM}├─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}"
+           echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}\n  ${DIM}├─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}"
            echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
-           [[ "$proto_choice" == "0" || -z "$proto_choice" ]] && continue
+           [[ "$proto_choice" == "q" || -z "$proto_choice" ]] && continue
            
            tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
            
-           echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | 0:Back]: ${NC}"; read s_type
-           [[ "$s_type" == "0" || -z "$s_type" ]] && continue
+           echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
+           [[ "$s_type" == "q" || -z "$s_type" ]] && continue
            
            echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (e.g. fr): ${NC}"; read suffix
            pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
@@ -214,7 +213,7 @@ while true; do
            
            echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
            if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
-               echo -e "\n  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned to another tunnel!${NC}"
+               echo -e "\n  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned!${NC}"
                sleep 2; continue
            fi
            
@@ -222,7 +221,6 @@ while true; do
            hash_c=$(echo -n "core_${tun_id}" | sha256sum)
            class_selector=$(( tun_id % 3 ))
            
-           # موتور جدید انتخاب قطعی کلاس‌های پرایوت (RFC 1918)
            if [ "$class_selector" == "1" ]; then
                c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
            elif [ "$class_selector" == "2" ]; then
@@ -242,13 +240,13 @@ while true; do
            echo -e "\n  ${B}╭────────────────── Select Tunnel for vIPs ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do
                conf_name=$(basename "${configs[$i]}" .conf)
-               printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-55s${NC} ${B}│${NC}\n" "$i" "$conf_name"
+               printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
            done
-           echo -e "  ${B}├───────────────────────────────────────────────────────────┤${NC}"
-           echo -e "  ${B}│${NC}  ${R}0${NC} ${C}❯${NC} ${DIM}Cancel and Go Back${NC}                                       ${B}│${NC}"
-           echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Select Index or 0: ${NC}"; read t_idx
-           [[ "$t_idx" == "0" || -z "$t_idx" ]] && continue
+           echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
+           printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Go Back"
+           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+           echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
+           [[ "$t_idx" == "q" || -z "$t_idx" ]] && continue
            if [[ -n "${configs[$t_idx]}" ]]; then
                sel_conf="${configs[$t_idx]}"; source "$sel_conf"
                echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
@@ -264,17 +262,36 @@ while true; do
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Erase ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do
                conf_name=$(basename "${configs[$i]}" .conf)
-               printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-55s${NC} ${B}│${NC}\n" "$i" "$conf_name"
+               printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
            done
            echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
-           echo -e "  ${B}│${NC}  ${R}0${NC} ${C}❯${NC} ${DIM}Cancel and Go Back${NC}                                         ${B}│${NC}"
+           printf "  ${B}│${NC}  ${R}%-3s${NC} ${C}❯${NC} ${R}%-53s${NC} ${B}│${NC}\n" "all" "Delete ALL Tunnels"
+           printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Go Back"
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Enter Index to erase or 0: ${NC}"; read del_idx
-           [[ "$del_idx" == "0" || -z "$del_idx" ]] && continue
+           echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
+           
+           [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
+           
+           if [[ "$del_idx" == "all" ]]; then
+               echo -ne "  ${R}● DANGER: Are you sure you want to delete ALL tunnels? (y/n): ${NC}"; read confirm_all
+               if [[ "$confirm_all" == "y" ]]; then
+                   for conf in "${configs[@]}"; do
+                       source "$conf"
+                       ip tunnel del "$T_NAME" >/dev/null 2>&1
+                       ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+                       rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"
+                   done
+                   echo -e "  ${G}● All tunnels have been purged.${NC}"; sleep 1.5
+               fi
+               continue
+           fi
+           
            if [[ -n "${configs[$del_idx]}" ]]; then
                source "${configs[$del_idx]}"
-               ip tunnel del "$T_NAME" >/dev/null 2>&1; rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
-               echo -e "  ${G}● Config destroyed.${NC}"; sleep 1.5
+               ip tunnel del "$T_NAME" >/dev/null 2>&1
+               ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+               rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
+               echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         5) edit_tunnel ;;
         0) break ;;

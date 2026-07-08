@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.8 (Dynamic Engine) ---
+# --- MDesign Master Core | Central Dashboard v1.8.1 (Bugfix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -73,7 +73,7 @@ while true; do
                sh_files="main.sh mgre.sh mporter.sh mdiag.sh"
            fi
            
-           local download_success=true
+           download_success=true
            for file in $sh_files; do
                echo -e "  ${DIM}├─ Downloading $file...${NC}"
                wget --timeout=10 --tries=2 -qO "/tmp/${file}_new" "$REPO_BASE/${file}?v=$CACHE_BUST"
@@ -88,24 +88,25 @@ while true; do
                echo -e "  ${DIM}├─ Purging old configurations & deploying updates...${NC}"
                
                for file in $sh_files; do
-                   # جایگذاری در پوشه محلی جاری
+                   # آپدیت فایل در پوشه جاری
                    cat "/tmp/${file}_new" > "./$file" 2>/dev/null
                    chmod +x "./$file" 2>/dev/null
                    
+                   # آپدیت هوشمند فایل‌های سیستمی (فقط ماژول‌های هسته)
                    if [[ "$file" == "main.sh" ]]; then
                        cat "/tmp/main.sh_new" > "$MTUNNEL_PATH" 2>/dev/null
                        chmod +x "$MTUNNEL_PATH" 2>/dev/null
                        cat "/tmp/main.sh_new" > "$0"
-                   else
-                       local mod_name="${file%.sh}"
-                       local mod_path="/usr/bin/$mod_name"
-                       # اگر ماژول قبلاً در سیستم لود شده بود، با نسخه جدید بازنویسی اش کن
-                       if [ -f "$mod_path" ] || [ -f "/usr/bin/mtunnel" ]; then
-                           touch "$mod_path" 2>/dev/null
-                           cat "/tmp/${file}_new" > "$mod_path" 2>/dev/null
-                           chmod +x "$mod_path" 2>/dev/null
-                       fi
+                   elif [[ "$file" == "mgre.sh" ]]; then
+                       [ -w "$MGRE_MODULE" ] && cat "/tmp/mgre.sh_new" > "$MGRE_MODULE" 2>/dev/null
+                   elif [[ "$file" == "mporter.sh" ]]; then
+                       [ -w "$MPORTER_MODULE" ] && cat "/tmp/mporter.sh_new" > "$MPORTER_MODULE" 2>/dev/null
+                   elif [[ "$file" == "mdiag.sh" ]]; then
+                       touch "$MDIAG_MODULE" 2>/dev/null
+                       cat "/tmp/mdiag.sh_new" > "$MDIAG_MODULE" 2>/dev/null
+                       chmod +x "$MDIAG_MODULE" 2>/dev/null
                    fi
+                   
                    rm -f "/tmp/${file}_new"
                done
                echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"

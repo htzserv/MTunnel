@@ -1,4 +1,3 @@
-cat << 'EOF' > /usr/bin/mgre
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1.6 (Variable Scope Fix) ---
 
@@ -183,7 +182,6 @@ while true; do
            echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
            [[ "$proto_choice" == "0" || -z "$proto_choice" ]] && continue
            
-           # ارور local اینجا بود که برطرف شد
            tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
            
            echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | 0:Back]: ${NC}"; read s_type
@@ -260,5 +258,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF
-chmod +x /usr/bin/mgre

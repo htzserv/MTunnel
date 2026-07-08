@@ -1,15 +1,13 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.5 ---
+# --- MDesign Master Core | Central Dashboard v1.6 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
-# مسیرهای نصب سیستم در خط فرمان
 MTUNNEL_PATH="/usr/bin/mtunnel"
 MGRE_MODULE="/usr/bin/mgre"
 MPORTER_MODULE="/usr/bin/mporter"
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 
-# تبدیل خودکار اسکریپت به دستور سراسری سیستم
 if [[ ! -x "$MTUNNEL_PATH" ]]; then
     cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null
 fi
@@ -64,25 +62,31 @@ while true; do
         3) 
            echo -e "\n  ${Y}● Fetching latest Core Modules from Repository...${NC}"
            
-           wget --timeout=10 --tries=2 -qO /tmp/main_new "$REPO_BASE/main.sh"
-           wget --timeout=10 --tries=2 -qO /tmp/mgre_new "$REPO_BASE/mgre.sh"
-           wget --timeout=10 --tries=2 -qO /tmp/mporter_new "$REPO_BASE/mporter.sh"
+           # سیستم دور زدن کش گیت‌هاب (Cache-Busting)
+           CACHE_BUST=$(date +%s)
            
-           if [ $? -eq 0 ] && [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ]; then
-               echo -e "  ${DIM}├─ Purging old workspace files...${NC}"
-               rm -f ./mgre.sh ./mporter.sh
+           wget --timeout=10 --tries=2 -qO /tmp/main_new "$REPO_BASE/main.sh?v=$CACHE_BUST"
+           wget --timeout=10 --tries=2 -qO /tmp/mgre_new "$REPO_BASE/mgre.sh?v=$CACHE_BUST"
+           wget --timeout=10 --tries=2 -qO /tmp/mporter_new "$REPO_BASE/mporter.sh?v=$CACHE_BUST"
+           
+           if [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ]; then
+               echo -e "  ${DIM}├─ Applying updates to system core...${NC}"
                
-               echo -e "  ${DIM}├─ Deploying fresh modules...${NC}"
-               mv /tmp/main_new "$0"
-               mv /tmp/mgre_new "./mgre.sh"
-               mv /tmp/mporter_new "./mporter.sh"
-               chmod +x "$0" ./mgre.sh ./mporter.sh
+               # آپدیت مستقیم هسته‌های نصب شده در سیستم‌عامل
+               [ -w "$MTUNNEL_PATH" ] && cat /tmp/main_new > "$MTUNNEL_PATH"
+               [ -w "$MGRE_MODULE" ] && cat /tmp/mgre_new > "$MGRE_MODULE"
+               [ -w "$MPORTER_MODULE" ] && cat /tmp/mporter_new > "$MPORTER_MODULE"
                
-               if [ -f "$MGRE_MODULE" ]; then cp ./mgre.sh "$MGRE_MODULE" && chmod +x "$MGRE_MODULE"; fi
-               if [ -f "$MPORTER_MODULE" ]; then cp ./mporter.sh "$MPORTER_MODULE" && chmod +x "$MPORTER_MODULE"; fi
+               # آپدیت فایل‌های لوکال (اگر داخل پوشه MTunnel باشیم)
+               [ -f "./main.sh" ] && cat /tmp/main_new > "./main.sh"
+               [ -f "./mgre.sh" ] && cat /tmp/mgre_new > "./mgre.sh"
+               [ -f "./mporter.sh" ] && cat /tmp/mporter_new > "./mporter.sh"
                
-               # آپدیت کردن دستور گلوبال mtunnel در سیستم
-               cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null
+               # در هر صورت فایل اجرای فعلی رو با نسخه جدید بازنویسی کن
+               cat /tmp/main_new > "$0"
+               
+               chmod +x "$MTUNNEL_PATH" "$MGRE_MODULE" "$MPORTER_MODULE" "$0" 2>/dev/null
+               rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new
                
                echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"
                sleep 1.5
@@ -97,8 +101,8 @@ while true; do
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL tunnels, configurations, scripts, and traces? (y/n): ${NC}"; read del_confirm
            if [[ "$del_confirm" == "y" ]]; then
                echo -e "\n  ${DIM}├─ Stopping and disabling all system services...${NC}"
-               systemctl stop mgre.service mporter.service haproxy 2>/dev/null
-               systemctl disable mgre.service mporter.service haproxy 2>/dev/null
+               systemctl stop mgre.service mporter.service haproxy gost 2>/dev/null
+               systemctl disable mgre.service mporter.service haproxy gost 2>/dev/null
                
                echo -e "  ${DIM}├─ Dismantling interfaces and cleansing firewall rules...${NC}"
                if [ -d "/etc/mgre/tunnels" ]; then
@@ -119,10 +123,10 @@ while true; do
                done
 
                echo -e "  ${DIM}├─ Purging all binary executables and core directories...${NC}"
-               rm -rf /etc/mgre /etc/mporter /var/lib/haproxy /etc/haproxy
-               # پاک کردن دستور mtunnel از سیستم
-               rm -f /usr/bin/mgre /usr/bin/mporter /usr/bin/mtunnel
-               rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mporter.service
+               rm -rf /etc/mgre /etc/mporter /etc/haproxy /var/lib/haproxy /etc/gost
+               rm -f /usr/bin/mgre /usr/bin/mporter /usr/bin/mtunnel /usr/local/bin/gost
+               rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mporter.service /etc/systemd/system/gost.service
+               crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab -
                systemctl daemon-reload
                
                echo -e "  ${DIM}├─ Self-destructing project folder...${NC}"

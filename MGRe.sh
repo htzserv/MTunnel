@@ -1,19 +1,18 @@
 #!/bin/bash
-
-# --- MGRE & MapRoxy v5.2.0 | MDesign Ultimate (Combined Edition) ---
+# --- MGRE Modular Core (mgre.sh) | MHDesign 0.1 (Flawless Modular Box v3.8) ---
 
 # Colors
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;36m'; W='\033[1;37m'; NC='\033[0m'
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
 # Paths
 INSTALL_PATH="/usr/bin/mgre"
-CONF_FILE="/etc/mahan_tunnel.conf"
+CONF_DIR="/etc/mgre/tunnels"
 SERVICE_FILE="/etc/systemd/system/mgre.service"
-STATE_FILE="/etc/mlocalip.state"
-H_CONF="/etc/haproxy/haproxy.cfg"
-
-# لینک گیت‌هاب خود را اینجا قرار دهید
+STATE_DIR="/etc/mgre/states"
 REPO_URL="https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh"
+
+# Initialize Directories
+mkdir -p "$CONF_DIR" "$STATE_DIR"
 
 # --- FAST-BOOT & AUTO-INSTALL ---
 if [[ "$1" != "--apply" ]]; then
@@ -24,277 +23,405 @@ fi
 
 # --- CORE MGRE FUNCTIONS ---
 get_local_ip() {
-    local ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+')
+    local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
 }
 
 apply_tunnel() {
-    [ ! -s "$CONF_FILE" ] && return
-    source "$CONF_FILE"
-    local t_name=$([ "$TYPE" == "1" ] && echo "greir" || echo "grekh")
-    local local_tun=$([ "$TYPE" == "1" ] && echo "10.76.76.1" || echo "10.76.76.2")
-    local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
+    local conf="$1"
+    [ ! -s "$conf" ] && return
+    source "$conf"
     
-    ip tunnel del greir >/dev/null 2>&1; ip tunnel del grekh >/dev/null 2>&1
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o greir -j TCPMSS --set-mss 1396 >/dev/null 2>&1
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o grekh -j TCPMSS --set-mss 1436 >/dev/null 2>&1
+    local local_tun=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.1" || echo "10.76.${TUN_ID}.2")
+    
+    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 >/dev/null 2>&1
+    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1436 >/dev/null 2>&1
+    ip tunnel del "$T_NAME" >/dev/null 2>&1
+    ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
 
-    ip tunnel add "$t_name" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255
-    ip link set "$t_name" up
-    ip addr add "$local_tun"/30 dev "$t_name"
-    ip link set dev "$t_name" mtu "$mtu_val"
-    iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$t_name" -j TCPMSS --set-mss $((mtu_val - 40))
+    if [[ "$TUN_PROTO" == "6to4" ]]; then
+        ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB"
+        ip link set dev "sit_$T_NAME" mtu 1480
+        ip link set "sit_$T_NAME" up
+        ip -6 addr add "$LOCAL_IP6/64" dev "sit_$T_NAME"
+        
+        ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6"
+        ip link set dev "$T_NAME" mtu 1436
+        ip link set "$T_NAME" up
+        ip addr add "$local_tun"/30 dev "$T_NAME"
+        
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396
+    else
+        local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
+        ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255
+        ip link set "$T_NAME" up
+        ip addr add "$local_tun"/30 dev "$T_NAME"
+        ip link set dev "$T_NAME" mtu "$mtu_val"
+        
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40))
+    fi
 
     if [[ "$MAX_IPS" -gt 0 ]]; then
-        echo "0" > "$STATE_FILE"
+        local s_file="${STATE_DIR}/${T_NAME}.state"
+        echo "0" > "$s_file"
         for ((i=1; i<=MAX_IPS; i++)); do
-            idx=$(cat "$STATE_FILE")
+            idx=$(cat "$s_file")
             hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum)
             
             range_selector=$(( 0x${hash:0:2} % 3 ))
-            if [[ "$range_selector" == "0" ]]; then
-                o1="10"
-            elif [[ "$range_selector" == "1" ]]; then
-                o1="172"
-            else
-                o1="192"
-            fi
+            if [[ "$range_selector" == "0" ]]; then o1="10"
+            elif [[ "$range_selector" == "1" ]]; then o1="172"
+            else o1="192"; fi
             
             o2=$(( (0x${hash:2:2} % 254) + 1 )); o3=$(( (0x${hash:4:2} % 254) + 1 ))
             last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
             
-            ip addr add "$nip/30" dev "$t_name" label "$t_name:m" 2>/dev/null
-            echo $((idx + 1)) > "$STATE_FILE"
+            ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null
+            echo $((idx + 1)) > "$s_file"
         done
     fi
 }
 
+apply_all_tunnels() {
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] && apply_tunnel "$conf"
+    done
+}
+
+# --- MHDesign 0.1 UI COMPONENTS ---
 draw_mgre_header() {
-    [ -f "$CONF_FILE" ] && source "$CONF_FILE"
     local s_ip=$(get_local_ip)
-    local active_if="None"; local status="${R}Offline${NC}"
-    local s_key="${Y}${SYNC_KEY:-"N/A"}${NC}"
-    if ip link show greir >/dev/null 2>&1; then active_if="greir"; status="${G}Online${NC}";
-    elif ip link show grekh >/dev/null 2>&1; then active_if="grekh"; status="${G}Online${NC}"; fi
+    local active_tunnels=0
+    local total_vips=0
+    
+    for conf in "$CONF_DIR"/*.conf; do
+        [ ! -f "$conf" ] && continue
+        source "$conf"
+        if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then 
+            ((active_tunnels++))
+        fi
+        total_vips=$((total_vips + MAX_IPS))
+    done
+
     clear
-    echo -e "${B}┌────────────────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${B}│${NC} ${G}IP:${NC} ${Y}${s_ip}${NC} | ${G}IF:${NC} ${Y}${active_if}${NC} | ${G}KEY:${NC} ${s_key} | ${G}V-IPS:${NC} ${Y}${MAX_IPS:-0}${NC} | ${G}STATUS:${NC} ${status} ${B}│${NC}"
-    echo -e "${B}└────────────────────────────────────────────────────────────────────────────────────────┘${NC}"
+    echo ""
+    
+    local str1=" MGRE Core 3.8 "
+    local str2=" IP: $s_ip "
+    local str3=" ACTIVE TUNNELS: $active_tunnels "
+    local str4=" TOTAL V-IPS: $total_vips "
+    
+    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} ))
+    local pad_len=$(( 92 - raw_len ))
+    [ "$pad_len" -lt 0 ] && pad_len=0
+    local padding=$(printf '%*s' "$pad_len" "")
+
+    echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} ACTIVE TUNNELS:${NC}${G} ${active_tunnels} ${NC}${B}│${NC}${DIM} TOTAL V-IPS:${NC}${Y} ${total_vips} ${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
 show_mgre_monitor() {
-    source "$CONF_FILE"
-    local t_name=$([ "$TYPE" == "1" ] && echo "greir" || echo "grekh")
-    echo -e "\n${C}MDesign Live Monitoring (CTRL+C to Stop)${NC}"
-    echo -e "${B}┌──────┬──────────────────────┬──────────────────────┬──────────────┬──────────────┐${NC}"
-    echo -e "${B}│${NC}${W}  ID  ${NC}${B}│${NC}${W}      LOCAL IP        ${NC}${B}│${NC}${W}      TARGET IP       ${NC}${B}│${NC}${W}     LAT      ${NC}${B}│${NC}${W}    STATUS    ${NC}${B}│${NC}"
-    echo -e "${B}├──────┼──────────────────────┼──────────────────────┼──────────────┼──────────────┤${NC}"
-    mapfile -t v_ips < <(ip -4 addr show dev "$t_name" label "$t_name:m" | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
-    for ((idx=0; idx<${#v_ips[@]}; idx++)); do
-        lip="${v_ips[$idx]}"
-        base_ip=$(echo "$lip" | cut -d'.' -f1-3)
-        last=$(echo "$lip" | cut -d'.' -f4)
-        tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
-        ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
+    echo -e "\n  ${C}Live Monitoring${NC}"
+    
+    local has_ips=false
+    for conf in "$CONF_DIR"/*.conf; do
+        [ ! -f "$conf" ] && continue
+        source "$conf"
+        has_ips=true
+        
+        mapfile -t v_ips < <(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+        
+        local title_color="${C}"
+        local proto_lbl="IPv4"
+        if [[ "$TUN_PROTO" == "6to4" ]]; then 
+            title_color="${M}"
+            proto_lbl="IP6GRE"
+        fi
+
+        # Draw Independent Box for this Tunnel
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        # UTF-8 Safe Title Padding
+        printf "  ${B}│${NC} %b▼ Tunnel: %-80s%b ${B}│${NC}\n" "${title_color}" "${T_NAME} [${proto_lbl}]" "${NC}"
+        echo -e "  ${B}├────────────────────┬────────────────────┬────────────────────┬──────────────┬──────────────┤${NC}"
+        printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
+        echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
+
+        # 1. Main Tunnel Node
+        local main_tip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.2" || echo "10.76.${TUN_ID}.1")
+        local main_lip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.1" || echo "10.76.${TUN_ID}.2")
+        
+        local lat_raw=""
+        local lat_color=""
+        local stat_icon=""
+        local stat_text=""
+        local stat_color=""
+        
+        ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         if [ $? -eq 0 ]; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K\S+')
-            p_lat="${Y}${lat}ms${NC}"; p_stat="${G}ONLINE${NC}"
+            lat_raw="${lat}ms"
+            lat_color="${Y}"
+            stat_icon="●"
+            stat_text="ONLINE"
+            stat_color="${G}"
         else
-            p_lat="${R}---${NC}"; p_stat="${R}OFFLINE${NC}"
-        fi
-        printf "${B}│${NC} %-4s ${B}│${NC} %-20s ${B}│${NC} %-20s ${B}│${NC} %-23b ${B}│${NC} %-22b ${B}│${NC}\n" "$((idx+1))" "$lip" "$tip" "$p_lat" "$p_stat"
-    done
-    echo -e "${B}└──────┴──────────────────────┴──────────────────────┴──────────────┴──────────────┘${NC}"
-}
-
-# --- MAPROXY FUNCTIONS (MapRoxy v6.0 Core) ---
-fix_and_install() {
-    echo -e "${Y}[*] Optimizing & Installing...${NC}"
-    sysctl -w fs.file-max=2000000 >/dev/null
-    rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock*
-    dpkg --configure -a && apt-get install -f -y
-    apt-get update && apt-get install -y haproxy socat
-    if [ $? -eq 0 ]; then create_base_conf; systemctl enable haproxy >/dev/null 2>&1; systemctl restart haproxy; echo -e "${G}[✓] Core Ready.${NC}"; fi
-    sleep 2
-}
-
-create_base_conf() {
-    mkdir -p /etc/haproxy
-    echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
-    echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
-}
-
-get_stats() {
-    if systemctl is-active --quiet haproxy; then core_status="${G}RUNNING${NC}"; else core_status="${R}STOPPED${NC}"; fi
-    total_ips_count=$(ip -o -4 addr show greir 2>/dev/null | wc -l)
-    used_ips_count=$(grep "server srv_" "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d':' -f1 | sort -u | wc -l)
-    total_ports=$(grep -c "frontend ft_[0-9]" "$H_CONF" 2>/dev/null)
-    if_status=$(ip link show greir >/dev/null 2>&1 && echo -e "${G}ON${NC}" || echo -e "${R}OFF${NC}")
-}
-
-draw_mproxy_header() {
-    get_stats
-    clear
-    echo -e "${B}┌────────────────────────────────────────────────────────────────────────────────────────┐${NC}"
-    echo -e "${B}│${NC} ${W}PROJECT:${NC} ${Y}MapRoxy v6.0${NC} | ${W}CORE:${NC} ${core_status} | ${W}IPs:${NC} ${G}${used_ips_count}${NC}/${Y}${total_ips_count}${NC} | ${W}PORTs:${NC} ${G}${total_ports}${NC} ${B}│${NC}"
-    echo -e "${B}│${NC} ${W}INTERFACE greir:${NC} ${if_status}                                                               ${B}│${NC}"
-    echo -e "${B}└────────────────────────────────────────────────────────────────────────────────────────┘${NC}"
-}
-
-smart_map() {
-    draw_mproxy_header
-    local map_ips=($(ip -o -4 addr show greir 2>/dev/null | awk '{print $4}' | cut -d/ -f1))
-    
-    if [ ${#map_ips[@]} -eq 0 ]; then
-        echo -e "${R}No active IPs found on greir!${NC}"; echo -ne "${Y}Enter IP manually: ${NC}"; read manual_ip; selected_ips=("$manual_ip")
-    else
-        echo -e "${B}┌────────────────── Available IPs on greir ──────────────────┐${NC}"
-        for i in "${!map_ips[@]}"; do printf "${B}│${NC}  ${W}[%d]${NC} ${G}%-48s${NC} ${B}│${NC}\n" "$i" "${map_ips[$i]}"; done
-        echo -e "${B}└────────────────────────────────────────────────────────────┘${NC}"
-        echo -e "${Y}Tip: Enter 'a' to randomize all IPs.${NC}"
-        echo -ne "${G}Select Index (0-${#map_ips[@]}) or 'a': ${NC}"; read choice
-        
-        if [[ "$choice" == "a" ]]; then selected_ips=("${map_ips[@]}")
-        elif [[ -n "${map_ips[$choice]}" ]]; then selected_ips=("${map_ips[$choice]}")
-        else echo -e "${R}Invalid selection!${NC}"; sleep 1; return; fi
-    fi
-    echo -ne "\n${G}Enter Local Ports (e.g. 80,443,1080): ${NC}"; read raw_ports
-    clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
-    echo -e "\n${Y}Applying Mappings...${NC}"
-    echo -e "${B}┌──────────────┬──────────────────────────────────────────────────┐${NC}"
-    printf "${B}│${W} %-12s ${B}│${W} %-48s ${B}│${NC}\n" "Local Port" "Assigned Target IP"
-    echo -e "${B}├──────────────┼──────────────────────────────────────────────────┤${NC}"
-    for p in $clean_ports; do
-        if grep -q "ft_$p" "$H_CONF" 2>/dev/null; then 
-            printf "${B}│${R} %-12s ${B}│${NC} %-48s ${B}│${NC}\n" "$p" "Error: Port already exists!"
-            continue 
+            lat_raw="---"
+            lat_color="${DIM}"
+            stat_icon="○"
+            stat_text="OFFLINE"
+            stat_color="${R}"
         fi
         
-        target_ip=$(echo ${selected_ips[$((RANDOM % ${#selected_ips[@]}))]} | cut -d'.' -f1-3).2
-        [ -n "$manual_ip" ] && target_ip="$manual_ip"
+        local m_icon="├─"
+        if [ ${#v_ips[@]} -eq 0 ]; then m_icon="└─"; fi
         
-        echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
-        printf "${B}│${G} %-12s ${B}│${NC} %-48s ${B}│${NC}\n" "$p" "$target_ip"
+        printf "  ${B}│${NC} ${W}%s %-15s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" \
+            "${m_icon}" "Core IP" \
+            "$main_lip" \
+            "$main_tip" \
+            "$lat_color" "$lat_raw" "$NC" \
+            "$stat_color" "$stat_icon" "$stat_text" "$NC"
+        
+        # 2. Virtual IPs Child Nodes
+        local total_v=${#v_ips[@]}
+        for ((idx=0; idx<total_v; idx++)); do
+            lip="${v_ips[$idx]}"
+            base_ip=$(echo "$lip" | cut -d'.' -f1-3)
+            last=$(echo "$lip" | cut -d'.' -f4)
+            tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
+            
+            ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
+            if [ $? -eq 0 ]; then
+                lat=$(echo "$ping_res" | grep -oP 'time=\K\S+')
+                lat_raw="${lat}ms"
+                lat_color="${Y}"
+                stat_icon="●"
+                stat_text="ONLINE"
+                stat_color="${G}"
+            else
+                lat_raw="---"
+                lat_color="${DIM}"
+                stat_icon="○"
+                stat_text="OFFLINE"
+                stat_color="${R}"
+            fi
+            
+            local v_icon="│  ├─"
+            if [ $idx -eq $((total_v - 1)) ]; then v_icon="│  └─"; fi
+            
+            printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" \
+                "${v_icon}" "vIP" \
+                "$lip" \
+                "$tip" \
+                "$lat_color" "$lat_raw" "$NC" \
+                "$stat_color" "$stat_icon" "$stat_text" "$NC"
+        done
+        
+        echo -e "  ${B}╰────────────────────┴────────────────────┴────────────────────┴──────────────┴──────────────╯${NC}"
+        echo ""
     done
     
-    echo -e "${B}└──────────────┴──────────────────────────────────────────────────┘${NC}"
-    systemctl restart haproxy 2>/dev/null
-    echo -ne "\n${G}Success! All mapped. Press Enter to return...${NC}"; read
-}
-
-show_table() {
-    draw_mproxy_header
-    echo -e "${Y}Current Mapping Table:${NC}"
-    echo -e "${B}┌──────────────┬─────────────────────────────────────────────────────────────────────────┐${NC}"
-    printf "${B}│${W} %-12s ${B}│${W} %-71s ${B}│${NC}\n" "Local Port" "Target IP"
-    echo -e "${B}├──────────────┼─────────────────────────────────────────────────────────────────────────┤${NC}"
-    local mappings=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {print port " " $3}' | sed 's/:.*//' | sort -n -k1)
-    if [ -z "$mappings" ]; then printf "${B}│${NC} %-86s ${B}│${NC}\n" "${R}No active mappings.${NC}"
-    else
-        while read -r line; do
-            p_num=$(echo $line | awk '{print $1}'); d_ip=$(echo $line | awk '{print $2}')
-            printf "${B}│${G} %-12s ${B}│${NC} %-71s ${B}│${NC}\n" "$p_num" "$d_ip"
-        done <<< "$mappings"
-    fi
-    echo -e "${B}└──────────────┴─────────────────────────────────────────────────────────────────────────┘${NC}"
-    echo -ne "\n${B}Press Enter...${NC}"; read
-}
-
-mproxy_main_menu() {
-    while true; do
-        draw_mproxy_header
-        printf "  ${Y}[1]${NC} ${W}%-45s${NC}\n" "REPAIR & INSTALL CORE"
-        printf "  ${Y}[2]${NC} ${G}%-45s${NC}\n" "Add Port Mapping (With Report)"
-        printf "  ${Y}[3]${NC} ${W}%-45s${NC}\n" "Activate Dynamic Sync"
-        printf "  ${Y}[4]${NC} ${W}%-45s${NC}\n" "Wipe Mappings (Standard Reset)"
-        printf "  ${Y}[5]${NC} ${W}%-45s${NC}\n" "View Port -> IP Table"
-        printf "  ${Y}[6]${NC} ${R}%-45s${NC}\n" "UNINSTALL EVERYTHING (Nuclear)"
-        printf "  ${Y}[0]${NC} ${W}%-45s${NC}\n" "Back"
-        echo -ne "\n${B}Command >> ${NC}"; read opt
-        case $opt in
-            1) fix_and_install ;;
-            2) smart_map ;;
-            3) echo -e "${G}Sync active.${NC}"; sleep 1 ;;
-            4) create_base_conf; systemctl restart haproxy 2>/dev/null; echo -e "${G}Wiped.${NC}"; sleep 1 ;;
-            5) show_table ;;
-            6) 
-                echo -ne "${R}Nuclear Wipe? (y/n): ${NC}"; read confirm
-                if [[ "$confirm" == "y" ]]; then 
-                    systemctl stop haproxy 2>/dev/null; rm -rf /etc/haproxy /var/lib/haproxy; apt-get purge -y haproxy 2>/dev/null
-                    echo -e "${G}Erased from system.${NC}"; sleep 1
-                fi ;;
-            0) break ;;
-        esac
-    done
-}
-
-# --- UPDATE LOGIC (WGET) ---
-update_script() {
-    echo -e "${Y}[*] Fetching update from GitHub via wget...${NC}"
-    wget -qO /tmp/mgre_new "$REPO_URL"
-    if [ $? -eq 0 ]; then
-        mv /tmp/mgre_new "$INSTALL_PATH"
-        chmod +x "$INSTALL_PATH"
-        echo -e "${G}[✓] Update applied successfully!${NC}"
-        sleep 1
-        exec mgre
-    else
-        echo -e "${R}[!] Update failed. Check URL/Connection.${NC}"
-        sleep 2
+    if [ "$has_ips" = false ]; then
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        printf "  ${B}│${NC} ${DIM}%-90s${NC} ${B}│${NC}\n" " No tunnels are currently active."
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
     fi
 }
 
-# --- MAIN DASHBOARD ---
-if [[ "$1" == "--apply" ]]; then apply_tunnel; exit 0; fi
-
-while true; do
-    draw_mgre_header
-    printf "  ${Y}[1]${NC} ${W}%-35s${NC}\n" "Configure Standard Tunnel"
-    printf "  ${Y}[2]${NC} ${W}%-35s${NC}\n" "Generate Sync Virtual IPs"
-    printf "  ${Y}[3]${NC} ${C}%-35s${NC} ${G}(MapRoxy)${NC}\n" "Manage Port Mappings"
-    printf "  ${Y}[4]${NC} ${W}%-35s${NC}\n" "Live Advanced Monitoring"
-    printf "  ${Y}[5]${NC} ${B}%-35s${NC} ${Y}(Update)${NC}\n" "Update Script (Wget)"
-    printf "  ${Y}[6]${NC} ${R}%-35s${NC}\n" "HARD UNINSTALL (Nuclear)"
-    printf "  ${Y}[0]${NC} ${W}%-35s${NC}\n" "Exit"
-    echo -ne "\n${B}Command >> ${NC}"
-    read opt
-    case $opt in
-        1) echo -ne "${G}Mode [1:IR | 2:KH]: ${NC}"; read s_type
-           detected_ip=$(get_local_ip)
-           echo -ne "${G}Local Public IP [Default: ${Y}${detected_ip}${G}]: ${NC}"; read custom_ip
-           local_ip="${custom_ip:-$detected_ip}"
-           echo -ne "${G}Remote IP: ${NC}"; read r_ip
-           echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0" > "$CONF_FILE"
-           apply_tunnel
-           cat <<EOF > "$SERVICE_FILE"
+setup_service() {
+    cat <<EOF > "$SERVICE_FILE"
 [Unit]
-Description=MGRE MDesign Service
+Description=MGRE Multi-Tunnel Service
 After=network.target
+
 [Service]
 ExecStart=$INSTALL_PATH --apply
 Type=oneshot
 RemainAfterExit=yes
+
 [Install]
 WantedBy=multi-user.target
 EOF
-           systemctl daemon-reload && systemctl enable mgre.service >/dev/null 2>&1
-           echo -e "${G}Tunnel Established.${NC}"; sleep 1 ;;
-        2) source "$CONF_FILE"
-           echo -ne "${G}IP Count: ${NC}"; read n; echo -ne "${G}Sync Key: ${NC}"; read k
-           echo -e "TYPE=$TYPE\nLOCAL_PUB=$LOCAL_PUB\nREMOTE_PUB=$REMOTE_PUB\nMAX_IPS=$n\nSYNC_KEY=$k" > "$CONF_FILE"
-           apply_tunnel; echo -e "${G}$n Sync IPs Generated.${NC}"; sleep 1 ;;
-        3) mproxy_main_menu ;;
-        4) while true; do draw_mgre_header; show_mgre_monitor; echo -e "${Y}Refreshing... CTRL+C to back.${NC}"; sleep 5; done ;;
-        5) update_script ;;
-        6) echo -ne "${R}Nuclear Wipe? (y/n): ${NC}"; read confirm
-           if [[ "$confirm" == "y" ]]; then
-               systemctl stop mgre.service >/dev/null 2>&1; systemctl disable mgre.service >/dev/null 2>&1
-               ip tunnel del greir >/dev/null 2>&1; ip tunnel del grekh >/dev/null 2>&1
-               rm -f "$SERVICE_FILE" "$CONF_FILE" "$STATE_FILE" "$INSTALL_PATH"
-               echo -e "${G}System Purged.${NC}"; exit 0
-           fi ;;
-        0) exit 0 ;;
+    systemctl daemon-reload && systemctl enable mgre.service >/dev/null 2>&1
+}
+
+# --- MODULE EXECUTION ---
+if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
+
+while true; do
+    draw_mgre_header
+    echo ""
+    echo -e "  ${DIM}┌─[ ACTIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 GRE / 6to4 IP6GRE)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (All Tunnels)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Specific Tunnel${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}"
+    echo ""
+    echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
+    
+    case $opt in
+        1) 
+           while true; do
+               echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}"
+               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC} ${DIM}(Normal)${NC}"
+               echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC} ${DIM}(Bypass DPI)${NC}"
+               echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
+               
+               if [[ "$proto_choice" == "2" ]]; then tun_proto="6to4"; else tun_proto="ipv4"; fi
+
+               echo -ne "\n  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH]: ${NC}"; read s_type
+               
+               if [[ "$tun_proto" == "6to4" ]]; then
+                   prefix=$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")
+               else
+                   prefix=$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")
+               fi
+               
+               echo -ne "  ${C}●${NC} ${W}Interface Custom Name (e.g. mahan): ${NC}"; read suffix
+               t_name="${prefix}${suffix}"
+               echo -e "  ${DIM}╰─❯${NC} ${G}Target Interface:${NC} ${W}${t_name}${NC}"
+
+               detected_ip=$(get_local_ip)
+               echo -ne "  ${C}●${NC} ${W}Local Public IP [Default: ${Y}${detected_ip}${W}]: ${NC}"; read custom_ip
+               local_ip="${custom_ip:-$detected_ip}"
+               local_ip=$(echo "$local_ip" | tr -d '[:space:]')
+               
+               echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
+               r_ip=$(echo "$r_ip" | tr -d '[:space:]')
+               
+               local_ip6=""
+               remote_ip6=""
+               if [[ "$tun_proto" == "6to4" ]]; then
+                   echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key (Must be EXACTLY same on both servers): ${NC}"; read tun_secret
+                   tun_secret=$(echo "$tun_secret" | tr -d '[:space:]')
+                   
+                   hash_str=$(echo -n "${tun_secret}_MHDesign" | sha256sum)
+                   pfx="fd${hash_str:0:2}:${hash_str:2:4}:${hash_str:6:4}:${hash_str:10:4}"
+                   
+                   if [[ "$s_type" == "1" ]]; then
+                       local_ip6="${pfx}::1"
+                       remote_ip6="${pfx}::2"
+                   else
+                       local_ip6="${pfx}::2"
+                       remote_ip6="${pfx}::1"
+                   fi
+                   echo -e "  ${DIM}╰─❯${NC} ${M}Auto-Generated IPv6 Prefix:${NC} ${W}${pfx}::/64${NC}"
+               fi
+               
+               tun_id=1
+               while grep -q "TUN_ID=$tun_id" "$CONF_DIR"/*.conf 2>/dev/null; do ((tun_id++)); done
+               
+               conf_path="$CONF_DIR/${t_name}.conf"
+               echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
+               
+               apply_tunnel "$conf_path"
+               setup_service
+               
+               echo -e "  ${G}● Tunnel [${t_name}] created successfully!${NC}"
+               
+               remote_tun=$([ "$s_type" == "1" ] && echo "10.76.${tun_id}.2" || echo "10.76.${tun_id}.1")
+               echo -ne "\n  ${DIM}┌─${NC} ${W}Run ping test to remote endpoint ($remote_tun)? (y/n): ${NC}"; read run_ping
+               if [[ "$run_ping" == "y" ]]; then
+                   echo -e "  ${DIM}│${NC}"
+                   ping -c 4 -W 1 "$remote_tun" | grep -v '^$' | while read -r p_line; do
+                       echo -e "  ${DIM}│${NC} ${C}$p_line${NC}"
+                   done
+                   echo -e "  ${DIM}└────────────────────────────────────────────────────────${NC}"
+               else
+                   echo -e "  ${DIM}└─${NC} ${DIM}Skipped.${NC}"
+               fi
+               
+               echo -ne "\n  ${DIM}┌─${NC} ${W}Do you want to create another tunnel? (y/n): ${NC}"; read create_more
+               if [[ "$create_more" != "y" ]]; then
+                   break
+               fi
+           done
+           ;;
+           
+        2) 
+           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+           if [ ${#configs[@]} -eq 0 ]; then
+               echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; continue
+           fi
+           
+           echo -e "\n  ${B}╭────────────────── Available Tunnels ──────────────────╮${NC}"
+           for i in "${!configs[@]}"; do
+               conf_name=$(basename "${configs[$i]}" .conf)
+               proto_label="IPv4 GRE"
+               grep -q "TUN_PROTO=6to4" "${configs[$i]}" && proto_label="6to4 IP6GRE"
+               printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-32s${NC} ${M}[%-10s]${NC} ${B}│${NC}\n" "$i" "$conf_name" "$proto_label"
+           done
+           echo -e "  ${B}╰───────────────────────────────────────────────────────╯${NC}"
+           echo -ne "  ${C}●${NC} ${W}Select Tunnel Index: ${NC}"; read t_idx
+           
+           if [[ -n "${configs[$t_idx]}" ]]; then
+               sel_conf="${configs[$t_idx]}"
+               source "$sel_conf"
+               
+               echo -ne "\n  ${C}●${NC} ${W}Virtual IPs Count for ${Y}${T_NAME}${W}: ${NC}"; read n
+               echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
+               
+               sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"
+               sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
+               
+               apply_tunnel "$sel_conf"
+               echo -e "  ${G}● IPs generated for ${T_NAME} successfully.${NC}"; sleep 1.5 
+           else
+               echo -e "  ${R}● Invalid selection!${NC}"; sleep 1.5
+           fi
+           ;;
+           
+        3) 
+           while true; do 
+               draw_mgre_header
+               show_mgre_monitor
+               echo -e "  ${DIM}Press '${NC}${Y}q${NC}${DIM}' to go back.${NC}"
+               read -t 5 -n 1 -s back_opt
+               [[ "$back_opt" == "q" ]] && break
+           done 
+           ;;
+
+        4)
+           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+           if [ ${#configs[@]} -eq 0 ]; then
+               echo -e "\n  ${R}● No tunnels available to delete!${NC}"; sleep 1.5; continue
+           fi
+           
+           echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ──────────────────╮${NC}"
+           for i in "${!configs[@]}"; do
+               conf_name=$(basename "${configs[$i]}" .conf)
+               printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-50s${NC} ${B}│${NC}\n" "$i" "$conf_name"
+           done
+           echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
+           echo -ne "  ${C}●${NC} ${W}Enter Index: ${NC}"; read del_idx
+           
+           if [[ -n "${configs[$del_idx]}" ]]; then
+               sel_conf="${configs[$del_idx]}"
+               source "$sel_conf"
+               
+               echo -ne "\n  ${R}● Are you sure you want to completely delete [${Y}${T_NAME}${R}]? (y/n): ${NC}"; read del_confirm
+               if [[ "$del_confirm" == "y" ]]; then
+                   iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 >/dev/null 2>&1
+                   iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1436 >/dev/null 2>&1
+                   ip tunnel del "$T_NAME" >/dev/null 2>&1
+                   ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+                   
+                   rm -f "$sel_conf" "${STATE_DIR}/${T_NAME}.state"
+                   echo -e "  ${G}● Tunnel [${T_NAME}] and all its routing rules have been erased.${NC}"; sleep 1.5
+               else
+                   echo -e "  ${DIM}● Aborted.${NC}"; sleep 1
+               fi
+           else
+               echo -e "  ${R}● Invalid selection!${NC}"; sleep 1.5
+           fi
+           ;;
+           
+        0) break ;;
     esac
 done

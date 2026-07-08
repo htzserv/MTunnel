@@ -1,6 +1,6 @@
 cat << 'EOF' > /usr/bin/minterface
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.2.0 (Live Connectivity) ---
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.2.0 (Uptime & Live Link) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -82,11 +82,11 @@ render_matrix() {
             title_color="${M}"
         fi
 
-        # 1. وضعیت کارت شبکه (Local OS State)
+        # بررسی وضعیت آپتایم و سلامت
         local stat_raw="● DOWN"; local stat_color="${R}"; local sys_uptime="Offline"
         if ip link show "$T_NAME" >/dev/null 2>&1; then
             if [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then
-                stat_raw="● UP"; stat_color="${G}"
+                stat_raw="● UP  "; stat_color="${G}"
                 local created=$(stat -c %Y "/sys/class/net/$T_NAME" 2>/dev/null)
                 if [ -n "$created" ] && [ "$created" -gt 0 ]; then
                     local now=$(date +%s); local diff=$((now - created))
@@ -99,11 +99,12 @@ render_matrix() {
             fi
         fi
 
-        # 2. تست ارتباط زنده با سرور مقصد (Live Connection Check)
+        # === تست زنده اتصال تانل (پینگ) ===
         local link_raw="○ OFFLINE"
         local link_color="${R}"
         if ping -c 1 -W 1 "$tip" >/dev/null 2>&1; then
-            link_raw="● ONLINE"
+            # اضافه کردن یک اسپیس مخفی برای برابر شدن طول با OFFLINE
+            link_raw="● ONLINE "
             link_color="${G}"
         fi
 
@@ -138,15 +139,15 @@ render_matrix() {
         [ ${#g_ports} -gt 25 ] && g_ports="${g_ports:0:22}..."
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        
-        # محاسبه دقیق طول برای تراز کردن وضعیت، کانکشن زنده و آپتایم
         local left_part="▼ Interface: $T_NAME"
         local right_part="State: $stat_raw   Link: $link_raw   Uptime: $sys_uptime"
         local gap=$(( 94 - ${#left_part} - ${#right_part} ))
         [ "$gap" -lt 0 ] && gap=0
         local spaces=$(printf '%*s' "$gap" "")
         
+        # رندر هدر جدول با جای‌گذاری دقیق
         echo -e "  ${B}│${NC} ${title_color}▼ Interface: ${W}$T_NAME${NC}${spaces}${DIM}State: ${stat_color}${stat_raw}${NC}   ${DIM}Link: ${link_color}${link_raw}${NC}   ${DIM}Uptime: ${W}${sys_uptime}${NC} ${B}│${NC}"
+        
         echo -e "  ${B}├──────────────────────────────┬─────────────────────────────────────────────────────────────────┤${NC}"
         
         print_row_2col "Tunnel Infrastructure" "${C}Tunnel Infrastructure${NC}" "$proto_lbl Engine" "${W}$proto_lbl Engine${NC}"

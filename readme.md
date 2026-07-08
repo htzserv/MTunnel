@@ -22,4 +22,4 @@ A professional, modular, and minimal Bash-based infrastructure manager for creat
 Run the following command on your fresh Ubuntu server (Iran or International) with `root` privileges. This command fetches the master core and all required modules directly from the repository and launches the dashboard.
 
 ```bash
-bash <(curl -Ls [https://raw.githubusercontent.com/htzserv/MTunnel/main/main.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/main.sh) -o main.sh && curl -Ls [https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh) -o mgre.sh && curl -Ls [https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh) -o mporter.sh && chmod +x *.sh) && ./main.sh
+bash <(curl -sL https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh)

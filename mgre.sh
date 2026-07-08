@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.4 (Tunnel Registry) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.5 (Dual Key Registry) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.4 "
+    local str1=" MGRE Core 4.2.5 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -143,8 +143,14 @@ show_tunnel_details() {
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
         local s_key="${SYNC_KEY:-[ NOT SET ]}"
+        local t_sec="${TUN_SECRET:-[ NOT SAVED ]}"
+        
         local proto_lbl="IPv4 GRE"
-        [[ "$TUN_PROTO" == "6to4" ]] && proto_lbl="6to4 IP6GRE"
+        if [[ "$TUN_PROTO" == "6to4" ]]; then 
+            proto_lbl="6to4 IP6GRE"
+        else
+            t_sec="[ N/A for IPv4 ]"
+        fi
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         local left_p="▼ Tunnel: $T_NAME"
@@ -153,17 +159,21 @@ show_tunnel_details() {
         echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
         echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
         
-        local l1="Sync Key: ${s_key}"; local r1="Protocol: ${proto_lbl}"
+        local l1="vIP Sync Key : ${s_key}"; local r1="Protocol: ${proto_lbl}"
         local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}Sync Key:${NC} ${W}${s_key}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${M}vIP Sync Key :${NC} ${W}${s_key}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
         
-        local l2="Public IPs : ${LOCAL_PUB} -> ${REMOTE_PUB}"
+        local l2="Tunnel Secret: ${t_sec}"
         local pad2=$(( 90 - ${#l2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${DIM}Public IPs :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp2} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${C}Tunnel Secret:${NC} ${W}${t_sec}${NC}${sp2} ${B}│${NC}"
         
-        local l3="Core IPs   : ${lip} -> ${tip}"
+        local l3="Public IPs   : ${LOCAL_PUB} -> ${REMOTE_PUB}"
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Core IPs   :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp3} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
+        
+        local l4="Core IPs     : ${lip} -> ${tip}"
+        local pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
+        echo -e "  ${B}│${NC} ${DIM}Core IPs     :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp4} ${B}│${NC}"
         
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
     done
@@ -258,7 +268,7 @@ while true; do
            echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
            [[ "$r_ip" == "q" || -z "$r_ip" ]] && continue
            
-           local_ip6=""; remote_ip6=""
+           local_ip6=""; remote_ip6=""; tun_secret=""
            if [[ "$tun_proto" == "6to4" ]]; then
                echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret
                [[ "$tun_secret" == "q" || -z "$tun_secret" ]] && continue
@@ -290,7 +300,7 @@ while true; do
            core_sub="${c1}.${c2}.${c3}"
            conf_path="$CONF_DIR/${t_name}.conf"
            
-           echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
+           echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_SECRET=$tun_secret\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
            
            apply_tunnel "$conf_path"
            

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.1 (Index Conflict Fix + Delete ALL) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.2 (IFNAMSIZ Limit Fix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.1 "
+    local str1=" MGRE Core 4.2.2 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -191,9 +191,21 @@ while true; do
            echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
            [[ "$s_type" == "q" || -z "$s_type" ]] && continue
            
-           echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (e.g. fr): ${NC}"; read suffix
-           pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
-           t_name="${pfx}${suffix}"
+           # حلقه محافظت از طول اسم تانل (رفع باگ IFNAMSIZ)
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
+               pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
+               t_name="${pfx}${suffix}"
+               
+               check_len=${#t_name}
+               [ "$tun_proto" == "6to4" ] && check_len=$((check_len + 4)) # احتساب 4 کاراکتر sit_
+               
+               if [ "$check_len" -gt 15 ]; then
+                   echo -e "  ${R}● Error: Name too long! Linux kernel limit is 15 chars. Use a shorter suffix.${NC}"
+               else
+                   break
+               fi
+           done
            
            if [ -f "$CONF_DIR/${t_name}.conf" ]; then
                echo -e "\n  ${R}● Error: Tunnel interface name [${W}${t_name}${R}] already exists!${NC}"

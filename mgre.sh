@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1.7 (GRE Key Isolation) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.0 (Smart Deterministic Subnets) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -30,20 +30,19 @@ apply_tunnel() {
         ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB"
         ip link set dev "sit_$T_NAME" mtu 1480; ip link set "sit_$T_NAME" up
         ip -6 addr add "$LOCAL_IP6/64" dev "sit_$T_NAME"
-        # اضافه شدن کِی جهت تفکیک تونل‌های موازی IP6GRE
         ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6" key "$TUN_ID"
         ip link set dev "$T_NAME" mtu 1436; ip link set "$T_NAME" up
         ip addr add "$local_tun"/30 dev "$T_NAME"
         iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396
     else
         local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
-        # اضافه شدن کِی جهت تفکیک تونل‌های موازی IPv4 GRE
         ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255 key "$TUN_ID"
         ip link set "$T_NAME" up; ip addr add "$local_tun"/30 dev "$T_NAME"
         ip link set dev "$T_NAME" mtu "$mtu_val"
         iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40))
     fi
 
+    # اصلاح باگ امنیتی RFC 1918 در تولید vIPها
     if [[ "$MAX_IPS" -gt 0 ]]; then
         local s_file="${STATE_DIR}/${T_NAME}.state"
         echo "0" > "$s_file"
@@ -51,10 +50,14 @@ apply_tunnel() {
             idx=$(cat "$s_file")
             hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum)
             range_selector=$(( 0x${hash:0:2} % 3 ))
-            if [[ "$range_selector" == "0" ]]; then o1="10"
-            elif [[ "$range_selector" == "1" ]]; then o1="172"
-            else o1="192"; fi
-            o2=$(( (0x${hash:2:2} % 254) + 1 )); o3=$(( (0x${hash:4:2} % 254) + 1 ))
+            if [[ "$range_selector" == "0" ]]; then
+                o1="10"; o2=$(( (0x${hash:2:2} % 254) + 1 ))
+            elif [[ "$range_selector" == "1" ]]; then
+                o1="172"; o2=$(( (0x${hash:2:2} % 16) + 16 ))
+            else
+                o1="192"; o2="168"
+            fi
+            o3=$(( (0x${hash:4:2} % 254) + 1 ))
             last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
             ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null
@@ -75,7 +78,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.1.7 "
+    local str1=" MGRE Core 4.2.0 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -193,7 +196,6 @@ while true; do
            pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
            t_name="${pfx}${suffix}"
            
-           # محافظ ۱: چک کردن تکراری نبودن اسم اینترفیس
            if [ -f "$CONF_DIR/${t_name}.conf" ]; then
                echo -e "\n  ${R}● Error: Tunnel interface name [${W}${t_name}${R}] already exists!${NC}"
                sleep 2; continue
@@ -211,8 +213,6 @@ while true; do
            fi
            
            echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
-           
-           # محافظ ۲: چک کردن تکراری نبودن آیدی شبکه تانل
            if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
                echo -e "\n  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned to another tunnel!${NC}"
                sleep 2; continue
@@ -220,11 +220,18 @@ while true; do
            
            tun_id=$user_tun_id
            hash_c=$(echo -n "core_${tun_id}" | sha256sum)
-           r_sel=$(( 0x${hash_c:0:2} % 3 ))
-           [ "$r_sel" == "0" ] && c1="10" || { [ "$r_sel" == "1" ] && c1="172" || c1="192"; }
-           c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-           core_sub="${c1}.${c2}.${c3}"
+           class_selector=$(( tun_id % 3 ))
            
+           # موتور جدید انتخاب قطعی کلاس‌های پرایوت (RFC 1918)
+           if [ "$class_selector" == "1" ]; then
+               c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+           elif [ "$class_selector" == "2" ]; then
+               c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+           else
+               c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+           fi
+           
+           core_sub="${c1}.${c2}.${c3}"
            conf_path="$CONF_DIR/${t_name}.conf"
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
            apply_tunnel "$conf_path"; setup_service

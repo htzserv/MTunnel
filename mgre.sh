@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MHDesign 0.1 (v3.8.5) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v3.9 (Tunnel Editor Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -78,7 +78,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 3.8 "
+    local str1=" MGRE Core 3.9 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -109,7 +109,6 @@ show_mgre_monitor() {
         local main_tip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.2" || echo "10.76.${TUN_ID}.1")
         local main_lip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.1" || echo "10.76.${TUN_ID}.2")
         
-        # استفاده از سوئیچ‌های -c 1 و -W 1 برای جلوگیری از هدر رفتن رم در بررسی وضعیت شبکه
         ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         if [ $? -eq 0 ]; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
@@ -122,7 +121,7 @@ show_mgre_monitor() {
         
         local total_v=${#v_ips[@]}
         for ((idx=0; idx<total_v; idx++)); do
-            lip="${v_ips[$idx]}"; base_ip=$(echo "$lip" | cut -d'.' -f1-3); last=$(echo "$lip" | cut -d'.' -f4); tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
+            local lip="${v_ips[$idx]}"; local base_ip=$(echo "$lip" | cut -d'.' -f1-3); local last=$(echo "$lip" | cut -d'.' -f4); local tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
             ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
             if [ $? -eq 0 ]; then
                 lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
@@ -136,6 +135,50 @@ show_mgre_monitor() {
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         printf "  ${B}│${NC} ${DIM}%-90s${NC} ${B}│${NC}\n" " No tunnels are currently active."
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
+    fi
+}
+
+edit_tunnel() {
+    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
+    
+    echo -e "\n  ${B}╭────────────────── Select Tunnel to Edit ──────────────────╮${NC}"
+    for i in "${!configs[@]}"; do
+        local conf_name=$(basename "${configs[$i]}" .conf)
+        local proto_label="IPv4 GRE"
+        grep -q "TUN_PROTO=6to4" "${configs[$i]}" && proto_label="6to4 IP6GRE"
+        printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-32s${NC} ${M}[%-10s]${NC} ${B}│${NC}\n" "$i" "$conf_name" "$proto_label"
+    done
+    echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
+    echo -ne "  ${C}●${NC} ${W}Select Tunnel Index: ${NC}"; read -t 20 t_idx
+    
+    if [[ -n "${configs[$t_idx]}" ]]; then
+        local sel_conf="${configs[$t_idx]}"
+        source "$sel_conf"
+        
+        echo -e "\n  ${DIM}┌─[ EDIT INFRASTRUCTURE IPs: ${Y}${T_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}├─ Current Local Public IP: ${W}${LOCAL_PUB}${NC}"
+        echo -e "  ${DIM}├─ Current Remote Public IP: ${W}${REMOTE_PUB}${NC}"
+        echo -e "  ${DIM}│${NC}"
+        
+        local detected_ip=$(get_local_ip)
+        echo -ne "  ${C}●${NC} ${W}Enter New Local Public IP [Default: ${Y}${LOCAL_PUB}${W}]: ${NC}"; read -t 30 new_local
+        local final_local="${new_local:-$LOCAL_PUB}"
+        final_local=$(echo "$final_local" | tr -d '[:space:]')
+        
+        echo -ne "  ${C}●${NC} ${W}Enter New Remote Public IP [Default: ${Y}${REMOTE_PUB}${W}]: ${NC}"; read -t 30 new_remote
+        local final_remote="${new_remote:-$REMOTE_PUB}"
+        final_remote=$(echo "$final_remote" | tr -d '[:space:]')
+        
+        # بروزرسانی امن فایل پیکربندی بدون دست زدن به آی‌پی‌های مجازی
+        sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$final_local/" "$sel_conf"
+        sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$final_remote/" "$sel_conf"
+        
+        echo -e "  ${DIM}├─ Re-applying tunnel routing tables...${NC}"
+        apply_tunnel "$sel_conf"
+        echo -e "  ${G}● Tunnel infrastructure updated successfully!${NC}"; sleep 2
+    else
+        echo -e "  ${R}● Invalid selection!${NC}"; sleep 1.5
     fi
 }
 
@@ -158,7 +201,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 GRE / 6to4 IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (All Tunnels)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Specific Tunnel${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 GRE / 6to4 IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (All Tunnels)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Specific Tunnel${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC} ${Y}(NEW)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read -t 60 opt
     case $opt in
         1) 
@@ -189,7 +232,7 @@ while true; do
                apply_tunnel "$conf_path"; setup_service
                echo -e "  ${G}● Tunnel [${t_name}] created!${NC}"
                
-               remote_tun=$([ "$s_type" == "1" ] && echo "10.76.${tun_id}.2" || echo "10.76.${tun_id}.1")
+               remote_tun=$([ "$s_type" == "1" ] && echo "10.76.${tun_id}.2" || echo "10.76.${TUN_ID}.1")
                echo -ne "\n  ${DIM}┌─${NC} ${W}Run ping test to remote endpoint ($remote_tun)? (y/n): ${NC}"; read -t 10 run_ping
                if [[ "$run_ping" == "y" ]]; then
                    echo -e "  ${DIM}│${NC}"
@@ -242,6 +285,7 @@ while true; do
                    echo -e "  ${G}● Tunnel erased.${NC}"; sleep 1.5
                fi
            fi ;;
+        5) edit_tunnel ;;
         0) break ;;
     esac
 done

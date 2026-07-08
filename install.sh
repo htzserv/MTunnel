@@ -9,23 +9,20 @@ echo -e "\n  ${B}╭────────────────────
 echo -e "  ${B}│${NC} ${W}MHDesign Core Initializing...${NC}          ${B}│${NC}"
 echo -e "  ${B}╰────────────────────────────────────────╯${NC}\n"
 
-# ساخت پوشه پروژه و ورود به آن
 echo -e "  ${DIM}├─ Creating workspace directory (MTunnel)...${NC}"
 mkdir -p MTunnel
 cd MTunnel || exit
 
-# دانلود ماژول‌ها
 echo -e "  ${DIM}├─ Fetching Core Modules...${NC}"
-curl -sO "$REPO/main.sh"
-curl -sO "$REPO/mgre.sh"
-curl -sO "$REPO/mporter.sh"
+# قرار دادن تایم‌اوت ۱۰ ثانیه‌ای برای دانلودها جهت جلوگیری از معلق ماندن پروسس
+curl --connect-timeout 10 -m 20 -sO "$REPO/main.sh"
+curl --connect-timeout 10 -m 20 -sO "$REPO/mgre.sh"
+curl --connect-timeout 10 -m 20 -sO "$REPO/mporter.sh"
 
-# اعمال دسترسی‌ها
 echo -e "  ${DIM}├─ Applying execution permissions...${NC}"
 chmod +x *.sh
 
 echo -e "  ${G}● Installation Complete! Booting Dashboard...${NC}"
 sleep 1.5
 
-# اجرای داشبورد مرکزی
 ./main.sh

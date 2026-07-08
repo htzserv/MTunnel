@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.6 ---
+# --- MDesign Master Core | Central Dashboard v1.6.1 (Bugfix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -61,40 +61,26 @@ while true; do
            
         3) 
            echo -e "\n  ${Y}● Fetching latest Core Modules from Repository...${NC}"
-           
-           # سیستم دور زدن کش گیت‌هاب (Cache-Busting)
            CACHE_BUST=$(date +%s)
-           
            wget --timeout=10 --tries=2 -qO /tmp/main_new "$REPO_BASE/main.sh?v=$CACHE_BUST"
            wget --timeout=10 --tries=2 -qO /tmp/mgre_new "$REPO_BASE/mgre.sh?v=$CACHE_BUST"
            wget --timeout=10 --tries=2 -qO /tmp/mporter_new "$REPO_BASE/mporter.sh?v=$CACHE_BUST"
            
            if [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ]; then
                echo -e "  ${DIM}├─ Applying updates to system core...${NC}"
-               
-               # آپدیت مستقیم هسته‌های نصب شده در سیستم‌عامل
                [ -w "$MTUNNEL_PATH" ] && cat /tmp/main_new > "$MTUNNEL_PATH"
                [ -w "$MGRE_MODULE" ] && cat /tmp/mgre_new > "$MGRE_MODULE"
                [ -w "$MPORTER_MODULE" ] && cat /tmp/mporter_new > "$MPORTER_MODULE"
-               
-               # آپدیت فایل‌های لوکال (اگر داخل پوشه MTunnel باشیم)
                [ -f "./main.sh" ] && cat /tmp/main_new > "./main.sh"
                [ -f "./mgre.sh" ] && cat /tmp/mgre_new > "./mgre.sh"
                [ -f "./mporter.sh" ] && cat /tmp/mporter_new > "./mporter.sh"
-               
-               # در هر صورت فایل اجرای فعلی رو با نسخه جدید بازنویسی کن
                cat /tmp/main_new > "$0"
-               
                chmod +x "$MTUNNEL_PATH" "$MGRE_MODULE" "$MPORTER_MODULE" "$0" 2>/dev/null
                rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new
-               
-               echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"
-               sleep 1.5
-               exec "$0"
+               echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"; sleep 1.5; exec "$0"
            else 
                echo -e "  ${R}● Update failed! Check network connection or repository files.${NC}"
-               rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new
-               sleep 2
+               rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new; sleep 2
            fi ;;
            
         4) 
@@ -117,7 +103,7 @@ while true; do
                    done
                fi
                
-               for link in $(ip link show | awk -F': ' '/greir|grekh|sit_gre/ {print $2}' | cut -d'@' -f1); do
+               for link in $(ip link show | awk -F': ' '/greir|grekh|gre6ir|gre6kh|sit_/ {print $2}' | cut -d'@' -f1); do
                    ip tunnel del "$link" >/dev/null 2>&1
                    ip link del "$link" >/dev/null 2>&1
                done
@@ -126,7 +112,7 @@ while true; do
                rm -rf /etc/mgre /etc/mporter /etc/haproxy /var/lib/haproxy /etc/gost
                rm -f /usr/bin/mgre /usr/bin/mporter /usr/bin/mtunnel /usr/local/bin/gost
                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mporter.service /etc/systemd/system/gost.service
-               crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab -
+               crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
                systemctl daemon-reload
                
                echo -e "  ${DIM}├─ Self-destructing project folder...${NC}"
@@ -134,9 +120,7 @@ while true; do
                if [[ "$current_dir" == *"/MTunnel"* ]]; then
                    cd .. && rm -rf "$current_dir"
                fi
-               
-               echo -e "  ${G}● Purge complete. No traces left. System is vanilla.${NC}\n"
-               exit 0
+               echo -e "  ${G}● Purge complete. No traces left. System is vanilla.${NC}\n"; exit 0
            else echo -e "  ${DIM}● Aborted.${NC}"; sleep 1; fi ;;
         0) clear; exit 0 ;;
     esac

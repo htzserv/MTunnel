@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mdiag.sh) | Network Diagnostics v1.1 (Speedtest Edition) ---
+# --- MDesign Modular Core (mdiag.sh) | Network Diagnostics v1.1.1 (Alignment Bugfix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -19,7 +19,7 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" MDesign Health Scanner 1.1 "
+    local str1=" MDesign Health Scanner 1.1.1 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -37,9 +37,9 @@ run_ping_diagnostics() {
     fi
 
     echo -e "\n  ${Y}● Running Deep Ping Diagnostics (10 Packets per Tunnel)... Please Wait.${NC}"
-    echo -e "  ${B}╭────────────────┬────────────────────┬───────────┬──────────────┬──────────────┬────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} ${W}%-9s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-6s${NC} ${B}│${NC}\n" "TUNNEL" "REMOTE IP" "LOSS %" "AVG LATENCY" "JITTER (dev)" "STATUS"
-    echo -e "  ${B}├────────────────┼────────────────────┼───────────┼──────────────┼──────────────┼────────┤${NC}"
+    echo -e "  ${B}╭────────────────┬────────────────────┬───────────┬──────────────┬──────────────┬───────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} ${W}%-9s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-13s${NC} ${B}│${NC}\n" "TUNNEL" "REMOTE IP" "LOSS %" "AVG LATENCY" "JITTER (dev)" "STATUS"
+    echo -e "  ${B}├────────────────┼────────────────────┼───────────┼──────────────┼──────────────┼───────────────┤${NC}"
 
     for conf in "${configs[@]}"; do
         source "$conf"
@@ -49,8 +49,8 @@ run_ping_diagnostics() {
         local loss="100%"
         local avg_lat="---"
         local jitter="---"
-        local status_icon="${R}● FAIL${NC}"
-        local color="${DIM}"
+        local status_text="● FAIL"
+        local stat_color="${R}"
 
         if [ -n "$ping_stats" ]; then
             loss=$(echo "$ping_stats" | grep -oP '\d+(?=% packet loss)')
@@ -63,18 +63,18 @@ run_ping_diagnostics() {
                     jitter=$(echo "$rtt" | cut -d '/' -f 4 | awk '{printf "%.1f", $1}')"ms"
                 fi
                 
-                if [ "$loss" -eq 0 ]; then status_icon="${G}● GOOD${NC}"; color="${G}"
-                elif [ "$loss" -le 20 ]; then status_icon="${Y}● WARN${NC}"; color="${Y}"
-                else status_icon="${R}● BAD${NC}"; color="${R}"; fi
-                
-                loss="${loss}%"
+                if [ "$loss" -eq 0 ]; then status_text="● GOOD"; stat_color="${G}"
+                elif [ "$loss" -le 20 ]; then status_text="● WARN"; stat_color="${Y}"
+                else status_text="● BAD"; stat_color="${R}"; fi
             fi
+            loss="${loss}%"
         fi
 
         local t_name_short="${T_NAME:0:14}"
-        printf "  ${B}│${NC} ${C}%-14s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${color}%-9s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} %b%-15s%b ${B}│${NC}\n" "$t_name_short" "$main_tip" "$loss" "$avg_lat" "$jitter" "" "$status_icon" "${NC}"
+        # رنگ‌ها در فرمت جدول تزریق شدند تا بهم‌ریختگی ایجاد نکنند
+        printf "  ${B}│${NC} ${C}%-14s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${stat_color}%-9s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${stat_color}%-13s${NC} ${B}│${NC}\n" "$t_name_short" "$main_tip" "$loss" "$avg_lat" "$jitter" "$status_text"
     done
-    echo -e "  ${B}╰────────────────┴────────────────────┴───────────┴──────────────┴──────────────┴────────╯${NC}"
+    echo -e "  ${B}╰────────────────┴────────────────────┴───────────┴──────────────┴──────────────┴───────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
 }
 
@@ -112,7 +112,6 @@ run_speedtest() {
             echo -e "\n  ${Y}● Initiating 10-Second Throughput Test to ${main_tip}...${NC}"
             echo -e "  ${DIM}├─ Measuring Bandwidth. Please wait...${NC}"
             
-            # اجرای تست با iperf3
             local result=$(iperf3 -c "$main_tip" -t 10 --format m 2>&1)
             
             if echo "$result" | grep -q "Connection refused"; then
@@ -134,7 +133,6 @@ run_speedtest() {
                 echo -e "  ${B}╰──────────────────────────────────────────────────╯${NC}"
                 echo -e "  ${G}● Test Completed Successfully.${NC}"
                 
-                # خاموش کردن سرور iperf3 در صورت وجود روی سیستم جاری برای آزادسازی منابع
                 pkill iperf3 2>/dev/null
             fi
             echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read

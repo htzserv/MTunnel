@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mdiag.sh) | Network Diagnostics v1.1.2 (Instant Boot) ---
+# --- MDesign Modular Core (mdiag.sh) | Network Diagnostics v1.1.3 (Dynamic Subnet Sync) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -13,7 +13,7 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" MDesign Health Scanner 1.1.2 "
+    local str1=" MDesign Health Scanner 1.1.3 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -37,7 +37,8 @@ run_ping_diagnostics() {
 
     for conf in "${configs[@]}"; do
         source "$conf"
-        local main_tip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.2" || echo "10.76.${TUN_ID}.1")
+        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         
         local ping_stats=$(ping -c 10 -i 0.2 -q "$main_tip" 2>/dev/null)
         local loss="100%"
@@ -72,7 +73,6 @@ run_ping_diagnostics() {
 }
 
 run_speedtest() {
-    # چک کردن و نصب پکیج iperf3 دقیقاً در زمان نیاز
     if ! command -v iperf3 >/dev/null 2>&1; then
         echo -e "\n  ${Y}● Core dependency 'iPerf3' is missing. Installing now...${NC}"
         echo -e "  ${DIM}├─ Updating package mirrors...${NC}"
@@ -98,8 +98,9 @@ run_speedtest() {
     
     if [[ -n "${configs[$t_idx]}" ]]; then
         source "${configs[$t_idx]}"
-        local main_lip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.1" || echo "10.76.${TUN_ID}.2")
-        local main_tip=$([ "$TYPE" == "1" ] && echo "10.76.${TUN_ID}.2" || echo "10.76.${TUN_ID}.1")
+        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
+        local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
 
         echo -e "\n  ${DIM}┌─[ SPEEDTEST MODE ]${NC}"
         echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Run as Receiver (Server)${NC} ${DIM}- Listens for incoming test${NC}"

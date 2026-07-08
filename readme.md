@@ -28,4 +28,4 @@
 کد زیر را در یک سرور خام اوبونتو (نسخه 22.04 یا 24.04) اجرا کنید. نصب‌کننده هوشمند به صورت خودکار آخرین نسخه‌ی ماژول‌ها را دریافت کرده و محیط کاری شما را آماده می‌کند:
 
 ```bash
-bash <(curl -sL [https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh))
+bash <(curl -sL [https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh]

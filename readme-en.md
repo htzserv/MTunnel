@@ -31,5 +31,5 @@ Run the following command on a fresh Ubuntu 22.04 / 24.04 server. The dynamic in
 Note: Once installed, simply type mtunnel anywhere in your terminal to launch the MDesign Dashboard.📦
 
 ```bash
-bash <(curl -sL [https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh))
+bash <(curl -sL https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh)
 

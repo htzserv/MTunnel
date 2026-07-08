@@ -1,14 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mdiag.sh) | Network Diagnostics v1.1.1 (Alignment Bugfix) ---
+# --- MDesign Modular Core (mdiag.sh) | Network Diagnostics v1.1.2 (Instant Boot) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
-
-# نصب خودکار پیش‌نیازها در صورت عدم وجود
-if ! command -v iperf3 >/dev/null 2>&1; then
-    apt-get update >/dev/null 2>&1
-    apt-get install -y iperf3 >/dev/null 2>&1
-fi
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -19,7 +13,7 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" MDesign Health Scanner 1.1.1 "
+    local str1=" MDesign Health Scanner 1.1.2 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -71,7 +65,6 @@ run_ping_diagnostics() {
         fi
 
         local t_name_short="${T_NAME:0:14}"
-        # رنگ‌ها در فرمت جدول تزریق شدند تا بهم‌ریختگی ایجاد نکنند
         printf "  ${B}│${NC} ${C}%-14s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${stat_color}%-9s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${stat_color}%-13s${NC} ${B}│${NC}\n" "$t_name_short" "$main_tip" "$loss" "$avg_lat" "$jitter" "$status_text"
     done
     echo -e "  ${B}╰────────────────┴────────────────────┴───────────┴──────────────┴──────────────┴───────────────╯${NC}"
@@ -79,6 +72,19 @@ run_ping_diagnostics() {
 }
 
 run_speedtest() {
+    # چک کردن و نصب پکیج iperf3 دقیقاً در زمان نیاز
+    if ! command -v iperf3 >/dev/null 2>&1; then
+        echo -e "\n  ${Y}● Core dependency 'iPerf3' is missing. Installing now...${NC}"
+        echo -e "  ${DIM}├─ Updating package mirrors...${NC}"
+        apt-get update -y
+        echo -e "  ${DIM}└─ Installing iperf3 multiplexer...${NC}"
+        apt-get install -y iperf3
+        if ! command -v iperf3 >/dev/null 2>&1; then
+            echo -e "\n  ${R}● Critical Error: Installation failed. Check server internet or mirrors.${NC}"
+            sleep 2.5; return
+        fi
+    fi
+
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
     
@@ -115,12 +121,10 @@ run_speedtest() {
             local result=$(iperf3 -c "$main_tip" -t 10 --format m 2>&1)
             
             if echo "$result" | grep -q "Connection refused"; then
-                echo -e "  ${DIM}│${NC}"
-                echo -e "  ${R}● Connection Refused!${NC}"
+                echo -e "  ${DIM}│${NC}\n  ${R}● Connection Refused!${NC}"
                 echo -e "  ${DIM}└─ You must activate 'Receiver (Server)' mode on the remote server first.${NC}"
             elif echo "$result" | grep -q "error"; then
-                echo -e "  ${DIM}│${NC}"
-                echo -e "  ${R}● Test Failed! Check tunnel connectivity (Ping) first.${NC}"
+                echo -e "  ${DIM}│${NC}\n  ${R}● Test Failed! Check tunnel connectivity (Ping) first.${NC}"
             else
                 local sender_speed=$(echo "$result" | grep "sender" | awk '{print $7" "$8}')
                 local receiver_speed=$(echo "$result" | grep "receiver" | awk '{print $7" "$8}')
@@ -132,7 +136,6 @@ run_speedtest() {
                 printf "  ${B}│${NC} ${W}%-15s${NC} ${C}❯❯${NC}  ${G}%-26s${NC} ${B}│${NC}\n" "Download Speed" "${receiver_speed:-$sender_speed}"
                 echo -e "  ${B}╰──────────────────────────────────────────────────╯${NC}"
                 echo -e "  ${G}● Test Completed Successfully.${NC}"
-                
                 pkill iperf3 2>/dev/null
             fi
             echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read

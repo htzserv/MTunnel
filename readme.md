@@ -1,23 +1,25 @@
-# 🚀 MDesign Unified Network Suite (MGRE + MapRoxy)
+# 🚀 MHDesign Master Core (MGRE & MPorter)
 
-A professional, high-performance tunneling and port-mapping solution designed for high-load environments. This suite combines GRE tunnel management with SHA-256 synchronized virtual IPs and HAProxy port forwarding.
+A professional, modular, and minimal Bash-based infrastructure manager for creating advanced GRE / IP6GRE (6to4) tunnels and HAProxy port forwarding. Designed with the **MHDesign 0.1** philosophy: pixel-perfect UI, seamless user experience, and zero dependencies.
 
-
-
-## ✨ Key Features
-
-* **⚡ MGRE Tunneling:** Automated GRE tunnel establishment with optimized MTU and MSS clamping.
-* **🔗 Sync IP Logic:** Generate up to 254 synchronized virtual IPs using a shared **Sync Key** (SHA-256 based) for seamless /30 peering.
-* **📡 MapRoxy Integration:** Professional HAProxy management for port mapping and load distribution.
-* **📊 Live Monitoring:** Real-time latency and status tracking for all virtual interfaces.
-* **🛡️ Persistence:** Full `systemd` integration to ensure tunnels survive reboots.
-* **🧹 Hard Uninstaller:** Complete system cleanup with a single command.
+![Version](https://img.shields.io/badge/Version-v3.8-blue.svg)
+![UI](https://img.shields.io/badge/UI-MHDesign_0.1-purple.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 ---
 
-## 🛠 Installation & Usage
+## ✨ Key Features
 
-To deploy the suite on your server, run the following one-liner:
+* **Modular Architecture:** Centralized command dashboard with completely isolated background modules.
+* **Multi-Tunnel Engine:** Create, manage, and monitor an unlimited number of tunnels simultaneously without conflict.
+* **6to4 IP6GRE Encapsulation:** Bypass DPI and network restrictions by encapsulating IPv4 traffic within deterministic, auto-generated IPv6 subnets.
+* **Pixel-Perfect Monitoring:** Live, boxed tree-view monitoring for each tunnel, core IPs, and virtual IPs.
+* **Surgical Deletion:** Safely delete specific tunnels and their routing rules (iptables) without affecting the rest of the infrastructure.
+* **MPorter (HAProxy):** Fully automated port mapping onto virtual IPs with real-time health checks.
+
+## ⚡ Quick Start (One-Line Installer)
+
+Run the following command on your fresh Ubuntu server (Iran or International) with `root` privileges. This command fetches the master core and all required modules directly from the repository and launches the dashboard.
 
 ```bash
-wget -4 -qO mgre https://raw.githubusercontent.com/htzserv/MTunnel/main/MGRe.sh && chmod +x mgre && ./mgre
+bash <(curl -Ls [https://raw.githubusercontent.com/htzserv/MTunnel/main/main.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/main.sh) -o main.sh && curl -Ls [https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/mgre.sh) -o mgre.sh && curl -Ls [https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh) -o mporter.sh && chmod +x *.sh) && ./main.sh

@@ -1,35 +1,31 @@
-# 🛡️ MTunnel | MDesign Master Core
+# 🛡️ MTunnel | هسته مرکزی MDesign
 
-**Enterprise-Grade Tunneling, Load Balancing & Network Diagnostics for Linux**
+**تانلینگ سطح تجاری (Enterprise)، لودبالانسینگ و عیب‌یابی شبکه برای لینوکس**
 
-MTunnel is a highly modular, automated, and visually flawless terminal dashboard designed for managing advanced networking infrastructures. Built upon the **MDesign** philosophy, it provides a pixel-perfect terminal UI for deploying GRE/6to4 tunnels, managing HAProxy/Gost multiplexers, and diagnosing network health without dealing with complex Linux commands.
-
----
-
-## ✨ Key Features
-
-* **🎛️ Centralized Dashboard (`mtunnel`)**: A dynamic, auto-updating core menu to control all modules from anywhere in your server.
-* **🌐 Advanced Tunnel Manager (`mgre`)**: 
-  * Support for Standard IPv4 GRE and 6to4 IP6GRE Encapsulation.
-  * Live monitoring of all active tunnels and vIPs.
-  * Hot-swap Public IPs (Edit tunnel endpoints without teardowns).
-* **🚦 Smart Multiplexer & Failover (`mporter`)**:
-  * Dual-core engine supporting **HAProxy** (Standard LB) and **Gost** (Advanced Routing).
-  * Intelligent Load-Balancing (Round-Robin) across multiple nodes.
-  * Auto-Restart Scheduler via Cron for 100% Uptime.
-* **🩺 Deep Diagnostics (`mdiag`)**:
-  * Real-time packet loss, average latency, and jitter calculation.
-  * Built-in `iperf3` Throughput Speedtest directly between tunnel endpoints.
-* **🔥 Nuclear Wipe**: Instantly self-destruct and purge all traces, configs, and services with a single command to return the server to a vanilla state.
+پروژه MTunnel یک داشبورد ترمینالی به شدت ماژولار، خودکار و از نظر بصری بی‌نقص است که برای مدیریت زیرساخت‌های پیچیده شبکه طراحی شده است. این ابزار که بر پایه استانداردهای سخت‌گیرانه **MDesign** توسعه یافته، به شما اجازه می‌دهد تانل‌های GRE/6to4 را مستقر کنید، مالتی‌پلکسرهای HAProxy/Gost را مدیریت کنید و سلامت شبکه را بدون نیاز به درگیری با دستورات پیچیده لینوکس بررسی نمایید.
 
 ---
 
-## 🚀 Quick Install
+## ✨ ویژگی‌های کلیدی
 
-Run the following command on a fresh Ubuntu 22.04 / 24.04 server. The dynamic installer will automatically fetch the latest core modules and build your workspace:
+* **🎛️ داشبورد فرماندهی (`mtunnel`):** یک منوی مرکزی داینامیک با قابلیت آپدیت خودکار برای کنترل تمام ماژول‌ها از هر کجای سرور.
+* **🌐 مدیر پیشرفته تانل‌ها (`mgre`):** * پشتیبانی کامل از تانل‌های استاندارد IPv4 GRE و کپسوله‌سازی 6to4 IP6GRE.
+  * مانیتورینگ زنده و درختیِ تمام تانل‌ها و آی‌پی‌های مجازی (vIPs).
+  * تعویض در لحظه آی‌پی‌های عمومی (Hot-swap) بدون نیاز به حذف و ساخت مجدد تانل.
+* **🚦 مالتی‌پلکسر هوشمند و سوییچ خودکار (`mporter`):**
+  * موتور دوگانه با پشتیبانی از **HAProxy** (برای لودبالانسینگ) و **Gost** (برای روتینگ پیشرفته).
+  * سیستم Load-Balancing هوشمند (Round-Robin) برای پخش ترافیک بین چند سرور/تانل.
+  * برنامه‌ریز ری‌استارت خودکار (Cron) برای تضمین آپتایم ۱۰۰٪.
+* **🩺 عیب‌یابی عمیق شبکه (`mdiag`):**
+  * محاسبه لحظه‌ای Packet Loss، میانگین پینگ و نوسان (Jitter).
+  * مجهز به اسپیدتست داخلی `iperf3` برای سنجش پهنای باند و سرعت انتقال دیتا مستقیماً از داخل تانل‌ها.
+* **🔥 پاکسازی هسته‌ای (Nuclear Wipe):** انهدام و پاکسازی کامل تمام ردپاها، کانفیگ‌ها، تانل‌ها و سرویس‌ها تنها با یک کلیک برای بازگرداندن سرور به حالت خام (Vanilla).
 
-Note: Once installed, simply type mtunnel anywhere in your terminal to launch the MDesign Dashboard.📦
+---
+
+## 🚀 نصب سریع
+
+کد زیر را در یک سرور خام اوبونتو (نسخه 22.04 یا 24.04) اجرا کنید. نصب‌کننده هوشمند به صورت خودکار آخرین نسخه‌ی ماژول‌ها را دریافت کرده و محیط کاری شما را آماده می‌کند:
 
 ```bash
 bash <(curl -sL [https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh))
-

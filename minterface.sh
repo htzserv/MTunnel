@@ -1,6 +1,6 @@
 cat << 'EOF' > /usr/bin/minterface
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.2.0 (Uptime & Live Link) ---
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.2.1 (Two-Line Port Mapping) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -29,7 +29,7 @@ draw_header() {
     local s_ip=$(get_local_ip)
     local role=$(detect_server_role)
     clear; echo ""
-    local str1=" MDesign Interface Matrix 1.2 "
+    local str1=" MDesign Interface Matrix 1.2.1 "
     local str2=" IP: $s_ip "
     
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
@@ -82,7 +82,6 @@ render_matrix() {
             title_color="${M}"
         fi
 
-        # بررسی وضعیت آپتایم و سلامت
         local stat_raw="● DOWN"; local stat_color="${R}"; local sys_uptime="Offline"
         if ip link show "$T_NAME" >/dev/null 2>&1; then
             if [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then
@@ -99,16 +98,13 @@ render_matrix() {
             fi
         fi
 
-        # === تست زنده اتصال تانل (پینگ) ===
         local link_raw="○ OFFLINE"
         local link_color="${R}"
         if ping -c 1 -W 1 "$tip" >/dev/null 2>&1; then
-            # اضافه کردن یک اسپیس مخفی برای برابر شدن طول با OFFLINE
             link_raw="● ONLINE "
             link_color="${G}"
         fi
 
-        # استخراج پورت‌های فوروارد شده برای این تانل
         local h_ports=""; local g_ports=""
         local subnets=("$c_sub")
         for v_lip in $(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1); do
@@ -135,8 +131,10 @@ render_matrix() {
         
         [ -z "$h_ports" ] && h_ports="None"
         [ -z "$g_ports" ] && g_ports="None"
-        [ ${#h_ports} -gt 25 ] && h_ports="${h_ports:0:22}..."
-        [ ${#g_ports} -gt 25 ] && g_ports="${g_ports:0:22}..."
+        
+        # افزایش ظرفیت نمایش پورت‌ها به دلیل رفتن به دو خط مجزا
+        [ ${#h_ports} -gt 50 ] && h_ports="${h_ports:0:47}..."
+        [ ${#g_ports} -gt 50 ] && g_ports="${g_ports:0:47}..."
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         local left_part="▼ Interface: $T_NAME"
@@ -145,9 +143,7 @@ render_matrix() {
         [ "$gap" -lt 0 ] && gap=0
         local spaces=$(printf '%*s' "$gap" "")
         
-        # رندر هدر جدول با جای‌گذاری دقیق
         echo -e "  ${B}│${NC} ${title_color}▼ Interface: ${W}$T_NAME${NC}${spaces}${DIM}State: ${stat_color}${stat_raw}${NC}   ${DIM}Link: ${link_color}${link_raw}${NC}   ${DIM}Uptime: ${W}${sys_uptime}${NC} ${B}│${NC}"
-        
         echo -e "  ${B}├──────────────────────────────┬─────────────────────────────────────────────────────────────────┤${NC}"
         
         print_row_2col "Tunnel Infrastructure" "${C}Tunnel Infrastructure${NC}" "$proto_lbl Engine" "${W}$proto_lbl Engine${NC}"
@@ -156,7 +152,10 @@ render_matrix() {
         echo -e "  ${B}├──────────────────────────────┼─────────────────────────────────────────────────────────────────┤${NC}"
         
         print_row_2col "Core IPv4 Network" "${DIM}Core IPv4 Network${NC}" "Local: $lip   Remote: $tip" "${DIM}Local:${NC} ${G}$lip${NC}   ${DIM}Remote:${NC} ${Y}$tip${NC}"
-        print_row_2col "Active Port Mappings" "${Y}Active Port Mappings${NC}" "HAProxy: $h_ports   Gost: $g_ports" "${C}HAProxy:${NC} ${W}$h_ports${NC}   ${M}Gost:${NC} ${W}$g_ports${NC}"
+        
+        # چاپ پورت‌ها در دو خط مجزا با تراز دقیق
+        print_row_2col "Active Port Mappings" "${Y}Active Port Mappings${NC}" "HAProxy: $h_ports" "${C}HAProxy:${NC} ${W}$h_ports${NC}"
+        print_row_2col "" "" "Gost   : $g_ports" "${M}Gost   :${NC} ${W}$g_ports${NC}"
         
         if [[ "$TUN_PROTO" == "6to4" ]]; then
             echo -e "  ${B}├──────────────────────────────┼─────────────────────────────────────────────────────────────────┤${NC}"

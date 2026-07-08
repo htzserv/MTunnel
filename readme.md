@@ -1,25 +1,34 @@
-# 🚀 MHDesign Master Core (MGRE & MPorter)
+# 🛡️ MTunnel | MDesign Master Core
 
-A professional, modular, and minimal Bash-based infrastructure manager for creating advanced GRE / IP6GRE (6to4) tunnels and HAProxy port forwarding. Designed with the **MHDesign 0.1** philosophy: pixel-perfect UI, seamless user experience, and zero dependencies.
+**Enterprise-Grade Tunneling, Load Balancing & Network Diagnostics for Linux**
 
-![Version](https://img.shields.io/badge/Version-v3.8-blue.svg)
-![UI](https://img.shields.io/badge/UI-MHDesign_0.1-purple.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
+MTunnel is a highly modular, automated, and visually flawless terminal dashboard designed for managing advanced networking infrastructures. Built upon the **MDesign** philosophy, it provides a pixel-perfect terminal UI for deploying GRE/6to4 tunnels, managing HAProxy/Gost multiplexers, and diagnosing network health without dealing with complex Linux commands.
 
 ---
 
 ## ✨ Key Features
 
-* **Modular Architecture:** Centralized command dashboard with completely isolated background modules.
-* **Multi-Tunnel Engine:** Create, manage, and monitor an unlimited number of tunnels simultaneously without conflict.
-* **6to4 IP6GRE Encapsulation:** Bypass DPI and network restrictions by encapsulating IPv4 traffic within deterministic, auto-generated IPv6 subnets.
-* **Pixel-Perfect Monitoring:** Live, boxed tree-view monitoring for each tunnel, core IPs, and virtual IPs.
-* **Surgical Deletion:** Safely delete specific tunnels and their routing rules (iptables) without affecting the rest of the infrastructure.
-* **MPorter (HAProxy):** Fully automated port mapping onto virtual IPs with real-time health checks.
+* **🎛️ Centralized Dashboard (`mtunnel`)**: A dynamic, auto-updating core menu to control all modules from anywhere in your server.
+* **🌐 Advanced Tunnel Manager (`mgre`)**: 
+  * Support for Standard IPv4 GRE and 6to4 IP6GRE Encapsulation.
+  * Live monitoring of all active tunnels and vIPs.
+  * Hot-swap Public IPs (Edit tunnel endpoints without teardowns).
+* **🚦 Smart Multiplexer & Failover (`mporter`)**:
+  * Dual-core engine supporting **HAProxy** (Standard LB) and **Gost** (Advanced Routing).
+  * Intelligent Load-Balancing (Round-Robin) across multiple nodes.
+  * Auto-Restart Scheduler via Cron for 100% Uptime.
+* **🩺 Deep Diagnostics (`mdiag`)**:
+  * Real-time packet loss, average latency, and jitter calculation.
+  * Built-in `iperf3` Throughput Speedtest directly between tunnel endpoints.
+* **🔥 Nuclear Wipe**: Instantly self-destruct and purge all traces, configs, and services with a single command to return the server to a vanilla state.
 
-## ⚡ Quick Start (One-Line Installer)
+---
 
-Run the following command on your fresh Ubuntu server (Iran or International) with `root` privileges. This command fetches the master core and all required modules directly from the repository and launches the dashboard.
+## 🚀 Quick Install
+
+Run the following command on a fresh Ubuntu 22.04 / 24.04 server. The dynamic installer will automatically fetch the latest core modules and build your workspace:
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh)
+bash <(curl -sL [https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh))
+
+Note: Once installed, simply type mtunnel anywhere in your terminal to launch the MDesign Dashboard.📦 Modules OverviewModuleDescriptionFunctionalitymain.shMaster CoreCentral UI, Dynamic Cache-Busting Updater, System Purgemgre.shTunnel EngineCreate, Sync, Edit, and Monitor GRE & IP6GRE Tunnelsmporter.shPort ForwarderDeploy HAProxy/Gost, Map Ports, Setup Failover/LBmdiag.shHealth ScannerDeep Ping Analysis, Jitter, iPerf3 Server/Client Speedtests💎 The MDesign PhilosophyThis project strictly adheres to MDesign standards:Zero Clutter: No unnecessary output or messy terminal logs.Visual Hierarchy: Distinct colors, perfectly aligned tables, and clean borders.Seamless UX: Complex Linux networking abstracted into intuitive, numbered menus.Status: Stable / Production Ready

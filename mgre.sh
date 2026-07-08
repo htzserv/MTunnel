@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1.6 (Variable Scope Fix) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1.7 (GRE Key Isolation) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -30,13 +30,15 @@ apply_tunnel() {
         ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB"
         ip link set dev "sit_$T_NAME" mtu 1480; ip link set "sit_$T_NAME" up
         ip -6 addr add "$LOCAL_IP6/64" dev "sit_$T_NAME"
-        ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6"
+        # اضافه شدن کِی جهت تفکیک تونل‌های موازی IP6GRE
+        ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6" key "$TUN_ID"
         ip link set dev "$T_NAME" mtu 1436; ip link set "$T_NAME" up
         ip addr add "$local_tun"/30 dev "$T_NAME"
         iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396
     else
         local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
-        ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255
+        # اضافه شدن کِی جهت تفکیک تونل‌های موازی IPv4 GRE
+        ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255 key "$TUN_ID"
         ip link set "$T_NAME" up; ip addr add "$local_tun"/30 dev "$T_NAME"
         ip link set dev "$T_NAME" mtu "$mtu_val"
         iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40))
@@ -73,7 +75,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.1.6 "
+    local str1=" MGRE Core 4.1.7 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -191,6 +193,12 @@ while true; do
            pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
            t_name="${pfx}${suffix}"
            
+           # محافظ ۱: چک کردن تکراری نبودن اسم اینترفیس
+           if [ -f "$CONF_DIR/${t_name}.conf" ]; then
+               echo -e "\n  ${R}● Error: Tunnel interface name [${W}${t_name}${R}] already exists!${NC}"
+               sleep 2; continue
+           fi
+           
            local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip; [ -n "$custom_ip" ] && local_ip=$custom_ip
            echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
            
@@ -203,6 +211,13 @@ while true; do
            fi
            
            echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
+           
+           # محافظ ۲: چک کردن تکراری نبودن آیدی شبکه تانل
+           if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
+               echo -e "\n  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned to another tunnel!${NC}"
+               sleep 2; continue
+           fi
+           
            tun_id=$user_tun_id
            hash_c=$(echo -n "core_${tun_id}" | sha256sum)
            r_sel=$(( 0x${hash_c:0:2} % 3 ))

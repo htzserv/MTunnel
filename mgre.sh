@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.2 (IFNAMSIZ Limit Fix) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.3 (Auto-Rollback System) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -27,19 +27,19 @@ apply_tunnel() {
     ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
 
     if [[ "$TUN_PROTO" == "6to4" ]]; then
-        ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB"
-        ip link set dev "sit_$T_NAME" mtu 1480; ip link set "sit_$T_NAME" up
-        ip -6 addr add "$LOCAL_IP6/64" dev "sit_$T_NAME"
-        ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6" key "$TUN_ID"
-        ip link set dev "$T_NAME" mtu 1436; ip link set "$T_NAME" up
-        ip addr add "$local_tun"/30 dev "$T_NAME"
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396
+        ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB" 2>/dev/null
+        ip link set dev "sit_$T_NAME" mtu 1480 2>/dev/null; ip link set "sit_$T_NAME" up 2>/dev/null
+        ip -6 addr add "$LOCAL_IP6/64" dev "sit_$T_NAME" 2>/dev/null
+        ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6" key "$TUN_ID" 2>/dev/null
+        ip link set dev "$T_NAME" mtu 1436 2>/dev/null; ip link set "$T_NAME" up 2>/dev/null
+        ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 2>/dev/null
     else
         local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
-        ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255 key "$TUN_ID"
-        ip link set "$T_NAME" up; ip addr add "$local_tun"/30 dev "$T_NAME"
-        ip link set dev "$T_NAME" mtu "$mtu_val"
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40))
+        ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255 key "$TUN_ID" 2>/dev/null
+        ip link set "$T_NAME" up 2>/dev/null; ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
+        ip link set dev "$T_NAME" mtu "$mtu_val" 2>/dev/null
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40)) 2>/dev/null
     fi
 
     if [[ "$MAX_IPS" -gt 0 ]]; then
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.2 "
+    local str1=" MGRE Core 4.2.3 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -191,17 +191,17 @@ while true; do
            echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
            [[ "$s_type" == "q" || -z "$s_type" ]] && continue
            
-           # حلقه محافظت از طول اسم تانل (رفع باگ IFNAMSIZ)
            while true; do
                echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
+               [[ "$suffix" == "q" ]] && break 2
                pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
                t_name="${pfx}${suffix}"
                
                check_len=${#t_name}
-               [ "$tun_proto" == "6to4" ] && check_len=$((check_len + 4)) # احتساب 4 کاراکتر sit_
+               [ "$tun_proto" == "6to4" ] && check_len=$((check_len + 4))
                
                if [ "$check_len" -gt 15 ]; then
-                   echo -e "  ${R}● Error: Name too long! Linux kernel limit is 15 chars. Use a shorter suffix.${NC}"
+                   echo -e "  ${R}● Error: Name too long! Kernel limit is 15 chars.${NC}"
                else
                    break
                fi
@@ -212,18 +212,25 @@ while true; do
                sleep 2; continue
            fi
            
-           local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip; [ -n "$custom_ip" ] && local_ip=$custom_ip
+           local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip
+           [[ "$custom_ip" == "q" ]] && continue
+           [ -n "$custom_ip" ] && local_ip=$custom_ip
+           
            echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
+           [[ "$r_ip" == "q" || -z "$r_ip" ]] && continue
            
            local_ip6=""; remote_ip6=""
            if [[ "$tun_proto" == "6to4" ]]; then
                echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret
+               [[ "$tun_secret" == "q" || -z "$tun_secret" ]] && continue
                hash_str=$(echo -n "${tun_secret}_MHDesign" | sha256sum)
                pfx_v6="fd${hash_str:0:2}:${hash_str:2:4}:${hash_str:6:4}:${hash_str:10:4}"
                if [[ "$s_type" == "1" ]]; then local_ip6="${pfx_v6}::1"; remote_ip6="${pfx_v6}::2"; else local_ip6="${pfx_v6}::2"; remote_ip6="${pfx_v6}::1"; fi
            fi
            
            echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
+           [[ "$user_tun_id" == "q" || -z "$user_tun_id" ]] && continue
+           
            if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
                echo -e "\n  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned!${NC}"
                sleep 2; continue
@@ -243,9 +250,26 @@ while true; do
            
            core_sub="${c1}.${c2}.${c3}"
            conf_path="$CONF_DIR/${t_name}.conf"
+           
+           # ذخیره موقت کانفیگ
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
-           apply_tunnel "$conf_path"; setup_service
-           echo -e "  ${G}● Tunnel [${t_name}] deployed (Subnet: ${core_sub}.x)${NC}"; sleep 1.5 ;;
+           
+           # اعمال تانل
+           apply_tunnel "$conf_path"
+           
+           # --- سیستم محافظتی ROLLBACK ---
+           if ip link show "$t_name" >/dev/null 2>&1; then
+               setup_service
+               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
+               sleep 1.5
+           else
+               echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel creation!${NC}"
+               echo -e "  ${DIM}├─ Causes: Invalid IPs, network unreachable, or missing modules.${NC}"
+               echo -e "  ${DIM}└─ Auto-Rollback: Purging ghost configuration files...${NC}"
+               rm -f "$conf_path" "${STATE_DIR}/${t_name}.state"
+               sleep 3.5
+           fi
+           ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels configured yet!${NC}" && sleep 1.5 && continue

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.3 (Auto-Rollback System) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.4 (Tunnel Registry) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.3 "
+    local str1=" MGRE Core 4.2.4 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -131,6 +131,45 @@ show_mgre_monitor() {
     done
 }
 
+show_tunnel_details() {
+    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
+
+    echo -e "\n  ${Y}● Deployed Tunnels Registry:${NC}"
+    for conf in "${configs[@]}"; do
+        source "$conf"
+        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
+        local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+        local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
+        local s_key="${SYNC_KEY:-[ NOT SET ]}"
+        local proto_lbl="IPv4 GRE"
+        [[ "$TUN_PROTO" == "6to4" ]] && proto_lbl="6to4 IP6GRE"
+
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        local left_p="▼ Tunnel: $T_NAME"
+        local right_p="Role: $t_role"
+        local pad=$(( 89 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
+        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
+        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
+        
+        local l1="Sync Key: ${s_key}"; local r1="Protocol: ${proto_lbl}"
+        local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
+        echo -e "  ${B}│${NC} ${M}Sync Key:${NC} ${W}${s_key}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
+        
+        local l2="Public IPs : ${LOCAL_PUB} -> ${REMOTE_PUB}"
+        local pad2=$(( 90 - ${#l2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+        echo -e "  ${B}│${NC} ${DIM}Public IPs :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp2} ${B}│${NC}"
+        
+        local l3="Core IPs   : ${lip} -> ${tip}"
+        local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
+        echo -e "  ${B}│${NC} ${DIM}Core IPs   :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp3} ${B}│${NC}"
+        
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    done
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read
+}
+
 edit_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
@@ -178,7 +217,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (All Tunnels)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Specific Tunnel${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (All Tunnels)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Specific Tunnel${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
@@ -251,13 +290,10 @@ while true; do
            core_sub="${c1}.${c2}.${c3}"
            conf_path="$CONF_DIR/${t_name}.conf"
            
-           # ذخیره موقت کانفیگ
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
            
-           # اعمال تانل
            apply_tunnel "$conf_path"
            
-           # --- سیستم محافظتی ROLLBACK ---
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
                echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
@@ -330,6 +366,7 @@ while true; do
                echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         5) edit_tunnel ;;
+        6) show_tunnel_details ;;
         0) break ;;
     esac
 done

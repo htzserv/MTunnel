@@ -1,11 +1,18 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.3 ---
+# --- MDesign Master Core | Central Dashboard v1.5 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
+# مسیرهای نصب سیستم در خط فرمان
+MTUNNEL_PATH="/usr/bin/mtunnel"
 MGRE_MODULE="/usr/bin/mgre"
 MPORTER_MODULE="/usr/bin/mporter"
-MASTER_REPO_URL="https://raw.githubusercontent.com/htzserv/MTunnel/main/main.sh"
+REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
+
+# تبدیل خودکار اسکریپت به دستور سراسری سیستم
+if [[ ! -x "$MTUNNEL_PATH" ]]; then
+    cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null
+fi
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -55,12 +62,36 @@ while true; do
            else echo -e "\n  ${R}● Error: Port Forwarding module not found!${NC}"; sleep 2; fi ;;
            
         3) 
-           echo -e "\n  ${Y}● Fetching latest Master Core...${NC}"
-           wget --timeout=10 --tries=2 -qO /tmp/main_new "$MASTER_REPO_URL"
-           if [ $? -eq 0 ]; then
-               mv /tmp/main_new "$0"; chmod +x "$0"
-               echo -e "  ${G}● Update successful! Reloading...${NC}"; sleep 1.5; exec "$0"
-           else echo -e "  ${R}● Update failed. Check Connection.${NC}"; sleep 2; fi ;;
+           echo -e "\n  ${Y}● Fetching latest Core Modules from Repository...${NC}"
+           
+           wget --timeout=10 --tries=2 -qO /tmp/main_new "$REPO_BASE/main.sh"
+           wget --timeout=10 --tries=2 -qO /tmp/mgre_new "$REPO_BASE/mgre.sh"
+           wget --timeout=10 --tries=2 -qO /tmp/mporter_new "$REPO_BASE/mporter.sh"
+           
+           if [ $? -eq 0 ] && [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ]; then
+               echo -e "  ${DIM}├─ Purging old workspace files...${NC}"
+               rm -f ./mgre.sh ./mporter.sh
+               
+               echo -e "  ${DIM}├─ Deploying fresh modules...${NC}"
+               mv /tmp/main_new "$0"
+               mv /tmp/mgre_new "./mgre.sh"
+               mv /tmp/mporter_new "./mporter.sh"
+               chmod +x "$0" ./mgre.sh ./mporter.sh
+               
+               if [ -f "$MGRE_MODULE" ]; then cp ./mgre.sh "$MGRE_MODULE" && chmod +x "$MGRE_MODULE"; fi
+               if [ -f "$MPORTER_MODULE" ]; then cp ./mporter.sh "$MPORTER_MODULE" && chmod +x "$MPORTER_MODULE"; fi
+               
+               # آپدیت کردن دستور گلوبال mtunnel در سیستم
+               cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null
+               
+               echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"
+               sleep 1.5
+               exec "$0"
+           else 
+               echo -e "  ${R}● Update failed! Check network connection or repository files.${NC}"
+               rm -f /tmp/main_new /tmp/mgre_new /tmp/mporter_new
+               sleep 2
+           fi ;;
            
         4) 
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL tunnels, configurations, scripts, and traces? (y/n): ${NC}"; read del_confirm
@@ -89,7 +120,8 @@ while true; do
 
                echo -e "  ${DIM}├─ Purging all binary executables and core directories...${NC}"
                rm -rf /etc/mgre /etc/mporter /var/lib/haproxy /etc/haproxy
-               rm -f /usr/bin/mgre /usr/bin/mporter
+               # پاک کردن دستور mtunnel از سیستم
+               rm -f /usr/bin/mgre /usr/bin/mporter /usr/bin/mtunnel
                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mporter.service
                systemctl daemon-reload
                

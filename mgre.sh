@@ -1,5 +1,6 @@
+cat << 'EOF' > /usr/bin/mgre
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1.5 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.1.6 (Variable Scope Fix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -73,7 +74,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.1.5 "
+    local str1=" MGRE Core 4.1.6 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -181,14 +182,16 @@ while true; do
            echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}\n  ${DIM}├─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}"
            echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
            [[ "$proto_choice" == "0" || -z "$proto_choice" ]] && continue
-           local tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
+           
+           # ارور local اینجا بود که برطرف شد
+           tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
            
            echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | 0:Back]: ${NC}"; read s_type
            [[ "$s_type" == "0" || -z "$s_type" ]] && continue
            
            echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (e.g. fr): ${NC}"; read suffix
-           local pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
-           local t_name="${pfx}${suffix}"
+           pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
+           t_name="${pfx}${suffix}"
            
            local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip; [ -n "$custom_ip" ] && local_ip=$custom_ip
            echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
@@ -257,3 +260,5 @@ while true; do
         0) break ;;
     esac
 done
+EOF
+chmod +x /usr/bin/mgre

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.7 ---
+# --- MDesign Master Core | Central Dashboard v1.7.2 (Audited) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -40,7 +40,7 @@ while true; do
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Manager${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover Module${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Network Health & Diagnostics${NC} ${Y}(NEW)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Network Health & Diagnostics${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Update Master Core & Modules${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Delete ALL Tunnels & Traces)${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -60,7 +60,7 @@ while true; do
         3)
            if [ -f "$MDIAG_MODULE" ] && [ -x "$MDIAG_MODULE" ]; then $MDIAG_MODULE;
            elif [ -f "./mdiag.sh" ]; then bash ./mdiag.sh;
-           else echo -e "\n  ${R}● Error: MDiag module not found! Run Update (4) first.${NC}"; sleep 2; fi ;;
+           else echo -e "\n  ${R}● Error: MDiag module not found! Run Update first.${NC}"; sleep 2; fi ;;
         4) 
            echo -e "\n  ${Y}● Fetching latest Core Modules from Repository...${NC}"
            CACHE_BUST=$(date +%s)
@@ -69,17 +69,18 @@ while true; do
            wget --timeout=10 --tries=2 -qO /tmp/mporter_new "$REPO_BASE/mporter.sh?v=$CACHE_BUST"
            wget --timeout=10 --tries=2 -qO /tmp/mdiag_new "$REPO_BASE/mdiag.sh?v=$CACHE_BUST"
            
-           if [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ]; then
+           # بررسی یکپارچگی دانلود هر ۴ ماژول به صورت همزمان
+           if [ -s /tmp/main_new ] && [ -s /tmp/mgre_new ] && [ -s /tmp/mporter_new ] && [ -s /tmp/mdiag_new ]; then
                echo -e "  ${DIM}├─ Applying updates to system core...${NC}"
                [ -w "$MTUNNEL_PATH" ] && cat /tmp/main_new > "$MTUNNEL_PATH"
                [ -w "$MGRE_MODULE" ] && cat /tmp/mgre_new > "$MGRE_MODULE"
                [ -w "$MPORTER_MODULE" ] && cat /tmp/mporter_new > "$MPORTER_MODULE"
-               touch "$MDIAG_MODULE"; chmod +x "$MDIAG_MODULE" 2>/dev/null; cat /tmp/mdiag_new > "$MDIAG_MODULE"
+               [ -w "$MDIAG_MODULE" ] && cat /tmp/mdiag_new > "$MDIAG_MODULE"
                
                [ -f "./main.sh" ] && cat /tmp/main_new > "./main.sh"
                [ -f "./mgre.sh" ] && cat /tmp/mgre_new > "./mgre.sh"
                [ -f "./mporter.sh" ] && cat /tmp/mporter_new > "./mporter.sh"
-               cat /tmp/mdiag_new > "./mdiag.sh"
+               [ -f "./mdiag.sh" ] && cat /tmp/mdiag_new > "./mdiag.sh"
                
                cat /tmp/main_new > "$0"
                chmod +x "$MTUNNEL_PATH" "$MGRE_MODULE" "$MPORTER_MODULE" "$MDIAG_MODULE" "$0" 2>/dev/null

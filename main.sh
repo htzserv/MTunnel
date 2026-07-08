@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v1.8.1 (Bugfix) ---
+# --- MDesign Master Core | Central Dashboard v1.9 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -7,6 +7,7 @@ MTUNNEL_PATH="/usr/bin/mtunnel"
 MGRE_MODULE="/usr/bin/mgre"
 MPORTER_MODULE="/usr/bin/mporter"
 MDIAG_MODULE="/usr/bin/mdiag"
+MINTERFACE_MODULE="/usr/bin/minterface"
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then
@@ -40,9 +41,10 @@ while true; do
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Manager${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover Module${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Network Health & Diagnostics${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Update Master Core & Modules${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Delete ALL Tunnels & Traces)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC} ${Y}(NEW)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${W}Network Health & Diagnostics${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Update Master Core & Modules${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Delete ALL Tunnels & Traces)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}"
     echo ""
@@ -58,10 +60,14 @@ while true; do
            elif [ -f "./mporter.sh" ]; then bash ./mporter.sh;
            else echo -e "\n  ${R}● Error: Port module not found!${NC}"; sleep 2; fi ;;
         3)
+           if [ -f "$MINTERFACE_MODULE" ] && [ -x "$MINTERFACE_MODULE" ]; then $MINTERFACE_MODULE;
+           elif [ -f "./minterface.sh" ]; then bash ./minterface.sh;
+           else echo -e "\n  ${R}● Error: Interface module not found! Run Update first.${NC}"; sleep 2; fi ;;
+        4)
            if [ -f "$MDIAG_MODULE" ] && [ -x "$MDIAG_MODULE" ]; then $MDIAG_MODULE;
            elif [ -f "./mdiag.sh" ]; then bash ./mdiag.sh;
            else echo -e "\n  ${R}● Error: MDiag module not found! Run Update first.${NC}"; sleep 2; fi ;;
-        4) 
+        5) 
            echo -e "\n  ${Y}● Fetching latest Core Modules from Repository...${NC}"
            CACHE_BUST=$(date +%s)
            
@@ -70,7 +76,7 @@ while true; do
            
            if [ -z "$sh_files" ]; then
                echo -e "  ${Y}● API restricted. Using Core Fallback list...${NC}"
-               sh_files="main.sh mgre.sh mporter.sh mdiag.sh"
+               sh_files="main.sh mgre.sh mporter.sh mdiag.sh minterface.sh"
            fi
            
            download_success=true
@@ -88,11 +94,9 @@ while true; do
                echo -e "  ${DIM}├─ Purging old configurations & deploying updates...${NC}"
                
                for file in $sh_files; do
-                   # آپدیت فایل در پوشه جاری
                    cat "/tmp/${file}_new" > "./$file" 2>/dev/null
                    chmod +x "./$file" 2>/dev/null
                    
-                   # آپدیت هوشمند فایل‌های سیستمی (فقط ماژول‌های هسته)
                    if [[ "$file" == "main.sh" ]]; then
                        cat "/tmp/main.sh_new" > "$MTUNNEL_PATH" 2>/dev/null
                        chmod +x "$MTUNNEL_PATH" 2>/dev/null
@@ -102,11 +106,12 @@ while true; do
                    elif [[ "$file" == "mporter.sh" ]]; then
                        [ -w "$MPORTER_MODULE" ] && cat "/tmp/mporter.sh_new" > "$MPORTER_MODULE" 2>/dev/null
                    elif [[ "$file" == "mdiag.sh" ]]; then
-                       touch "$MDIAG_MODULE" 2>/dev/null
-                       cat "/tmp/mdiag.sh_new" > "$MDIAG_MODULE" 2>/dev/null
-                       chmod +x "$MDIAG_MODULE" 2>/dev/null
+                       [ -w "$MDIAG_MODULE" ] && cat "/tmp/mdiag.sh_new" > "$MDIAG_MODULE" 2>/dev/null
+                   elif [[ "$file" == "minterface.sh" ]]; then
+                       touch "$MINTERFACE_MODULE" 2>/dev/null
+                       cat "/tmp/minterface.sh_new" > "$MINTERFACE_MODULE" 2>/dev/null
+                       chmod +x "$MINTERFACE_MODULE" 2>/dev/null
                    fi
-                   
                    rm -f "/tmp/${file}_new"
                done
                echo -e "  ${G}● All modules updated successfully! Reloading Dashboard...${NC}"
@@ -116,7 +121,7 @@ while true; do
                for file in $sh_files; do rm -f "/tmp/${file}_new"; done
                sleep 2
            fi ;;
-        5) 
+        6) 
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL tunnels and scripts? (y/n): ${NC}"; read del_confirm
            if [[ "$del_confirm" == "y" ]]; then
                systemctl stop mgre.service mporter.service haproxy gost 2>/dev/null
@@ -135,7 +140,7 @@ while true; do
                    ip tunnel del "$link" >/dev/null 2>&1; ip link del "$link" >/dev/null 2>&1
                done
                rm -rf /etc/mgre /etc/mporter /etc/haproxy /var/lib/haproxy /etc/gost
-               rm -f /usr/bin/mgre /usr/bin/mporter /usr/bin/mdiag /usr/bin/mtunnel /usr/local/bin/gost
+               rm -f /usr/bin/mgre /usr/bin/mporter /usr/bin/mdiag /usr/bin/minterface /usr/bin/mtunnel /usr/local/bin/gost
                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mporter.service /etc/systemd/system/gost.service
                crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
                systemctl daemon-reload

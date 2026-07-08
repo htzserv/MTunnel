@@ -1,10 +1,22 @@
 #!/bin/bash
-# --- MPorter v4.0 | MDesign Professional Interface (Final Smart Shield Edition) ---
+# --- MDesign Modular Core (mporter.sh) | HAProxy Manager v4.1 (Bugfix) ---
+
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
+
+INSTALL_PATH="/usr/bin/mporter"
 H_CONF="/etc/haproxy/haproxy.cfg"
 G_CONF="/etc/gost/config.json"
 
-# --- Core Installers ---
+if [[ "$1" != "--apply" ]]; then
+    if [[ ! -x "$INSTALL_PATH" ]]; then cp "$0" "$INSTALL_PATH" 2>/dev/null && chmod +x "$INSTALL_PATH" 2>/dev/null; fi
+fi
+
+get_local_ip() {
+    local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
+    echo "${ip:-Unknown}"
+}
+
 install_haproxy_core() {
     echo -e "  ${C}●${NC} ${W}Configuring HAProxy Engine...${NC}"
     apt-get install -y haproxy socat >/dev/null 2>&1
@@ -19,11 +31,8 @@ install_gost_core() {
     echo -e "  ${M}●${NC} ${W}Configuring Gost Engine...${NC}"
     if [ ! -f /usr/local/bin/gost ]; then
         wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
-        gzip -d gost.gz
-        chmod +x gost
-        mv gost /usr/local/bin/gost
+        gzip -d gost.gz; chmod +x gost; mv gost /usr/local/bin/gost
     fi
-    
     mkdir -p /etc/gost
     if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then
         echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
@@ -33,22 +42,17 @@ cat <<EOF > /etc/systemd/system/gost.service
 [Unit]
 Description=GO Simple Tunnel (MPorter Core)
 After=network.target
-
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/gost -C /etc/gost/config.json
 Restart=always
 LimitNOFILE=1048576
-
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable gost >/dev/null 2>&1
-    systemctl restart gost
+    systemctl daemon-reload; systemctl enable gost >/dev/null 2>&1; systemctl restart gost
 }
 
-# --- System Functions ---
 fix_and_install() {
     echo -e "\n  ${DIM}┌─[ SELECT CORE ENGINE ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -76,29 +80,22 @@ fix_and_install() {
         0) return ;;
         *) echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return ;;
     esac
-
-    echo -e "  ${G}● Installation Completed Successfully.${NC}\n"
-    sleep 2
+    echo -e "  ${G}● Installation Completed Successfully.${NC}\n"; sleep 2
 }
 
-# --- Wipe Functions ---
 wipe_all_mappings() {
     if [ -f "$H_CONF" ]; then
         echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
         echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
         systemctl restart haproxy 2>/dev/null
     fi
-    
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
         echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
         systemctl restart gost 2>/dev/null
     fi
-    
-    echo -e "  ${G}● All Engine Mappings Wiped Clean.${NC}"
-    sleep 1.5
+    echo -e "  ${G}● All Engine Mappings Wiped Clean.${NC}"; sleep 1.5
 }
 
-# --- Smart Interface Detector ---
 get_iface_for_ip() {
     local target_ip=$1
     local subnet=$(echo "$target_ip" | cut -d'.' -f1-3)
@@ -107,10 +104,7 @@ get_iface_for_ip() {
 }
 
 get_stats() {
-    server_ip=$(ip -4 route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
-    if [ -z "$server_ip" ]; then server_ip=$(hostname -I | awk '{print $1}'); fi
-    [ -z "$server_ip" ] && server_ip="UNKNOWN"
-
+    server_ip=$(get_local_ip)
     if systemctl is-active --quiet haproxy; then hap_stat="${G}●${NC}"; raw_hap="●"
     else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
 
@@ -119,13 +113,11 @@ get_stats() {
     
     local h_ports=0; local g_ports=0
     if [ -f "$H_CONF" ]; then
-        h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null)
-        ((h_ports--))
+        h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null); ((h_ports--))
         [ "$h_ports" -lt 0 ] && h_ports=0
     fi
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-        g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null)
-        [ -z "$g_ports" ] && g_ports=0
+        g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0
     fi
     total_ports=$((h_ports + g_ports))
 
@@ -141,17 +133,14 @@ get_stats() {
 }
 
 draw_header() {
-    get_stats
-    clear
-    echo ""
-    
-    # MDesign Padding Engine
-    raw_text=" MPorter 4.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
+    get_stats; clear; echo ""
+    raw_text=" MPorter 4.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 93 - ${#raw_text} ))
+    [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 4.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬─────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-31s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼─────────────────────────────────┤${NC}"
@@ -165,8 +154,7 @@ draw_header() {
     if [ -z "$ip_port_counts" ] || [ "$ip_port_counts" == "|" ]; then
         printf "  ${B}│${NC} ${DIM}%-89s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route."
     else
-        declare -A iface_ips_arr
-        declare -A iface_ports_arr
+        declare -A iface_ips_arr; declare -A iface_ports_arr
         while IFS='|' read -r ip count; do
             if [ -n "$ip" ]; then
                 iface=$(get_iface_for_ip "$ip")
@@ -175,8 +163,7 @@ draw_header() {
             fi
         done <<< "$ip_port_counts"
         for iface in $(for i in "${!iface_ips_arr[@]}"; do echo $i; done | sort); do
-            ips=(${iface_ips_arr["$iface"]})
-            total_p=${iface_ports_arr["$iface"]}
+            ips=(${iface_ips_arr["$iface"]}); total_p=${iface_ports_arr["$iface"]}
             if [ ${#ips[@]} -gt 2 ]; then display_ips="${ips[0]}, ${ips[1]}, ..."
             elif [ ${#ips[@]} -eq 2 ]; then display_ips="${ips[0]}, ${ips[1]}"
             else display_ips="${ips[0]}"; fi
@@ -186,7 +173,6 @@ draw_header() {
     echo -e "  ${B}╰──────────────┴────────────────────────────────────────────┴─────────────────────────────────╯${NC}"
 }
 
-# --- Features & Actions ---
 smart_map() {
     draw_header
     echo -e "\n  ${DIM}┌─[ FORWARDING ENGINE ]${NC}"
@@ -228,9 +214,7 @@ smart_map() {
                 elif [[ -n "${map_ips[$ip_choice]}" ]]; then selected_ips=("${map_ips[$ip_choice]}")
                 else echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
             fi
-        else 
-            echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return
-        fi
+        else echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
     fi
 
     echo -ne "\n  ${C}●${NC} ${W}Enter Local Ports (e.g. 80,443,1080): ${NC}"; read raw_ports
@@ -242,19 +226,21 @@ smart_map() {
     echo -e "  ${B}├──────────────┼─────────┼────────────────────────────────────────────┤${NC}"
     
     for p in $clean_ports; do
-        target_ip=$(echo ${selected_ips[$((RANDOM % ${#selected_ips[@]}))]} | cut -d'.' -f1-3).2
-        [ -n "$manual_ip" ] && target_ip="$manual_ip"
+        # منطق هوشمند برای استخراج تارگت آی‌پی (حفظ تعادل بین سرور ایران و خارج)
+        local selected_ip="${selected_ips[$((RANDOM % ${#selected_ips[@]}))]}"
+        if [ -n "$manual_ip" ]; then 
+            target_ip="$manual_ip"
+        else
+            local base_ip=$(echo "$selected_ip" | cut -d'.' -f1-3)
+            local last_octet=$(echo "$selected_ip" | cut -d'.' -f4)
+            target_ip="${base_ip}.$([ "$last_octet" == "1" ] && echo "2" || echo "1")"
+        fi
         
-        # Smart Skip Checks (System-Wide Scan)
         local skip_reason=""
-        if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then
-            skip_reason="OS/System"
-        elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then 
-            skip_reason="HAProxy"
+        if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then skip_reason="OS/System"
+        elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then skip_reason="HAProxy"
         elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-            if jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then
-                skip_reason="Gost"
-            fi
+            if jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then skip_reason="Gost"; fi
         fi
 
         if [ -n "$skip_reason" ]; then
@@ -262,7 +248,6 @@ smart_map() {
             continue
         fi
         
-        # Proceed with mapping
         if [ "$fwd_engine" == "1" ]; then
             echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$target_ip (on $selected_if)"
@@ -299,8 +284,7 @@ show_table() {
         done <<< "$mappings"
         for d_ip in $(for i in "${!ip_ports_arr[@]}"; do echo $i; done | sort); do
             iface=$(get_iface_for_ip "$d_ip")
-            ports="${ip_ports_arr[$d_ip]}"
-            ports="${ports%, }"
+            ports="${ip_ports_arr[$d_ip]}"; ports="${ports%, }"
             if [ ${#ports} -gt 31 ]; then ports="${ports:0:28}..."; fi
             printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${G}%-42s${NC} ${B}│${NC} ${Y}%-31s${NC} ${B}│${NC}\n" "$iface" "$d_ip" "$ports"
         done
@@ -321,7 +305,7 @@ auto_restart_cron() {
         echo -e "\n  ${R}● Invalid input! Numbers only.${NC}"; sleep 2; return
     fi
 
-    crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab -
+    crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
 
     if [ "$cron_h" == "0" ] && [ "$cron_m" == "0" ]; then
         echo -e "\n  ${Y}● Auto-restart disabled. System returned to normal.${NC}"
@@ -331,7 +315,7 @@ auto_restart_cron() {
         [ "$cron_m" -gt 0 ] && m_str="*/$cron_m"
         [ "$cron_h" -gt 0 ] && [ "$cron_m" == "0" ] && m_str="0"
 
-        (crontab -l 2>/dev/null; echo "$m_str $h_str * * * systemctl restart haproxy >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1") | crontab -
+        (crontab -l 2>/dev/null; echo "$m_str $h_str * * * systemctl restart haproxy >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1") | crontab - 2>/dev/null
         echo -e "\n  ${G}● Auto-restart configured! (Cron Format: $m_str $h_str * * *)${NC}"
     fi
     sleep 2
@@ -391,7 +375,7 @@ while true; do
             if [[ "$confirm" == "y" ]]; then 
                 systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
                 systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
-                crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab -
+                crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
                 rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service
                 apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
                 echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0

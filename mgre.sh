@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.7 (Dedicated Purge Menu) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.8 (vIP Registry Listing) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.7 "
+    local str1=" MGRE Core 4.2.8 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -174,6 +174,40 @@ show_tunnel_details() {
         local l4="Core IPs     : ${lip} -> ${tip}"
         local pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
         echo -e "  ${B}│${NC} ${DIM}Core IPs     :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp4} ${B}│${NC}"
+        
+        if [[ "$MAX_IPS" -gt 0 ]]; then
+            for ((idx=0; idx<MAX_IPS; idx++)); do
+                local hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum)
+                local range_selector=$(( 0x${hash:0:2} % 3 ))
+                local o1 o2 o3
+                if [[ "$range_selector" == "0" ]]; then
+                    o1="10"; o2=$(( (0x${hash:2:2} % 254) + 1 ))
+                elif [[ "$range_selector" == "1" ]]; then
+                    o1="172"; o2=$(( (0x${hash:2:2} % 16) + 16 ))
+                else
+                    o1="192"; o2="168"
+                fi
+                o3=$(( (0x${hash:4:2} % 254) + 1 ))
+                local lo=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
+                local to=$([ "$TYPE" == "1" ] && echo "2" || echo "1")
+                local v_lip="${o1}.${o2}.${o3}.${lo}"
+                local v_tip="${o1}.${o2}.${o3}.${to}"
+                
+                if [ "$idx" -eq 0 ]; then
+                    local l_str="Virtual IPs  : ${v_lip} -> ${v_tip}"
+                    local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
+                    echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${G}${v_lip}${NC} ${DIM}->${NC} ${Y}${v_tip}${NC}${p_sp} ${B}│${NC}"
+                else
+                    local l_str="               ${v_lip} -> ${v_tip}"
+                    local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
+                    echo -e "  ${B}│${NC} ${DIM}               ${G}${v_lip}${NC} ${DIM}->${NC} ${Y}${v_tip}${NC}${p_sp} ${B}│${NC}"
+                fi
+            done
+        else
+            local l_str="Virtual IPs  : None"
+            local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
+            echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${DIM}None${NC}${p_sp} ${B}│${NC}"
+        fi
         
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
     done

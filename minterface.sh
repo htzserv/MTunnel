@@ -1,5 +1,6 @@
+cat << 'EOF' > /usr/bin/minterface
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.0.1 (Alignment Fix) ---
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.0.2 (Ultimate Fix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -28,7 +29,7 @@ draw_header() {
     local s_ip=$(get_local_ip)
     local role=$(detect_server_role)
     clear; echo ""
-    local str1=" MDesign Interface Matrix 1.0.1 "
+    local str1=" MDesign Interface Matrix 1.0.2 "
     local str2=" IP: $s_ip "
     local str3=" ROLE: $role "
     
@@ -70,7 +71,7 @@ render_matrix() {
             title_color="${M}"
         fi
 
-        # رفع باگ استخراج رنگ و تراز دقیق وضعیت اتصال
+        # رفع قطعی باگ رنگ در جدول وضعیت
         local stat_text="● DOWN"
         local stat_color="${R}"
         if ip link show "$T_NAME" >/dev/null 2>&1; then
@@ -81,7 +82,7 @@ render_matrix() {
         fi
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        # جدول با 96 کاراکتر عرض دقیق و تزریق رنگ بدون محاسبه در طول رشته
+        # تزریق امن رنگ‌ها به فرمت‌بندی
         printf "  ${B}│${NC} %b▼ Interface: %-64s%b ${DIM}State: %b%-10s%b ${B}│${NC}\n" "${title_color}" "$T_NAME" "${NC}" "${stat_color}" "$stat_text" "${NC}"
         echo -e "  ${B}├──────────────────────────────┬─────────────────────────────────────────────────────────────────┤${NC}"
         
@@ -89,7 +90,8 @@ render_matrix() {
         printf "  ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC} ${DIM}Local:${NC} %-24s ${DIM}Remote:${NC} %-23s ${B}│${NC}\n" "Public Endpoint IPs" "$LOCAL_PUB" "$REMOTE_PUB"
         echo -e "  ${B}├──────────────────────────────┼─────────────────────────────────────────────────────────────────┤${NC}"
         
-        printf "  ${B}│${NC} %-28s ${B}│${NC} ${G}Local Core IP:${NC} %-21s ${Y}Remote Core IP:${NC} %-19s ${B}│${NC}\n" "Core IPv4 Network" "$lip" "$tip"
+        # اصلاح تراز دقیق بخش آی‌پی‌های هسته (جلوگیری از بیرون‌زدگی جدول)
+        printf "  ${B}│${NC} %-28s ${B}│${NC} ${G}Local Core IP: ${NC}%-16s ${Y}Remote Core IP: ${NC}%-16s ${B}│${NC}\n" "Core IPv4 Network" "$lip" "$tip"
         
         if [[ "$TUN_PROTO" == "6to4" ]]; then
             echo -e "  ${B}├──────────────────────────────┼─────────────────────────────────────────────────────────────────┤${NC}"
@@ -108,3 +110,5 @@ while true; do
     render_matrix
     break
 done
+EOF
+chmod +x /usr/bin/minterface

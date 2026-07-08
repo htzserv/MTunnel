@@ -28,7 +28,8 @@ MTunnel is a highly modular, automated, and visually flawless terminal dashboard
 
 Run the following command on a fresh Ubuntu 22.04 / 24.04 server. The dynamic installer will automatically fetch the latest core modules and build your workspace:
 
+Note: Once installed, simply type mtunnel anywhere in your terminal to launch the MDesign Dashboard.📦
+
 ```bash
 bash <(curl -sL [https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh](https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh))
 
-Note: Once installed, simply type mtunnel anywhere in your terminal to launch the MDesign Dashboard.📦 Modules OverviewModuleDescriptionFunctionalitymain.shMaster CoreCentral UI, Dynamic Cache-Busting Updater, System Purgemgre.shTunnel EngineCreate, Sync, Edit, and Monitor GRE & IP6GRE Tunnelsmporter.shPort ForwarderDeploy HAProxy/Gost, Map Ports, Setup Failover/LBmdiag.shHealth ScannerDeep Ping Analysis, Jitter, iPerf3 Server/Client Speedtests💎 The MDesign PhilosophyThis project strictly adheres to MDesign standards:Zero Clutter: No unnecessary output or messy terminal logs.Visual Hierarchy: Distinct colors, perfectly aligned tables, and clean borders.Seamless UX: Complex Linux networking abstracted into intuitive, numbered menus.Status: Stable / Production Ready

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.5 (Dual Key Registry) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.6 (UX Menu Menu Rearrange) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.5 "
+    local str1=" MGRE Core 4.2.6 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -312,7 +312,7 @@ while true; do
                echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel creation!${NC}"
                echo -e "  ${DIM}├─ Causes: Invalid IPs, network unreachable, or missing modules.${NC}"
                echo -e "  ${DIM}└─ Auto-Rollback: Purging ghost configuration files...${NC}"
-               rm -f "$conf_path" "${STATE_DIR}/${t_name}.state"
+               rm -f "$conf_path" "${STATE_DIR}/${T_NAME}.state"
                sleep 3.5
            fi
            ;;
@@ -347,8 +347,8 @@ while true; do
                printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
            done
            echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
-           printf "  ${B}│${NC}  ${R}%-3s${NC} ${C}❯${NC} ${R}%-53s${NC} ${B}│${NC}\n" "all" "Delete ALL Tunnels"
            printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Go Back"
+           printf "  ${B}│${NC}  ${R}%-3s${NC} ${C}❯${NC} ${R}%-53s${NC} ${B}│${NC}\n" "all" "Delete ALL Tunnels"
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
            

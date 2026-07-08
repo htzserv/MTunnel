@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | HAProxy Manager v5.0.1 (Failover Audited) ---
+# --- MDesign Modular Core (mporter.sh) | HAProxy Manager v5.1.0 (Iran Shield Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -17,21 +17,64 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-install_haproxy_core() {
-    echo -e "  ${C}●${NC} ${W}Configuring HAProxy Engine...${NC}"
-    apt-get install -y haproxy socat >/dev/null 2>&1
+create_base_conf() {
     mkdir -p /etc/haproxy
     echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
     echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
+}
+
+install_haproxy_core() {
+    local custom_url=$1
+    echo -e "  ${C}●${NC} ${W}Configuring HAProxy Engine...${NC}"
+    mkdir -p /etc/haproxy
+    
+    if [ -n "$custom_url" ]; then
+        echo -e "  ${DIM}├─ Fetching HAProxy from Custom URL...${NC}"
+        wget --timeout=15 --tries=2 -qO /tmp/haproxy.deb "$custom_url"
+        if [ -s /tmp/haproxy.deb ]; then
+            dpkg -i /tmp/haproxy.deb >/dev/null 2>&1
+            apt-get install -f -y >/dev/null 2>&1
+            rm -f /tmp/haproxy.deb
+        else
+            echo -e "  ${R}● Custom HAProxy download failed! Falling back to APT...${NC}"
+            apt-get install -y haproxy socat >/dev/null 2>&1
+        fi
+    else
+        apt-get install -y haproxy socat >/dev/null 2>&1
+    fi
+    
+    create_base_conf
     systemctl enable haproxy >/dev/null 2>&1; systemctl restart haproxy
 }
 
 install_gost_core() {
+    local custom_url=$1
     echo -e "  ${M}●${NC} ${W}Configuring Gost Engine...${NC}"
-    if [ ! -f /usr/local/bin/gost ]; then
+    
+    if [ -n "$custom_url" ]; then
+        echo -e "  ${DIM}├─ Fetching Gost from Custom URL...${NC}"
+        wget --timeout=15 --tries=2 -qO /tmp/gost_file "$custom_url"
+        if [ -s /tmp/gost_file ]; then
+            # بررسی اینکه آیا فایل فشرده است یا باینری خام
+            if file /tmp/gost_file | grep -q "gzip"; then
+                mv /tmp/gost_file /tmp/gost.gz
+                gzip -d /tmp/gost.gz
+                chmod +x /tmp/gost
+                mv /tmp/gost /usr/local/bin/gost
+            else
+                chmod +x /tmp/gost_file
+                mv /tmp/gost_file /usr/local/bin/gost
+            fi
+        else
+            echo -e "  ${R}● Custom Gost download failed! Falling back to GitHub...${NC}"
+            wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
+            gzip -d gost.gz; chmod +x gost; mv gost /usr/local/bin/gost
+        fi
+    else
         wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
         gzip -d gost.gz; chmod +x gost; mv gost /usr/local/bin/gost
     fi
+    
     mkdir -p /etc/gost
     if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
 cat <<EOF > /etc/systemd/system/gost.service
@@ -50,26 +93,39 @@ EOF
 }
 
 fix_and_install() {
+    echo -e "\n  ${DIM}┌─[ SELECT DOWNLOAD SOURCE ]${NC}"
+    echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official Sources${NC} ${DIM}(Default APT / GitHub)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Custom Direct Links${NC} ${DIM}(For restricted Iran Servers)${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Select Source ❯❯ ${NC}"; read dl_src_opt
+
+    local h_url=""
+    local g_url=""
+
+    if [ "$dl_src_opt" == "2" ]; then
+        echo -ne "\n  ${C}●${NC} ${W}Enter HAProxy Custom URL (.deb link): ${NC}"; read h_url
+        echo -ne "  ${C}●${NC} ${M}Enter Gost Custom URL (.gz or Binary link): ${NC}"; read g_url
+    fi
+
     echo -e "\n  ${DIM}┌─[ SELECT CORE ENGINE ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} ${DIM}(Best for Load-Balancing)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} ${DIM}(Advanced Tunneling)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Both Cores${NC} ${DIM}(Dual-Core Setup)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Both Cores${NC}"
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-    echo -ne "  ${C}Install ❯❯ ${NC}"; read -t 30 core_opt
+    echo -ne "  ${C}Install Core ❯❯ ${NC}"; read -t 30 core_opt
 
     if [[ "$core_opt" =~ ^[1-3]$ ]]; then
-        echo -e "\n  ${DIM}● Preparing OS & Dependencies...${NC}"
+        echo -e "\n  ${Y}● Preparing OS & Installing Dependencies...${NC}"
         sysctl -w fs.file-max=2000000 >/dev/null 2>&1
         rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock*
         dpkg --configure -a >/dev/null 2>&1 && apt-get install -f -y >/dev/null 2>&1
         apt-get update >/dev/null 2>&1
-        apt-get install -y wget curl gzip jq iproute2 cron >/dev/null 2>&1
+        apt-get install -y wget curl gzip jq iproute2 cron file >/dev/null 2>&1
     fi
     case $core_opt in
-        1) install_haproxy_core ;;
-        2) install_gost_core ;;
-        3) install_haproxy_core; install_gost_core ;;
+        1) install_haproxy_core "$h_url" ;;
+        2) install_gost_core "$g_url" ;;
+        3) install_haproxy_core "$h_url"; install_gost_core "$g_url" ;;
         0) return ;;
         *) echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return ;;
     esac
@@ -118,13 +174,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 5.0.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 5.1.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 93 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 5.0.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 5.1.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}╰─────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -261,7 +317,6 @@ show_table() {
     
     local has_data=false
     if [ -f "$H_CONF" ]; then
-        # تفکیک پورت‌ها با فیلتر sort -u جهت جلوگیری از تکرار فیلدها در جدول رندر
         local h_ports=$(grep "frontend ft_" "$H_CONF" | awk -F'_' '{print $2}' | sort -u)
         for p in $h_ports; do
             local targets=$(grep "server srv_${p}_" "$H_CONF" | awk '{print $3}' | cut -d':' -f1 | paste -sd ", " -)

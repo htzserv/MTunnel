@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Traffic & QoS Manager v1.1.0 ---
+# --- MDesign Modular Core (mstats.sh) | MStats Traffic & QoS Manager v1.1.1 (Clean UI Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" MStats Traffic & QoS 1.1.0 "
+    local str1=" MStats Traffic & QoS 1.1.1 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -45,11 +45,21 @@ format_total() {
 
 show_live_radar() {
     tput civis
-    local phys_ifs=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE '^(lo|gre|br_|vx_|wg|tun|tap)' | xargs)
-    local gre_ifs=$(ls /sys/class/net 2>/dev/null | grep -E '^gre' | xargs)
-    local vx_ifs=$(ls /sys/class/net 2>/dev/null | grep -E '^(vx_|br_)' | xargs)
-    local wg_ifs=$(ls /sys/class/net 2>/dev/null | grep -E '^wg' | xargs)
     
+    # خوندن اسم اینترفیس‌ها و حذف پسوند زائد @NONE
+    local raw_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | sort -u)
+    
+    # فیلتر کردن اینترفیس‌های دیفالتِ بلااستفاده و سیستمی
+    local clean_ifs=$(echo "$raw_ifs" | grep -vE '^(lo|gre0|gretap0|erspan0|sit0|ip6tnl0|ip6gre0|dummy.*)$' | xargs)
+    
+    local phys_ifs=""; local gre_ifs=""; local vx_ifs=""; local wg_ifs=""
+    for iface in $clean_ifs; do
+        if [[ "$iface" =~ ^(vx_|br_) ]]; then vx_ifs="$vx_ifs $iface"
+        elif [[ "$iface" =~ ^wg ]]; then wg_ifs="$wg_ifs $iface"
+        elif [[ "$iface" =~ ^(gre|sit_gre) ]]; then gre_ifs="$gre_ifs $iface"
+        else phys_ifs="$phys_ifs $iface"; fi
+    done
+
     local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
     declare -A rx_old tx_old
     
@@ -60,16 +70,18 @@ show_live_radar() {
 
     while true; do
         draw_mstats_header
-        echo -e "\n  ${DIM}┌─[ LIVE TRAFFIC RADAR ]${NC} ${C}(Auto-Refreshing every 1s | Press 'q' to stop)${NC}\n"
-        echo -e "  ${B}╭───────────────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}%-13s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ RX SPEED" "▲ TX SPEED" "TOTAL RX" "TOTAL TX"
-        echo -e "  ${B}├───────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
+        echo -e "\n  ${DIM}┌─[ LIVE TRAFFIC RADAR ]${NC} ${C}(Auto-Refreshing every 1s | Only Active Links | Press 'q' to stop)${NC}\n"
+        echo -e "  ${B}╭──────────────────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────╮${NC}"
+        printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ RX SPEED" "▲ TX SPEED" "TOTAL RX" "TOTAL TX"
+        echo -e "  ${B}├──────────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
 
         declare -A rx_new tx_new
         for iface in $all_ifs; do
             rx_new[$iface]=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
             tx_new[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
         done
+
+        local active_count=0
 
         render_category() {
             local cat_name=$1; local cat_color=$2; local if_list=$3
@@ -78,13 +90,21 @@ show_live_radar() {
                 local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
                 local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
                 
+                # شرط پنهان کردن اینترفیس‌هایی که سرعت ندارند
+                if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ]; then
+                    rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
+                    continue
+                fi
+                
+                active_count=$((active_count + 1))
+                
                 local c_rx="${C}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
                 local c_tx="${M}"; [ "$tx_sec" -gt 0 ] && c_tx="${Y}"
                 
                 local str_rx_s=$(format_speed $rx_sec); local str_tx_s=$(format_speed $tx_sec)
                 local str_rx_t=$(format_total $r_new); local str_tx_t=$(format_total $t_new)
 
-                printf "  ${B}│${NC} ${W}%-13s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$iface" "$cat_color" "$cat_name" "$NC" "$c_rx" "$str_rx_s" "$NC" "$c_tx" "$str_tx_s" "$NC" "$str_rx_t" "$str_tx_t"
+                printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$iface" "$cat_color" "$cat_name" "$NC" "$c_rx" "$str_rx_s" "$NC" "$c_tx" "$str_tx_s" "$NC" "$str_rx_t" "$str_tx_t"
                 
                 rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
             done
@@ -95,7 +115,11 @@ show_live_radar() {
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs"
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
 
-        echo -e "  ${B}╰───────────────┴────────────┴──────────────┴──────────────┴──────────────┴──────────────╯${NC}"
+        if [ "$active_count" -eq 0 ]; then
+            printf "  ${B}│${NC} ${DIM}%-83s${NC} ${B}│${NC}\n" "  Idle... No active traffic detected on any interface right now."
+        fi
+
+        echo -e "  ${B}╰──────────────────┴────────────┴──────────────┴──────────────┴──────────────┴──────────────╯${NC}"
         
         read -t 1 -n 1 -s key
         if [[ $key == "q" || $key == "Q" ]]; then break; fi
@@ -108,34 +132,40 @@ show_total_usage() {
     echo -e "\n  ${DIM}┌─[ HISTORICAL TRAFFIC USAGE ]${NC}"
     echo -e "  ${C}●${NC} ${W}Data accumulated since system boot or interface creation.${NC}\n"
     
-    local phys_ifs=$(ip -o link show | awk -F': ' '{print $2}' | grep -vE '^(lo|gre|br_|vx_|wg|tun|tap)' | xargs)
-    local all_tuns=$(ls /sys/class/net 2>/dev/null | grep -E '^(gre|vx_|br_|wg)' | xargs)
+    local raw_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | sort -u)
+    local clean_ifs=$(echo "$raw_ifs" | grep -vE '^(lo|gre0|gretap0|erspan0|sit0|ip6tnl0|ip6gre0|dummy.*)$' | xargs)
     
-    echo -e "  ${B}╭───────────────┬────────────────────┬────────────────────┬────────────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-13s${NC} ${B}│${NC} ${C}%-18s${NC} ${B}│${NC} ${M}%-18s${NC} ${B}│${NC} ${G}%-18s${NC} ${B}│${NC}\n" "INTERFACE" "▼ TOTAL DOWNLOAD" "▲ TOTAL UPLOAD" "∑ COMBINED TRAFFIC"
-    echo -e "  ${B}├───────────────┴────────────────────┴────────────────────┴────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${DIM}%-74s${NC} ${B}│${NC}\n" " PHYSICAL / WAN UPLINKS"
-    echo -e "  ${B}├───────────────┬────────────────────┬────────────────────┬────────────────────┤${NC}"
+    local phys_ifs=""; local all_tuns=""
+    for iface in $clean_ifs; do
+        if [[ "$iface" =~ ^(gre|sit_gre|vx_|br_|wg) ]]; then all_tuns="$all_tuns $iface"
+        else phys_ifs="$phys_ifs $iface"; fi
+    done
+    
+    echo -e "  ${B}╭──────────────────┬───────────────────────┬───────────────────────┬────────────────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "INTERFACE" "▼ TOTAL DOWNLOAD" "▲ TOTAL UPLOAD" "∑ COMBINED TRAFFIC"
+    echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " PHYSICAL / WAN UPLINKS"
+    echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
     
     for iface in $phys_ifs; do
         local rx=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
         local tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
         local total=$((rx + tx))
-        printf "  ${B}│${NC} ${W}%-13s${NC} ${B}│${NC} ${C}%-18s${NC} ${B}│${NC} ${M}%-18s${NC} ${B}│${NC} ${G}%-18s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
+        printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
     done
 
     if [ -n "$all_tuns" ]; then
-        echo -e "  ${B}├───────────────┴────────────────────┴────────────────────┴────────────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-74s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, WG)"
-        echo -e "  ${B}├───────────────┬────────────────────┬────────────────────┬────────────────────┤${NC}"
+        echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
+        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, WG)"
+        echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
         for iface in $all_tuns; do
             local rx=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
             local tx=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
             local total=$((rx + tx))
-            printf "  ${B}│${NC} ${W}%-13s${NC} ${B}│${NC} ${C}%-18s${NC} ${B}│${NC} ${M}%-18s${NC} ${B}│${NC} ${G}%-18s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
+            printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
         done
     fi
-    echo -e "  ${B}╰───────────────┴────────────────────┴────────────────────┴────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────────┴───────────────────────┴───────────────────────┴────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
 }
 

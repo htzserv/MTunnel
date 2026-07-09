@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.0.0 ---
+# --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.1.0 (Smart Import) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 WG_DIR="/etc/wireguard"
@@ -16,8 +16,8 @@ get_local_ip() {
 }
 
 check_dependencies() {
-    if ! command -v wg >/dev/null 2>&1; then
-        echo -e "\n  ${Y}● WireGuard tools missing. Installing components...${NC}"
+    if ! command -v wg >/dev/null 2>&1 || ! command -v qrencode >/dev/null 2>&1; then
+        echo -e "\n  ${Y}● WireGuard & QR tools missing. Installing components...${NC}"
         apt-get update -y -q && apt-get install wireguard wireguard-tools qrencode -y -q
     fi
 }
@@ -29,7 +29,7 @@ draw_mwire_header() {
         active_peers=$(wg show wg0 peers 2>/dev/null | wc -l)
     fi
     clear; echo ""
-    local str1=" MWIRE Crypto Matrix 1.0.0 "
+    local str1=" MWIRE Crypto Matrix 1.1.0 "
     local str2=" IP: $s_ip "
     local str3=" SERVER: $srv_status "
     local str4=" PEERS: $active_peers "
@@ -66,19 +66,15 @@ init_wg_server() {
         break
     done
 
-    # تولید کلیدهای سرور
     local server_priv=$(wg genkey)
     local server_pub=$(echo "$server_priv" | wg pubkey)
     
-    # فعال‌سازی IP Forwarding در کرند لینوکس
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-    # پیدا کردن اینترفیس اصلی شبکه برای روتینگ NAT
     local eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5}' | head -n 1)
     [ -z "$eth_iface" ] && eth_iface=$(ip link | awk -F: '$0 !~ "lo|vir|wl|^[^0-9]"{print $2;exit}' | tr -d ' ')
 
-    # ساخت فایل کانفیگ اصلی سرور
     cat <<EOF > "$WG_CONF"
 [Interface]
 PrivateKey = $server_priv
@@ -115,7 +111,6 @@ generate_peer() {
         break
     done
 
-    # پیدا کردن آدرس آی‌پی خالی بعدی در شبکه
     local server_ip=$(grep "Address" "$WG_CONF" | awk '{print $3}' | cut -d'/' -f1)
     local base_ip=$(echo "$server_ip" | cut -d'.' -f1-3)
     local last_octet=$(echo "$server_ip" | cut -d'.' -f4)
@@ -126,7 +121,6 @@ generate_peer() {
     done
     local peer_ip="${base_ip}.${next_octet}"
 
-    # تولید کلیدهای Peer
     local peer_priv=$(wg genkey)
     local peer_pub=$(echo "$peer_priv" | wg pubkey)
     local peer_psk=$(wg genpsk)
@@ -134,7 +128,6 @@ generate_peer() {
     local srv_port=$(grep "ListenPort" "$WG_CONF" | awk '{print $3}')
     local srv_pub_ip=$(get_local_ip)
 
-    # الحاق کردن Peer به فایل سرور
     cat <<EOF >> "$WG_CONF"
 
 # --- Peer: ${p_name} ---
@@ -144,10 +137,8 @@ PresharedKey = $peer_psk
 AllowedIPs = ${peer_ip}/32
 EOF
 
-    # همگام‌سازی کِرنل بدون قطعی شبکه
     wg syncconf wg0 <(wg-quick strip wg0)
 
-    # ساخت فایل کانفیگ اختصاصی کلاینت
     cat <<EOF > "$PEER_DIR/${p_name}.conf"
 [Interface]
 PrivateKey = $peer_priv
@@ -168,11 +159,17 @@ EOF
     echo -e "  ${DIM}├─ Peer File: ${W}${PEER_DIR}/${p_name}.conf${NC}"
     echo -e "  ${DIM}└─ Allocated IP: ${Y}${peer_ip}${NC}\n"
     
-    echo -e "  ${C}▼ CLIENT CONFIGURATION INTERFACE:${NC}"
+    echo -e "  ${C}▼ CLIENT CONFIGURATION TEXT:${NC}"
     echo -e "${DIM}────────────────────────────────────────────────────────────────────────────────────────────${NC}"
     cat "$PEER_DIR/${p_name}.conf"
     echo -e "${DIM}────────────────────────────────────────────────────────────────────────────────────────────${NC}"
-    echo -ne "  ${DIM}Press Enter to return...${NC}"; read
+    
+    if command -v qrencode >/dev/null 2>&1; then
+        echo -e "\n  ${M}▼ MOBILE SCAN SCANNER (QR CODE):${NC}"
+        qrencode -t ansiutf8 < "$PEER_DIR/${p_name}.conf"
+    fi
+    
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
 }
 
 show_active_peers() {
@@ -183,7 +180,6 @@ show_active_peers() {
     echo -e "\n  ${C}Live Encryption Engine Tunnel Matrix:${NC}"
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     
-    # خواندن آمار زنده کلیدها و حجم ترافیک مصرفی
     while read -r line; do
         printf "  ${B}│${NC}  %-88s  ${B}│${NC}\n" "$line"
     done < <(wg show wg0)
@@ -231,14 +227,10 @@ remove_peer_or_server() {
         done
 
         local target_name=$(basename "${peer_files[$p_idx]}" .conf)
-        local target_pub=$(grep -B 3 "Peer: ${target_name}" "$WG_CONF" | grep "PublicKey" | awk '{print $3}')
-        [ -z "$target_pub" ] && target_pub=$(grep -A 2 "PublicKey" "$WG_CONF" | head -n 2 | tail -n 1 | awk '{print $3}')
-
-        # حذف بلاک مربوط به کلاینت از فایل سرور اصلی
+        
         sed -i "/# --- Peer: ${target_name} ---/,+4d" "$WG_CONF"
         rm -f "${peer_files[$p_idx]}"
         
-        # ریلود آنی کِرنل لینوکس بدون قطعی بقیه
         wg syncconf wg0 <(wg-quick strip wg0)
         echo -e "  ${G}● Peer [${target_name}] has been terminated and purged.${NC}"; sleep 1.5
 
@@ -253,17 +245,61 @@ remove_peer_or_server() {
     fi
 }
 
+import_client_config() {
+    if [ -f "$WG_CONF" ]; then
+        echo -e "\n  ${R}● WireGuard configuration already exists on this server!${NC}"
+        echo -e "  ${DIM}├─ If you want to import a new one, delete the old one first (Option 4).${NC}"
+        sleep 2.5; return
+    fi
+
+    echo -e "\n  ${DIM}┌─[ IMPORT CLIENT CONFIGURATION ]${NC}"
+    echo -e "  ${DIM}│${NC} ${Y}Paste the entire configuration text generated by your Server here.${NC}"
+    echo -e "  ${DIM}│${NC} ${Y}When you are finished pasting, type ${W}SAVE${Y} on a new line and press Enter.${NC}"
+    echo -e "  ${DIM}└────────────────────────────────────────────────────────────────────────${NC}\n"
+
+    local temp_conf="/tmp/wg0_import.conf"
+    > "$temp_conf"
+
+    while IFS= read -r line; do
+        if [[ "$line" == "SAVE" || "$line" == "save" ]]; then
+            break
+        fi
+        echo "$line" >> "$temp_conf"
+    done
+
+    if [ ! -s "$temp_conf" ]; then
+        echo -e "\n  ${R}● Error: Empty configuration received! Import aborted.${NC}"
+        rm -f "$temp_conf"; sleep 2; return
+    fi
+
+    mv "$temp_conf" "$WG_CONF"
+    chmod 600 "$WG_CONF"
+    
+    systemctl enable wg-quick@wg0 >/dev/null 2>&1
+    systemctl start wg-quick@wg0 >/dev/null 2>&1
+
+    if ip link show wg0 >/dev/null 2>&1; then
+        echo -e "\n  ${G}● Client Node deployed successfully! Connected to Matrix.${NC}"
+        echo -e "  ${DIM}├─ Interface: ${W}wg0${NC}"
+        echo -e "  ${DIM}└─ Status: ${G}ONLINE${NC}"
+    else
+        echo -e "\n  ${R}● Failed to start WireGuard interface. Check configuration syntax.${NC}"
+    fi
+    sleep 3
+}
+
 check_dependencies
 
 while true; do
     draw_mwire_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Initialize WireGuard Server Core${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Generate Secure Peer Configuration (Client Key)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Show Active Peer Connections (wg show)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Remove Crypto Peer / Turn Off Server${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Initialize WireGuard Server Core${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Generate Secure Peer Configuration (Client Key)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Show Active Peer Connections (wg show)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Remove Crypto Peer / Turn Off Server${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Deploy Node as Client (Import Config)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${G}MWIRE ❯❯ ${NC}"; read opt
     case $opt in
         1) init_wg_server ;;
         2) generate_peer ;;
         3) show_active_peers ;;
         4) remove_peer_or_server ;;
+        5) import_client_config ;;
         0) break ;;
     esac
 done

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.9 (Network ID in Registry) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.11 (Safe Deletion Menu) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.9 "
+    local str1=" MGRE Core 4.2.11 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -91,7 +91,7 @@ draw_mgre_header() {
 }
 
 show_mgre_monitor() {
-    echo -e "\n  ${C}Live Monitoring${NC}"
+    echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     local has_ips=false
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue; source "$conf"; has_ips=true
@@ -164,7 +164,6 @@ show_tunnel_details() {
         local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
         echo -e "  ${B}│${NC} ${M}vIP Sync Key :${NC} ${W}${s_key}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
         
-        # در این بخش Network ID اضافه شد
         local l2="Tunnel Secret: ${t_sec}"; local r2="Network ID: ${t_id}"
         local pad2=$(( 89 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}Tunnel Secret:${NC} ${W}${t_sec}${NC}${sp2} ${DIM}Network ID:${NC} ${W}${t_id}${NC} ${B}│${NC}"
@@ -263,7 +262,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (All Tunnels)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Specific Tunnel${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${R}Purge ALL Active Tunnels${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
@@ -373,7 +372,13 @@ while true; do
                apply_tunnel "$sel_conf"
                echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
            fi ;;
-        3) while true; do draw_mgre_header; show_mgre_monitor; echo -e "  Press '${Y}q${NC}' to go back."; read -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+        3) 
+           while true; do 
+               draw_mgre_header
+               show_mgre_monitor
+               read -t 2 -n 1 -s b_opt
+               if [[ "$b_opt" == "q" ]]; then break; fi
+           done ;;
         4)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No active tunnels to remove!${NC}" && sleep 1.5 && continue
@@ -383,11 +388,26 @@ while true; do
                printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
            done
            echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
+           printf "  ${B}│${NC}  ${R}%-3s${NC} ${C}❯${NC} ${R}%-53s${NC} ${B}│${NC}\n" "all" "Delete ALL Tunnels"
            printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Go Back"
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Enter Index or 'q': ${NC}"; read del_idx
+           echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
            
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
+           
+           if [[ "$del_idx" == "all" ]]; then
+               echo -ne "  ${R}● DANGER: Are you sure you want to delete ALL tunnels? (y/n): ${NC}"; read confirm_all
+               if [[ "$confirm_all" == "y" ]]; then
+                   for conf in "${configs[@]}"; do
+                       source "$conf"
+                       ip tunnel del "$T_NAME" >/dev/null 2>&1
+                       ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+                       rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"
+                   done
+                   echo -e "  ${G}● All tunnels have been safely purged.${NC}"; sleep 1.5
+               fi
+               continue
+           fi
            
            if [[ -n "${configs[$del_idx]}" ]]; then
                source "${configs[$del_idx]}"
@@ -398,21 +418,6 @@ while true; do
            fi ;;
         5) edit_tunnel ;;
         6) show_tunnel_details ;;
-        7) 
-           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; continue; fi
-           echo -ne "\n  ${R}● DANGER: Are you sure you want to purge ALL ${#configs[@]} active tunnels? (y/n): ${NC}"; read confirm_all
-           if [[ "$confirm_all" == "y" ]]; then
-               for conf in "${configs[@]}"; do
-                   source "$conf"
-                   ip tunnel del "$T_NAME" >/dev/null 2>&1
-                   ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
-                   rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"
-               done
-               echo -e "  ${G}● Infrastructure successfully wiped. All tunnels removed.${NC}"; sleep 1.5
-           else
-               echo -e "  ${DIM}● Aborted.${NC}"; sleep 1
-           fi ;;
         0) break ;;
     esac
 done

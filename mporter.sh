@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.2 (Dual-Core & Multi-Fabric) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.3 (Animated UI) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -17,26 +17,59 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+# ---------------------------------------------------------
+# MDesign Animated Progress Bar Engine
+# ---------------------------------------------------------
+draw_progress_bar() {
+    local pid=$1
+    local text=$2
+    local width=25
+    local progress=0
+    
+    tput civis # Hide cursor for clean animation
+    
+    while kill -0 $pid 2>/dev/null; do
+        progress=$((progress + 1))
+        [ $progress -gt 95 ] && progress=95 # Hold at 95% until actually finished
+        
+        local filled=$(( progress * width / 100 ))
+        local empty=$(( width - filled ))
+        local bar=$(printf "%${filled}s" | tr ' ' '█')
+        local empty_bar=$(printf "%${empty}s" | tr ' ' '░')
+        
+        printf "\r  ${C}⟳${NC} ${W}%-22s${NC} ${M}[${bar}${DIM}${empty_bar}${M}]${NC} ${C}%3d%%${NC}" "$text" "$progress"
+        sleep 0.2
+    done
+    
+    local bar=$(printf "%${width}s" | tr ' ' '█')
+    printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
+    
+    tput cnorm # Restore cursor
+}
+# ---------------------------------------------------------
+
 install_haproxy_core() {
-    echo -e "  ${C}●${NC} ${W}Configuring HAProxy Engine...${NC}"
-    apt-get install -y haproxy socat >/dev/null 2>&1
-    mkdir -p /etc/haproxy
-    echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
-    echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
-    systemctl enable haproxy >/dev/null 2>&1
-    systemctl restart haproxy
+    (
+        apt-get install -y haproxy socat >/dev/null 2>&1
+        mkdir -p /etc/haproxy
+        echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
+        echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
+        systemctl enable haproxy >/dev/null 2>&1
+        systemctl restart haproxy >/dev/null 2>&1
+    ) &
+    draw_progress_bar $! "Deploying HAProxy"
 }
 
 install_gost_core() {
-    echo -e "  ${M}●${NC} ${W}Configuring Gost Engine...${NC}"
-    if [ ! -f /usr/local/bin/gost ]; then
-        wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz
-        gzip -d gost.gz; chmod +x gost; mv gost /usr/local/bin/gost
-    fi
-    mkdir -p /etc/gost
-    if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then
-        echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
-    fi
+    (
+        if [ ! -f /usr/local/bin/gost ]; then
+            wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
+            gzip -d gost.gz; chmod +x gost; mv gost /usr/local/bin/gost
+        fi
+        mkdir -p /etc/gost
+        if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then
+            echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
+        fi
 
 cat <<EOF > /etc/systemd/system/gost.service
 [Unit]
@@ -50,7 +83,9 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload; systemctl enable gost >/dev/null 2>&1; systemctl restart gost
+        systemctl daemon-reload; systemctl enable gost >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1
+    ) &
+    draw_progress_bar $! "Deploying Gost Tunnel"
 }
 
 fix_and_install() {
@@ -65,12 +100,15 @@ fix_and_install() {
     echo -ne "  ${C}Install ❯❯ ${NC}"; read -t 30 core_opt
 
     if [[ "$core_opt" =~ ^[1-3]$ ]]; then
-        echo -e "\n  ${DIM}● Preparing OS & Dependencies...${NC}"
-        sysctl -w fs.file-max=2000000 >/dev/null 2>&1
-        rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock*
-        dpkg --configure -a >/dev/null 2>&1 && apt-get install -f -y >/dev/null 2>&1
-        apt-get update >/dev/null 2>&1
-        apt-get install -y wget curl gzip jq iproute2 cron >/dev/null 2>&1
+        echo ""
+        (
+            sysctl -w fs.file-max=2000000 >/dev/null 2>&1
+            rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock*
+            dpkg --configure -a >/dev/null 2>&1 && apt-get install -f -y >/dev/null 2>&1
+            apt-get update >/dev/null 2>&1
+            apt-get install -y wget curl gzip jq iproute2 cron socat >/dev/null 2>&1
+        ) &
+        draw_progress_bar $! "Preparing OS & Deps"
     fi
 
     case $core_opt in
@@ -80,7 +118,7 @@ fix_and_install() {
         0) return ;;
         *) echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return ;;
     esac
-    echo -e "  ${G}● Installation Completed Successfully.${NC}\n"; sleep 2
+    echo -e "\n  ${G}● Initialization Completed Successfully.${NC}"; sleep 2
 }
 
 wipe_all_mappings() {
@@ -134,13 +172,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 4.2 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 4.3 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 93 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.2${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 4.3${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬─────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-31s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼─────────────────────────────────┤${NC}"
@@ -183,7 +221,6 @@ smart_map() {
     if [ "$fwd_engine" != "1" ] && [ "$fwd_engine" != "2" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
     if [ "$fwd_engine" == "2" ] && ! command -v jq >/dev/null 2>&1; then echo -e "  ${R}● Gost requires 'jq'. Run Installer (1) first.${NC}"; sleep 2; return; fi
 
-    # در اینجا قابلیت پشتیبانی از VXLAN و WireGuard اضافه شده است
     local gre_ifs=($(ls /sys/class/net 2>/dev/null | grep -E '^(gre|br_|wg)'))
     if [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -e "\n  ${R}● No Tunnel interfaces found!${NC}"

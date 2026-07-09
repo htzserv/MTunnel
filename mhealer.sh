@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.0 ---
+# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.1 (Live Sync Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 LOG_FILE="/var/log/mhealer.log"
@@ -10,7 +10,6 @@ WEB_SVC_FILE="/etc/systemd/system/mhealer-web.service"
 mkdir -p /etc/mhealer 2>/dev/null
 [ ! -f "$LOG_FILE" ] && touch "$LOG_FILE"
 
-# Default Configuration
 if [ ! -f "$CONF_FILE" ]; then
     echo "CHECK_INTERVAL=15" > "$CONF_FILE"
     echo "MAX_FAILURES=3" >> "$CONF_FILE"
@@ -43,7 +42,7 @@ draw_mhealer_header() {
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
 
     clear; echo ""
-    local str1=" MHealer Web-Radar Hub 1.2.0 "
+    local str1=" MHealer Web-Radar Hub 1.2.1 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -55,7 +54,7 @@ draw_mhealer_header() {
 }
 
 # ---------------------------------------------------------
-# 1. CORE BACKGROUND DAEMON (The Healer AI)
+# 1. CORE BACKGROUND DAEMON
 # ---------------------------------------------------------
 if [[ "$1" == "--daemon" ]]; then
     log_msg() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; }
@@ -91,7 +90,7 @@ if [[ "$1" == "--daemon" ]]; then
 fi
 
 # ---------------------------------------------------------
-# 2. WEB UI BACKGROUND DAEMON (MDesign Live Dashboard)
+# 2. WEB UI BACKGROUND DAEMON
 # ---------------------------------------------------------
 if [[ "$1" == "--web-daemon" ]]; then
     PORT=$2
@@ -104,7 +103,8 @@ if [[ "$1" == "--web-daemon" ]]; then
 
     declare -A rx_old tx_old
 
-    while true; do
+    # رندر کردن داخل تابع برای حل مشکل Local Scope
+    generate_html() {
         TUNNEL_HTML=""
         
         # Parse GRE Tunnels
@@ -124,8 +124,10 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local state=$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)
                 local st_badge="<span class='badge-off'>OFFLINE</span>"
                 [[ "$state" == "up" || "$state" == "unknown" ]] && st_badge="<span class='badge-on'>ONLINE</span>"
+                
+                local rip=${T_REMOTE:-${REMOTE_IP:-"Unknown"}}
 
-                TUNNEL_HTML+="<tr><td>$T_NAME</td><td>GRE / L3</td><td class='ip-font'>$REMOTE_IP</td><td>$st_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
+                TUNNEL_HTML+="<tr><td>$T_NAME</td><td>GRE / L3</td><td class='ip-font'>$rip</td><td>$st_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
             fi
         done
 
@@ -147,7 +149,9 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local st_badge="<span class='badge-off'>OFFLINE</span>"
                 [[ "$state" == "up" || "$state" == "unknown" ]] && st_badge="<span class='badge-on'>ONLINE</span>"
 
-                TUNNEL_HTML+="<tr><td>$BR_NAME</td><td>VXLAN / L2</td><td class='ip-font'>$REMOTE_IP</td><td>$st_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
+                local rip=${VX_REMOTE:-${REMOTE_IP:-"Unknown"}}
+
+                TUNNEL_HTML+="<tr><td>$BR_NAME</td><td>VXLAN / L2</td><td class='ip-font'>$rip</td><td>$st_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
             fi
         done
 
@@ -164,7 +168,6 @@ if [[ "$1" == "--web-daemon" ]]; then
             else print $0 "<br>"
         }')
 
-        # Generate Full UI
         cat <<EOF > index.html
 <!DOCTYPE html>
 <html lang="en">
@@ -238,6 +241,10 @@ $LOG_HTML
 </body>
 </html>
 EOF
+    }
+
+    while true; do
+        generate_html
         sleep 3
     done
     exit 0
@@ -262,7 +269,7 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload; systemctl enable mhealer.service >/dev/null 2>&1; systemctl start mhealer.service
+    systemctl daemon-reload; systemctl enable mhealer.service >/dev/null 2>&1; systemctl restart mhealer.service
     echo -e "  ${G}● MHealer AI is now successfully running in the background.${NC}"; sleep 2
 }
 
@@ -275,9 +282,16 @@ stop_daemon() {
 manage_web_ui() {
     while true; do
         draw_mhealer_header
+        
+        local s_ip=$(get_local_ip)
+        local w_stat_text="${R}OFFLINE${NC}"
+        if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then 
+            w_stat_text="${G}ONLINE${NC} ${DIM}❯${NC} ${C}http://${s_ip}:${WEB_PORT}${NC}"
+        fi
+
         echo -e "\n  ${DIM}┌─[ WEB DASHBOARD MANAGER ]${NC}"
-        echo -e "  ${C}●${NC} ${W}Launch the MDesign Glassmorphic Web Radar.${NC}\n"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Start Web Dashboard${NC} ${DIM}(Live Speeds, IPs & Status)${NC}"
+        echo -e "  ${DIM}│${NC} ${W}Status:${NC} ${w_stat_text}\n  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Start / Restart Web Dashboard${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Stop Web Dashboard${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to MHealer${NC}\n"
@@ -303,11 +317,9 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-                systemctl daemon-reload; systemctl enable mhealer-web.service >/dev/null 2>&1; systemctl start mhealer-web.service
-                local s_ip=$(get_local_ip)
+                systemctl daemon-reload; systemctl enable mhealer-web.service >/dev/null 2>&1; systemctl restart mhealer-web.service
                 echo -e "\n  ${G}● Web Radar is LIVE!${NC}"
-                echo -e "  ${Y}● Open your browser to: ${W}http://${s_ip}:${WEB_PORT}${NC}"
-                sleep 4; break ;;
+                sleep 2; break ;;
             2)
                 systemctl stop mhealer-web.service; systemctl disable mhealer-web.service >/dev/null 2>&1
                 rm -rf /tmp/mhealer_web
@@ -353,11 +365,15 @@ edit_config() {
 
 while true; do
     draw_mhealer_header
+    
+    local w_menu_stat="${DIM}(OFFLINE)${NC}"
+    if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_menu_stat="${G}(ONLINE)${NC}"; fi
+
     echo -e "\n  ${DIM}┌─[ ROBOTIC CONTROL CENTER ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Awaken & Enable MHealer AI${NC} ${DIM}(Background Monitor)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Put MHealer to Sleep${NC} ${DIM}(Disable Monitoring)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}View Live Healing Logs${NC} ${DIM}(CLI Terminal)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Web Dashboard Manager${NC} ${DIM}(Launch Browser UI)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Web Dashboard Manager${NC} ${w_menu_stat}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Calibrate AI Sensitivity${NC} ${DIM}(Interval & Ping targets)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"

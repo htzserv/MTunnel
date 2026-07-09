@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.3 (Strict Zero-Speed Filter) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.4 (Strict Cache Bypass) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.3 "
+    local str1=" MStats Omni-Radar 1.3.4 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -46,32 +46,34 @@ format_total() {
 show_live_radar() {
     tput civis
     clear
-    
-    local phys_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(eth|ens|eno|enp)' | xargs)
-    local gre_ifs=""
-    for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
-    local vx_ifs=""
-    for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
-    local wg_ifs=""
-    [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
-
-    local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
     declare -A rx_old tx_old
-    
-    for iface in $all_ifs; do
-        [ ! -d "/sys/class/net/$iface" ] && continue
-        rx_old[$iface]=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-        tx_old[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-    done
 
     while true; do
         printf "\033[H"
-        
         draw_mstats_header
         echo -e "\n  ${DIM}┌─[ UNIFIED TRAFFIC RADAR ]${NC} ${C}(Real-time 1s Auto-Refresh | Press 'q' to stop)${NC}\n"
         echo -e "  ${B}╭──────────────────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────╮${NC}"
         printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL DOWN" "∑ TOTAL UP"
         echo -e "  ${B}├──────────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
+
+        # اسکن داینامیک درون حلقه: هر ثانیه اینترفیس‌های جدید رو پیدا می‌کنه
+        local phys_ifs=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(eth|ens|eno|enp)' | xargs)
+        local gre_ifs=""
+        for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
+        local vx_ifs=""
+        for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
+        local wg_ifs=""
+        [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
+
+        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
+
+        # مقداردهی اولیه برای اینترفیس‌هایی که تو این ثانیه تازه ساخته شدن
+        for iface in $all_ifs; do
+            if [ -z "${rx_old[$iface]}" ] && [ -d "/sys/class/net/$iface" ]; then
+                rx_old[$iface]=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+                tx_old[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+            fi
+        done
 
         declare -A rx_new tx_new
         for iface in $all_ifs; do
@@ -91,7 +93,7 @@ show_live_radar() {
                 local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
                 local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
                 
-                # فیلتر سخت‌گیرانه و اصلاح شده: فقط و فقط اگر سرعت آپلود و دانلود در این ثانیه صفر بود خط رو مخفی کن
+                # فیلتر سخت‌گیرانه: اگر سرعت این ثانیه مطلقاً صفر است، خط را مخفی کن
                 if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ]; then
                     rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
                     continue
@@ -117,7 +119,7 @@ show_live_radar() {
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
 
         if [ "$active_count" -eq 0 ]; then
-            printf "  ${B}│${NC} ${DIM}%-83s${NC} ${B}│${NC}\n" "  Standby... No active MDesign tunnels or physical interfaces detected."
+            printf "  ${B}│${NC} ${DIM}%-83s${NC} ${B}│${NC}\n" "  Standby... No active MDesign tunnels or physical traffic detected right now."
         fi
 
         echo -e "  ${B}╰──────────────────┴────────────┴──────────────┴──────────────┴──────────────┴──────────────╯${NC}"

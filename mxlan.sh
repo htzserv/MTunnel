@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.1.1 (FDB Parser Patch) ---
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.1.2 (Auto-NAT Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/vxlan"
@@ -31,7 +31,15 @@ apply_fabric() {
     ip link add "$BR_NAME" type bridge 2>/dev/null
     ip link set "$BR_NAME" up 2>/dev/null
     
-    ip link add "$VX_NAME" type vxlan id "$VNI_ID" dev "$eth_iface" remote "$REMOTE_PUB" local "$LOCAL_PUB" dstport 4789 2>/dev/null
+    # --- Auto-NAT Detection Patch ---
+    if ip addr show 2>/dev/null | grep -q "$LOCAL_PUB"; then
+        ip link add "$VX_NAME" type vxlan id "$VNI_ID" dev "$eth_iface" remote "$REMOTE_PUB" local "$LOCAL_PUB" dstport 4789 2>/dev/null
+    else
+        # If server is behind NAT, omit 'local' strict binding to avoid kernel rejection
+        ip link add "$VX_NAME" type vxlan id "$VNI_ID" dev "$eth_iface" remote "$REMOTE_PUB" dstport 4789 2>/dev/null
+    fi
+    # --------------------------------
+    
     ip link set "$VX_NAME" master "$BR_NAME" 2>/dev/null
     ip link set "$VX_NAME" up 2>/dev/null
     
@@ -72,7 +80,7 @@ draw_mxlan_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MXLAN Layer-2 Fabric 1.1.1 "
+    local str1=" MXLAN Layer-2 Fabric 1.1.2 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE FABRICS: $active_fabrics "
     local str4=" TOTAL V-IPS: $total_vips "

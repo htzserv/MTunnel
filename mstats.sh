@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Traffic & QoS Manager v1.1.2 (Clean Radar) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Traffic & QoS Manager v1.1.4 (UX Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" MStats Traffic & QoS 1.1.2 "
+    local str1=" MStats Traffic & QoS 1.1.4 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -46,10 +46,7 @@ format_total() {
 show_live_radar() {
     tput civis
     
-    # گرفتن تمام اینترفیس‌ها و حذف زوائد (مثل @NONE)
     local raw_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | sort -u)
-    
-    # فیلتر هوشمند: فقط کارت شبکه اصلی و تانل‌هایی که خودمون ساختیم رو نگه دار
     local clean_ifs=$(echo "$raw_ifs" | grep -vE '^(lo|gre0|gretap0|erspan0|sit0|ip6tnl0|ip6gre0|dummy.*)$' | xargs)
     
     local phys_ifs=""; local gre_ifs=""; local vx_ifs=""; local wg_ifs=""
@@ -68,11 +65,14 @@ show_live_radar() {
         tx_old[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
     done
 
+    sleep 1
+    local current_interval=1
+
     while true; do
         draw_mstats_header
-        echo -e "\n  ${DIM}┌─[ LIVE TRAFFIC RADAR ]${NC} ${C}(Auto-Refreshing every 1s | Only Active Links | Press 'q' to stop)${NC}\n"
+        echo -e "\n  ${DIM}┌─[ LIVE TRAFFIC RADAR ]${NC} ${C}(Auto-Refreshing every 10s | Only Active Links | Press 'q' to stop)${NC}\n"
         echo -e "  ${B}╭──────────────────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ RX SPEED" "▲ TX SPEED" "TOTAL RX" "TOTAL TX"
+        printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ DOWNLOAD" "▲ UPLOAD" "TOTAL DOWN" "TOTAL UP"
         echo -e "  ${B}├──────────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
 
         declare -A rx_new tx_new
@@ -88,9 +88,11 @@ show_live_radar() {
             for iface in $if_list; do
                 local r_old=${rx_old[$iface]:-0}; local t_old=${tx_old[$iface]:-0}
                 local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
-                local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
                 
-                # جادوی اصلی: اگر ترافیکی عبور نمی‌کنه، کلاً خط رو تو جدول نکش!
+                local rx_diff=$((r_new - r_old)); local tx_diff=$((t_new - t_old))
+                local rx_sec=$((rx_diff / current_interval))
+                local tx_sec=$((tx_diff / current_interval))
+                
                 if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ]; then
                     rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
                     continue
@@ -121,7 +123,8 @@ show_live_radar() {
 
         echo -e "  ${B}╰──────────────────┴────────────┴──────────────┴──────────────┴──────────────┴──────────────╯${NC}"
         
-        read -t 1 -n 1 -s key
+        current_interval=10
+        read -t 10 -n 1 -s key
         if [[ $key == "q" || $key == "Q" ]]; then break; fi
     done
     tput cnorm

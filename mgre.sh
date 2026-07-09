@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.11 (Safe Deletion Menu) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.12 (Strict Input Validation) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.11 "
+    local str1=" MGRE Core 4.2.12 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -267,17 +267,28 @@ while true; do
     case $opt in
         1) 
            echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}\n  ${DIM}├─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}"
-           echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
-           [[ "$proto_choice" == "q" || -z "$proto_choice" ]] && continue
+           
+           while true; do
+               echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
+               [[ "$proto_choice" == "q" ]] && break
+               [[ "$proto_choice" == "1" || "$proto_choice" == "2" ]] && break
+           done
+           [[ "$proto_choice" == "q" ]] && continue
            
            tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
            
-           echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
-           [[ "$s_type" == "q" || -z "$s_type" ]] && continue
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
+               [[ "$s_type" == "q" ]] && break
+               [[ "$s_type" == "1" || "$s_type" == "2" ]] && break
+           done
+           [[ "$s_type" == "q" ]] && continue
            
            while true; do
                echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
-               [[ "$suffix" == "q" ]] && break 2
+               [[ "$suffix" == "q" ]] && break
+               [[ -z "$suffix" ]] && continue
+               
                pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
                t_name="${pfx}${suffix}"
                
@@ -290,35 +301,55 @@ while true; do
                    break
                fi
            done
+           [[ "$suffix" == "q" ]] && continue
            
            if [ -f "$CONF_DIR/${t_name}.conf" ]; then
                echo -e "\n  ${R}● Error: Tunnel interface name [${W}${t_name}${R}] already exists!${NC}"
                sleep 2; continue
            fi
            
-           local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip
+           local_ip=$(get_local_ip)
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}] (Enter for default | q:Back): ${NC}"; read custom_ip
+               [[ "$custom_ip" == "q" ]] && break
+               [ -n "$custom_ip" ] && local_ip=$custom_ip
+               break
+           done
            [[ "$custom_ip" == "q" ]] && continue
-           [ -n "$custom_ip" ] && local_ip=$custom_ip
            
-           echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
-           [[ "$r_ip" == "q" || -z "$r_ip" ]] && continue
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
+               [[ "$r_ip" == "q" ]] && break
+               [[ -n "$r_ip" ]] && break
+           done
+           [[ "$r_ip" == "q" ]] && continue
            
            local_ip6=""; remote_ip6=""; tun_secret=""
            if [[ "$tun_proto" == "6to4" ]]; then
-               echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret
-               [[ "$tun_secret" == "q" || -z "$tun_secret" ]] && continue
+               while true; do
+                   echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret
+                   [[ "$tun_secret" == "q" ]] && break
+                   [[ -n "$tun_secret" ]] && break
+               done
+               [[ "$tun_secret" == "q" ]] && continue
+               
                hash_str=$(echo -n "${tun_secret}_MHDesign" | sha256sum)
                pfx_v6="fd${hash_str:0:2}:${hash_str:2:4}:${hash_str:6:4}:${hash_str:10:4}"
                if [[ "$s_type" == "1" ]]; then local_ip6="${pfx_v6}::1"; remote_ip6="${pfx_v6}::2"; else local_ip6="${pfx_v6}::2"; remote_ip6="${pfx_v6}::1"; fi
            fi
            
-           echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
-           [[ "$user_tun_id" == "q" || -z "$user_tun_id" ]] && continue
-           
-           if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
-               echo -e "\n  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned!${NC}"
-               sleep 2; continue
-           fi
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
+               [[ "$user_tun_id" == "q" ]] && break
+               [[ -z "$user_tun_id" ]] && continue
+               
+               if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
+                   echo -e "  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned!${NC}"
+                   continue
+               fi
+               break
+           done
+           [[ "$user_tun_id" == "q" ]] && continue
            
            tun_id=$user_tun_id
            hash_c=$(echo -n "core_${tun_id}" | sha256sum)
@@ -362,12 +393,31 @@ while true; do
            echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
            printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Go Back"
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
-           [[ "$t_idx" == "q" || -z "$t_idx" ]] && continue
+           
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
+               [[ "$t_idx" == "q" ]] && break
+               [[ -n "$t_idx" ]] && break
+           done
+           [[ "$t_idx" == "q" ]] && continue
+           
            if [[ -n "${configs[$t_idx]}" ]]; then
                sel_conf="${configs[$t_idx]}"; source "$sel_conf"
-               echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
-               echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
+               
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
+                   [[ "$n" == "q" ]] && break
+                   [[ -n "$n" ]] && break
+               done
+               [[ "$n" == "q" ]] && continue
+               
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
+                   [[ "$k" == "q" ]] && break
+                   [[ -n "$k" ]] && break
+               done
+               [[ "$k" == "q" ]] && continue
+               
                sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
                apply_tunnel "$sel_conf"
                echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5

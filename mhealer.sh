@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.5 (Ping Matrix & IPv4 Resolver) ---
+# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.6 (Smart Ping & IPv4 Regex) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 LOG_FILE="/var/log/mhealer.log"
@@ -46,7 +46,7 @@ draw_mhealer_header() {
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
 
     clear; echo ""
-    local str1=" MHealer Web-Radar Hub 1.2.5 "
+    local str1=" MHealer Web-Radar Hub 1.2.6 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -76,14 +76,14 @@ if [[ "$1" == "--daemon" ]]; then
             if [ -d "/sys/class/net/$tun" ]; then
                 local state=$(cat /sys/class/net/$tun/operstate 2>/dev/null)
                 if [[ "$state" == "down" || "$state" == "unknown" ]]; then
-                    if ! ping -c 1 -W 2 -I "$tun" "$PING_TARGET" >/dev/null 2>&1; then
-                        log_msg "⚠️  Tunnel [$tun] is DEAD. Initiating Auto-Repair..."
-                        ip link set "$tun" down; sleep 1; ip link set "$tun" up; sleep 2
-                        if ping -c 1 -W 2 -I "$tun" "$PING_TARGET" >/dev/null 2>&1; then
-                            log_msg "✅ Tunnel [$tun] successfully revived via Link Reset."
-                        else
-                            log_msg "🚨 CPR failed for [$tun]. Requires manual core sync."
-                        fi
+                    # Simplified daemon check: if link is physically down, reset it.
+                    log_msg "⚠️  Tunnel [$tun] Link is DOWN. Initiating Auto-Repair..."
+                    ip link set "$tun" down; sleep 1; ip link set "$tun" up; sleep 2
+                    local check_state=$(cat /sys/class/net/$tun/operstate 2>/dev/null)
+                    if [[ "$check_state" == "up" || "$check_state" == "unknown" ]]; then
+                        log_msg "✅ Tunnel [$tun] successfully revived via Link Reset."
+                    else
+                        log_msg "🚨 CPR failed for [$tun]. Link remains offline."
                     fi
                 fi
             fi
@@ -119,10 +119,15 @@ if [[ "$1" == "--web-daemon" ]]; then
         echo "$rip"
     }
 
-    # تابع رنگ‌بندی و محاسبه پینگ
     get_ping_badge() {
-        local dev=$1
-        local p_time=$(ping -c 1 -W 1 -I "$dev" "$PING_TARGET" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
+        local target=$1
+        [ -z "$target" ] || [[ "$target" == "Unknown" ]] && { echo "<span class='ping-poor'>ERR</span>"; return; }
+        
+        local cmd="ping"
+        [[ "$target" == *":"* ]] && cmd="ping6"
+        
+        # پینگ مستقیم به سرور مقصد برای گرفتن Latency واقعی
+        local p_time=$($cmd -c 1 -W 1 "$target" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
         
         if [ -z "$p_time" ]; then
             echo "<span class='ping-poor'>TIMEOUT</span>"
@@ -138,15 +143,12 @@ if [[ "$1" == "--web-daemon" ]]; then
     generate_html() {
         TUNNEL_HTML=""
         
-        # Parse GRE Tunnels
         for conf in /etc/mgre/tunnels/*.conf; do
             if [ -f "$conf" ]; then
                 source "$conf"
                 local r_new=$(cat /sys/class/net/$T_NAME/statistics/rx_bytes 2>/dev/null || echo 0)
                 local t_new=$(cat /sys/class/net/$T_NAME/statistics/tx_bytes 2>/dev/null || echo 0)
-                local r_old=${rx_old[$T_NAME]:-$r_new}
-                local t_old=${tx_old[$T_NAME]:-$t_new}
-                
+                local r_old=${rx_old[$T_NAME]:-$r_new}; local t_old=${tx_old[$T_NAME]:-$t_new}
                 local rx_s=$(((r_new - r_old) / 3)); [ "$rx_s" -lt 0 ] && rx_s=0
                 local tx_s=$(((t_new - t_old) / 3)); [ "$tx_s" -lt 0 ] && tx_s=0
                 rx_old[$T_NAME]=$r_new; tx_old[$T_NAME]=$t_new
@@ -159,26 +161,31 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local rip=$(get_tunnel_ip "$T_NAME")
                 [ -z "$rip" ] && rip=${T_REMOTE:-${REMOTE_IP:-"Unknown"}}
                 
-                # هوش مصنوعی استخراج IPv4 از کانفیگ در صورت استفاده از IPv6
-                if [[ "$rip" == *":"* ]] && [[ -n "$REMOTE_IP" ]] && [[ "$REMOTE_IP" == *"."* ]]; then
-                    rip="${REMOTE_IP} <br><span style='font-size:10px; color:#64748b;'>IPv6: ${rip}</span>"
+                # هوش مصنوعی: شکار اولین آی‌پی پابلیک نسخه ۴ از داخل فایل کانفیگ
+                local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | head -n 1)
+                
+                local display_ip="$rip"
+                local ping_target="$rip"
+                
+                if [[ "$rip" == *":"* ]] && [ -n "$v4_from_conf" ]; then
+                    display_ip="${v4_from_conf} <br><span style='font-size:10px; color:#64748b;'>IPv6: ${rip}</span>"
+                    ping_target="$v4_from_conf"
+                elif [ -n "$v4_from_conf" ]; then
+                    ping_target="$v4_from_conf"
                 fi
 
-                local p_badge=$(get_ping_badge "$T_NAME")
+                local p_badge=$(get_ping_badge "$ping_target")
 
-                TUNNEL_HTML+="<tr><td>$T_NAME</td><td>GRE / L3</td><td class='ip-font'>$rip</td><td>$st_badge</td><td>$p_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
+                TUNNEL_HTML+="<tr><td>$T_NAME</td><td>GRE / L3</td><td class='ip-font'>$display_ip</td><td>$st_badge</td><td>$p_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
             fi
         done
 
-        # Parse VXLAN Tunnels
         for conf in /etc/mgre/vxlan/*.conf; do
             if [ -f "$conf" ]; then
                 source "$conf"
                 local r_new=$(cat /sys/class/net/$BR_NAME/statistics/rx_bytes 2>/dev/null || echo 0)
                 local t_new=$(cat /sys/class/net/$BR_NAME/statistics/tx_bytes 2>/dev/null || echo 0)
-                local r_old=${rx_old[$BR_NAME]:-$r_new}
-                local t_old=${tx_old[$BR_NAME]:-$t_new}
-                
+                local r_old=${rx_old[$BR_NAME]:-$r_new}; local t_old=${tx_old[$BR_NAME]:-$t_new}
                 local rx_s=$(((r_new - r_old) / 3)); [ "$rx_s" -lt 0 ] && rx_s=0
                 local tx_s=$(((t_new - t_old) / 3)); [ "$tx_s" -lt 0 ] && tx_s=0
                 rx_old[$BR_NAME]=$r_new; tx_old[$BR_NAME]=$t_new
@@ -191,13 +198,21 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local rip=$(get_tunnel_ip "$BR_NAME")
                 [ -z "$rip" ] && rip=${VX_REMOTE:-${REMOTE_IP:-"Unknown"}}
                 
-                if [[ "$rip" == *":"* ]] && [[ -n "$REMOTE_IP" ]] && [[ "$REMOTE_IP" == *"."* ]]; then
-                    rip="${REMOTE_IP} <br><span style='font-size:10px; color:#64748b;'>IPv6: ${rip}</span>"
+                local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | head -n 1)
+                
+                local display_ip="$rip"
+                local ping_target="$rip"
+                
+                if [[ "$rip" == *":"* ]] && [ -n "$v4_from_conf" ]; then
+                    display_ip="${v4_from_conf} <br><span style='font-size:10px; color:#64748b;'>IPv6: ${rip}</span>"
+                    ping_target="$v4_from_conf"
+                elif [ -n "$v4_from_conf" ]; then
+                    ping_target="$v4_from_conf"
                 fi
 
-                local p_badge=$(get_ping_badge "$BR_NAME")
+                local p_badge=$(get_ping_badge "$ping_target")
 
-                TUNNEL_HTML+="<tr><td>$BR_NAME</td><td>VXLAN / L2</td><td class='ip-font'>$rip</td><td>$st_badge</td><td>$p_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
+                TUNNEL_HTML+="<tr><td>$BR_NAME</td><td>VXLAN / L2</td><td class='ip-font'>$display_ip</td><td>$st_badge</td><td>$p_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
             fi
         done
 
@@ -205,7 +220,6 @@ if [[ "$1" == "--web-daemon" ]]; then
             TUNNEL_HTML="<tr><td colspan='7' style='text-align:center; color:#64748b; padding:20px;'>No active MDesign tunnels detected.</td></tr>"
         fi
 
-        # Parse Logs
         LOG_HTML=$(tail -n 12 "$LOG_FILE" 2>/dev/null | awk '{
             if ($0 ~ /✅/) print "<span class=\"success\">" $0 "</span><br>"
             else if ($0 ~ /⚠️/) print "<span class=\"warning\">" $0 "</span><br>"
@@ -245,10 +259,10 @@ if [[ "$1" == "--web-daemon" ]]; then
         .badge-off { background: rgba(248, 113, 113, 0.15); color: #f87171; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; border: 1px solid rgba(248, 113, 113, 0.3); display: inline-block;}
         
         /* Ping Bubbles CSS */
-        .ping-excellent { background: rgba(74, 222, 128, 0.15); color: #4ade80; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(74, 222, 128, 0.3); display: inline-block; min-width: 45px; text-align: center; }
-        .ping-good { background: rgba(192, 132, 252, 0.15); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(192, 132, 252, 0.3); display: inline-block; min-width: 45px; text-align: center; }
-        .ping-fair { background: rgba(250, 204, 21, 0.15); color: #facc15; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(250, 204, 21, 0.3); display: inline-block; min-width: 45px; text-align: center; }
-        .ping-poor { background: rgba(248, 113, 113, 0.15); color: #f87171; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(248, 113, 113, 0.3); display: inline-block; min-width: 45px; text-align: center; }
+        .ping-excellent { background: rgba(74, 222, 128, 0.15); color: #4ade80; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(74, 222, 128, 0.3); display: inline-block; min-width: 50px; text-align: center; }
+        .ping-good { background: rgba(192, 132, 252, 0.15); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(192, 132, 252, 0.3); display: inline-block; min-width: 50px; text-align: center; }
+        .ping-fair { background: rgba(250, 204, 21, 0.15); color: #facc15; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(250, 204, 21, 0.3); display: inline-block; min-width: 50px; text-align: center; }
+        .ping-poor { background: rgba(248, 113, 113, 0.15); color: #f87171; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(248, 113, 113, 0.3); display: inline-block; min-width: 50px; text-align: center; }
         
         .terminal { background: #050505; border-radius: 12px; padding: 20px; font-family: 'Courier New', Courier, monospace; font-size: 13px; line-height: 1.7; color: #94a3b8; height: 260px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.05); }
         .success { color: #4ade80; }
@@ -277,7 +291,7 @@ if [[ "$1" == "--web-daemon" ]]; then
                     <th>Protocol</th>
                     <th>Endpoint IP</th>
                     <th>Status</th>
-                    <th>Ping Target</th>
+                    <th>Latency (Ping)</th>
                     <th>▼ Download</th>
                     <th>▲ Upload</th>
                 </tr>

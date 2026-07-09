@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.6 (Smart Ping & IPv4 Regex) ---
+# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.7 (Smart Ping & Sync Restart) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 LOG_FILE="/var/log/mhealer.log"
@@ -28,6 +28,8 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+MY_PUB_IP=$(get_local_ip)
+
 format_speed() {
     local bytes=$1
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B/s"; return; fi
@@ -38,7 +40,6 @@ format_speed() {
 }
 
 draw_mhealer_header() {
-    local s_ip=$(get_local_ip)
     local d_stat="${R}OFFLINE${NC}"
     if systemctl is-active --quiet mhealer.service 2>/dev/null; then d_stat="${G}ACTIVE & WATCHING${NC}"; fi
     
@@ -46,7 +47,7 @@ draw_mhealer_header() {
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
 
     clear; echo ""
-    local str1=" MHealer Web-Radar Hub 1.2.6 "
+    local str1=" MHealer Web-Radar Hub 1.2.7 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -76,7 +77,6 @@ if [[ "$1" == "--daemon" ]]; then
             if [ -d "/sys/class/net/$tun" ]; then
                 local state=$(cat /sys/class/net/$tun/operstate 2>/dev/null)
                 if [[ "$state" == "down" || "$state" == "unknown" ]]; then
-                    # Simplified daemon check: if link is physically down, reset it.
                     log_msg "⚠️  Tunnel [$tun] Link is DOWN. Initiating Auto-Repair..."
                     ip link set "$tun" down; sleep 1; ip link set "$tun" up; sleep 2
                     local check_state=$(cat /sys/class/net/$tun/operstate 2>/dev/null)
@@ -121,13 +121,16 @@ if [[ "$1" == "--web-daemon" ]]; then
 
     get_ping_badge() {
         local target=$1
+        # پاکسازی آی‌پی از کاراکترهای اضافه
+        target=$(echo "$target" | tr -d ' \n')
+        
         [ -z "$target" ] || [[ "$target" == "Unknown" ]] && { echo "<span class='ping-poor'>ERR</span>"; return; }
         
         local cmd="ping"
         [[ "$target" == *":"* ]] && cmd="ping6"
         
-        # پینگ مستقیم به سرور مقصد برای گرفتن Latency واقعی
-        local p_time=$($cmd -c 1 -W 1 "$target" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
+        # استفاده از awk برای استخراج ۱۰۰٪ تضمینی پینگ
+        local p_time=$($cmd -c 1 -W 2 "$target" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
         
         if [ -z "$p_time" ]; then
             echo "<span class='ping-poor'>TIMEOUT</span>"
@@ -161,8 +164,8 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local rip=$(get_tunnel_ip "$T_NAME")
                 [ -z "$rip" ] && rip=${T_REMOTE:-${REMOTE_IP:-"Unknown"}}
                 
-                # هوش مصنوعی: شکار اولین آی‌پی پابلیک نسخه ۴ از داخل فایل کانفیگ
-                local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | head -n 1)
+                # فیلتر هوشمند برای پیدا کردن آی‌پی ریموت در کانفیگ (حذف آی‌پی لوکال و پرایوت)
+                local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | grep -v "$MY_PUB_IP" | head -n 1)
                 
                 local display_ip="$rip"
                 local ping_target="$rip"
@@ -198,7 +201,7 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local rip=$(get_tunnel_ip "$BR_NAME")
                 [ -z "$rip" ] && rip=${VX_REMOTE:-${REMOTE_IP:-"Unknown"}}
                 
-                local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | head -n 1)
+                local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | grep -v "$MY_PUB_IP" | head -n 1)
                 
                 local display_ip="$rip"
                 local ping_target="$rip"
@@ -342,12 +345,17 @@ EOF
 }
 
 restart_daemon() {
-    echo -e "\n  ${DIM}● Restarting MHealer Core Engine...${NC}"
+    echo -e "\n  ${DIM}● Restarting MHealer Ecosystem...${NC}"
     if systemctl is-active --quiet mhealer.service 2>/dev/null; then
         systemctl restart mhealer.service
-        echo -e "  ${G}● MHealer AI has been successfully restarted.${NC}"
+        echo -e "  ${G}● Core AI Engine successfully restarted.${NC}"
     else
-        echo -e "  ${R}● Service is not running. Please Enable it first (Option 1).${NC}"
+        echo -e "  ${Y}● Core is not running. Skipping Core restart.${NC}"
+    fi
+    
+    if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then
+        systemctl restart mhealer-web.service
+        echo -e "  ${G}● Web Dashboard successfully synced and restarted.${NC}"
     fi
     sleep 2
 }
@@ -460,11 +468,11 @@ while true; do
 
     echo -e "\n  ${DIM}┌─[ ROBOTIC CONTROL CENTER ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Awaken & Enable Core${NC} ${DIM}(Install/Start Monitor)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restart MHealer Core${NC} ${DIM}(Reboot AI Service)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Put Core to Sleep${NC}   ${DIM}(Disable Monitoring)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}View Live Healing Logs${NC} ${DIM}(CLI Terminal)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Web Dashboard Manager${NC}  ${w_menu_stat}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Calibrate AI Config${NC}    ${DIM}(Interval & Ping targets)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restart Ecosystem${NC}  ${DIM}(Sync Core & Web)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Put Core to Sleep${NC}  ${DIM}(Disable Monitoring)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}View Live Logs${NC}     ${DIM}(CLI Terminal)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Web Dashboard${NC}      ${w_menu_stat}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Calibrate AI${NC}       ${DIM}(Interval & Targets)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MHEALER ❯❯ ${NC}"; read opt

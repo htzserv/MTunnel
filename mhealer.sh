@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.4 (Kernel IP Extractor) ---
+# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.5 (Ping Matrix & IPv4 Resolver) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 LOG_FILE="/var/log/mhealer.log"
@@ -46,7 +46,7 @@ draw_mhealer_header() {
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
 
     clear; echo ""
-    local str1=" MHealer Web-Radar Hub 1.2.4 "
+    local str1=" MHealer Web-Radar Hub 1.2.5 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -107,7 +107,6 @@ if [[ "$1" == "--web-daemon" ]]; then
 
     declare -A rx_old tx_old
 
-    # موتور استخراج آی‌پی از قلب کِرنل لینوکس (پشتیبانی از IPv4 و IPv6)
     get_tunnel_ip() {
         local dev=$1
         local rip=$(ip -d link show "$dev" 2>/dev/null | grep -oP 'remote \K[0-9a-fA-F\.:]+' | head -n 1)
@@ -118,6 +117,22 @@ if [[ "$1" == "--web-daemon" ]]; then
             rip=$(ip -d link show "$vx_dev" 2>/dev/null | grep -oP 'remote \K[0-9a-fA-F\.:]+' | head -n 1)
         fi
         echo "$rip"
+    }
+
+    # تابع رنگ‌بندی و محاسبه پینگ
+    get_ping_badge() {
+        local dev=$1
+        local p_time=$(ping -c 1 -W 1 -I "$dev" "$PING_TARGET" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
+        
+        if [ -z "$p_time" ]; then
+            echo "<span class='ping-poor'>TIMEOUT</span>"
+        else
+            local p_int=${p_time%.*}
+            if [ "$p_int" -lt 80 ]; then echo "<span class='ping-excellent'>${p_time} ms</span>"
+            elif [ "$p_int" -lt 150 ]; then echo "<span class='ping-good'>${p_time} ms</span>"
+            else echo "<span class='ping-fair'>${p_time} ms</span>"
+            fi
+        fi
     }
 
     generate_html() {
@@ -143,8 +158,15 @@ if [[ "$1" == "--web-daemon" ]]; then
                 
                 local rip=$(get_tunnel_ip "$T_NAME")
                 [ -z "$rip" ] && rip=${T_REMOTE:-${REMOTE_IP:-"Unknown"}}
+                
+                # هوش مصنوعی استخراج IPv4 از کانفیگ در صورت استفاده از IPv6
+                if [[ "$rip" == *":"* ]] && [[ -n "$REMOTE_IP" ]] && [[ "$REMOTE_IP" == *"."* ]]; then
+                    rip="${REMOTE_IP} <br><span style='font-size:10px; color:#64748b;'>IPv6: ${rip}</span>"
+                fi
 
-                TUNNEL_HTML+="<tr><td>$T_NAME</td><td>GRE / L3</td><td class='ip-font'>$rip</td><td>$st_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
+                local p_badge=$(get_ping_badge "$T_NAME")
+
+                TUNNEL_HTML+="<tr><td>$T_NAME</td><td>GRE / L3</td><td class='ip-font'>$rip</td><td>$st_badge</td><td>$p_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
             fi
         done
 
@@ -168,13 +190,19 @@ if [[ "$1" == "--web-daemon" ]]; then
 
                 local rip=$(get_tunnel_ip "$BR_NAME")
                 [ -z "$rip" ] && rip=${VX_REMOTE:-${REMOTE_IP:-"Unknown"}}
+                
+                if [[ "$rip" == *":"* ]] && [[ -n "$REMOTE_IP" ]] && [[ "$REMOTE_IP" == *"."* ]]; then
+                    rip="${REMOTE_IP} <br><span style='font-size:10px; color:#64748b;'>IPv6: ${rip}</span>"
+                fi
 
-                TUNNEL_HTML+="<tr><td>$BR_NAME</td><td>VXLAN / L2</td><td class='ip-font'>$rip</td><td>$st_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
+                local p_badge=$(get_ping_badge "$BR_NAME")
+
+                TUNNEL_HTML+="<tr><td>$BR_NAME</td><td>VXLAN / L2</td><td class='ip-font'>$rip</td><td>$st_badge</td><td>$p_badge</td><td class='down'>$f_rx</td><td class='up'>$f_tx</td></tr>"
             fi
         done
 
         if [ -z "$TUNNEL_HTML" ]; then
-            TUNNEL_HTML="<tr><td colspan='6' style='text-align:center; color:#64748b; padding:20px;'>No active MDesign tunnels detected.</td></tr>"
+            TUNNEL_HTML="<tr><td colspan='7' style='text-align:center; color:#64748b; padding:20px;'>No active MDesign tunnels detected.</td></tr>"
         fi
 
         # Parse Logs
@@ -196,7 +224,7 @@ if [[ "$1" == "--web-daemon" ]]; then
     <title>MDesign Web Radar</title>
     <style>
         body { margin: 0; background-color: #0b0f19; color: #f8fafc; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; padding: 40px 20px; box-sizing: border-box; }
-        .glass-panel { background: rgba(255, 255, 255, 0.02); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; padding: 30px; width: 100%; max-width: 1000px; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4); }
+        .glass-panel { background: rgba(255, 255, 255, 0.02); backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; padding: 30px; width: 100%; max-width: 1050px; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4); }
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 15px; margin-bottom: 25px; }
         h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: 1px; color: #f1f5f9; }
         .badge { background: rgba(56, 189, 248, 0.1); color: #38bdf8; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; border: 1px solid rgba(56, 189, 248, 0.2); }
@@ -205,15 +233,22 @@ if [[ "$1" == "--web-daemon" ]]; then
         
         table { width: 100%; border-collapse: collapse; margin-bottom: 35px; background: rgba(0,0,0,0.2); border-radius: 12px; overflow: hidden; }
         th { text-align: left; padding: 14px 16px; font-size: 12px; color: #cbd5e1; border-bottom: 1px solid rgba(255,255,255,0.05); text-transform: uppercase; letter-spacing: 1px; }
-        td { padding: 14px 16px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.03); color: #f8fafc; }
+        td { padding: 14px 16px; font-size: 14px; border-bottom: 1px solid rgba(255,255,255,0.03); color: #f8fafc; vertical-align: middle; }
         tr:last-child td { border-bottom: none; }
         tr:hover { background: rgba(255,255,255,0.02); }
         
-        .ip-font { font-family: 'Courier New', Courier, monospace; color: #e2e8f0; }
+        .ip-font { font-family: 'Courier New', Courier, monospace; color: #e2e8f0; line-height: 1.4; }
         .down { color: #38bdf8; font-weight: 600; }
         .up { color: #f472b6; font-weight: 600; }
+        
         .badge-on { background: rgba(74, 222, 128, 0.15); color: #4ade80; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; border: 1px solid rgba(74, 222, 128, 0.3); display: inline-block;}
         .badge-off { background: rgba(248, 113, 113, 0.15); color: #f87171; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; border: 1px solid rgba(248, 113, 113, 0.3); display: inline-block;}
+        
+        /* Ping Bubbles CSS */
+        .ping-excellent { background: rgba(74, 222, 128, 0.15); color: #4ade80; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(74, 222, 128, 0.3); display: inline-block; min-width: 45px; text-align: center; }
+        .ping-good { background: rgba(192, 132, 252, 0.15); color: #c084fc; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(192, 132, 252, 0.3); display: inline-block; min-width: 45px; text-align: center; }
+        .ping-fair { background: rgba(250, 204, 21, 0.15); color: #facc15; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(250, 204, 21, 0.3); display: inline-block; min-width: 45px; text-align: center; }
+        .ping-poor { background: rgba(248, 113, 113, 0.15); color: #f87171; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: bold; border: 1px solid rgba(248, 113, 113, 0.3); display: inline-block; min-width: 45px; text-align: center; }
         
         .terminal { background: #050505; border-radius: 12px; padding: 20px; font-family: 'Courier New', Courier, monospace; font-size: 13px; line-height: 1.7; color: #94a3b8; height: 260px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.05); }
         .success { color: #4ade80; }
@@ -242,6 +277,7 @@ if [[ "$1" == "--web-daemon" ]]; then
                     <th>Protocol</th>
                     <th>Endpoint IP</th>
                     <th>Status</th>
+                    <th>Ping Target</th>
                     <th>▼ Download</th>
                     <th>▲ Upload</th>
                 </tr>

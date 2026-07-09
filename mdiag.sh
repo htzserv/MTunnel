@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mdiag.sh) | MDiag Omni-Scanner v2.0.0 ---
+# --- MDesign Modular Core (mdiag.sh) | MDiag Omni-Scanner v2.0.1 (UI Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -51,7 +51,7 @@ draw_mdiag_header() {
     local total_nodes=$((gre_c + vx_c + wg_c))
 
     clear; echo ""
-    local str1=" MDiag Omni-Scanner 2.0.0 "
+    local str1=" MDiag Omni-Scanner 2.0.1 "
     local str2=" IP: $s_ip "
     local str3=" NODES DETECTED: $total_nodes "
     local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} ))
@@ -79,24 +79,24 @@ run_full_infrastructure_scan() {
         [ ! -f "$conf" ] && continue; has_any=true
         source "$conf"
         
-        local state="${R}DOWN${NC}"; local lat="${DIM}---${NC}"
+        local state_color="${R}"; local state_text="DOWN"; local lat_color="${DIM}"; local lat_text="---"
         if ip link show "$T_NAME" >/dev/null 2>&1; then
-            if [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then state="${G}UP${NC}"; fi
+            if [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then state_color="${G}"; state_text="UP"; fi
             local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
             local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
             
             ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
             if [ $? -eq 0 ]; then
                 local ms=$(echo "$ping_res" | grep -oP 'time=\K\S+')
-                lat="${Y}${ms}ms${NC}"
-                state="${G}ONLINE${NC}"
+                lat_text="${ms}ms"; lat_color="${Y}"
+                state_text="ONLINE"; state_color="${G}"
             else
-                state="${R}OFFLINE${NC}"
+                state_text="OFFLINE"; state_color="${R}"
             fi
         fi
         
         local proto_lbl="GRE L3"; [ "$TUN_PROTO" == "6to4" ] && proto_lbl="IP6GRE"
-        printf "  ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC}\n" "$T_NAME" "$proto_lbl" "$REMOTE_PUB" "$state" "$NC" "$lat" "$NC"
+        printf "  ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC}\n" "$T_NAME" "$proto_lbl" "$REMOTE_PUB" "$state_color" "$state_text" "$NC" "$lat_color" "$lat_text" "$NC"
     done
 
     # 2. Scan VXLAN Fabrics
@@ -104,43 +104,47 @@ run_full_infrastructure_scan() {
         [ ! -f "$conf" ] && continue; has_any=true
         source "$conf"
         
-        local state="${R}DOWN${NC}"; local lat="${DIM}---${NC}"
+        local state_color="${R}"; local state_text="DOWN"; local lat_color="${DIM}"; local lat_text="---"
         if ip link show "$VX_NAME" >/dev/null 2>&1; then
-            if [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" != "down" ]; then state="${G}UP${NC}"; fi
+            if [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" != "down" ]; then state_color="${G}"; state_text="UP"; fi
             local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
             local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
             
             ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
             if [ $? -eq 0 ]; then
                 local ms=$(echo "$ping_res" | grep -oP 'time=\K\S+')
-                lat="${Y}${ms}ms${NC}"
-                state="${G}ONLINE${NC}"
+                lat_text="${ms}ms"; lat_color="${Y}"
+                state_text="ONLINE"; state_color="${G}"
             else
-                state="${R}OFFLINE${NC}"
+                state_text="OFFLINE"; state_color="${R}"
             fi
         fi
         
-        printf "  ${B}│${NC} ${M}%-13s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC}\n" "$VX_NAME" "VXLAN L2" "$REMOTE_PUB" "$state" "$NC" "$lat" "$NC"
+        printf "  ${B}│${NC} ${M}%-13s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC}\n" "$VX_NAME" "VXLAN L2" "$REMOTE_PUB" "$state_color" "$state_text" "$NC" "$lat_color" "$lat_text" "$NC"
     done
 
     # 3. Scan WireGuard
     if [ -f "$WG_CONF" ]; then
         has_any=true
-        local state="${R}DOWN${NC}"; local lat="${DIM}---${NC}"
+        local state_color="${R}"; local state_text="DOWN"; local lat_color="${DIM}"; local lat_text="---"
         if ip link show wg0 >/dev/null 2>&1; then
-            state="${G}UP${NC}"
-            # Check if any peer has a recent handshake
+            state_color="${G}"; state_text="UP"
             local handshakes=$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}')
             local is_online=false
             local now=$(date +%s)
             for hs in $handshakes; do
                 if [ "$hs" != "0" ] && [ $((now - hs)) -lt 180 ]; then is_online=true; break; fi
             done
-            if [ "$is_online" = true ]; then state="${G}ONLINE${NC}"; lat="${G}Active${NC}"; else state="${Y}IDLE${NC}"; fi
+            if [ "$is_online" = true ]; then 
+                state_color="${G}"; state_text="ONLINE"
+                lat_color="${G}"; lat_text="Active"
+            else 
+                state_color="${Y}"; state_text="IDLE"
+            fi
         fi
         
         local active_peers=$(wg show wg0 peers 2>/dev/null | wc -l)
-        printf "  ${B}│${NC} ${G}%-13s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC}\n" "wg0" "WG Crypto" "${active_peers} Peers Reg." "$state" "$NC" "$lat" "$NC"
+        printf "  ${B}│${NC} ${G}%-13s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC}\n" "wg0" "WG Crypto" "${active_peers} Peers Reg." "$state_color" "$state_text" "$NC" "$lat_color" "$lat_text" "$NC"
     fi
 
     if [ "$has_any" = false ]; then
@@ -178,7 +182,6 @@ deep_ping_analysis() {
         echo -e "\n  ${C}● Testing Core IP: ${W}${target}${NC}"
         local tmp_file=$(mktemp)
         
-        # اجرای پینگ تو پس‌زمینه با انیمیشن
         (ping -c 10 -i 0.2 -W 1 "$target" > "$tmp_file" 2>&1) &
         draw_progress_bar $! "Sending 10 Packets"
         
@@ -208,15 +211,15 @@ check_mtu_routing() {
         local mtu=$(ip -o link show "$iface" | grep -oP 'mtu \K\d+')
         local mss_rule=$(iptables -t mangle -S FORWARD 2>/dev/null | grep -w "$iface" | grep TCPMSS | head -n 1)
         
-        local stat_msg="${DIM}Standard L2/L3 Routing${NC}"
+        local stat_color="${DIM}"; local stat_text="Standard L2/L3 Routing"
         if [ -n "$mss_rule" ]; then
             local clamp=$(echo "$mss_rule" | grep -oP '--set-mss \K\d+')
-            stat_msg="${G}TCPMSS Clamped to ${clamp}${NC}"
+            stat_color="${G}"; stat_text="TCPMSS Clamped to ${clamp}"
         elif [[ "$iface" == "wg0" ]]; then
-            stat_msg="${M}Crypto Kernel Routing${NC}"
+            stat_color="${M}"; stat_text="Crypto Kernel Routing"
         fi
 
-        printf "  ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${Y}%-4s${NC} ${B}│${NC} %b%-56s%b ${B}│${NC}\n" "$iface" "$mtu" "" "$stat_msg" "$NC"
+        printf "  ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${Y}%-4s${NC} ${B}│${NC} %b%-56s%b ${B}│${NC}\n" "$iface" "$mtu" "$stat_color" "$stat_text" "$NC"
     done
     echo -e "  ${B}╰───────────────┴──────┴──────────────────────────────────────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read

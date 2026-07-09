@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.12 (Strict Input Validation) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.13 (Registry Ping Radar) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.12 "
+    local str1=" MGRE Core 4.2.13 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -135,7 +135,7 @@ show_tunnel_details() {
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
 
-    echo -e "\n  ${Y}● Deployed Tunnels Registry:${NC}"
+    echo -e "\n  ${Y}● Deployed Tunnels Registry (Scanning Network Latency...):${NC}"
     for conf in "${configs[@]}"; do
         source "$conf"
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
@@ -172,9 +172,16 @@ show_tunnel_details() {
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
         echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
         
+        # --- Core IP Ping Execution ---
+        ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
+        
         local l4="Core IPs     : ${lip} -> ${tip}"
-        local pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
-        echo -e "  ${B}│${NC} ${DIM}Core IPs     :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp4} ${B}│${NC}"
+        local r4_raw="Link: * ${stat_text} (${lat_raw})"
+        local pad4=$(( 89 - ${#l4} - ${#r4_raw} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
+        echo -e "  ${B}│${NC} ${DIM}Core IPs     :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp4} ${DIM}Link:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${lat_color}(${lat_raw})${NC} ${B}│${NC}"
         
         if [[ "$MAX_IPS" -gt 0 ]]; then
             for ((idx=0; idx<MAX_IPS; idx++)); do
@@ -194,14 +201,23 @@ show_tunnel_details() {
                 local v_lip="${o1}.${o2}.${o3}.${lo}"
                 local v_tip="${o1}.${o2}.${o3}.${to}"
                 
+                # --- vIP Ping Execution ---
+                ping_res_vip=$(ping -c 1 -W 1 "$v_tip" 2>/dev/null)
+                if [ $? -eq 0 ]; then
+                    v_lat=$(echo "$ping_res_vip" | grep -oP 'time=\K\S+'); v_lat_raw="${v_lat}ms"; v_stat_color="${G}"
+                else v_lat_raw="---"; v_stat_color="${R}"; fi
+                
+                local v_prefix="Virtual IPs  : "
+                if [ "$idx" -ne 0 ]; then v_prefix="               "; fi
+                local l_str="${v_prefix}${v_lip} -> ${v_tip}"
+                local r_str="[${v_lat_raw}]"
+                local p_len=$(( 89 - ${#l_str} - ${#r_str} ))
+                [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
+                
                 if [ "$idx" -eq 0 ]; then
-                    local l_str="Virtual IPs  : ${v_lip} -> ${v_tip}"
-                    local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
-                    echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${M}${v_lip}${NC} ${DIM}->${NC} ${M}${v_tip}${NC}${p_sp} ${B}│${NC}"
+                    echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${M}${v_lip}${NC} ${DIM}->${NC} ${M}${v_tip}${NC}${p_sp} ${v_stat_color}${r_str}${NC} ${B}│${NC}"
                 else
-                    local l_str="               ${v_lip} -> ${v_tip}"
-                    local p_len=$(( 90 - ${#l_str} )); [ "$p_len" -lt 0 ] && p_len=0; local p_sp=$(printf '%*s' "$p_len" "")
-                    echo -e "  ${B}│${NC} ${DIM}               ${M}${v_lip}${NC} ${DIM}->${NC} ${M}${v_tip}${NC}${p_sp} ${B}│${NC}"
+                    echo -e "  ${B}│${NC} ${DIM}               ${M}${v_lip}${NC} ${DIM}->${NC} ${M}${v_tip}${NC}${p_sp} ${v_stat_color}${r_str}${NC} ${B}│${NC}"
                 fi
             done
         else

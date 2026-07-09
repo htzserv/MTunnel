@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.3 (Animated UI) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.3.1 (Stable UI) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -18,7 +18,7 @@ get_local_ip() {
 }
 
 # ---------------------------------------------------------
-# MDesign Animated Progress Bar Engine
+# MDesign Animated Progress Bar Engine (ASCII Stable)
 # ---------------------------------------------------------
 draw_progress_bar() {
     local pid=$1
@@ -26,22 +26,22 @@ draw_progress_bar() {
     local width=25
     local progress=0
     
-    tput civis # Hide cursor for clean animation
+    tput civis # Hide cursor
     
     while kill -0 $pid 2>/dev/null; do
         progress=$((progress + 1))
-        [ $progress -gt 95 ] && progress=95 # Hold at 95% until actually finished
+        [ $progress -gt 95 ] && progress=95
         
         local filled=$(( progress * width / 100 ))
         local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" | tr ' ' '█')
-        local empty_bar=$(printf "%${empty}s" | tr ' ' '░')
+        local bar=$(printf "%${filled}s" | tr ' ' '#')
+        local empty_bar=$(printf "%${empty}s" | tr ' ' '-')
         
         printf "\r  ${C}⟳${NC} ${W}%-22s${NC} ${M}[${bar}${DIM}${empty_bar}${M}]${NC} ${C}%3d%%${NC}" "$text" "$progress"
         sleep 0.2
     done
     
-    local bar=$(printf "%${width}s" | tr ' ' '█')
+    local bar=$(printf "%${width}s" | tr ' ' '#')
     printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
     
     tput cnorm # Restore cursor
@@ -172,13 +172,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 4.3 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 4.3.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 93 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.3${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 4.3.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬─────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-31s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼─────────────────────────────────┤${NC}"

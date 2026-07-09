@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.5 (Pro Tracker) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.6 (Laser Filter Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.5 "
+    local str1=" MStats Omni-Radar 1.3.6 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -170,28 +170,34 @@ show_total_usage() {
 
 show_connection_tracker() {
     clear; draw_mstats_header
-    echo -e "\n  ${DIM}┌─[ TCP/UDP CONNECTION TRACKER ]${NC}"
-    echo -e "  ${C}●${NC} ${W}Deep scanning established connections & resolving services...${NC}\n"
+    echo -e "\n  ${DIM}┌─[ MDESIGN CONNECTION TRACKER ]${NC}"
+    echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy & Gost)...${NC}\n"
+
+    # پیدا کردن دقیق پورت‌هایی که دست گوست و هپروکسی هستن
+    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE '"(gost|haproxy)"' | awk '{print $5}' | rev | cut -d: -f1 | rev | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "SERVICE APP" "CONNECTIONS"
+    printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "CORE ENGINE" "CONNECTIONS"
     echo -e "  ${B}├─────────┼───────────────┼─────────────────┼─────────────┤${NC}"
     
-    # فیلتر هوشمند: پورت 22 (SSH ادمین) مخفی می‌شود
-    local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -vwE "22" | sort | uniq -c | sort -nr | head -n 5)
-    local rank=1
-    if [ -z "$top_ports" ]; then
-        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections detected."
+    if [ -z "$core_ports" ]; then
+        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Gost or HAProxy services running."
     else
-        while read -r count port; do
-            # جادوی استخراج نام برنامه: پیدا کردن پروسه‌ای که روی این پورت در حال شنود است
-            local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -o 'users:(("[^"]*"' | head -n 1 | cut -d'"' -f2)
-            [ -z "$app_name" ] && app_name="Unknown"
-            app_name=${app_name^^} # حروف بزرگ برای زیبایی بصری
-            
-            printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
-            ((rank++))
-        done <<< "$top_ports"
+        # استخراج کانکشن‌هایی که فقط روی این پورت‌های اصلی هستند
+        local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -E "^($core_ports)$" | sort | uniq -c | sort -nr | head -n 5)
+        
+        local rank=1
+        if [ -z "$top_ports" ]; then
+            printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections to Core Engines."
+        else
+            while read -r count port; do
+                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o 'users:(("(gost|haproxy)"' | head -n 1 | cut -d'"' -f2)
+                [ -z "$app_name" ] && app_name="Unknown"
+                app_name=${app_name^^}
+                printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
+                ((rank++))
+            done <<< "$top_ports"
+        fi
     fi
     echo -e "  ${B}╰─────────┴───────────────┴─────────────────┴─────────────╯${NC}\n"
 
@@ -199,16 +205,24 @@ show_connection_tracker() {
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${Y}%-24s${NC} ${B}│${NC} ${M}%-11s${NC} ${B}│${NC}\n" "RANK" "TOP CLIENT IPs (PEERS)" "CONNECTIONS"
     echo -e "  ${B}├─────────┼──────────────────────────┼─────────────┤${NC}"
     
-    # فیلتر هوشمند: ادغام آی‌پی‌های ::ffff: با آی‌پی‌های عادی برای شمارش دقیق
-    local top_ips=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $5}' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 5)
-    local rank2=1
-    if [ -z "$top_ips" ]; then
+    if [ -z "$core_ports" ]; then
         printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
     else
-        while read -r count ip; do
-            printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank2" "$ip" "$count"
-            ((rank2++))
-        done <<< "$top_ips"
+        # استخراج آی‌پی‌هایی که فقط و فقط به پورت‌های هاست و هپروکسی ما وصل شدن (حذف آی‌پی‌های بک‌گراند)
+        local top_ips=$(ss -tun state established 2>/dev/null | awk -v cp="^(${core_ports})$" '{
+            n = split($4, a, ":"); port = a[n];
+            if(port ~ cp) print $5;
+        }' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 5)
+        
+        local rank2=1
+        if [ -z "$top_ips" ]; then
+            printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients connected to Cores."
+        else
+            while read -r count ip; do
+                printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank2" "$ip" "$count"
+                ((rank2++))
+            done <<< "$top_ips"
+        fi
     fi
     echo -e "  ${B}╰─────────┴──────────────────────────┴─────────────╯${NC}"
     
@@ -309,7 +323,7 @@ while true; do
     echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Live Omni-Radar${NC} ${DIM}(Bandwidth & Historical Total)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Total Historical Usage${NC} ${DIM}(Static Traffic Snapshot)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}TCP/UDP Connection Tracker${NC} ${DIM}(Find Floods & App Resolver)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}TCP/UDP Connection Tracker${NC} ${DIM}(Exclusive Core Filter)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Fabric QoS & Speed Limiter${NC} ${DIM}(Throttle specific interfaces)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Active Bandwidth Benchmark${NC} ${DIM}(iPerf3 Client/Server)${NC}"
     echo -e "  ${DIM}│${NC}"

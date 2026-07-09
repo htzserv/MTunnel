@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.8 (Animated iPerf3 Setup) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.9 (iPerf3 Loop Catch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.8 "
+    local str1=" MStats Omni-Radar 1.3.9 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -24,9 +24,6 @@ draw_mstats_header() {
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
-# ---------------------------------------------------------
-# MDesign Animated Progress Bar Engine (ASCII Stable)
-# ---------------------------------------------------------
 draw_progress_bar() {
     local pid=$1
     local text=$2
@@ -51,7 +48,6 @@ draw_progress_bar() {
     printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
     tput cnorm
 }
-# ---------------------------------------------------------
 
 format_speed() {
     local bytes=$1
@@ -260,7 +256,7 @@ qos_manager() {
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific interfaces to prevent network saturation.${NC}\n"
     
-    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|vx_|br_|wg|eth|ens|eno|enp)' | xargs)
+    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|br_|wg|eth|ens|eno|enp)' | xargs)
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"
@@ -306,7 +302,6 @@ iperf_benchmark() {
 
     if ! command -v iperf3 >/dev/null 2>&1; then
         echo -e "  ${Y}● iPerf3 engine not found. Initializing setup...${NC}"
-        # اجرای نصب در پس‌زمینه همراه با پروگرس‌بار انیمیشنی
         (
             apt-get update >/dev/null 2>&1
             apt-get install -y iperf3 >/dev/null 2>&1
@@ -325,9 +320,11 @@ iperf_benchmark() {
     if [ "$i_mode" == "1" ]; then
         echo -ne "  ${C}●${NC} ${W}Port to listen on [Default: 5201]: ${NC}"; read i_port
         i_port=${i_port:-5201}
-        echo -e "\n  ${G}● iPerf3 Server is now running on port ${W}${i_port}${G}. (Press Ctrl+C to stop)${NC}"
+        echo -e "\n  ${G}● iPerf3 Server is starting on port ${W}${i_port}${G}... (Press Ctrl+C to close server)${NC}"
         echo -e "  ${DIM}──────────────────────────────────────────────────────────────${NC}"
         iperf3 -s -p "$i_port"
+        echo -e "  ${DIM}──────────────────────────────────────────────────────────────${NC}"
+        echo -ne "\n  ${Y}● Server process finished. Press Enter to return...${NC}"; read
     elif [ "$i_mode" == "2" ]; then
         echo -ne "  ${C}●${NC} ${W}Target Server IP (e.g. Tunnel IP): ${NC}"; read i_ip
         [ -z "$i_ip" ] && return

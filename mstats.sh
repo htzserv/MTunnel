@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.6 (Laser Filter Patch) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.7 (Pro Filter Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.6 "
+    local str1=" MStats Omni-Radar 1.3.7 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -174,7 +174,7 @@ show_connection_tracker() {
     echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy & Gost)...${NC}\n"
 
     # پیدا کردن دقیق پورت‌هایی که دست گوست و هپروکسی هستن
-    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE '"(gost|haproxy)"' | awk '{print $5}' | rev | cut -d: -f1 | rev | sort -u | tr '\n' '|' | sed 's/|$//')
+    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "CORE ENGINE" "CONNECTIONS"
@@ -191,7 +191,7 @@ show_connection_tracker() {
             printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections to Core Engines."
         else
             while read -r count port; do
-                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o 'users:(("(gost|haproxy)"' | head -n 1 | cut -d'"' -f2)
+                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy)' | head -n 1)
                 [ -z "$app_name" ] && app_name="Unknown"
                 app_name=${app_name^^}
                 printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
@@ -234,7 +234,7 @@ qos_manager() {
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific interfaces to prevent network saturation.${NC}\n"
     
-    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|br_|wg|eth|ens|eno|enp)' | xargs)
+    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|vx_|br_|wg|eth|ens|eno|enp)' | xargs)
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"

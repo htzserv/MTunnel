@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.1 (Live Sync Patch) ---
+# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.2 (Restart Option Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 LOG_FILE="/var/log/mhealer.log"
@@ -42,7 +42,7 @@ draw_mhealer_header() {
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
 
     clear; echo ""
-    local str1=" MHealer Web-Radar Hub 1.2.1 "
+    local str1=" MHealer Web-Radar Hub 1.2.2 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -103,7 +103,6 @@ if [[ "$1" == "--web-daemon" ]]; then
 
     declare -A rx_old tx_old
 
-    # رندر کردن داخل تابع برای حل مشکل Local Scope
     generate_html() {
         TUNNEL_HTML=""
         
@@ -269,8 +268,19 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload; systemctl enable mhealer.service >/dev/null 2>&1; systemctl restart mhealer.service
+    systemctl daemon-reload; systemctl enable mhealer.service >/dev/null 2>&1; systemctl start mhealer.service
     echo -e "  ${G}● MHealer AI is now successfully running in the background.${NC}"; sleep 2
+}
+
+restart_daemon() {
+    echo -e "\n  ${DIM}● Restarting MHealer Core Engine...${NC}"
+    if systemctl is-active --quiet mhealer.service 2>/dev/null; then
+        systemctl restart mhealer.service
+        echo -e "  ${G}● MHealer AI has been successfully restarted.${NC}"
+    else
+        echo -e "  ${R}● Service is not running. Please Enable it first (Option 1).${NC}"
+    fi
+    sleep 2
 }
 
 stop_daemon() {
@@ -294,7 +304,7 @@ manage_web_ui() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Start / Restart Web Dashboard${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Stop Web Dashboard${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to MHealer${NC}\n"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}WEB-UI ❯❯ ${NC}"; read w_opt
         
         case $w_opt in
@@ -370,20 +380,22 @@ while true; do
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_menu_stat="${G}(ONLINE)${NC}"; fi
 
     echo -e "\n  ${DIM}┌─[ ROBOTIC CONTROL CENTER ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Awaken & Enable MHealer AI${NC} ${DIM}(Background Monitor)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Put MHealer to Sleep${NC} ${DIM}(Disable Monitoring)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}View Live Healing Logs${NC} ${DIM}(CLI Terminal)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Web Dashboard Manager${NC} ${w_menu_stat}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Calibrate AI Sensitivity${NC} ${DIM}(Interval & Ping targets)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Awaken & Enable Core${NC} ${DIM}(Install/Start Monitor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restart MHealer Core${NC} ${DIM}(Reboot AI Service)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Put Core to Sleep${NC}   ${DIM}(Disable Monitoring)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}View Live Healing Logs${NC} ${DIM}(CLI Terminal)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Web Dashboard Manager${NC}  ${w_menu_stat}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Calibrate AI Config${NC}    ${DIM}(Interval & Ping targets)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MHEALER ❯❯ ${NC}"; read opt
     case $opt in
         1) install_daemon ;;
-        2) stop_daemon ;;
-        3) view_logs ;;
-        4) manage_web_ui ;;
-        5) edit_config ;;
+        2) restart_daemon ;;
+        3) stop_daemon ;;
+        4) view_logs ;;
+        5) manage_web_ui ;;
+        6) edit_config ;;
         0) break ;;
     esac
 done

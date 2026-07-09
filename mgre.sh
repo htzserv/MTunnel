@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.13 (Registry Ping Radar) ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.15 (vIP Manager Integration) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -77,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.13 "
+    local str1=" MGRE Core 4.2.15 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -172,7 +172,6 @@ show_tunnel_details() {
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
         echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
         
-        # --- Core IP Ping Execution ---
         ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
         if [ $? -eq 0 ]; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
@@ -201,7 +200,6 @@ show_tunnel_details() {
                 local v_lip="${o1}.${o2}.${o3}.${lo}"
                 local v_tip="${o1}.${o2}.${o3}.${to}"
                 
-                # --- vIP Ping Execution ---
                 ping_res_vip=$(ping -c 1 -W 1 "$v_tip" 2>/dev/null)
                 if [ $? -eq 0 ]; then
                     v_lat=$(echo "$ping_res_vip" | grep -oP 'time=\K\S+'); v_lat_raw="${v_lat}ms"; v_stat_color="${G}"
@@ -278,7 +276,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Generate Sync IPs (Select Tunnel)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
@@ -412,31 +410,59 @@ while true; do
            
            while true; do
                echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
-               [[ "$t_idx" == "q" ]] && break
+               [[ "$t_idx" == "q" ]] && break 2
                [[ -n "$t_idx" ]] && break
            done
-           [[ "$t_idx" == "q" ]] && continue
            
            if [[ -n "${configs[$t_idx]}" ]]; then
                sel_conf="${configs[$t_idx]}"; source "$sel_conf"
                
-               while true; do
-                   echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
-                   [[ "$n" == "q" ]] && break
-                   [[ -n "$n" ]] && break
-               done
-               [[ "$n" == "q" ]] && continue
+               echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}"
+               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}"
+               echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}"
+               echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
                
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
-                   [[ "$k" == "q" ]] && break
-                   [[ -n "$k" ]] && break
+                   echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action
+                   [[ "$vip_action" == "q" || "$vip_action" == "1" || "$vip_action" == "2" ]] && break
                done
-               [[ "$k" == "q" ]] && continue
+               [[ "$vip_action" == "q" ]] && continue
                
-               sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
-               apply_tunnel "$sel_conf"
-               echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
+               if [[ "$vip_action" == "1" ]]; then
+                   while true; do
+                       echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
+                       [[ "$n" == "q" ]] && break
+                       [[ -n "$n" ]] && break
+                   done
+                   [[ "$n" == "q" ]] && continue
+                   
+                   while true; do
+                       echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
+                       [[ "$k" == "q" ]] && break
+                       [[ -n "$k" ]] && break
+                   done
+                   [[ "$k" == "q" ]] && continue
+                   
+                   sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
+                   apply_tunnel "$sel_conf"
+                   echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
+                   
+               elif [[ "$vip_action" == "2" ]]; then
+                   if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then
+                       echo -e "  ${Y}● No Virtual IPs found on this tunnel!${NC}"
+                       sleep 1.5; continue
+                   fi
+                   
+                   echo -ne "  ${R}● Are you sure you want to delete all ${MAX_IPS} vIPs from [${T_NAME}]? (y/n): ${NC}"; read confirm_vip
+                   if [[ "$confirm_vip" == "y" ]]; then
+                       sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"
+                       sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"
+                       apply_tunnel "$sel_conf"
+                       echo -e "  ${G}● Virtual IPs purged successfully. Core tunnel remains intact.${NC}"; sleep 1.5
+                   else
+                       echo -e "  ${DIM}● Aborted.${NC}"; sleep 1
+                   fi
+               fi
            fi ;;
         3) 
            while true; do 

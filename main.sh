@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v2.3.1 (UI Typography Update) ---
+# --- MDesign Master Core | Central Dashboard v2.3.2 (Compact UI Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -47,13 +47,12 @@ draw_main_header() {
     if iptables -C INPUT -p icmp --icmp-type echo-request -j DROP 2>/dev/null; then st_shld="●"; c_shld="${G}"; fi
 
     clear; echo ""
-    local title=" MDesign Master Core v2.3.1 "
+    local title=" MDesign Master Core v2.3.2 "
     local ip_str=" IP: $s_ip "
     local pad1=$(( 94 - ${#title} - 1 - ${#ip_str} ))
     [ "$pad1" -lt 0 ] && pad1=0
     local spc1=$(printf '%*s' "$pad1" "")
 
-    # محاسبه پدینگ بر اساس رشته‌ی 81 کاراکتریِ جدید
     local pad2=$(( 94 - 81 ))
     [ "$pad2" -lt 0 ] && pad2=0
     local spc2=$(printf '%*s' "$pad2" "")
@@ -71,9 +70,7 @@ show_tunnel_hub() {
         echo -e "  ${DIM}┌─[ TUNNEL INFRASTRUCTURE HUB ]${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}      ${DIM}[Layer 3 Routing]${NC}"
-        echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}    ${DIM}[Layer 2 Bridge Over UDP]${NC}"
-        echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}WireGuard Crypto Secure Matrix (Mwire)${NC} ${DIM}[High-Speed Encrypted]${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core Dashboard${NC}\n"
@@ -92,21 +89,13 @@ while true; do
     echo -e "  ${DIM}┌─[ MAIN DASHBOARD ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub (Mgre / Mxlan / Mwire)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover Module (Mporter)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix (Minterface)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${W}Network Health & Diagnostics (Mdiag)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Stealth Anti-Probing Shield (Mshield)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${B}Bandwidth Radar & Traffic Stats (Mstats)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer (Mhealer)${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${DIM}Update Master Core & All Sub-Modules${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Delete ALL Tunnels & Traces)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}"

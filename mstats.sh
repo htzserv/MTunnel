@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.2 (Visual Deduplication) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.3 (Strict Zero-Speed Filter) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.2 "
+    local str1=" MStats Omni-Radar 1.3.3 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -91,7 +91,8 @@ show_live_radar() {
                 local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
                 local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
                 
-                if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ] && [ "$r_new" -eq 0 ] && [ "$t_new" -eq 0 ]; then
+                # فیلتر سخت‌گیرانه و اصلاح شده: فقط و فقط اگر سرعت آپلود و دانلود در این ثانیه صفر بود خط رو مخفی کن
+                if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ]; then
                     rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
                     continue
                 fi
@@ -208,7 +209,7 @@ qos_manager() {
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific interfaces to prevent network saturation.${NC}\n"
     
-    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|br_|wg|eth|ens|eno|enp)' | xargs)
+    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|vx_|br_|wg|eth|ens|eno|enp)' | xargs)
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"

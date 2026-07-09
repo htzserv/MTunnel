@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v2.3.0 (Detailed Hub & Spaced UI) ---
+# --- MDesign Master Core | Central Dashboard v2.3.1 (UI Typography Update) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -47,21 +47,21 @@ draw_main_header() {
     if iptables -C INPUT -p icmp --icmp-type echo-request -j DROP 2>/dev/null; then st_shld="●"; c_shld="${G}"; fi
 
     clear; echo ""
-    local title=" MDesign Master Core v2.3.0 "
+    local title=" MDesign Master Core v2.3.1 "
     local ip_str=" IP: $s_ip "
     local pad1=$(( 94 - ${#title} - 1 - ${#ip_str} ))
     [ "$pad1" -lt 0 ] && pad1=0
     local spc1=$(printf '%*s' "$pad1" "")
 
-    # محاسبه دقیق طول استرینگ پایینی برای تراز کردن کادر (60 کاراکتر خالص)
-    local pad2=$(( 94 - 60 ))
+    # محاسبه پدینگ بر اساس رشته‌ی 81 کاراکتریِ جدید
+    local pad2=$(( 94 - 81 ))
     [ "$pad2" -lt 0 ] && pad2=0
     local spc2=$(printf '%*s' "$pad2" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${title}${NC}${B}│${NC}${DIM}${ip_str}${NC}${spc1}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM} VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM} WG:${NC}${c_wg}${st_wg}${NC}${DIM}  │  HAProxy: ${NC}${c_hap}${st_hap}${NC}${DIM}  Gost: ${NC}${c_gost}${st_gost}${NC}${DIM}  Shield: ${NC}${c_shld}${st_shld}${NC}${spc2}${B}│${NC}"
+    echo -e "  ${B}│${NC}${DIM} Hub:  GRE: ${NC}${c_gre}${st_gre}${NC}${DIM}    VXLAN: ${NC}${c_vx}${st_vx}${NC}${DIM}    WireGuard: ${NC}${c_wg}${st_wg}${NC}${DIM}  │  HAProxy: ${NC}${c_hap}${st_hap}${NC}${DIM}    Gost: ${NC}${c_gost}${st_gost}${NC}${DIM}    Shield: ${NC}${c_shld}${st_shld}${NC}${spc2}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 

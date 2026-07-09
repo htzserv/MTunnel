@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.4.0 (QoS Laser Filter) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.4.1 (Safe QoS Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.4.0 "
+    local str1=" MStats Omni-Radar 1.4.1 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -254,12 +254,9 @@ show_connection_tracker() {
 qos_manager() {
     clear; draw_mstats_header
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
-    echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific interfaces to prevent network saturation.${NC}\n"
+    echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific Virtual Fabrics to prevent saturation.${NC}\n"
     
-    # فیلتر لیزری: استخراج کارت‌های اصلی فیزیکی
-    local phys_ifs=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(eth|ens|eno|enp)' | xargs)
-    
-    # فیلتر لیزری: استخراج دقیق نام تانل‌های MDesign
+    # فیلتر لیزری اختصاصی برای QoS: هیچ پورت فیزیکی (eth, ens) نمایش داده نمی‌شود. فقط تونل‌ها.
     local gre_ifs=""
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
     local vx_ifs=""
@@ -267,7 +264,7 @@ qos_manager() {
     local wg_ifs=""
     [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
 
-    local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
+    local all_tuns="$gre_ifs $vx_ifs $wg_ifs"
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"
@@ -275,9 +272,11 @@ qos_manager() {
     
     local iface_arr=()
     local idx=0
-    for iface in $all_ifs; do
-        # بررسی اینکه کارت شبکه واقعا روی سیستم وجود داره
+    local found_any=false
+    
+    for iface in $all_tuns; do
         if [ -d "/sys/class/net/$iface" ]; then
+            found_any=true
             iface_arr+=("$iface")
             local limit=$(tc qdisc show dev "$iface" 2>/dev/null | grep -oP 'rate \K\S+')
             local stat_color="${G}"; local stat_text="UNLIMITED (Native Speed)"
@@ -287,9 +286,15 @@ qos_manager() {
             ((idx++))
         fi
     done
+    
+    if [ "$found_any" = false ]; then
+        printf "  ${B}│${NC} ${DIM}%-49s${NC} ${B}│${NC}\n" "  No active virtual tunnels found."
+    fi
     echo -e "  ${B}╰─────┴──────────────────┴──────────────────────────────╯${NC}\n"
     
-    echo -ne "  ${C}●${NC} ${W}Select Interface Index (or 'q' to cancel): ${NC}"; read sel_idx
+    [ "$found_any" = false ] && { echo -ne "  ${DIM}Press Enter to return...${NC}"; read; return; }
+    
+    echo -ne "  ${C}●${NC} ${W}Select Tunnel Index (or 'q' to cancel): ${NC}"; read sel_idx
     [[ "$sel_idx" == "q" || -z "$sel_idx" ]] && return
     
     local target_if="${iface_arr[$sel_idx]}"

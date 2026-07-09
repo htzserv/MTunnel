@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.0 (iPerf3 Integration) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.1 (Dynamic & Strict Filter) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.0 "
+    local str1=" MStats Omni-Radar 1.3.1 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -46,32 +46,64 @@ format_total() {
 show_live_radar() {
     tput civis
     clear
-    
-    local phys_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(eth|ens|eno|enp)' | xargs)
-    local gre_ifs=""
-    for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
-    local vx_ifs=""
-    for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $VX_NAME $BR_NAME"; done
-    local wg_ifs=""
-    [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
-
-    local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
     declare -A rx_old tx_old
-    
-    for iface in $all_ifs; do
-        [ ! -d "/sys/class/net/$iface" ] && continue
-        rx_old[$iface]=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-        tx_old[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-    done
+
+    # متد پرینت کردن برای جلوگیری از تکرار کد
+    render_category() {
+        local cat_name=$1; local cat_color=$2; local if_list=$3
+        for iface in $if_list; do
+            [ ! -d "/sys/class/net/$iface" ] && continue
+            
+            local r_old=${rx_old[$iface]:-0}; local t_old=${tx_old[$iface]:-0}
+            local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
+            local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
+            
+            # فیلتر سخت‌گیرانه: اگر سرعت در این ثانیه دقیقا صفر است، اصلاً خط رو رندر نکن
+            if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ]; then
+                rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
+                continue
+            fi
+            
+            active_count=$((active_count + 1))
+            
+            local c_rx="${C}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
+            local c_tx="${M}"; [ "$tx_sec" -gt 0 ] && c_tx="${Y}"
+            
+            local str_rx_s=$(format_speed $rx_sec); local str_tx_s=$(format_speed $tx_sec)
+            local str_rx_t=$(format_total $r_new); local str_tx_t=$(format_total $t_new)
+
+            printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$iface" "$cat_color" "$cat_name" "$NC" "$c_rx" "$str_rx_s" "$NC" "$c_tx" "$str_tx_s" "$NC" "$str_rx_t" "$str_tx_t"
+            
+            rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
+        done
+    }
 
     while true; do
         printf "\033[H"
-        
         draw_mstats_header
         echo -e "\n  ${DIM}┌─[ UNIFIED TRAFFIC RADAR ]${NC} ${C}(Real-time 1s Auto-Refresh | Press 'q' to stop)${NC}\n"
         echo -e "  ${B}╭──────────────────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────╮${NC}"
         printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL DOWN" "∑ TOTAL UP"
         echo -e "  ${B}├──────────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
+
+        # اسکن داینامیک در هر ثانیه (برای پیدا کردن تانل‌های جدیدی که الان ساخته شدن)
+        local phys_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(eth|ens|eno|enp)' | xargs)
+        local gre_ifs=""
+        for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
+        local vx_ifs=""
+        for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $VX_NAME $BR_NAME"; done
+        local wg_ifs=""
+        [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
+
+        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
+        
+        # مقداردهی اولیه برای اینترفیس‌هایی که تازه پیدا شدن
+        for iface in $all_ifs; do
+            if [ -z "${rx_old[$iface]}" ] && [ -d "/sys/class/net/$iface" ]; then
+                rx_old[$iface]=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
+                tx_old[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
+            fi
+        done
 
         declare -A rx_new tx_new
         for iface in $all_ifs; do
@@ -80,47 +112,20 @@ show_live_radar() {
             tx_new[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
         done
 
-        local active_count=0
-
-        render_category() {
-            local cat_name=$1; local cat_color=$2; local if_list=$3
-            for iface in $if_list; do
-                [ ! -d "/sys/class/net/$iface" ] && continue
-                
-                local r_old=${rx_old[$iface]:-0}; local t_old=${tx_old[$iface]:-0}
-                local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
-                local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
-                
-                if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ] && [ "$r_new" -eq 0 ] && [ "$t_new" -eq 0 ]; then
-                    rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
-                    continue
-                fi
-                
-                active_count=$((active_count + 1))
-                
-                local c_rx="${C}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
-                local c_tx="${M}"; [ "$tx_sec" -gt 0 ] && c_tx="${Y}"
-                
-                local str_rx_s=$(format_speed $rx_sec); local str_tx_s=$(format_speed $tx_sec)
-                local str_rx_t=$(format_total $r_new); local str_tx_t=$(format_total $t_new)
-
-                printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$iface" "$cat_color" "$cat_name" "$NC" "$c_rx" "$str_rx_s" "$NC" "$c_tx" "$str_tx_s" "$NC" "$str_rx_t" "$str_tx_t"
-                
-                rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
-            done
-        }
-
+        active_count=0
+        
         [ -n "$phys_ifs" ] && render_category "WAN / PHYS" "${W}" "$phys_ifs"
         [ -n "$gre_ifs" ] && render_category "GRE / L3" "${C}" "$gre_ifs"
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs"
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
 
         if [ "$active_count" -eq 0 ]; then
-            printf "  ${B}│${NC} ${DIM}%-83s${NC} ${B}│${NC}\n" "  Standby... No active MDesign tunnels or physical interfaces detected."
+            printf "  ${B}│${NC} ${DIM}%-83s${NC} ${B}│${NC}\n" "  Standby... No active MDesign tunnels or physical traffic detected."
         fi
 
         echo -e "  ${B}╰──────────────────┴────────────┴──────────────┴──────────────┴──────────────┴──────────────╯${NC}"
         printf "\033[J"
+        
         read -t 1 -n 1 -s key
         if [[ $key == "q" || $key == "Q" ]]; then break; fi
     done

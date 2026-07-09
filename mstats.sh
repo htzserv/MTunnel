@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.4 (Strict Cache Bypass) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.5 (Pro Tracker) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.4 "
+    local str1=" MStats Omni-Radar 1.3.5 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -56,7 +56,6 @@ show_live_radar() {
         printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "INTERFACE" "CATEGORY" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL DOWN" "∑ TOTAL UP"
         echo -e "  ${B}├──────────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
 
-        # اسکن داینامیک درون حلقه: هر ثانیه اینترفیس‌های جدید رو پیدا می‌کنه
         local phys_ifs=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(eth|ens|eno|enp)' | xargs)
         local gre_ifs=""
         for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
@@ -67,7 +66,6 @@ show_live_radar() {
 
         local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
 
-        # مقداردهی اولیه برای اینترفیس‌هایی که تو این ثانیه تازه ساخته شدن
         for iface in $all_ifs; do
             if [ -z "${rx_old[$iface]}" ] && [ -d "/sys/class/net/$iface" ]; then
                 rx_old[$iface]=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
@@ -93,7 +91,6 @@ show_live_radar() {
                 local r_new=${rx_new[$iface]:-0}; local t_new=${tx_new[$iface]:-0}
                 local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
                 
-                # فیلتر سخت‌گیرانه: اگر سرعت این ثانیه مطلقاً صفر است، خط را مخفی کن
                 if [ "$rx_sec" -eq 0 ] && [ "$tx_sec" -eq 0 ]; then
                     rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
                     continue
@@ -174,35 +171,47 @@ show_total_usage() {
 show_connection_tracker() {
     clear; draw_mstats_header
     echo -e "\n  ${DIM}┌─[ TCP/UDP CONNECTION TRACKER ]${NC}"
-    echo -e "  ${C}●${NC} ${W}Scanning established connections in Kernel...${NC}\n"
+    echo -e "  ${C}●${NC} ${W}Deep scanning established connections & resolving services...${NC}\n"
 
-    echo -e "  ${B}╭─────────┬──────────────────────┬─────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-20s${NC} ${B}│${NC} ${M}%-11s${NC} ${B}│${NC}\n" "RANK" "HEAVIEST LOCAL PORTS" "CONNECTIONS"
-    echo -e "  ${B}├─────────┼──────────────────────┼─────────────┤${NC}"
-    local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | sort | uniq -c | sort -nr | head -n 5)
+    echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "SERVICE APP" "CONNECTIONS"
+    echo -e "  ${B}├─────────┼───────────────┼─────────────────┼─────────────┤${NC}"
+    
+    # فیلتر هوشمند: پورت 22 (SSH ادمین) مخفی می‌شود
+    local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -vwE "22" | sort | uniq -c | sort -nr | head -n 5)
     local rank=1
     if [ -z "$top_ports" ]; then
-        printf "  ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "  No active connections detected."
+        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections detected."
     else
         while read -r count port; do
-            printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$count"; ((rank++))
+            # جادوی استخراج نام برنامه: پیدا کردن پروسه‌ای که روی این پورت در حال شنود است
+            local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -o 'users:(("[^"]*"' | head -n 1 | cut -d'"' -f2)
+            [ -z "$app_name" ] && app_name="Unknown"
+            app_name=${app_name^^} # حروف بزرگ برای زیبایی بصری
+            
+            printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
+            ((rank++))
         done <<< "$top_ports"
     fi
-    echo -e "  ${B}╰─────────┴──────────────────────┴─────────────╯${NC}\n"
+    echo -e "  ${B}╰─────────┴───────────────┴─────────────────┴─────────────╯${NC}\n"
 
-    echo -e "  ${B}╭─────────┬──────────────────────┬─────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${Y}%-20s${NC} ${B}│${NC} ${M}%-11s${NC} ${B}│${NC}\n" "RANK" "TOP CLIENT IPs (PEERS)" "CONNECTIONS"
-    echo -e "  ${B}├─────────┼──────────────────────┼─────────────┤${NC}"
-    local top_ips=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $5}' | rev | cut -d: -f2- | rev | tr -d '[]' | grep -Ev '127\.0\.0\.1|0\.0\.0\.0|\*' | sort | uniq -c | sort -nr | head -n 5)
+    echo -e "  ${B}╭─────────┬──────────────────────────┬─────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${Y}%-24s${NC} ${B}│${NC} ${M}%-11s${NC} ${B}│${NC}\n" "RANK" "TOP CLIENT IPs (PEERS)" "CONNECTIONS"
+    echo -e "  ${B}├─────────┼──────────────────────────┼─────────────┤${NC}"
+    
+    # فیلتر هوشمند: ادغام آی‌پی‌های ::ffff: با آی‌پی‌های عادی برای شمارش دقیق
+    local top_ips=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $5}' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 5)
     local rank2=1
     if [ -z "$top_ips" ]; then
-        printf "  ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "  No active external clients."
+        printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
     else
         while read -r count ip; do
-            printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank2" "$ip" "$count"; ((rank2++))
+            printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank2" "$ip" "$count"
+            ((rank2++))
         done <<< "$top_ips"
     fi
-    echo -e "  ${B}╰─────────┴──────────────────────┴─────────────╯${NC}"
+    echo -e "  ${B}╰─────────┴──────────────────────────┴─────────────╯${NC}"
+    
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
 }
 
@@ -211,7 +220,7 @@ qos_manager() {
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific interfaces to prevent network saturation.${NC}\n"
     
-    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|vx_|br_|wg|eth|ens|eno|enp)' | xargs)
+    local all_ifs=$(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|br_|wg|eth|ens|eno|enp)' | xargs)
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"
@@ -300,7 +309,7 @@ while true; do
     echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Live Omni-Radar${NC} ${DIM}(Bandwidth & Historical Total)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Total Historical Usage${NC} ${DIM}(Static Traffic Snapshot)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}TCP/UDP Connection Tracker${NC} ${DIM}(Find Floods & Top IPs)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}TCP/UDP Connection Tracker${NC} ${DIM}(Find Floods & App Resolver)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Fabric QoS & Speed Limiter${NC} ${DIM}(Throttle specific interfaces)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Active Bandwidth Benchmark${NC} ${DIM}(iPerf3 Client/Server)${NC}"
     echo -e "  ${DIM}│${NC}"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.7 (Pro Filter Patch) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.3.8 (Animated iPerf3 Setup) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.3.7 "
+    local str1=" MStats Omni-Radar 1.3.8 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -23,6 +23,35 @@ draw_mstats_header() {
     echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
+
+# ---------------------------------------------------------
+# MDesign Animated Progress Bar Engine (ASCII Stable)
+# ---------------------------------------------------------
+draw_progress_bar() {
+    local pid=$1
+    local text=$2
+    local width=25
+    local progress=0
+    
+    tput civis
+    while kill -0 $pid 2>/dev/null; do
+        progress=$((progress + 1))
+        [ $progress -gt 95 ] && progress=95
+        
+        local filled=$(( progress * width / 100 ))
+        local empty=$(( width - filled ))
+        local bar=$(printf "%${filled}s" | tr ' ' '#')
+        local empty_bar=$(printf "%${empty}s" | tr ' ' '-')
+        
+        printf "\r  ${C}⟳${NC} ${W}%-22s${NC} ${M}[${bar}${DIM}${empty_bar}${M}]${NC} ${C}%3d%%${NC}" "$text" "$progress"
+        sleep 0.15
+    done
+    
+    local bar=$(printf "%${width}s" | tr ' ' '#')
+    printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
+    tput cnorm
+}
+# ---------------------------------------------------------
 
 format_speed() {
     local bytes=$1
@@ -173,7 +202,6 @@ show_connection_tracker() {
     echo -e "\n  ${DIM}┌─[ MDESIGN CONNECTION TRACKER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy & Gost)...${NC}\n"
 
-    # پیدا کردن دقیق پورت‌هایی که دست گوست و هپروکسی هستن
     local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
@@ -183,7 +211,6 @@ show_connection_tracker() {
     if [ -z "$core_ports" ]; then
         printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Gost or HAProxy services running."
     else
-        # استخراج کانکشن‌هایی که فقط روی این پورت‌های اصلی هستند
         local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -E "^($core_ports)$" | sort | uniq -c | sort -nr | head -n 5)
         
         local rank=1
@@ -208,7 +235,6 @@ show_connection_tracker() {
     if [ -z "$core_ports" ]; then
         printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
     else
-        # استخراج آی‌پی‌هایی که فقط و فقط به پورت‌های هاست و هپروکسی ما وصل شدن (حذف آی‌پی‌های بک‌گراند)
         local top_ips=$(ss -tun state established 2>/dev/null | awk -v cp="^(${core_ports})$" '{
             n = split($4, a, ":"); port = a[n];
             if(port ~ cp) print $5;
@@ -279,9 +305,13 @@ iperf_benchmark() {
     echo -e "  ${C}●${NC} ${W}Active end-to-end speed test using iPerf3 engine.${NC}\n"
 
     if ! command -v iperf3 >/dev/null 2>&1; then
-        echo -e "  ${Y}● iPerf3 engine not found. Installing now...${NC}"
-        apt-get update >/dev/null 2>&1
-        apt-get install -y iperf3 >/dev/null 2>&1
+        echo -e "  ${Y}● iPerf3 engine not found. Initializing setup...${NC}"
+        # اجرای نصب در پس‌زمینه همراه با پروگرس‌بار انیمیشنی
+        (
+            apt-get update >/dev/null 2>&1
+            apt-get install -y iperf3 >/dev/null 2>&1
+        ) &
+        draw_progress_bar $! "Installing iPerf3 Core"
     fi
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────╮${NC}"

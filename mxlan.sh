@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.1.0 (Parity Edition) ---
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.1.1 (FDB Parser Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/vxlan"
@@ -72,7 +72,7 @@ draw_mxlan_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MXLAN Layer-2 Fabric 1.1.0 "
+    local str1=" MXLAN Layer-2 Fabric 1.1.1 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE FABRICS: $active_fabrics "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -202,7 +202,7 @@ show_fabric_details() {
             echo -e "  ${B}│${NC} ${DIM}Virtual IPs  :${NC} ${DIM}None${NC}${p_sp} ${B}│${NC}"
         fi
         
-        # بخش اختصاصی لایه 2: نمایش MAC Table
+        # بخش اختصاصی لایه 2: نمایش MAC Table با پارسر امن
         echo -e "  ${B}│${NC} ${C}Forwarding Database (Remote MAC Table):${NC}                                                ${B}│${NC}"
         local has_mac=false
         while read -r mac dst; do
@@ -212,7 +212,7 @@ show_fabric_details() {
                 local p_mac=$(( 89 - ${#l_mac} )); [ "$p_mac" -lt 0 ] && p_mac=0; local sp_mac=$(printf '%*s' "$p_mac" "")
                 echo -e "  ${B}│${NC} ${DIM}  ├─ MAC:${NC} ${Y}${mac}${NC}  ${DIM}-->${NC}  ${W}${dst}${NC}${sp_mac} ${B}│${NC}"
             fi
-        done < <(bridge fdb show dev "$VX_NAME" 2>/dev/null | grep -v "00:00:00:00:00:00" | grep dst | awk '{print $1, $3}')
+        done < <(bridge fdb show dev "$VX_NAME" 2>/dev/null | grep -v "00:00:00:00:00:00" | grep dst | awk '{for(i=1;i<=NF;i++) if($i=="dst") print $1, $(i+1)}')
         
         if [ "$has_mac" = false ]; then
             echo -e "  ${B}│${NC} ${DIM}  └─ No remote MAC addresses learned yet.${NC}                                              ${B}│${NC}"

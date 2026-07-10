@@ -1,5 +1,6 @@
+cat << 'EOF_MHEALER' > /usr/bin/mhealer
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.7 (Smart Ping & Sync Restart) ---
+# --- MDesign Modular Core (mhealer.sh) | MHealer Web-Radar Hub v1.2.8 (Log Rotation Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 LOG_FILE="/var/log/mhealer.log"
@@ -47,7 +48,7 @@ draw_mhealer_header() {
     if systemctl is-active --quiet mhealer-web.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
 
     clear; echo ""
-    local str1=" MHealer Web-Radar Hub 1.2.7 "
+    local str1=" MHealer Web-Radar Hub 1.2.8 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -62,7 +63,16 @@ draw_mhealer_header() {
 # 1. CORE BACKGROUND DAEMON
 # ---------------------------------------------------------
 if [[ "$1" == "--daemon" ]]; then
-    log_msg() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"; }
+    # --- PATCH 3: Smart Log Rotation to prevent Disk Full issues ---
+    log_msg() { 
+        echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+        local lines=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$lines" -gt 3000 ]; then
+            tail -n 2000 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+        fi
+    }
+    # ---------------------------------------------------------------
+    
     log_msg "🤖 MHealer Core Activated. Watchdog Interval: ${CHECK_INTERVAL}s"
     
     while true; do
@@ -121,15 +131,12 @@ if [[ "$1" == "--web-daemon" ]]; then
 
     get_ping_badge() {
         local target=$1
-        # پاکسازی آی‌پی از کاراکترهای اضافه
         target=$(echo "$target" | tr -d ' \n')
-        
         [ -z "$target" ] || [[ "$target" == "Unknown" ]] && { echo "<span class='ping-poor'>ERR</span>"; return; }
         
         local cmd="ping"
         [[ "$target" == *":"* ]] && cmd="ping6"
         
-        # استفاده از awk برای استخراج ۱۰۰٪ تضمینی پینگ
         local p_time=$($cmd -c 1 -W 2 "$target" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
         
         if [ -z "$p_time" ]; then
@@ -164,7 +171,6 @@ if [[ "$1" == "--web-daemon" ]]; then
                 local rip=$(get_tunnel_ip "$T_NAME")
                 [ -z "$rip" ] && rip=${T_REMOTE:-${REMOTE_IP:-"Unknown"}}
                 
-                # فیلتر هوشمند برای پیدا کردن آی‌پی ریموت در کانفیگ (حذف آی‌پی لوکال و پرایوت)
                 local v4_from_conf=$(grep -oE '\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' "$conf" | grep -vE '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|127\.)' | grep -v "$MY_PUB_IP" | head -n 1)
                 
                 local display_ip="$rip"
@@ -486,3 +492,5 @@ while true; do
         0) break ;;
     esac
 done
+EOF_MHEALER
+chmod +x /usr/bin/mhealer

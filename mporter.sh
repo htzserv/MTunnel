@@ -1,11 +1,13 @@
+cat << 'EOF_MPORTER' > /usr/bin/mporter
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.3.1 (Stable UI) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.4.0 (Stealth Integrated) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
 INSTALL_PATH="/usr/bin/mporter"
 H_CONF="/etc/haproxy/haproxy.cfg"
 G_CONF="/etc/gost/config.json"
+OBFS_DIR="/etc/mporter/obfs_rules"
 
 if [[ "$1" != "--apply" ]]; then
     if [[ ! -x "$INSTALL_PATH" ]]; then cp "$0" "$INSTALL_PATH" 2>/dev/null && chmod +x "$INSTALL_PATH" 2>/dev/null; fi
@@ -47,6 +49,31 @@ draw_progress_bar() {
     tput cnorm # Restore cursor
 }
 # ---------------------------------------------------------
+
+build_obfs_runner() {
+    cat <<'EOF' > /usr/local/bin/mporter-obfs.sh
+#!/bin/bash
+iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+[ -f /etc/mporter/obfs_rules/nat.sh ] && source /etc/mporter/obfs_rules/nat.sh 2>/dev/null
+[ -f /etc/mporter/obfs_rules/gost.sh ] && source /etc/mporter/obfs_rules/gost.sh 2>/dev/null
+wait
+EOF
+    chmod +x /usr/local/bin/mporter-obfs.sh
+    
+    cat <<'EOF' > /etc/systemd/system/mporter-obfs.service
+[Unit]
+Description=MPorter OBFS Stealth Engine
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mporter-obfs.sh
+Restart=always
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload; systemctl enable mporter-obfs >/dev/null 2>&1; systemctl restart mporter-obfs >/dev/null 2>&1
+}
 
 install_haproxy_core() {
     (
@@ -131,7 +158,11 @@ wipe_all_mappings() {
         echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
         systemctl restart gost 2>/dev/null
     fi
-    echo -e "  ${G}● All Engine Mappings Wiped Clean.${NC}"; sleep 1.5
+    systemctl stop mporter-obfs 2>/dev/null
+    iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+    rm -rf "$OBFS_DIR"
+    build_obfs_runner
+    echo -e "  ${G}● All Engine Mappings & OBFS Rules Wiped Clean.${NC}"; sleep 1.5
 }
 
 get_iface_for_ip() {
@@ -148,6 +179,10 @@ get_stats() {
 
     if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"
     else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
+    
+    if systemctl is-active --quiet mporter-obfs && [ -s "$OBFS_DIR/gost.sh" ]; then
+        obfs_stat="${C}●${NC}"; raw_obfs="●"
+    else obfs_stat="${DIM}○${NC}"; raw_obfs="○"; fi
     
     local h_ports=0; local g_ports=0
     if [ -f "$H_CONF" ]; then
@@ -172,16 +207,16 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 4.3.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ IPs: $raw_ip │ PORTS: $total_ports"
-    pad_len=$(( 93 - ${#raw_text} ))
+    raw_text=" MPorter 4.4.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ PORTS: $total_ports"
+    pad_len=$(( 92 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
-    echo -e "  ${B}╭─────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.3.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
-    echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬─────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-31s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
-    echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼─────────────────────────────────┤${NC}"
+    echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 4.4.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
+    echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""
     [ -f "$H_CONF" ] && h_map=$(grep "server srv_" "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d':' -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
@@ -190,7 +225,7 @@ draw_header() {
     local ip_port_counts=$(echo -e "$h_map\n$g_map" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
 
     if [ -z "$ip_port_counts" ] || [ "$ip_port_counts" == "|" ]; then
-        printf "  ${B}│${NC} ${DIM}%-89s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route."
+        printf "  ${B}│${NC} ${DIM}%-88s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route."
     else
         declare -A iface_ips_arr; declare -A iface_ports_arr
         while IFS='|' read -r ip count; do
@@ -205,10 +240,15 @@ draw_header() {
             if [ ${#ips[@]} -gt 2 ]; then display_ips="${ips[0]}, ${ips[1]}, ..."
             elif [ ${#ips[@]} -eq 2 ]; then display_ips="${ips[0]}, ${ips[1]}"
             else display_ips="${ips[0]}"; fi
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${G}%-42s${NC} ${B}│${NC} ${Y}%-31s${NC} ${B}│${NC}\n" "$iface" "$display_ips" "$total_p Ports Forwarding"
+            
+            # Check if OBFS is active for this IP
+            local obfs_indicator=""
+            if grep -q "\-d ${ips[0]} " "$OBFS_DIR/nat.sh" 2>/dev/null; then obfs_indicator=" ${M}[OBFS]${NC}"; fi
+            
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${G}%-42s${NC} ${B}│${NC} ${Y}%-20s${NC} %b${B}│${NC}\n" "$iface" "$display_ips" "$total_p Ports Forwarding" "$obfs_indicator"
         done
     fi
-    echo -e "  ${B}╰──────────────┴────────────────────────────────────────────┴─────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴────────────────────────────────────────────┴────────────────────────────────╯${NC}"
 }
 
 smart_map() {
@@ -297,15 +337,72 @@ smart_map() {
     
     [ "$fwd_engine" == "1" ] && systemctl restart haproxy 2>/dev/null
     [ "$fwd_engine" == "2" ] && systemctl restart gost 2>/dev/null
+
+    # -----------------------------------------------------
+    # NEW FEATURE: OBFS STEALTH INTEGRATION
+    # -----------------------------------------------------
+    echo -ne "\n  ${C}●${NC} ${W}Enable OBFS Stealth (Bypass Filtering) for these ports? (y/n): ${NC}"; read enable_obfs
+    if [[ "$enable_obfs" == "y" ]]; then
+        # Ensure gost is installed for OBFS mechanism
+        if [ ! -f /usr/local/bin/gost ]; then
+            echo -e "  ${DIM}● Installing Gost engine for OBFS layer...${NC}"
+            wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
+            gzip -d gost.gz; chmod +x gost; mv gost /usr/local/bin/gost
+        fi
+
+        local remote_pub=""
+        if [[ "$selected_if" != "Manual" ]]; then
+            if [ -f "/etc/mgre/tunnels/${selected_if}.conf" ]; then
+                remote_pub=$(grep "REMOTE_PUB" "/etc/mgre/tunnels/${selected_if}.conf" | cut -d= -f2)
+            elif [ -f "/etc/mgre/vxlan/${selected_if}.conf" ]; then
+                remote_pub=$(grep "REMOTE_PUB" "/etc/mgre/vxlan/${selected_if}.conf" | cut -d= -f2)
+            fi
+        fi
+        
+        if [ -z "$remote_pub" ]; then
+            echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
+        else
+            echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"
+        fi
+        
+        echo -ne "  ${C}●${NC} ${W}Enter Kharej Stealth Port (Target Receiver): ${NC}"; read stealth_port
+        echo -ne "  ${C}●${NC} ${W}Select Protocol [1: TLS | 2: WS | 3: WSS] (Default 1): ${NC}"; read t_proto
+        local method="relay+tls"
+        [ "$t_proto" == "2" ] && method="relay+ws"
+        [ "$t_proto" == "3" ] && method="relay+wss"
+
+        mkdir -p "$OBFS_DIR"
+        
+        for p in $clean_ports; do
+            local t_ip="$manual_ip"
+            if [ -z "$t_ip" ]; then
+                local selected_ip="${selected_ips[$((RANDOM % ${#selected_ips[@]}))]}"
+                local base_ip=$(echo "$selected_ip" | cut -d'.' -f1-3)
+                local last_octet=$(echo "$selected_ip" | cut -d'.' -f4)
+                t_ip="${base_ip}.$([ "$last_octet" == "1" ] && echo "2" || echo "1")"
+            fi
+            
+            local obfs_lport=$((30000 + p))
+            [ "$obfs_lport" -gt 65535 ] && obfs_lport=$(( p + 10000 ))
+            
+            echo "iptables -t nat -A OUTPUT -d $t_ip -p tcp --dport $p -m comment --comment \"MPORTER_OBFS\" -j REDIRECT --to-ports $obfs_lport" >> "$OBFS_DIR/nat.sh"
+            echo "/usr/local/bin/gost -L tcp://:$obfs_lport/$t_ip:$p -F $method://$remote_pub:$stealth_port &" >> "$OBFS_DIR/gost.sh"
+        done
+        
+        build_obfs_runner
+        echo -e "\n  ${G}● OBFS Stealth Layer configured and NAT-Hijack applied!${NC}"
+        echo -e "  ${M}└─ REMEMBER: On Kharej server -> Open MShield -> Deploy OBFS (SERVER Mode) -> Port ${stealth_port}${NC}"
+    fi
+
     echo -ne "\n  ${G}● Success! Press Enter...${NC}"; read
 }
 
 show_table() {
     draw_header
     echo -e "\n  ${Y}● Detailed IP -> Port Matrix:${NC}"
-    echo -e "  ${B}╭──────────────┬────────────────────────────────────────────┬─────────────────────────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-31s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET IP" "FORWARDED PORTS"
-    echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼─────────────────────────────────┤${NC}"
+    echo -e "  ${B}╭──────────────┬────────────────────────────────────────────┬────────────────────────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET IP" "FORWARDED PORTS"
+    echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {print port " " $3}' | sed 's/:.*//')
@@ -313,7 +410,7 @@ show_table() {
     
     local mappings=$(echo -e "$h_map\n$g_map" | grep -v '^$')
     if [ -z "$mappings" ]; then 
-        printf "  ${B}│${NC} ${DIM}%-89s${NC} ${B}│${NC}\n" "  No active mappings."
+        printf "  ${B}│${NC} ${DIM}%-88s${NC} ${B}│${NC}\n" "  No active mappings."
     else
         declare -A ip_ports_arr
         while read -r p_num d_ip; do
@@ -321,12 +418,26 @@ show_table() {
         done <<< "$mappings"
         for d_ip in $(for i in "${!ip_ports_arr[@]}"; do echo $i; done | sort); do
             iface=$(get_iface_for_ip "$d_ip")
-            ports="${ip_ports_arr[$d_ip]}"; ports="${ports%, }"
-            if [ ${#ports} -gt 31 ]; then ports="${ports:0:28}..."; fi
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${G}%-42s${NC} ${B}│${NC} ${Y}%-31s${NC} ${B}│${NC}\n" "$iface" "$d_ip" "$ports"
+            raw_ports="${ip_ports_arr[$d_ip]}"; raw_ports="${raw_ports%, }"
+            
+            local display_ports=""
+            for p in $(echo "$raw_ports" | tr ',' ' '); do
+                if grep -q "dport $p " "$OBFS_DIR/nat.sh" 2>/dev/null; then
+                    display_ports+="${M}${p}*(OBFS)${Y}, "
+                else
+                    display_ports+="${p}, "
+                fi
+            done
+            display_ports="${display_ports%, }"
+            
+            local clean_str=$(echo -e "$display_ports" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+            if [ ${#clean_str} -gt 30 ]; then display_ports="${clean_str:0:27}..."; clean_str="$display_ports"; fi
+            local pad=$(printf '%*s' "$((30 - ${#clean_str}))" "")
+            
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${G}%-42s${NC} ${B}│${NC} ${Y}%s%s${NC} ${B}│${NC}\n" "$iface" "$d_ip" "$display_ports" "$pad"
         done
     fi
-    echo -e "  ${B}╰──────────────┴────────────────────────────────────────────┴─────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴────────────────────────────────────────────┴────────────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
 }
 
@@ -388,12 +499,11 @@ while true; do
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Core Engines${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Multipoint)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Activate Dynamic Sync${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Wipe Mappings (Standard Reset)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}View IP -> Port Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Everything (Nuclear Wipe)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${M}Auto-Restart Scheduler (Cron)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix (OBFS Stats)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Wipe Mappings (Reset Forwarding & OBFS)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Uninstall Everything (Nuclear Wipe)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Auto-Restart Scheduler (Cron)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}"
     echo ""
@@ -401,24 +511,28 @@ while true; do
     case $opt in
         1) fix_and_install ;;
         2) smart_map ;;
-        3) echo -e "  ${G}● Dynamic Sync active.${NC}"; sleep 1 ;;
+        3) show_table ;;
         4) 
             echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm
             if [[ "$confirm" == "y" ]]; then wipe_all_mappings; fi
             ;;
-        5) show_table ;;
-        6) 
+        5) 
             echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
             if [[ "$confirm" == "y" ]]; then 
                 systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
                 systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
+                systemctl stop mporter-obfs 2>/dev/null; systemctl disable mporter-obfs 2>/dev/null
                 crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
-                rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service
+                rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service "$OBFS_DIR" /etc/systemd/system/mporter-obfs.service
                 apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
+                iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
                 echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
             fi ;;
-        7) auto_restart_cron ;;
-        8) manual_restart ;;
+        6) auto_restart_cron ;;
+        7) manual_restart ;;
         0) clear; exit 0 ;;
     esac
 done
+EOF_MPORTER
+chmod +x /usr/bin/mporter
+mporter

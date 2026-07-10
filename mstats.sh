@@ -384,5 +384,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MSTATS
-chmod +x /usr/bin/mstats

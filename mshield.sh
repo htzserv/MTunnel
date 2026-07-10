@@ -1,11 +1,14 @@
 #!/bin/bash
-# --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & MPorter-Sync OBFS v2.1.1 ---
+# --- MDesign Modular Core (mshield.sh) | Zero-Trust & Auto-Sync OBFS v2.2.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
 OBFS_DIR="/etc/mshield/obfs"
-SVC_FILE="/etc/systemd/system/mshield-obfs.service"
-mkdir -p "$OBFS_DIR"
+SYNC_CONF="/etc/mshield/sync.conf"
+OBFS_SVC="/etc/systemd/system/mshield-obfs.service"
+SYNC_SVC="/etc/systemd/system/mshield-sync.service"
+
+mkdir -p "$OBFS_DIR" 2>/dev/null
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -21,9 +24,10 @@ draw_header() {
     
     local obfs_stat="${DIM}OFFLINE${NC}"
     if systemctl is-active --quiet mshield-obfs.service 2>/dev/null; then obfs_stat="${C}ACTIVE${NC}"; fi
+    if systemctl is-active --quiet mshield-sync.service 2>/dev/null; then obfs_stat="${M}AUTO-SYNC${NC}"; fi
 
     clear; echo ""
-    local str1=" MShield Zero-Trust & MPorter-Sync 2.1.1 "
+    local str1=" MShield Zero-Trust & Auto-Sync OBFS 2.2.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -41,21 +45,17 @@ activate_firewall() {
     echo -e "\n  ${DIM}● Scanning MDesign ecosystem for active configurations...${NC}"
     
     iptables -D INPUT -j MSHIELD >/dev/null 2>&1
-    iptables -F MSHIELD >/dev/null 2>&1
-    iptables -X MSHIELD >/dev/null 2>&1
+    iptables -F MSHIELD >/dev/null 2>&1; iptables -X MSHIELD >/dev/null 2>&1
     iptables -N MSHIELD
 
-    # 1. Allow Local & Established
     iptables -A MSHIELD -i lo -j ACCEPT
     iptables -A MSHIELD -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-    # 2. Allow SSH
     local ssh_port=$(ss -tlnp 2>/dev/null | grep -i sshd | awk '{print $4}' | rev | cut -d: -f1 | rev | head -n 1)
     [ -z "$ssh_port" ] && ssh_port=22
     iptables -A MSHIELD -p tcp --dport "$ssh_port" -j ACCEPT
     echo -e "  ${G}✔${NC} Secured SSH Management Port (${ssh_port})"
 
-    # 3. Whitelist Peer IPs (Tunnels)
     local peer_ips=""
     for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do 
         if [ -f "$conf" ]; then
@@ -63,7 +63,6 @@ activate_firewall() {
             [ -n "$r_ip" ] && peer_ips="$peer_ips $r_ip\n"
         fi
     done
-    
     if [ -n "$peer_ips" ]; then
         local unique_peers=$(echo -e "$peer_ips" | sort -u | grep -v '^$')
         for pip in $unique_peers; do
@@ -72,22 +71,13 @@ activate_firewall() {
         done
     fi
 
-    # 4. Protect MPorter & OBFS Ports
     local fw_ports=""
     [ -f "/etc/haproxy/haproxy.cfg" ] && fw_ports+=$(awk '/frontend ft_/ {print $2}' /etc/haproxy/haproxy.cfg | sed 's/ft_//')"\n"
     [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1 && fw_ports+=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g')"\n"
     
-    # Add OBFS Server ports to protection (Fixed Syntax Error)
-    for conf in "$OBFS_DIR"/server_*.conf; do
+    for conf in "$OBFS_DIR"/server_*.conf 2>/dev/null; do
         if [ -f "$conf" ]; then
             local obfs_p=$(grep -oP '://:\K[0-9]+' "$conf" | head -n 1)
-            [ -n "$obfs_p" ] && fw_ports+="${obfs_p}\n"
-        fi
-    done
-    # Add OBFS Client ports to protection (Fixed Syntax Error)
-    for conf in "$OBFS_DIR"/client_*.conf; do
-        if [ -f "$conf" ]; then
-            local obfs_p=$(grep -oP 'tcp://:\K[0-9]+' "$conf" | head -n 1)
             [ -n "$obfs_p" ] && fw_ports+="${obfs_p}\n"
         fi
     done
@@ -99,10 +89,9 @@ activate_firewall() {
             iptables -A MSHIELD -p tcp --dport "$port" --syn -j DROP
             iptables -A MSHIELD -p tcp --dport "$port" -j ACCEPT
         done
-        echo -e "  ${G}✔${NC} Secured $(echo "$unique_ports" | wc -w) MPorter/OBFS active ports with SYN-Flood protection."
+        echo -e "  ${G}✔${NC} Secured MPorter & OBFS ports with SYN-Flood protection."
     fi
 
-    # 5. Stealth Drops (Scanners, Pings, Fabric)
     iptables -A MSHIELD -p gre -j DROP
     iptables -A MSHIELD -p udp --dport 4789 -j DROP
     iptables -A MSHIELD -p tcp -m tcp --dport 1:65535 --tcp-flags SYN,RST,ACK SYN -m recent --name M_SCANNER --set -j ACCEPT
@@ -121,7 +110,7 @@ disable_firewall() {
 }
 
 # ==========================================
-# 2. SMART OBFS ENGINE (MPORTER SYNC)
+# 2. SMART OBFS ENGINE (MPORTER SYNC DAEMON)
 # ==========================================
 install_gost_if_needed() {
     if ! command -v gost >/dev/null 2>&1; then
@@ -131,28 +120,93 @@ install_gost_if_needed() {
     fi
 }
 
-apply_obfs_service() {
-    local commands=""
-    for conf in "$OBFS_DIR"/*.conf; do
-        [ -f "$conf" ] && commands+="$(cat "$conf")\n"
-    done
-    
-    if [ -z "$commands" ]; then
-        systemctl stop mshield-obfs.service >/dev/null 2>&1
-        systemctl disable mshield-obfs.service >/dev/null 2>&1
-        return
-    fi
-    
-    cat <<EOF > /usr/local/bin/mshield-runner.sh
+deploy_sync_daemon() {
+    cat <<'EOF' > /usr/local/bin/mshield-sync-daemon.sh
 #!/bin/bash
 while true; do
-$(echo -e "$commands" | grep -v '^$' | awk '{print $0 " &"}')
+    if [ ! -f "/etc/mshield/sync.conf" ]; then sleep 60; continue; fi
+
+    declare -A target_tcp_ports
+    declare -A target_udp_ports
+
+    # 1. Parse MPorter Configs
+    if [ -f "/etc/haproxy/haproxy.cfg" ]; then
+        while read -r p t; do
+            t_ip=$(echo "$t" | cut -d: -f1)
+            t_port=$(echo "$t" | cut -d: -f2)
+            target_tcp_ports["$t_ip"]+="$t_port "
+        done < <(awk '/server srv_/ {print $2 " " $3}' /etc/haproxy/haproxy.cfg 2>/dev/null | sed 's/srv_//')
+    fi
+
+    if [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1; then
+        while read -r raw; do
+            proto=$(echo "$raw" | grep -oE '^(tcp|udp)')
+            t_ip=$(echo "$raw" | sed -E 's/.*\/\/:[0-9]+\/([0-9\.]+):[0-9]+.*/\1/')
+            t_port=$(echo "$raw" | sed -E 's/.*\/\/:[0-9]+\/[0-9\.]+:([0-9]+).*/\1/')
+            if [ "$proto" == "tcp" ]; then target_tcp_ports["$t_ip"]+="$t_port "
+            elif [ "$proto" == "udp" ]; then target_udp_ports["$t_ip"]+="$t_port "; fi
+        done < <(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null)
+    fi
+
+    # 2. Flush Old MShield NAT Rules
+    iptables -t nat -S OUTPUT 2>/dev/null | grep "MSHIELD_SYNC" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+    rm -f /etc/mshield/obfs/client_*.conf
+
+    # 3. Generate New Rules & Hijack NAT
+    while IFS='|' read -r sync_ip remote_pub stealth_port method; do
+        [ -z "$sync_ip" ] && continue
+
+        tcp_ports=$(echo "${target_tcp_ports[$sync_ip]}" | tr ' ' '\n' | sort -u | grep -v '^$')
+        udp_ports=$(echo "${target_udp_ports[$sync_ip]}" | tr ' ' '\n' | sort -u | grep -v '^$')
+
+        for p in $tcp_ports; do
+            local_port=$((30000 + p))
+            iptables -t nat -A OUTPUT -p tcp -d "$sync_ip" --dport "$p" -m comment --comment "MSHIELD_SYNC" -j REDIRECT --to-ports "$local_port"
+            echo "/usr/local/bin/gost -L tcp://:$local_port/$sync_ip:$p -F $method://$remote_pub:$stealth_port" > /etc/mshield/obfs/client_${sync_ip}_${p}_tcp.conf
+        done
+
+        for p in $udp_ports; do
+            local_port=$((40000 + p))
+            iptables -t nat -A OUTPUT -p udp -d "$sync_ip" --dport "$p" -m comment --comment "MSHIELD_SYNC" -j REDIRECT --to-ports "$local_port"
+            echo "/usr/local/bin/gost -L udp://:$local_port/$sync_ip:$p -F $method://$remote_pub:$stealth_port" > /etc/mshield/obfs/client_${sync_ip}_${p}_udp.conf
+        done
+    done < "/etc/mshield/sync.conf"
+
+    # 4. Smart Restart OBFS Service
+    NEW_HASH=$(cat /etc/mshield/obfs/client_*.conf 2>/dev/null | md5sum | awk '{print $1}')
+    OLD_HASH=$(cat /tmp/mshield_obfs_hash 2>/dev/null)
+    if [ "$NEW_HASH" != "$OLD_HASH" ]; then
+        # Compile runner script
+        cat <<'RUNNER' > /usr/local/bin/mshield-runner.sh
+#!/bin/bash
+while true; do
+$(for conf in /etc/mshield/obfs/*.conf; do [ -f "$conf" ] && echo "$(cat "$conf") &"; done)
 wait
 done
-EOF
-    chmod +x /usr/local/bin/mshield-runner.sh
+RUNNER
+        chmod +x /usr/local/bin/mshield-runner.sh
+        systemctl restart mshield-obfs.service 2>/dev/null
+        echo "$NEW_HASH" > /tmp/mshield_obfs_hash
+    fi
 
-    cat <<EOF > "$SVC_FILE"
+    sleep 60
+done
+EOF
+    chmod +x /usr/local/bin/mshield-sync-daemon.sh
+
+    cat <<EOF > "$SYNC_SVC"
+[Unit]
+Description=MShield MPorter Auto-Sync Daemon
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mshield-sync-daemon.sh
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    cat <<EOF > "$OBFS_SVC"
 [Unit]
 Description=MShield OBFS Stealth Transport
 After=network.target
@@ -164,14 +218,18 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload; systemctl enable mshield-obfs >/dev/null 2>&1; systemctl restart mshield-obfs
+
+    systemctl daemon-reload
+    systemctl enable mshield-obfs >/dev/null 2>&1
+    systemctl enable mshield-sync >/dev/null 2>&1
+    systemctl restart mshield-sync
 }
 
 smart_obfs_deploy() {
     install_gost_if_needed
     echo -e "\n  ${DIM}┌─[ SMART OBFS DEPLOYMENT ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}SERVER Mode (Exit Node / Kharej)${NC} ${DIM}- Decrypts and feeds to MPorter${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}CLIENT Mode (Entry Node / Iran)${NC}  ${DIM}- Encrypts and sends to Kharej${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}SERVER Mode (Exit Node / Kharej)${NC} ${DIM}- Standard Universal Receiver${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}CLIENT Mode (Entry Node / Iran)${NC}  ${DIM}- MPorter Auto-Sync Daemon${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read o_mode
     
@@ -182,113 +240,122 @@ smart_obfs_deploy() {
     [ "$t_proto" == "2" ] && method="relay+ws"
     [ "$t_proto" == "3" ] && method="relay+wss"
 
-    local c_id=$(date +%s%N | cut -b1-13)
-
     if [ "$o_mode" == "1" ]; then
-        # MPorter Auto-Discovery
-        declare -a mp_rules
-        declare -a mp_ports
+        echo -ne "  ${C}●${NC} ${W}Enter Universal Stealth Port to listen on (e.g. 8443): ${NC}"; read s_port
+        [ -z "$s_port" ] && return
         
+        # در حالت سرور فقط یک رسیور اصلی ران میشه
+        local cmd="/usr/local/bin/gost -L $method://:$s_port"
+        echo "$cmd" > "$OBFS_DIR/server_main.conf"
+        
+        cat <<EOF > /usr/local/bin/mshield-runner.sh
+#!/bin/bash
+while true; do
+$cmd &
+wait
+done
+EOF
+        chmod +x /usr/local/bin/mshield-runner.sh
+        
+        cat <<EOF > "$OBFS_SVC"
+[Unit]
+Description=MShield OBFS Stealth Transport
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mshield-runner.sh
+Restart=always
+LimitNOFILE=1048576
+[Install]
+WantedBy=multi-user.target
+EOF
+        systemctl daemon-reload; systemctl enable mshield-obfs >/dev/null 2>&1; systemctl restart mshield-obfs
+        echo -e "\n  ${G}● Server OBFS Universal Receiver created! Listening on :${s_port}${NC}"
+    
+    elif [ "$o_mode" == "2" ]; then
+        declare -a mp_ips
+        
+        # استخراج هوشمند تمام آی‌پی‌های مجازی استفاده شده در MPorter
         if [ -f "/etc/haproxy/haproxy.cfg" ]; then
-            while read -r p t; do
-                p=${p#srv_}
-                mp_rules+=("HAProxy | Port: $p ➔ $t")
-                mp_ports+=("$p")
-            done < <(awk '/server srv_/ {print $2 " " $3}' /etc/haproxy/haproxy.cfg 2>/dev/null)
+            while read -r t; do mp_ips+=("$(echo "$t" | cut -d: -f1)"); done < <(awk '/server srv_/ {print $3}' /etc/haproxy/haproxy.cfg 2>/dev/null)
         fi
-        
         if [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1; then
-            while read -r raw; do
-                p=$(echo "$raw" | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/')
-                t=$(echo "$raw" | sed -E 's/.*\/([0-9\.]+:[0-9]+).*/\1/')
-                mp_rules+=("Gost    | Port: $p ➔ $t")
-                mp_ports+=("$p")
-            done < <(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null)
+            while read -r raw; do mp_ips+=("$(echo "$raw" | sed -E 's/.*\/\/:[0-9]+\/([0-9\.]+):[0-9]+.*/\1/')"); done < <(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null)
         fi
 
-        local target_port=""
-        if [ ${#mp_rules[@]} -gt 0 ]; then
-            echo -e "\n  ${B}╭─── Discovered MPorter Forwarding Rules ───╮${NC}"
-            for i in "${!mp_rules[@]}"; do
-                printf "  ${B}│${NC}  ${Y}%-2s${NC} ${C}❯${NC} ${W}%-35s${NC} ${B}│${NC}\n" "$i" "${mp_rules[$i]}"
+        local unique_ips=($(echo "${mp_ips[@]}" | tr ' ' '\n' | sort -u | grep -v '^$'))
+        
+        if [ ${#unique_ips[@]} -gt 0 ]; then
+            echo -e "\n  ${B}╭─── Discovered MPorter Target Networks ───╮${NC}"
+            for i in "${!unique_ips[@]}"; do
+                printf "  ${B}│${NC}  ${Y}%-2s${NC} ${C}❯${NC} ${W}Virtual IP Group: %-16s${NC} ${B}│${NC}\n" "$i" "${unique_ips[$i]}"
             done
-            echo -e "  ${B}├───────────────────────────────────────────┤${NC}"
-            printf "  ${B}│${NC}  ${Y}%-2s${NC} ${C}❯${NC} ${M}%-35s${NC} ${B}│${NC}\n" "m" "Manual Port Entry"
-            echo -e "  ${B}╰───────────────────────────────────────────╯${NC}"
-            echo -ne "  ${C}●${NC} ${W}Select Rule to Hide (0-$(( ${#mp_rules[@]} - 1 )) or 'm'): ${NC}"; read r_sel
+            echo -e "  ${B}╰──────────────────────────────────────────╯${NC}"
+            echo -ne "  ${C}●${NC} ${W}Select Virtual IP Group to Auto-Sync (0-$(( ${#unique_ips[@]} - 1 ))): ${NC}"; read r_sel
             
-            if [[ "$r_sel" == "m" ]]; then
-                echo -ne "  ${C}●${NC} ${W}Enter Local Port manually: ${NC}"; read target_port
-            elif [[ -n "${mp_ports[$r_sel]}" ]]; then
-                target_port="${mp_ports[$r_sel]}"
-                echo -e "  ${G}✔ Selected Port to Hide: ${target_port}${NC}"
+            if [[ -n "${unique_ips[$r_sel]}" ]]; then
+                target_ip="${unique_ips[$r_sel]}"
+                echo -e "  ${G}✔ Selected Target: ${target_ip}${NC}"
             else
                 echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return
             fi
         else
-            echo -e "\n  ${Y}● No MPorter rules found. Manual entry required.${NC}"
-            echo -ne "  ${C}●${NC} ${W}Enter Local Port to feed decrypted traffic to: ${NC}"; read target_port
+            echo -e "\n  ${R}● No active MPorter forwarding rules found! Run MPorter first.${NC}"; sleep 2; return
         fi
 
-        [ -z "$target_port" ] && return
-        echo -ne "  ${C}●${NC} ${W}Enter Stealth Port to expose to Internet (e.g. 443, 8443): ${NC}"; read s_port
-        [ -z "$s_port" ] && return
+        echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read r_ip
+        echo -ne "  ${C}●${NC} ${W}Enter Kharej Server STEALTH PORT (The one you set in Step 1): ${NC}"; read r_port
+        [ -z "$r_ip" ] || [ -z "$r_port" ] && return
         
-        local cmd="/usr/local/bin/gost -L $method://:$s_port/127.0.0.1:$target_port"
-        echo "$cmd" > "$OBFS_DIR/server_${c_id}.conf"
-        echo -e "\n  ${G}● Server OBFS wrapper created!${NC}"
-        echo -e "  ${DIM}└─ [Internet] -> (:$s_port Stealth) -> (:$target_port MPorter) -> [Destination]${NC}"
-    
-    elif [ "$o_mode" == "2" ]; then
-        echo -ne "  ${C}●${NC} ${W}Traffic Type [1: TCP | 2: UDP]: ${NC}"; read l_proto
-        local f_proto="tcp"; [ "$l_proto" == "2" ] && f_proto="udp"
+        # ذخیره تنظیمات برای ربات پس‌زمینه
+        echo "${target_ip}|${r_ip}|${r_port}|${method}" >> "$SYNC_CONF"
         
-        echo -ne "  ${C}●${NC} ${W}Open Local Raw Port for Users (e.g. 80, 4789): ${NC}"; read l_port
-        echo -ne "  ${C}●${NC} ${W}Remote Server IP (Kharej): ${NC}"; read r_ip
-        echo -ne "  ${C}●${NC} ${W}Remote Stealth Port (Kharej OBFS Port): ${NC}"; read r_port
-        [ -z "$l_port" ] || [ -z "$r_ip" ] || [ -z "$r_port" ] && return
+        # حذف خطوط تکراری از کانفیگ
+        sort -u "$SYNC_CONF" -o "$SYNC_CONF"
         
-        local cmd="/usr/local/bin/gost -L $f_proto://:$l_port -F $method://$r_ip:$r_port"
-        echo "$cmd" > "$OBFS_DIR/client_${c_id}.conf"
-        echo -e "\n  ${G}● Client OBFS wrapper created!${NC}"
-        echo -e "  ${DIM}└─ [Users] -> (:$l_port Raw) -> (Encrypted) -> [$r_ip:$r_port]${NC}"
+        deploy_sync_daemon
+        echo -e "\n  ${G}● Auto-Sync Daemon Activated!${NC}"
+        echo -e "  ${DIM}└─ Daemon will scan MPorter every 60s and automatically wrap ports destined for ${target_ip}.${NC}"
     fi
 
-    apply_obfs_service
-    
-    # Reload Firewall to protect new ports
-    if iptables -C INPUT -j MSHIELD >/dev/null 2>&1; then
-        echo -e "  ${DIM}● Synchronizing Zero-Trust Firewall with new OBFS ports...${NC}"
-        activate_firewall >/dev/null
-    fi
-    sleep 2.5
+    if iptables -C INPUT -j MSHIELD >/dev/null 2>&1; then activate_firewall >/dev/null; fi
+    sleep 3
 }
 
 list_obfs() {
-    local configs=($(ls "$OBFS_DIR"/*.conf 2>/dev/null))
-    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No OBFS transports configured!${NC}"; sleep 1.5; return; fi
-
-    echo -e "\n  ${B}╭────────────────── Active OBFS Transports ──────────────────╮${NC}"
-    for i in "${!configs[@]}"; do
-        local c_type="${G}CLIENT${NC} (Iran)"
-        [[ "${configs[$i]}" == *"server"* ]] && c_type="${C}SERVER${NC} (Kharej)"
-        local c_cmd=$(cat "${configs[$i]}" | sed 's/\/usr\/local\/bin\/gost //')
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} %b%-24s%b ${DIM}CMD:${NC} ${W}%-31s${NC} ${B}│${NC}\n" "$i" "" "$c_type" "" "${c_cmd:0:30}..."
-    done
+    echo -e "\n  ${B}╭────────────────── Active OBFS & Sync Rules ────────────────╮${NC}"
+    local has_rules=false
+    
+    if [ -f "$SYNC_CONF" ]; then
+        local idx=0
+        while IFS='|' read -r sync_ip remote_pub stealth_port method; do
+            [ -z "$sync_ip" ] && continue
+            has_rules=true
+            printf "  ${B}│${NC}  ${Y}C%-2s${NC} ${C}❯${NC} ${M}CLIENT SYNC${NC} ${DIM}Target:${NC} ${W}%-15s${NC} ${DIM}->${NC} ${C}%s:%s${NC} ${B}│${NC}\n" "$idx" "$sync_ip" "$remote_pub" "$stealth_port"
+            ((idx++))
+        done < "$SYNC_CONF"
+    fi
+    
+    if [ -f "$OBFS_DIR/server_main.conf" ]; then
+        has_rules=true
+        local s_port=$(grep -oP '://:\K[0-9]+' "$OBFS_DIR/server_main.conf" | head -n 1)
+        printf "  ${B}│${NC}  ${Y}S1 ${NC} ${C}❯${NC} ${C}SERVER RCVR${NC} ${DIM}Listening on Stealth Port:${NC} ${W}%-12s${NC} ${B}│${NC}\n" "$s_port"
+    fi
+    
+    if [ "$has_rules" = false ]; then echo -e "  ${B}│${NC}  ${DIM}No OBFS transports configured.                              ${B}│${NC}"; fi
     echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC}  ${R}%-3s${NC} ${C}❯${NC} ${R}%-53s${NC} ${B}│${NC}\n" "rm" "Delete a transport"
+    printf "  ${B}│${NC}  ${R}%-3s${NC} ${C}❯${NC} ${R}%-53s${NC} ${B}│${NC}\n" "rm" "Purge ALL OBFS rules & daemons"
     printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Go Back"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Select 'rm' or 'q': ${NC}"; read l_opt
 
     if [[ "$l_opt" == "rm" ]]; then
-        echo -ne "  ${C}●${NC} ${W}Enter Index to delete: ${NC}"; read rm_idx
-        if [[ -n "${configs[$rm_idx]}" ]]; then
-            rm -f "${configs[$rm_idx]}"
-            apply_obfs_service
-            if iptables -C INPUT -j MSHIELD >/dev/null 2>&1; then activate_firewall >/dev/null; fi
-            echo -e "  ${G}● Transport removed & Firewall synced.${NC}"; sleep 1.5
-        fi
+        systemctl stop mshield-obfs mshield-sync 2>/dev/null
+        systemctl disable mshield-obfs mshield-sync 2>/dev/null
+        iptables -t nat -S OUTPUT 2>/dev/null | grep "MSHIELD_SYNC" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+        rm -rf "$OBFS_DIR" "$SYNC_CONF"
+        if iptables -C INPUT -j MSHIELD >/dev/null 2>&1; then activate_firewall >/dev/null; fi
+        echo -e "  ${G}● All OBFS layers and daemons completely wiped.${NC}"; sleep 1.5
     fi
 }
 
@@ -297,7 +364,7 @@ while true; do
     echo -e "\n  ${DIM}┌─[ FIREWALL & STEALTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Activate Zero-Trust Firewall${NC}  ${DIM}(Auto-Whitelists MPorter & Tunnels)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Disable Firewall${NC}              ${DIM}(Revert to open WAN)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Deploy Smart OBFS Layer${NC}       ${DIM}(MPorter Auto-Sync)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Deploy Smart OBFS Layer${NC}       ${DIM}(MPorter Auto-Sync Engine)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Manage Active OBFS Transports${NC} ${DIM}(View/Delete)${NC}"
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MShield ❯❯ ${NC}"; read opt

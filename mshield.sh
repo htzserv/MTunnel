@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & MPorter-Sync OBFS v2.1.0 ---
+# --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & MPorter-Sync OBFS v2.1.1 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -23,7 +23,7 @@ draw_header() {
     if systemctl is-active --quiet mshield-obfs.service 2>/dev/null; then obfs_stat="${C}ACTIVE${NC}"; fi
 
     clear; echo ""
-    local str1=" MShield Zero-Trust & MPorter-Sync 2.1.0 "
+    local str1=" MShield Zero-Trust & MPorter-Sync 2.1.1 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -77,15 +77,15 @@ activate_firewall() {
     [ -f "/etc/haproxy/haproxy.cfg" ] && fw_ports+=$(awk '/frontend ft_/ {print $2}' /etc/haproxy/haproxy.cfg | sed 's/ft_//')"\n"
     [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1 && fw_ports+=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g')"\n"
     
-    # Add OBFS Server ports to protection
-    for conf in "$OBFS_DIR"/server_*.conf 2>/dev/null; do
+    # Add OBFS Server ports to protection (Fixed Syntax Error)
+    for conf in "$OBFS_DIR"/server_*.conf; do
         if [ -f "$conf" ]; then
             local obfs_p=$(grep -oP '://:\K[0-9]+' "$conf" | head -n 1)
             [ -n "$obfs_p" ] && fw_ports+="${obfs_p}\n"
         fi
     done
-    # Add OBFS Client ports to protection
-    for conf in "$OBFS_DIR"/client_*.conf 2>/dev/null; do
+    # Add OBFS Client ports to protection (Fixed Syntax Error)
+    for conf in "$OBFS_DIR"/client_*.conf; do
         if [ -f "$conf" ]; then
             local obfs_p=$(grep -oP 'tcp://:\K[0-9]+' "$conf" | head -n 1)
             [ -n "$obfs_p" ] && fw_ports+="${obfs_p}\n"

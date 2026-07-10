@@ -1,6 +1,6 @@
 cat << 'EOF_MSHIELD' > /usr/bin/mshield
 #!/bin/bash
-# --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & Kharej Receiver v2.3.0 ---
+# --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & Kharej Receiver v2.3.1 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -24,7 +24,7 @@ draw_header() {
     if systemctl is-active --quiet mshield-obfs.service 2>/dev/null; then obfs_stat="${C}RCVR ACTIVE${NC}"; fi
 
     clear; echo ""
-    local str1=" MShield Zero-Trust Warden 2.3.0 "
+    local str1=" MShield Zero-Trust Warden 2.3.1 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 39 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -98,6 +98,10 @@ activate_firewall() {
     iptables -A MSHIELD -p tcp -m tcp --dport 1:65535 --tcp-flags SYN,RST,ACK SYN -m recent --name M_SCANNER --set -j ACCEPT
     iptables -A MSHIELD -m recent --name M_SCANNER --rcheck --seconds 3600 --hitcount 8 -j DROP
     iptables -A MSHIELD -p icmp --icmp-type echo-request -j DROP
+
+    # --- PATCH 2: Blackhole TCP Probing (Silent Drop for all unhandled SYN requests) ---
+    iptables -A MSHIELD -p tcp --syn -j DROP
+    # -----------------------------------------------------------------------------------
 
     iptables -I INPUT 1 -j MSHIELD
     echo -e "\n  ${G}● Zero-Trust Shield Activated Successfully!${NC}"; sleep 2
@@ -214,4 +218,3 @@ while true; do
 done
 EOF_MSHIELD
 chmod +x /usr/bin/mshield
-mshield

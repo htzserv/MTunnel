@@ -1,6 +1,6 @@
 cat << 'EOF_MPORTER' > /usr/bin/mporter
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.4.0 (Stealth Integrated) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.4.1 (Smart Filter) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -207,13 +207,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 4.4.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 4.4.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 92 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.4.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 4.4.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -261,9 +261,29 @@ smart_map() {
     if [ "$fwd_engine" != "1" ] && [ "$fwd_engine" != "2" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
     if [ "$fwd_engine" == "2" ] && ! command -v jq >/dev/null 2>&1; then echo -e "  ${R}● Gost requires 'jq'. Run Installer (1) first.${NC}"; sleep 2; return; fi
 
-    local gre_ifs=($(ls /sys/class/net 2>/dev/null | grep -E '^(gre|br_|wg)'))
+    # -------------------------------------------------------------
+    # SMART INTERFACE DISCOVERY (Cross-referencing MDesign Configs)
+    # -------------------------------------------------------------
+    local active_ifs=()
+    shopt -s nullglob
+    for conf in /etc/mgre/tunnels/*.conf; do
+        [ -f "$conf" ] && active_ifs+=($(grep -E "^T_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'"))
+    done
+    for conf in /etc/mgre/vxlan/*.conf; do
+        [ -f "$conf" ] && active_ifs+=($(grep -E "^BR_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'"))
+    done
+    shopt -u nullglob
+
+    local gre_ifs=()
+    for iface in "${active_ifs[@]}"; do
+        if ip link show "$iface" >/dev/null 2>&1; then
+            gre_ifs+=("$iface")
+        fi
+    done
+    # -------------------------------------------------------------
+
     if [ ${#gre_ifs[@]} -eq 0 ]; then
-        echo -e "\n  ${R}● No Tunnel interfaces found!${NC}"
+        echo -e "\n  ${R}● No MDesign Tunnel interfaces found!${NC}"
         echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip; selected_ips=("$manual_ip"); selected_if="Manual"
     else
         echo -e "\n  ${B}╭────────────────── Available Interfaces ────────────────────╮${NC}"

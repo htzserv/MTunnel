@@ -1,5 +1,6 @@
+cat << 'EOF' > /usr/bin/mshield
 #!/bin/bash
-# --- MDesign Modular Core (mshield.sh) | Zero-Trust & Auto-Sync OBFS v2.2.1 ---
+# --- MDesign Modular Core (mshield.sh) | Zero-Trust & Auto-Sync OBFS v2.2.2 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -27,7 +28,7 @@ draw_header() {
     if systemctl is-active --quiet mshield-sync.service 2>/dev/null; then obfs_stat="${M}AUTO-SYNC${NC}"; fi
 
     clear; echo ""
-    local str1=" MShield Zero-Trust & Auto-Sync OBFS 2.2.1 "
+    local str1=" MShield Zero-Trust & Auto-Sync 2.2.2 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -75,15 +76,12 @@ activate_firewall() {
     [ -f "/etc/haproxy/haproxy.cfg" ] && fw_ports+=$(awk '/frontend ft_/ {print $2}' /etc/haproxy/haproxy.cfg | sed 's/ft_//')"\n"
     [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1 && fw_ports+=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g')"\n"
     
-    # فیکس ارور سینتکسی (حذف 2>/dev/null از حلقه)
-    shopt -s nullglob
-    for conf in "$OBFS_DIR"/server_*.conf; do
+    for conf in "$OBFS_DIR"/*.conf; do
         if [ -f "$conf" ]; then
             local obfs_p=$(grep -oP '://:\K[0-9]+' "$conf" | head -n 1)
             [ -n "$obfs_p" ] && fw_ports+="${obfs_p}\n"
         fi
     done
-    shopt -u nullglob
 
     if [ -n "$fw_ports" ]; then
         local unique_ports=$(echo -e "$fw_ports" | sort -n -u | grep -v '^$')
@@ -132,7 +130,6 @@ while true; do
     declare -A target_tcp_ports
     declare -A target_udp_ports
 
-    # 1. Parse MPorter Configs
     if [ -f "/etc/haproxy/haproxy.cfg" ]; then
         while read -r p t; do
             t_ip=$(echo "$t" | cut -d: -f1)
@@ -151,11 +148,9 @@ while true; do
         done < <(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null)
     fi
 
-    # 2. Flush Old MShield NAT Rules
     iptables -t nat -S OUTPUT 2>/dev/null | grep "MSHIELD_SYNC" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
     rm -f /etc/mshield/obfs/client_*.conf
 
-    # 3. Generate New Rules & Hijack NAT
     while IFS='|' read -r sync_ip remote_pub stealth_port method; do
         [ -z "$sync_ip" ] && continue
 
@@ -175,7 +170,6 @@ while true; do
         done
     done < "/etc/mshield/sync.conf"
 
-    # 4. Smart Restart OBFS Service
     NEW_HASH=$(cat /etc/mshield/obfs/client_*.conf 2>/dev/null | md5sum | awk '{print $1}')
     OLD_HASH=$(cat /tmp/mshield_obfs_hash 2>/dev/null)
     if [ "$NEW_HASH" != "$OLD_HASH" ]; then
@@ -373,3 +367,6 @@ while true; do
         0) exit 0 ;;
     esac
 done
+EOF
+chmod +x /usr/bin/mshield
+mshield

@@ -1,4 +1,4 @@
-cat << 'EOF' > /usr/bin/mshield
+cat << 'EOF_MSHIELD' > /usr/bin/mshield
 #!/bin/bash
 # --- MDesign Modular Core (mshield.sh) | Zero-Trust & Auto-Sync OBFS v2.2.2 ---
 
@@ -76,12 +76,14 @@ activate_firewall() {
     [ -f "/etc/haproxy/haproxy.cfg" ] && fw_ports+=$(awk '/frontend ft_/ {print $2}' /etc/haproxy/haproxy.cfg | sed 's/ft_//')"\n"
     [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1 && fw_ports+=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g')"\n"
     
+    shopt -s nullglob
     for conf in "$OBFS_DIR"/*.conf; do
         if [ -f "$conf" ]; then
             local obfs_p=$(grep -oP '://:\K[0-9]+' "$conf" | head -n 1)
             [ -n "$obfs_p" ] && fw_ports+="${obfs_p}\n"
         fi
     done
+    shopt -u nullglob
 
     if [ -n "$fw_ports" ]; then
         local unique_ports=$(echo -e "$fw_ports" | sort -n -u | grep -v '^$')
@@ -367,6 +369,6 @@ while true; do
         0) exit 0 ;;
     esac
 done
-EOF
+EOF_MSHIELD
 chmod +x /usr/bin/mshield
 mshield

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.4.1 (Safe QoS Patch) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v1.4.2 (Safe QoS Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -12,7 +12,7 @@ get_local_ip() {
 draw_mstats_header() {
     local s_ip=$(get_local_ip)
     echo ""
-    local str1=" MStats Omni-Radar 1.4.1 "
+    local str1=" MStats Omni-Radar 1.4.2 "
     local str2=" IP: $s_ip "
     local raw_len=$(( ${#str1} + 1 + ${#str2} ))
     local pad_len=$(( 92 - raw_len ))
@@ -256,7 +256,6 @@ qos_manager() {
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific Virtual Fabrics to prevent saturation.${NC}\n"
     
-    # فیلتر لیزری اختصاصی برای QoS: هیچ پورت فیزیکی (eth, ens) نمایش داده نمی‌شود. فقط تونل‌ها.
     local gre_ifs=""
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
     local vx_ifs=""
@@ -306,7 +305,8 @@ qos_manager() {
     tc qdisc del dev "$target_if" root 2>/dev/null
     
     if [ "$speed_val" -gt 0 ]; then
-        tc qdisc add dev "$target_if" root tbf rate ${speed_val}mbit burst 32kbit latency 400ms 2>/dev/null
+        # --- PATCH 1: Burst size changed from 32kbit to 1mbit for TCP optimization ---
+        tc qdisc add dev "$target_if" root tbf rate ${speed_val}mbit burst 1mbit latency 400ms 2>/dev/null
         echo -e "\n  ${G}● Speed limit of ${speed_val} Mbps successfully applied to ${target_if}.${NC}"
     else
         echo -e "\n  ${G}● Speed limit removed. ${target_if} is now UNLIMITED.${NC}"
@@ -384,3 +384,5 @@ while true; do
         0) break ;;
     esac
 done
+EOF_MSTATS
+chmod +x /usr/bin/mstats

@@ -1,6 +1,6 @@
 cat << 'EOF_MPORTER' > /usr/bin/mporter
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.4.1 (Smart Filter) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v4.4.2 (Ghost Counters Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -19,47 +19,35 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-# ---------------------------------------------------------
-# MDesign Animated Progress Bar Engine (ASCII Stable)
-# ---------------------------------------------------------
 draw_progress_bar() {
-    local pid=$1
-    local text=$2
-    local width=25
-    local progress=0
-    
-    tput civis # Hide cursor
-    
+    local pid=$1; local text=$2; local width=25; local progress=0
+    tput civis
     while kill -0 $pid 2>/dev/null; do
         progress=$((progress + 1))
         [ $progress -gt 95 ] && progress=95
-        
         local filled=$(( progress * width / 100 ))
         local empty=$(( width - filled ))
         local bar=$(printf "%${filled}s" | tr ' ' '#')
         local empty_bar=$(printf "%${empty}s" | tr ' ' '-')
-        
         printf "\r  ${C}⟳${NC} ${W}%-22s${NC} ${M}[${bar}${DIM}${empty_bar}${M}]${NC} ${C}%3d%%${NC}" "$text" "$progress"
         sleep 0.2
     done
-    
     local bar=$(printf "%${width}s" | tr ' ' '#')
     printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
-    
-    tput cnorm # Restore cursor
+    tput cnorm
 }
-# ---------------------------------------------------------
 
 build_obfs_runner() {
     cat <<'EOF' > /usr/local/bin/mporter-obfs.sh
 #!/bin/bash
 iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
 [ -f /etc/mporter/obfs_rules/nat.sh ] && source /etc/mporter/obfs_rules/nat.sh 2>/dev/null
 [ -f /etc/mporter/obfs_rules/gost.sh ] && source /etc/mporter/obfs_rules/gost.sh 2>/dev/null
 wait
 EOF
     chmod +x /usr/local/bin/mporter-obfs.sh
-    
     cat <<'EOF' > /etc/systemd/system/mporter-obfs.service
 [Unit]
 Description=MPorter OBFS Stealth Engine
@@ -81,8 +69,7 @@ install_haproxy_core() {
         mkdir -p /etc/haproxy
         echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
         echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
-        systemctl enable haproxy >/dev/null 2>&1
-        systemctl restart haproxy >/dev/null 2>&1
+        systemctl enable haproxy >/dev/null 2>&1; systemctl restart haproxy >/dev/null 2>&1
     ) &
     draw_progress_bar $! "Deploying HAProxy"
 }
@@ -97,7 +84,6 @@ install_gost_core() {
         if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then
             echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
         fi
-
 cat <<EOF > /etc/systemd/system/gost.service
 [Unit]
 Description=GO Simple Tunnel (MPorter Core)
@@ -117,13 +103,10 @@ EOF
 
 fix_and_install() {
     echo -e "\n  ${DIM}┌─[ SELECT CORE ENGINE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} ${DIM}(Standard Multiplexer)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} ${DIM}(Advanced Tunneling)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Both Cores${NC} ${DIM}(Dual-Core Setup)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo ""
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Install ❯❯ ${NC}"; read -t 30 core_opt
 
     if [[ "$core_opt" =~ ^[1-3]$ ]]; then
@@ -137,7 +120,6 @@ fix_and_install() {
         ) &
         draw_progress_bar $! "Preparing OS & Deps"
     fi
-
     case $core_opt in
         1) install_haproxy_core ;;
         2) install_gost_core ;;
@@ -160,6 +142,8 @@ wipe_all_mappings() {
     fi
     systemctl stop mporter-obfs 2>/dev/null
     iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+    iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+    iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
     rm -rf "$OBFS_DIR"
     build_obfs_runner
     echo -e "  ${G}● All Engine Mappings & OBFS Rules Wiped Clean.${NC}"; sleep 1.5
@@ -174,24 +158,13 @@ get_iface_for_ip() {
 
 get_stats() {
     server_ip=$(get_local_ip)
-    if systemctl is-active --quiet haproxy; then hap_stat="${G}●${NC}"; raw_hap="●"
-    else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
-
-    if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"
-    else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
-    
-    if systemctl is-active --quiet mporter-obfs && [ -s "$OBFS_DIR/gost.sh" ]; then
-        obfs_stat="${C}●${NC}"; raw_obfs="●"
-    else obfs_stat="${DIM}○${NC}"; raw_obfs="○"; fi
+    if systemctl is-active --quiet haproxy; then hap_stat="${G}●${NC}"; raw_hap="●"; else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
+    if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"; else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
+    if systemctl is-active --quiet mporter-obfs && [ -s "$OBFS_DIR/gost.sh" ]; then obfs_stat="${C}●${NC}"; raw_obfs="●"; else obfs_stat="${DIM}○${NC}"; raw_obfs="○"; fi
     
     local h_ports=0; local g_ports=0
-    if [ -f "$H_CONF" ]; then
-        h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null); ((h_ports--))
-        [ "$h_ports" -lt 0 ] && h_ports=0
-    fi
-    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-        g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0
-    fi
+    if [ -f "$H_CONF" ]; then h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null); ((h_ports--)); [ "$h_ports" -lt 0 ] && h_ports=0; fi
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0; fi
     total_ports=$((h_ports + g_ports))
 
     local h_ips=""; local g_ips=""
@@ -207,13 +180,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 4.4.1 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 4.4.2 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ PORTS: $total_ports"
     pad_len=$(( 92 - ${#raw_text} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 4.4.1${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 4.4.2${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -241,7 +214,6 @@ draw_header() {
             elif [ ${#ips[@]} -eq 2 ]; then display_ips="${ips[0]}, ${ips[1]}"
             else display_ips="${ips[0]}"; fi
             
-            # Check if OBFS is active for this IP
             local obfs_indicator=""
             if grep -q "\-d ${ips[0]} " "$OBFS_DIR/nat.sh" 2>/dev/null; then obfs_indicator=" ${M}[OBFS]${NC}"; fi
             
@@ -261,26 +233,14 @@ smart_map() {
     if [ "$fwd_engine" != "1" ] && [ "$fwd_engine" != "2" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
     if [ "$fwd_engine" == "2" ] && ! command -v jq >/dev/null 2>&1; then echo -e "  ${R}● Gost requires 'jq'. Run Installer (1) first.${NC}"; sleep 2; return; fi
 
-    # -------------------------------------------------------------
-    # SMART INTERFACE DISCOVERY (Cross-referencing MDesign Configs)
-    # -------------------------------------------------------------
     local active_ifs=()
     shopt -s nullglob
-    for conf in /etc/mgre/tunnels/*.conf; do
-        [ -f "$conf" ] && active_ifs+=($(grep -E "^T_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'"))
-    done
-    for conf in /etc/mgre/vxlan/*.conf; do
-        [ -f "$conf" ] && active_ifs+=($(grep -E "^BR_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'"))
-    done
+    for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && active_ifs+=($(grep -E "^T_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'")); done
+    for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && active_ifs+=($(grep -E "^BR_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'")); done
     shopt -u nullglob
 
     local gre_ifs=()
-    for iface in "${active_ifs[@]}"; do
-        if ip link show "$iface" >/dev/null 2>&1; then
-            gre_ifs+=("$iface")
-        fi
-    done
-    # -------------------------------------------------------------
+    for iface in "${active_ifs[@]}"; do if ip link show "$iface" >/dev/null 2>&1; then gre_ifs+=("$iface"); fi; done
 
     if [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -e "\n  ${R}● No MDesign Tunnel interfaces found!${NC}"
@@ -358,12 +318,8 @@ smart_map() {
     [ "$fwd_engine" == "1" ] && systemctl restart haproxy 2>/dev/null
     [ "$fwd_engine" == "2" ] && systemctl restart gost 2>/dev/null
 
-    # -----------------------------------------------------
-    # NEW FEATURE: OBFS STEALTH INTEGRATION
-    # -----------------------------------------------------
     echo -ne "\n  ${C}●${NC} ${W}Enable OBFS Stealth (Bypass Filtering) for these ports? (y/n): ${NC}"; read enable_obfs
     if [[ "$enable_obfs" == "y" ]]; then
-        # Ensure gost is installed for OBFS mechanism
         if [ ! -f /usr/local/bin/gost ]; then
             echo -e "  ${DIM}● Installing Gost engine for OBFS layer...${NC}"
             wget -qO gost.gz https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
@@ -407,13 +363,19 @@ smart_map() {
             
             echo "iptables -t nat -A OUTPUT -d $t_ip -p tcp --dport $p -m comment --comment \"MPORTER_OBFS\" -j REDIRECT --to-ports $obfs_lport" >> "$OBFS_DIR/nat.sh"
             echo "/usr/local/bin/gost -L tcp://:$obfs_lport/$t_ip:$p -F $method://$remote_pub:$stealth_port &" >> "$OBFS_DIR/gost.sh"
+            
+            # --- Ghost Counters Injection ---
+            if ! grep -q "OBFS_CNT_TX_${selected_if}_${t_ip}" "$OBFS_DIR/nat.sh" 2>/dev/null; then
+                echo "iptables -t mangle -A OUTPUT -d $t_ip -m comment --comment \"OBFS_CNT_TX_${selected_if}\" 2>/dev/null" >> "$OBFS_DIR/nat.sh"
+                echo "iptables -t mangle -A INPUT -s $t_ip -m comment --comment \"OBFS_CNT_RX_${selected_if}\" 2>/dev/null" >> "$OBFS_DIR/nat.sh"
+                echo "# OBFS_CNT_TX_${selected_if}_${t_ip}" >> "$OBFS_DIR/nat.sh"
+            fi
+            # --------------------------------
         done
         
         build_obfs_runner
-        echo -e "\n  ${G}● OBFS Stealth Layer configured and NAT-Hijack applied!${NC}"
-        echo -e "  ${M}└─ REMEMBER: On Kharej server -> Open MShield -> Deploy OBFS (SERVER Mode) -> Port ${stealth_port}${NC}"
+        echo -e "\n  ${G}● OBFS Stealth Layer configured and Ghost Counters applied!${NC}"
     fi
-
     echo -ne "\n  ${G}● Success! Press Enter...${NC}"; read
 }
 
@@ -472,9 +434,7 @@ auto_restart_cron() {
     if ! [[ "$cron_h" =~ ^[0-9]+$ ]] || ! [[ "$cron_m" =~ ^[0-9]+$ ]]; then
         echo -e "\n  ${R}● Invalid input! Numbers only.${NC}"; sleep 2; return
     fi
-
     crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
-
     if [ "$cron_h" == "0" ] && [ "$cron_m" == "0" ]; then
         echo -e "\n  ${Y}● Auto-restart disabled. System returned to normal.${NC}"
     else
@@ -482,7 +442,6 @@ auto_restart_cron() {
         [ "$cron_h" -gt 0 ] && h_str="*/$cron_h"
         [ "$cron_m" -gt 0 ] && m_str="*/$cron_m"
         [ "$cron_h" -gt 0 ] && [ "$cron_m" == "0" ] && m_str="0"
-
         (crontab -l 2>/dev/null; echo "$m_str $h_str * * * systemctl restart haproxy >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1") | crontab - 2>/dev/null
         echo -e "\n  ${G}● Auto-restart configured! (Cron Format: $m_str $h_str * * *)${NC}"
     fi
@@ -491,16 +450,12 @@ auto_restart_cron() {
 
 manual_restart() {
     draw_header
-    echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}"
-    echo -e "  ${DIM}│${NC}"
+    echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Restart Both Engines${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo ""
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Restart Both Engines${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read r_opt
-    
     echo ""
     case $r_opt in
         1) systemctl restart haproxy 2>/dev/null; echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
@@ -514,40 +469,34 @@ manual_restart() {
 
 while true; do
     draw_header
-    echo ""
-    echo -e "  ${DIM}┌─[ ACTIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Core Engines${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Multipoint)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix (OBFS Stats)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Wipe Mappings (Reset Forwarding & OBFS)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Uninstall Everything (Nuclear Wipe)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Auto-Restart Scheduler (Cron)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}"
-    echo ""
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
     echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -t 30 opt
     case $opt in
         1) fix_and_install ;;
         2) smart_map ;;
         3) show_table ;;
-        4) 
-            echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm
-            if [[ "$confirm" == "y" ]]; then wipe_all_mappings; fi
-            ;;
-        5) 
-            echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
-            if [[ "$confirm" == "y" ]]; then 
-                systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
-                systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
-                systemctl stop mporter-obfs 2>/dev/null; systemctl disable mporter-obfs 2>/dev/null
-                crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
-                rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service "$OBFS_DIR" /etc/systemd/system/mporter-obfs.service
-                apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
-                iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
-                echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
-            fi ;;
+        4) echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm; [[ "$confirm" == "y" ]] && wipe_all_mappings ;;
+        5) echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
+           if [[ "$confirm" == "y" ]]; then 
+               systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
+               systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
+               systemctl stop mporter-obfs 2>/dev/null; systemctl disable mporter-obfs 2>/dev/null
+               crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
+               rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service "$OBFS_DIR" /etc/systemd/system/mporter-obfs.service
+               apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
+               iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+               iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+               iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+               echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
+           fi ;;
         6) auto_restart_cron ;;
         7) manual_restart ;;
         0) clear; exit 0 ;;
@@ -555,4 +504,3 @@ while true; do
 done
 EOF_MPORTER
 chmod +x /usr/bin/mporter
-mporter

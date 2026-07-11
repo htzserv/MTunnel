@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v3.5.0 (Offline Engine) ---
+# --- MDesign Master Core | Central Dashboard v4.0.0 (FRP Integration) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -24,22 +24,22 @@ draw_main_header() {
     local st_wg="○"; local c_wg="${DIM}"; ([ -f "/etc/wireguard/wg0.conf" ] || ip link show wg0 >/dev/null 2>&1) && { st_wg="●"; c_wg="${G}"; }
     local st_hap="○"; local c_hap="${DIM}"; pgrep -x "haproxy" >/dev/null 2>&1 && { st_hap="●"; c_hap="${G}"; }
     local st_gost="○"; local c_gost="${DIM}"; pgrep -x "gost" >/dev/null 2>&1 && { st_gost="●"; c_gost="${G}"; }
-    local st_shld="○"; local c_shld="${DIM}"; iptables -C INPUT -p icmp --icmp-type echo-request -j DROP 2>/dev/null && { st_shld="●"; c_shld="${G}"; }
+    local st_frp="○"; local c_frp="${DIM}"; pgrep -f "frp[sc]" >/dev/null 2>&1 && { st_frp="●"; c_frp="${G}"; }
 
     clear; echo ""
-    local title=" MDesign Master Core v3.5 "
+    local title=" MDesign Master Core v4.0 "
     local ip_str=" IP: $s_ip "
     local pad1=$(( 94 - ${#title} - 1 - ${#ip_str} ))
     [ "$pad1" -lt 0 ] && pad1=0
     local spc1=$(printf '%*s' "$pad1" "")
-    local pad2=$(( 94 - 81 ))
+    local pad2=$(( 94 - 83 ))
     [ "$pad2" -lt 0 ] && pad2=0
     local spc2=$(printf '%*s' "$pad2" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${title}${NC}${B}│${NC}${DIM}${ip_str}${NC}${spc1}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub:  GRE: ${NC}${c_gre}${st_gre}${NC}${DIM}    VXLAN: ${NC}${c_vx}${st_vx}${NC}${DIM}    WireGuard: ${NC}${c_wg}${st_wg}${NC}${DIM}  │  HAProxy: ${NC}${c_hap}${st_hap}${NC}${DIM}    Gost: ${NC}${c_gost}${st_gost}${NC}${DIM}    Shield: ${NC}${c_shld}${st_shld}${NC}${spc2}${B}│${NC}"
+    echo -e "  ${B}│${NC}${DIM} Hub:  GRE: ${NC}${c_gre}${st_gre}${NC}${DIM}    VXLAN: ${NC}${c_vx}${st_vx}${NC}${DIM}    WireGuard: ${NC}${c_wg}${st_wg}${NC}${DIM}  │  HAProxy: ${NC}${c_hap}${st_hap}${NC}${DIM}    Gost: ${NC}${c_gost}${st_gost}${NC}${DIM}    FRP: ${NC}${c_frp}${st_frp}${NC}${spc2}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -51,6 +51,7 @@ show_tunnel_hub() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}      ${DIM}[Layer 3 Routing]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}    ${DIM}[Layer 2 Bridge]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}WireGuard Crypto Matrix (Mwire)${NC}      ${DIM}[High-Speed VPN]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}FRP Reverse Proxy Engine (Mfrp)${NC}      ${DIM}[NAT Bypass Tunnel]${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core Dashboard${NC}\n"
         echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
@@ -58,6 +59,7 @@ show_tunnel_hub() {
             1) [ -f "/usr/bin/mgre" ] && mgre || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
             2) [ -f "/usr/bin/mxlan" ] && mxlan || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
             3) [ -f "/usr/bin/mwire" ] && mwire || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
+            4) [ -f "/usr/bin/mfrp" ] && mfrp || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5) ;;
             0) break ;;
         esac
     done
@@ -67,7 +69,7 @@ while true; do
     draw_main_header; echo ""
     echo -e "  ${DIM}┌─[ CORE NETWORK & ROUTING ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub${NC} ${DIM}(GRE / VXLAN / WireGuard)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub${NC} ${DIM}(GRE / VXLAN / WireGuard / FRP)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover${NC} ${DIM}(Mporter)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC} ${DIM}(Minterface)${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -100,10 +102,9 @@ while true; do
            echo -e "\n  ${Y}● Syncing components from GitHub to $LOCAL_DIR...${NC}"
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
            CACHE_BUST=$(date +%s)
-           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
            download_success=true
            
-           # دانلود داخل پوشه بکاپ
            for file in "${MODULES[@]}"; do
                echo -e "  ${DIM}├─ Fetching $file...${NC}"
                wget --timeout=10 --tries=2 -qO "$LOCAL_DIR/$file" "$REPO_BASE/${file}?v=$CACHE_BUST"
@@ -111,7 +112,6 @@ while true; do
            done
            
            if [ "$download_success" = true ]; then
-               # کپی کردن از پوشه بکاپ به فایل‌های سیستم
                for file in "${MODULES[@]}"; do
                    mod_name="${file%.sh}"
                    [ "$mod_name" == "main" ] && mod_name="mtunnel"
@@ -137,15 +137,13 @@ while true; do
                    wget --timeout=15 -qO "/tmp/mtunnel_offline.zip" "$zip_url"
                    if [ -s "/tmp/mtunnel_offline.zip" ]; then
                        echo -e "  ${DIM}├─ Extracting and organizing files...${NC}"
-                       if ! command -v unzip >/dev/null 2>&1; then
-                           apt-get update >/dev/null 2>&1; apt-get install unzip -y >/dev/null 2>&1
-                       fi
+                       if ! command -v unzip >/dev/null 2>&1; then apt-get update >/dev/null 2>&1; apt-get install unzip -y >/dev/null 2>&1; fi
                        rm -rf /tmp/mtunnel_extract; mkdir -p /tmp/mtunnel_extract
                        unzip -q -o "/tmp/mtunnel_offline.zip" -d "/tmp/mtunnel_extract"
                        
-                       # استخراج هوشمند: پیدا کردن فایل‌های .sh، باینری gost و پکیج‌های .deb از هر کجای فایل زیپ
                        find "/tmp/mtunnel_extract" -type f -name "*.sh" -exec cp {} "$LOCAL_DIR/" \;
                        find "/tmp/mtunnel_extract" -type f -name "gost" -exec cp {} "$LOCAL_DIR/" \;
+                       find "/tmp/mtunnel_extract" -type f -name "frp*" -exec cp {} "$LOCAL_DIR/" \;
                        find "/tmp/mtunnel_extract" -type f -name "*.deb" -exec cp {} "$LOCAL_DIR/packages/" \;
                        rm -rf "/tmp/mtunnel_offline.zip" "/tmp/mtunnel_extract"
                    else
@@ -156,9 +154,8 @@ while true; do
                fi
            fi
 
-           # ۱. نصب اسکریپت‌ها
            echo -e "\n  ${DIM}├─ Deploying Dashboard Scripts...${NC}"
-           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
            for file in "${MODULES[@]}"; do
                if [ -f "$LOCAL_DIR/$file" ]; then
                    mod_name="${file%.sh}"
@@ -169,28 +166,28 @@ while true; do
                fi
            done
            
-           # ۲. نصب باینری Gost
            if [ -f "$LOCAL_DIR/gost" ]; then
-               echo -e "\n  ${DIM}├─ Deploying Core Engines...${NC}"
-               cp "$LOCAL_DIR/gost" /usr/bin/gost
-               chmod +x /usr/bin/gost
-               echo -e "  ${G}  ✔ deployed binary: ${W}gost${NC}"
+               cp "$LOCAL_DIR/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; echo -e "  ${G}  ✔ deployed binary: ${W}gost${NC}"
+           fi
+           if [ -f "$LOCAL_DIR/frps" ]; then
+               cp "$LOCAL_DIR/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; echo -e "  ${G}  ✔ deployed binary: ${W}frps${NC}"
+           fi
+           if [ -f "$LOCAL_DIR/frpc" ]; then
+               cp "$LOCAL_DIR/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; echo -e "  ${G}  ✔ deployed binary: ${W}frpc${NC}"
            fi
            
-           # ۳. نصب آفلاین پکیج‌های DEB
            if ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
                echo -e "\n  ${DIM}├─ Installing Local OS Packages (.deb)...${NC}"
                dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
                echo -e "  ${G}  ✔ installed system dependencies!${NC}"
            fi
-
            echo -e "\n  ${G}● Total Offline Deployment Complete!${NC}"; sleep 2.5; exec "$0" ;;
 
         10)
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL infrastructure traces? (y/n): ${NC}"; read del_confirm
            if [[ "$del_confirm" == "y" ]]; then
-               systemctl stop mgre.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service 2>/dev/null
-               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /usr/bin/m*
+               systemctl stop mgre.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service frps frpc 2>/dev/null
+               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /usr/bin/m* /usr/local/bin/frp*
                echo -e "  ${G}● Purge complete. System is vanilla.${NC}\n"; exit 0
            fi ;;
            

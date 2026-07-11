@@ -1,6 +1,6 @@
 cat << 'EOF_MSTATS' > /usr/bin/mstats
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.5.2 (Force Cache & UI) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.6.0 (FRP Tracker Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -33,7 +33,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 2.5.2 "
+    local str1=" MStats Omni-Radar Core 2.6.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -172,23 +172,24 @@ show_total_usage() {
 show_connection_tracker() {
     clear; draw_mstats_header
     echo -e "\n  ${DIM}┌─[ MDESIGN CONNECTION TRACKER ]${NC}"
-    echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy & Gost)...${NC}\n"
+    echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy / Gost / FRP)...${NC}\n"
 
-    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
+    # اضافه شدن frps و frpc به موتور اسکنر پورت‌ها
+    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|frps|frpc' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "CORE ENGINE" "CONNECTIONS"
     echo -e "  ${B}├─────────┼───────────────┼─────────────────┼─────────────┤${NC}"
     
     if [ -z "$core_ports" ]; then
-        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Gost or HAProxy services running."
+        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Proxy/Tunnel services running."
     else
         local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -E "^($core_ports)$" | sort | uniq -c | sort -nr | head -n 5)
         local rank=1
         if [ -z "$top_ports" ]; then printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections to Core Engines."
         else
             while read -r count port; do
-                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy)' | head -n 1)
+                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy|frps|frpc)' | head -n 1)
                 [ -z "$app_name" ] && app_name="Unknown"; app_name=${app_name^^}
                 printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
                 ((rank++))
@@ -280,26 +281,25 @@ iperf_benchmark() {
     echo -e "\n  ${DIM}┌─[ iPerf3 BANDWIDTH BENCHMARK ]${NC}"
     echo -e "  ${C}●${NC} ${W}Active end-to-end speed test using iPerf3 engine.${NC}\n"
 
-    if ! command -v iperf3 >/dev/null 2>&1; then
-        echo -e ""
-        mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-        if ! ls "$LOCAL_DIR/packages"/iperf3*.deb >/dev/null 2>&1; then
-            echo -e "  ${DIM}● Caching iPerf3 Packages for Offline Use...${NC}"
-            (
-                apt-get update -y -q >/dev/null 2>&1
-                apt-get clean >/dev/null 2>&1
-                apt-get install --download-only -y -q iperf3 >/dev/null 2>&1
-                apt-get install --download-only -y -q --reinstall iperf3 >/dev/null 2>&1
-                cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
-            ) &
-            draw_percentage $! "Building Local Cache"
-            sleep 1
-        fi
+    mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+    if ! ls "$LOCAL_DIR/packages"/iperf3*.deb >/dev/null 2>&1; then
+        echo -e "  ${DIM}● Caching iPerf3 Packages for Offline Use...${NC}"
+        (
+            apt-get update -y -q >/dev/null 2>&1
+            apt-get clean >/dev/null 2>&1
+            apt-get install --download-only -y -q iperf3 >/dev/null 2>&1
+            apt-get install --download-only -y -q --reinstall iperf3 >/dev/null 2>&1
+            cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
+        ) >/dev/null 2>&1 &
+        draw_percentage $! "Building Local Cache"
+        sleep 1
+    fi
 
+    if ! command -v iperf3 >/dev/null 2>&1; then
         (
             dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
             apt-get install -f -y -q >/dev/null 2>&1
-        ) &
+        ) >/dev/null 2>&1 &
         draw_percentage $! "Deploying iPerf3 Engine"
         sleep 1
     fi

@@ -1,6 +1,6 @@
 cat << 'EOF_MSTATS' > /usr/bin/mstats
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.5.4 (UI Bugfix) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.6.1 (Golden Master) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -33,7 +33,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 2.5.4 "
+    local str1=" MStats Omni-Radar Core 2.6.1 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     if (( pad_len < 0 )); then pad_len=0; fi
@@ -76,8 +76,42 @@ get_iface_tx() {
     echo "$t_base"
 }
 
+init_frp_counters() {
+    if [ -f "/etc/frp/frpc.toml" ] && systemctl is-active --quiet frpc 2>/dev/null; then
+        local s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
+        local s_port=$(awk -F'=' '/^serverPort/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' ')
+        if [ -n "$s_addr" ] && [ -n "$s_port" ]; then
+            iptables -t mangle -C OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 || \
+            iptables -t mangle -A OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
+            iptables -t mangle -C INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 || \
+            iptables -t mangle -A INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
+        fi
+    fi
+    if [ -f "/etc/frp/frps.toml" ] && systemctl is-active --quiet frps 2>/dev/null; then
+        local b_port=$(awk -F'=' '/^bindPort/ {print $2}' /etc/frp/frps.toml 2>/dev/null | tr -d ' ')
+        if [ -n "$b_port" ]; then
+            iptables -t mangle -C OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 || \
+            iptables -t mangle -A OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
+            iptables -t mangle -C INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 || \
+            iptables -t mangle -A INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
+        fi
+    fi
+}
+
+get_frp_rx() {
+    local rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "FRP_CNT_RX" | awk '{sum+=$2} END {print sum}')
+    echo "${rx:-0}"
+}
+
+get_frp_tx() {
+    local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "FRP_CNT_TX" | awk '{sum+=$2} END {print sum}')
+    echo "${tx:-0}"
+}
+
 show_live_radar() {
     tput civis; clear; declare -A rx_old tx_old
+    init_frp_counters
+
     while true; do
         printf "\033[H"; draw_mstats_header
         echo -e "\n  ${DIM}┌─[ UNIFIED TRAFFIC RADAR ]${NC} ${C}(Real-time 1s Auto-Refresh | Press 'q' to stop)${NC}\n"
@@ -98,6 +132,14 @@ show_live_radar() {
                 rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface")
             fi
         done
+
+        local frp_active=false
+        if systemctl is-active --quiet frps 2>/dev/null || systemctl is-active --quiet frpc 2>/dev/null; then
+            frp_active=true
+            if [ -z "${rx_old["FRP_TUNNEL"]}" ]; then
+                rx_old["FRP_TUNNEL"]=$(get_frp_rx); tx_old["FRP_TUNNEL"]=$(get_frp_tx)
+            fi
+        fi
 
         local active_count=0
         render_category() {
@@ -121,6 +163,19 @@ show_live_radar() {
         [ -n "$gre_ifs" ] && render_category "GRE / L3" "${C}" "$gre_ifs"
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs"
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
+
+        if [ "$frp_active" = true ]; then
+            local r_old=${rx_old["FRP_TUNNEL"]:-0}; local t_old=${tx_old["FRP_TUNNEL"]:-0}
+            local r_new=$(get_frp_rx); local t_new=$(get_frp_tx)
+            local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
+            active_count=$((active_count + 1))
+            
+            local c_rx="${DIM}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
+            local c_tx="${DIM}"; [ "$tx_sec" -gt 0 ] && c_tx="${Y}"
+            
+            printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "FRP Engine" "${Y}" "REVERSE P." "$NC" "$c_rx" "$(format_speed $rx_sec)" "$NC" "$c_tx" "$(format_speed $tx_sec)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
+            rx_old["FRP_TUNNEL"]=$r_new; tx_old["FRP_TUNNEL"]=$t_new
+        fi
 
         if [ "$active_count" -eq 0 ]; then
             printf "  ${B}│${NC} ${DIM}%-83s${NC} ${B}│${NC}\n" "  Standby... No active MDesign tunnels or physical traffic detected right now."
@@ -165,30 +220,70 @@ show_total_usage() {
             printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
         done
     fi
+
+    init_frp_counters
+    local frp_rx=$(get_frp_rx); local frp_tx=$(get_frp_tx); local frp_total=$((frp_rx + frp_tx))
+    if [ "$frp_total" -gt 0 ] || systemctl is-active --quiet frps 2>/dev/null || systemctl is-active --quiet frpc 2>/dev/null; then
+        echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
+        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " LAYER 4 PROXIES"
+        echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
+        printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "FRP Engine" "$(format_total $frp_rx)" "$(format_total $frp_tx)" "$(format_total $frp_total)"
+    fi
+
     echo -e "  ${B}╰──────────────────┴───────────────────────┴───────────────────────┴────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
 }
 
 show_connection_tracker() {
     clear; draw_mstats_header
-    echo -e "\n  ${DIM}┌─[ MDESIGN CONNECTION TRACKER ]${NC}"
-    echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy & Gost)...${NC}\n"
+    
+    echo -e "\n  ${DIM}┌─[ CONFIGURED MAPPINGS & TUNNELS ]${NC}"
+    echo -e "  ${C}●${NC} ${W}Parsed from MDesign local configurations...${NC}\n"
 
-    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
+    local has_frp=false
+    if [ -f "/etc/frp/frps.toml" ] || [ -f "/etc/frp/frpc.toml" ]; then
+        echo -e "  ${B}╭─────────┬──────────────┬──────────────────────────────┬──────────────────────╮${NC}"
+        printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-28s${NC} ${B}│${NC} ${G}%-20s${NC} ${B}│${NC}\n" "ENGINE" "ROLE" "TARGET IP / BIND" "PORTS IN USE"
+        echo -e "  ${B}├─────────┼──────────────┼──────────────────────────────┼──────────────────────┤${NC}"
+        
+        if [ -f "/etc/frp/frps.toml" ]; then
+            local b_port=$(awk -F'=' '/^bindPort/ {print $2}' /etc/frp/frps.toml 2>/dev/null | tr -d ' ')
+            if [ -n "$b_port" ]; then
+                printf "  ${B}│${NC} ${Y}%-7s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC}\n" "FRP" "Server (IR)" "Listening (Gateway)" "$b_port"
+                has_frp=true
+            fi
+        fi
+        if [ -f "/etc/frp/frpc.toml" ]; then
+            local s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
+            local local_ports=$(awk -F'=' '/^localPort/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' ' | sort -u | xargs | sed 's/ /,/g')
+            if [ -n "$s_addr" ]; then
+                local p_str="${local_ports:0:17}"
+                [ ${#local_ports} -gt 17 ] && p_str="${p_str}..."
+                printf "  ${B}│${NC} ${Y}%-7s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC}\n" "FRP" "Client (KH)" "$s_addr" "$p_str"
+                has_frp=true
+            fi
+        fi
+        echo -e "  ${B}╰─────────┴──────────────┴──────────────────────────────┴──────────────────────╯${NC}\n"
+    fi
+
+    echo -e "  ${DIM}┌─[ LIVE CONNECTION TRACKER ]${NC}"
+    echo -e "  ${C}●${NC} ${W}Scanning TCP/UDP sockets for Core Engines...${NC}\n"
+
+    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|frps|frpc' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "CORE ENGINE" "CONNECTIONS"
     echo -e "  ${B}├─────────┼───────────────┼─────────────────┼─────────────┤${NC}"
     
     if [ -z "$core_ports" ]; then
-        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Gost or HAProxy services running."
+        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Proxy/Tunnel services running."
     else
         local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -E "^($core_ports)$" | sort | uniq -c | sort -nr | head -n 5)
         local rank=1
         if [ -z "$top_ports" ]; then printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections to Core Engines."
         else
             while read -r count port; do
-                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy)' | head -n 1)
+                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy|frps|frpc)' | head -n 1)
                 [ -z "$app_name" ] && app_name="Unknown"; app_name=${app_name^^}
                 printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
                 ((rank++))
@@ -204,9 +299,11 @@ show_connection_tracker() {
     if [ -z "$core_ports" ]; then
         printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
     else
-        local top_ips=$(ss -tun state established 2>/dev/null | awk -v cp="^(${core_ports})$" '{
-            n = split($4, a, ":"); port = a[n];
-            if(port ~ cp) print $5;
+        # --- BULLETPROOF AWK EXTRACTOR FOR IPs ---
+        local top_ips=$(ss -tnH state established 2>/dev/null | awk -v cp="^(${core_ports})$" '{
+            local_addr = $(NF-1); remote_addr = $NF;
+            n = split(local_addr, a, ":"); port = a[n];
+            if(port ~ cp) print remote_addr;
         }' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 5)
         
         local rank2=1
@@ -395,7 +492,7 @@ while true; do
     echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Live Omni-Radar${NC} ${DIM}(CLI Real-Time Monitor)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Total Historical Usage${NC} ${DIM}(CLI Static Snapshot)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}TCP/UDP Connection Tracker${NC} ${DIM}(Active Clients)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Active Ports & Connection Tracker${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Fabric QoS & Speed Limiter${NC} ${DIM}(Traffic Shaping)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Active Bandwidth Benchmark${NC} ${DIM}(iPerf3 Tools)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Web Dashboard Controller${NC} ${DIM}(Start/Stop Web UI)${NC}"

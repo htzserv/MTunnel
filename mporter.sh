@@ -1,9 +1,8 @@
 cat << 'EOF_MPORTER' > /usr/bin/mporter
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v5.2.0 (Force Auto-Cache) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v5.2.1 (UI Bugfix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
-
 INSTALL_PATH="/usr/bin/mporter"
 H_CONF="/etc/haproxy/haproxy.cfg"
 G_CONF="/etc/gost/config.json"
@@ -24,17 +23,17 @@ draw_progress_bar() {
     local pid=$1; local text=$2; local width=25; local progress=0
     tput civis
     while kill -0 $pid 2>/dev/null; do
-        progress=$((progress + 1))
-        [ $progress -gt 95 ] && progress=95
+        ((progress++))
+        if (( progress > 95 )); then progress=95; fi
         local filled=$(( progress * width / 100 ))
         local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" | tr ' ' '#')
-        local empty_bar=$(printf "%${empty}s" | tr ' ' '-')
-        printf "\r  ${C}⟳${NC} ${W}%-22s${NC} ${M}[${bar}${DIM}${empty_bar}${M}]${NC} ${C}%3d%%${NC}" "$text" "$progress"
+        local bar=$(printf "%${filled}s" "" | tr ' ' '#')
+        local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+        printf "\r  %b⟳%b %b%-22s%b %b[%b%b%b%b]%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$M" "$bar" "$DIM" "$empty_bar" "$M" "$NC" "$C" "$progress" "$NC"
         sleep 0.2
     done
-    local bar=$(printf "%${width}s" | tr ' ' '#')
-    printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
+    local bar=$(printf "%${width}s" "" | tr ' ' '#')
+    printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
     tput cnorm
 }
 
@@ -124,7 +123,6 @@ fix_and_install() {
             rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock*
             dpkg --configure -a >/dev/null 2>&1 && apt-get install -f -y >/dev/null 2>&1
             
-            # --- FORCE OFFLINE CACHING ---
             mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
             if ! ls "$LOCAL_DIR/packages"/haproxy*.deb >/dev/null 2>&1; then
                 apt-get update -y -q >/dev/null 2>&1
@@ -196,13 +194,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 5.2.0 │ HOST: $server_ip │ HAProxy: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ PORTS: $total_ports"
+    raw_text=" MPorter 5.2.1 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
-    [ "$pad_len" -lt 0 ] && pad_len=0
+    if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 5.2.0${NC} ${B}│${NC} ${DIM}HOST:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAProxy:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}PORTS:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 5.2.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"

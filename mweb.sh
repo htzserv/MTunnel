@@ -2,7 +2,7 @@ systemctl stop mweb 2>/dev/null
 
 cat << 'EOF_MWEB' > /usr/bin/mweb
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v3.1.0 ---
+# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v3.4.0 (Golden Master) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -51,6 +51,38 @@ get_iface_tx() {
     echo "$t_base"
 }
 
+init_frp_counters() {
+    if [ -f "/etc/frp/frpc.toml" ] && systemctl is-active --quiet frpc 2>/dev/null; then
+        local s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
+        local s_port=$(awk -F'=' '/^serverPort/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' ')
+        if [ -n "$s_addr" ] && [ -n "$s_port" ]; then
+            iptables -t mangle -C OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 || \
+            iptables -t mangle -A OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
+            iptables -t mangle -C INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 || \
+            iptables -t mangle -A INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
+        fi
+    fi
+    if [ -f "/etc/frp/frps.toml" ] && systemctl is-active --quiet frps 2>/dev/null; then
+        local b_port=$(awk -F'=' '/^bindPort/ {print $2}' /etc/frp/frps.toml 2>/dev/null | tr -d ' ')
+        if [ -n "$b_port" ]; then
+            iptables -t mangle -C OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 || \
+            iptables -t mangle -A OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
+            iptables -t mangle -C INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 || \
+            iptables -t mangle -A INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
+        fi
+    fi
+}
+
+get_frp_rx() {
+    local rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "FRP_CNT_RX" | awk '{sum+=$2} END {print sum}')
+    echo "${rx:-0}"
+}
+
+get_frp_tx() {
+    local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "FRP_CNT_TX" | awk '{sum+=$2} END {print sum}')
+    echo "${tx:-0}"
+}
+
 get_uptime() {
     local iface=$1
     if ! ip link show "$iface" >/dev/null 2>&1 || [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" == "down" ]; then
@@ -72,6 +104,26 @@ get_uptime() {
         [ "$s_uptime" == "0m" ] && s_uptime="Just now"
         echo "$s_uptime"
     else echo "---"; fi
+}
+
+get_frp_uptime() {
+    local svc=$1
+    local ts=$(systemctl show -p ActiveEnterTimestamp "$svc" 2>/dev/null | awk -F= '{print $2}')
+    if [ -n "$ts" ]; then
+        local created=$(date -d "$ts" +%s 2>/dev/null)
+        if [[ "$created" =~ ^[0-9]+$ ]]; then
+            local now=$(date +%s); local diff=$((now - created)); [ "$diff" -lt 0 ] && diff=0
+            local d=$((diff / 86400)); local h=$(( (diff % 86400) / 3600 )); local m=$(( (diff % 3600) / 60 ))
+            local s_uptime=""
+            [ "$d" -gt 0 ] && s_uptime="${d}d "
+            [ "$h" -gt 0 ] && s_uptime="${s_uptime}${h}h "
+            s_uptime="${s_uptime}${m}m"
+            [ "$s_uptime" == "0m" ] && s_uptime="Just now"
+            echo "$s_uptime"
+            return
+        fi
+    fi
+    echo "Active"
 }
 
 get_tunnel_ip() {
@@ -107,7 +159,10 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             params = urllib.parse.parse_qs(query)
             if 'iface' in params:
                 iface = params['iface'][0]
-                if iface.replace('_', '').replace('-', '').isalnum():
+                if iface == 'FRP Engine':
+                    os.system("systemctl restart frps 2>/dev/null; systemctl restart frpc 2>/dev/null")
+                    os.system("date +%s > /etc/mstats/uptimes/frp_engine 2>/dev/null")
+                elif iface.replace('_', '').replace('-', '').isalnum():
                     subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
                     subprocess.run(['sleep', '1'])
                     subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True)
@@ -161,7 +216,6 @@ cat <<'EOF' > index.html
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
-        /* UPGRADED SIDEBAR */
         .sidebar {
             position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
             display: flex; flex-direction: column; gap: 28px; z-index: 1000;
@@ -212,6 +266,7 @@ cat <<'EOF' > index.html
         .b-blue { background: rgba(56, 189, 248, 0.1); color: var(--sky); border: 1px solid rgba(56, 189, 248, 0.2); }
         .b-green { background: rgba(52, 211, 153, 0.1); color: var(--green); border: 1px solid rgba(52, 211, 153, 0.2); }
         .b-red { background: rgba(248, 113, 113, 0.1); color: var(--red); border: 1px solid rgba(248, 113, 113, 0.2); }
+        .b-yellow { background: rgba(251, 191, 36, 0.1); color: var(--yellow); border: 1px solid rgba(251, 191, 36, 0.2); }
 
         .btn-restart { display: inline-flex; align-items: center; justify-content: center; background: rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.3); color: var(--sky); padding: 8px 16px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: 0.2s; margin-top: 15px; }
         body[dir="ltr"] .btn-restart { float: right; }
@@ -395,11 +450,12 @@ cat <<'EOF' > index.html
                 } else {
                     for(let tObj of data.tunnels) {
                         let stBadge = tObj.state === "ONLINE" ? "<span class='badge b-green'>ONLINE</span>" : "<span class='badge b-red'>OFFLINE</span>";
-                        let typeBadge = tObj.type.includes("VXLAN") ? "<span class='badge b-purple'>VXLAN/L2</span>" : "<span class='badge b-blue'>GRE/L3</span>";
+                        let typeBadge = tObj.type.includes("VXLAN") ? "<span class='badge b-purple'>VXLAN/L2</span>" : 
+                                        (tObj.type.includes("Proxy") ? "<span class='badge b-yellow'>FRP/L4</span>" : "<span class='badge b-blue'>GRE/L3</span>");
                         
                         let pingHtml = "<span class='text-slate'>---</span>";
                         if(tObj.state === "ONLINE") {
-                            pingHtml = tObj.ping ? `<div class="status-dot dot-green"></div><span class="text-green" dir="ltr">${tObj.ping} ms</span>` : `<div class="status-dot dot-red"></div><span style="color:var(--red);">${t('timeout')}</span>`;
+                            pingHtml = tObj.ping && tObj.ping !== "---" ? `<div class="status-dot dot-green"></div><span class="text-green" dir="ltr">${tObj.ping} ms</span>` : `<div class="status-dot dot-red"></div><span style="color:var(--red);">${t('timeout')}</span>`;
                         }
 
                         let rCpu = "--%", rRam = "--%";
@@ -411,7 +467,6 @@ cat <<'EOF' > index.html
                             rRam = `<span style='color:var(--red); font-family:Inter;'>${t('offline')}</span>`;
                         }
 
-                        // Perfect symmetrical row rendering without Iran data
                         tunHtml += `
                         <div class="glass-card tun-border">
                             <div class="tun-header">
@@ -526,6 +581,51 @@ while true; do
             TUNNELS_JSON+="{\"iface\":\"$name\", \"type\":\"$type_txt\", \"endpoint\":\"$rip\", \"state\":\"$st_badge\", \"ping\":\"$ping_res\", \"uptime\":\"$t_uptime\", \"rx_spd\":\"$(format_speed $rx_s)\", \"tx_spd\":\"$(format_speed $tx_s)\", \"rx_tot\":\"$(format_total $r_new)\", \"tx_tot\":\"$(format_total $t_new)\", \"comb_spd\":\"$(format_speed $comb_spd)\", \"comb_tot\":\"$(format_total $comb_tot)\"}"
         fi
     done
+
+    # --- FRP INTEGRATION MODULE ---
+    init_frp_counters
+    if systemctl is-active --quiet frps 2>/dev/null || systemctl is-active --quiet frpc 2>/dev/null; then
+        frp_name="FRP Engine"
+        frp_type="Proxy"
+        frp_state="ONLINE"
+        frp_rip="Listening..."
+        frp_ping="---"
+        frp_uptime="Active"
+        
+        if systemctl is-active --quiet frps 2>/dev/null; then
+            frp_uptime=$(get_frp_uptime "frps")
+            b_port=$(awk -F'=' '/^bindPort/ {print $2}' /etc/frp/frps.toml 2>/dev/null | tr -d ' ')
+            if [ -n "$b_port" ]; then
+                active_client=$(ss -tnH state established 2>/dev/null | awk -v p=":${b_port}$" '$(NF-1) ~ p {print $NF; exit}' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*|)$')
+                if [ -n "$active_client" ]; then
+                    frp_rip="$active_client"
+                    remote_list+=("$active_client")
+                    frp_ping=$(ping -c 1 -W 1 "$active_client" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+                fi
+            fi
+        elif systemctl is-active --quiet frpc 2>/dev/null; then
+            frp_uptime=$(get_frp_uptime "frpc")
+            s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
+            if [ -n "$s_addr" ]; then
+                frp_rip="$s_addr"
+                remote_list+=("$s_addr")
+                frp_ping=$(ping -c 1 -W 1 "$s_addr" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+            fi
+        fi
+
+        r_new_f=$(get_frp_rx); t_new_f=$(get_frp_tx)
+        r_old_f=${rx_old["FRP_TUNNEL"]:-$r_new_f}; t_old_f=${tx_old["FRP_TUNNEL"]:-$t_new_f}
+        rx_s_f=$((r_new_f - r_old_f)); [ "$rx_s_f" -lt 0 ] && rx_s_f=0
+        tx_s_f=$((t_new_f - t_old_f)); [ "$tx_s_f" -lt 0 ] && tx_s_f=0
+        rx_old["FRP_TUNNEL"]=$r_new_f; tx_old["FRP_TUNNEL"]=$t_new_f
+
+        comb_spd_f=$((rx_s_f + tx_s_f))
+        comb_tot_f=$((r_new_f + t_new_f))
+
+        if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
+        TUNNELS_JSON+="{\"iface\":\"$frp_name\", \"type\":\"$frp_type\", \"endpoint\":\"$frp_rip\", \"state\":\"$frp_state\", \"ping\":\"$frp_ping\", \"uptime\":\"$frp_uptime\", \"rx_spd\":\"$(format_speed $rx_s_f)\", \"tx_spd\":\"$(format_speed $tx_s_f)\", \"rx_tot\":\"$(format_total $r_new_f)\", \"tx_tot\":\"$(format_total $t_new_f)\", \"comb_spd\":\"$(format_speed $comb_spd_f)\", \"comb_tot\":\"$(format_total $comb_tot_f)\"}"
+    fi
+
     TUNNELS_JSON+="]"
 
     unique_remotes=($(echo "${remote_list[@]}" | tr ' ' '\n' | sort -u | grep -v '^$'))

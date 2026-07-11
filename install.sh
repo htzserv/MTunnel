@@ -16,7 +16,7 @@ mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 echo -e "  ${Y}● Fetching latest Core Modules from Github...${NC}"
 CACHE_BUST=$(date +%s)
 # اضافه شدن mfrp.sh به لیست
-MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh" "mfrp.sh")
+MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh" "mfrp.sh" "mwall.sh")
 
 for file in "${MODULES[@]}"; do
     echo -e "  ${DIM}├─ Syncing $file...${NC}"

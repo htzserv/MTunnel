@@ -1,6 +1,6 @@
 cat << 'EOF_MSTATS' > /usr/bin/mstats
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.5.1 (UI Patch) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.5.2 (Force Cache & UI) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -33,7 +33,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 2.5.1 "
+    local str1=" MStats Omni-Radar Core 2.5.2 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -282,18 +282,24 @@ iperf_benchmark() {
 
     if ! command -v iperf3 >/dev/null 2>&1; then
         echo -e ""
-        (
-            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-            if ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
-                dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-                apt-get install -f -y -q >/dev/null 2>&1
-            else
+        mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+        if ! ls "$LOCAL_DIR/packages"/iperf3*.deb >/dev/null 2>&1; then
+            echo -e "  ${DIM}● Caching iPerf3 Packages for Offline Use...${NC}"
+            (
                 apt-get update -y -q >/dev/null 2>&1
-                apt-get install -d -y -q iperf3 >/dev/null 2>&1
-                cp /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
-                apt-get install -y -q iperf3 >/dev/null 2>&1
-            fi
-        ) >/dev/null 2>&1 &
+                apt-get clean >/dev/null 2>&1
+                apt-get install --download-only -y -q iperf3 >/dev/null 2>&1
+                apt-get install --download-only -y -q --reinstall iperf3 >/dev/null 2>&1
+                cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
+            ) &
+            draw_percentage $! "Building Local Cache"
+            sleep 1
+        fi
+
+        (
+            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
+            apt-get install -f -y -q >/dev/null 2>&1
+        ) &
         draw_percentage $! "Deploying iPerf3 Engine"
         sleep 1
     fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v2.5.0 (Offline-Ready) ---
+# --- MDesign Master Core | Central Installer v3.0.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
@@ -15,7 +15,8 @@ mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 
 echo -e "  ${Y}● Fetching latest Core Modules from Github...${NC}"
 CACHE_BUST=$(date +%s)
-MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+# اضافه شدن mfrp.sh به لیست
+MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
 
 for file in "${MODULES[@]}"; do
     echo -e "  ${DIM}├─ Syncing $file...${NC}"

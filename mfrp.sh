@@ -1,5 +1,6 @@
+cat << 'EOF_MFRP' > /usr/bin/mfrp
 #!/bin/bash
-# --- MFRP Reverse Proxy Matrix (mfrp.sh) | MDesign Core v1.0.0 (Offline Cache Patch) ---
+# --- MFRP Reverse Proxy Matrix (mfrp.sh) | MDesign Core v1.1.0 (Web UI Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 FRP_DIR="/etc/frp"
@@ -19,12 +20,11 @@ draw_percentage() {
     local pid=$1; local text=$2; local progress=0
     tput civis
     while kill -0 $pid 2>/dev/null; do
-        progress=$((progress + 1))
-        [ $progress -gt 95 ] && progress=95
-        printf "\r  ${C}⟳${NC} ${W}%-25s${NC} ${C}%3d%%${NC}" "$text" "$progress"
+        progress=$((progress + 1))         [$progress -gt 95 ] && progress=95
+        printf "\r  ${C}⟳${NC} ${W}\%-25s${NC} ${C}\%3d\%\%${NC}" "$text" "$progress"
         sleep 0.2
     done
-    printf "\r  ${G}✔${NC} ${W}%-25s${NC} ${G}100%%${NC} \n" "$text"
+    printf "\r  ${G}✔${NC}${W}%-25s${NC}${G}100%%${NC} \n" "$text"
     tput cnorm
 }
 
@@ -33,7 +33,7 @@ check_frp_binaries() {
         echo -e ""
         (
             mkdir -p "$LOCAL_DIR" 2>/dev/null
-            if [ ! -f "$LOCAL_DIR/frps" ] || [ ! -f "$LOCAL_DIR/frpc" ]; then
+            if [ ! -f "$LOCAL_DIR/frps" ] \vert{}\vert{} [ ! -f "$LOCAL_DIR/frpc" ]; then
                 wget -qO "/tmp/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.58.0/frp_0.58.0_linux_amd64.tar.gz" >/dev/null 2>&1
                 tar -xzf "/tmp/frp.tar.gz" -C "/tmp/"
                 cp /tmp/frp_*_linux_amd64/frps "$LOCAL_DIR/"
@@ -59,7 +59,7 @@ draw_mfrp_header() {
     if systemctl is-active --quiet frpc 2>/dev/null; then frpc_stat="${G}ONLINE${NC}"; raw_frpc="ONLINE"; fi
 
     clear; echo ""
-    local str1=" MFRP Reverse Proxy Matrix 1.0.0 "
+    local str1=" MFRP Reverse Proxy Matrix 1.1.0 "
     local str2=" IP: $s_ip "
     local str3=" SERVER (Kharej): $raw_frps "
     local str4=" CLIENT (Iran): $raw_frpc "
@@ -67,20 +67,20 @@ draw_mfrp_header() {
     local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} ))
     local pad_len=$(( 92 - raw_len ))
     [ "$pad_len" -lt 0 ] && pad_len=0
-    local padding=$(printf '%*s' "$pad_len" "")
+    local padding=$(printf '\%*s' "$pad_len" "")
     
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} SERVER (Kharej):${NC} ${frps_stat} ${B}│${NC}${DIM} CLIENT (Iran):${NC} ${frpc_stat} ${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W}${s_ip} ${NC}${B}│${NC}${DIM} SERVER (Kharej):${NC}${frps_stat} ${B}│${NC}${DIM} CLIENT (Iran):${NC} ${frpc_stat}${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
 deploy_frp_server() {
     check_frp_binaries
     echo -e "\n  ${DIM}┌─[ DEPLOY FRP SERVER (KHAREJ) ]${NC}"
-    echo -ne "  ${C}●${NC} ${W}FRP Bind Port (e.g. 7000): ${NC}"; read b_port
+    echo -ne "  ${C}●${NC} ${W}FRP Bind Port (e.g. 7000):${NC}"; read b_port
     [ -z "$b_port" ] && b_port=7000
     
-    echo -ne "  ${C}●${NC} ${W}Secret Authentication Token: ${NC}"; read auth_token
+    echo -ne "  ${C}●${NC} ${W}Secret Authentication Token:${NC}"; read auth_token
     [ -z "$auth_token" ] && auth_token="MDesignSecure123"
 
     cat <<EOF > "$FRP_S_CONF"
@@ -90,6 +90,25 @@ bindPort = $b_port
 method = "token"
 token = "$auth_token"
 EOF
+
+    echo -ne "  ${C}●${NC} ${W}Enable FRP Built-in Web Dashboard? (y/n) [y]:${NC}"; read en_dash
+    if [[ "$en_dash" != "n" ]]; then
+        echo -ne "  ${C}  ├─${NC} ${W}Dashboard Port (e.g. 7500):${NC}"; read d_port
+        [ -z "$d_port" ] && d_port=7500
+        echo -ne "  ${C}  ├─${NC} ${W}Username [admin]:${NC}"; read d_user
+        [ -z "$d_user" ] && d_user="admin"
+        echo -ne "  ${C}  └─${NC} ${W}Password [admin]:${NC}"; read d_pass
+        [ -z "$d_pass" ] && d_pass="admin"
+        
+        cat <<EOF >> "$FRP_S_CONF"
+
+webServer.addr = "0.0.0.0"
+webServer.port = $d_port
+webServer.user = "$d_user"
+webServer.password = "$d_pass"
+EOF
+        dash_msg="  ${DIM}├─ Web Dashboard: ${C}http://$(get_local_ip):${d_port}${NC} ${DIM}(u:${d_user} | p: ${d_pass})${NC}"
+    fi
 
     cat <<EOF > /etc/systemd/system/frps.service
 [Unit]
@@ -111,20 +130,21 @@ EOF
     echo -e "\n  ${G}● FRPS Server deployed successfully!${NC}"
     echo -e "  ${DIM}├─ Server IP: ${W}$(get_local_ip)${NC}"
     echo -e "  ${DIM}├─ Bind Port: ${Y}${b_port}${NC}"
-    echo -e "  ${DIM}└─ Token: ${M}${auth_token}${NC}"
-    sleep 3
+    echo -e "  ${DIM}├─ Token: ${M}${auth_token}${NC}"
+    [ -n "$dash_msg" ] && echo -e "$dash_msg"
+    sleep 3.5
 }
 
 deploy_frp_client() {
     check_frp_binaries
     echo -e "\n  ${DIM}┌─[ DEPLOY FRP CLIENT (IRAN) & MAP PORTS ]${NC}"
-    echo -ne "  ${C}●${NC} ${W}Kharej Server IP: ${NC}"; read server_ip
+    echo -ne "  ${C}●${NC} ${W}Kharej Server IP:${NC}"; read server_ip
     [ -z "$server_ip" ] && return
     
-    echo -ne "  ${C}●${NC} ${W}Kharej Bind Port (e.g. 7000): ${NC}"; read server_port
+    echo -ne "  ${C}●${NC} ${W}Kharej Bind Port (e.g. 7000):${NC}"; read server_port
     [ -z "$server_port" ] && server_port=7000
     
-    echo -ne "  ${C}●${NC} ${W}Secret Authentication Token: ${NC}"; read auth_token
+    echo -ne "  ${C}●${NC} ${W}Secret Authentication Token:${NC}"; read auth_token
     [ -z "$auth_token" ] && auth_token="MDesignSecure123"
 
     cat <<EOF > "$FRP_C_CONF"
@@ -136,7 +156,7 @@ method = "token"
 token = "$auth_token"
 EOF
 
-    echo -ne "\n  ${C}●${NC} ${W}Enter local ports to forward (comma separated, e.g. 80,443): ${NC}"; read ports
+    echo -ne "\n  ${C}●${NC} ${W}Enter local ports to forward (comma separated, e.g. 80,443):${NC}"; read ports
     local clean_ports=$(echo "$ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
 
     for p in $clean_ports; do
@@ -215,3 +235,5 @@ while true; do
         0) break ;;
     esac
 done
+EOF_MFRP
+chmod +x /usr/bin/mfrp

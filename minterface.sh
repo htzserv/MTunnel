@@ -1,16 +1,21 @@
+cat << 'EOF_MINTERFACE' > /usr/bin/minterface
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v1.2.5 ---
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v2.0.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-CONF_DIR="/etc/mgre/tunnels"
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
 }
 
+get_configs() {
+    ls /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf 2>/dev/null
+}
+
 detect_server_role() {
-    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+    local configs=($(get_configs))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "${DIM}Unknown (No Tunnels)${NC}"; return; fi
     source "${configs[0]}"
     [ "$TYPE" == "1" ] && echo -e "${G}IRAN (Access Node)${NC}" || echo -e "${M}KHAREJ (Gateway Node)${NC}"
@@ -19,10 +24,10 @@ detect_server_role() {
 draw_header() {
     local s_ip=$(get_local_ip); local role=$(detect_server_role)
     clear; echo ""
-    local str1=" MDesign Interface Matrix 1.2.5 "
+    local str1=" MDesign Interface Matrix 2.0.0 "
     local str2=" IP: $s_ip "
     
-    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+    local configs=($(get_configs))
     local raw_role="Unknown (No Tunnels)"
     if [ ${#configs[@]} -gt 0 ]; then
         source "${configs[0]}"
@@ -46,22 +51,29 @@ print_row_2col() {
 }
 
 render_matrix() {
-    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+    local configs=($(get_configs))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No network blueprints configured.${NC}"; sleep 2; return; fi
 
     echo -e "\n  ${Y}● Active Network Interface Blueprint:${NC}"
     for conf in "${configs[@]}"; do
         source "$conf"
+        
+        local is_vx=false; local t_name="$T_NAME"
+        if [ -n "$BR_NAME" ]; then is_vx=true; t_name="$BR_NAME"; fi
+
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
-        local proto_lbl="IPv4 GRE"; local title_color="${C}"
-        [[ "$TUN_PROTO" == "6to4" ]] && { proto_lbl="6to4 IP6GRE"; title_color="${M}"; }
+        
+        local proto_lbl="IPv4 GRE Engine"; local title_color="${C}"
+        [[ "$TUN_PROTO" == "6to4" ]] && { proto_lbl="6to4 IP6GRE Engine"; title_color="${M}"; }
+        [[ "$is_vx" == true ]] && { proto_lbl="VXLAN L2 Bridge"; title_color="${M}"; }
 
         local stat_raw="● DOWN"; local stat_color="${R}"; local sys_uptime="Offline"
-        if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then
+        local state=$(cat /sys/class/net/$t_name/operstate 2>/dev/null)
+        if ip link show "$t_name" >/dev/null 2>&1 && [[ "$state" == "up" || "$state" == "unknown" ]]; then
             stat_raw="● UP  "; stat_color="${G}"
-            local created=$(stat -c %Y "/sys/class/net/$T_NAME" 2>/dev/null)
+            local created=$(stat -c %Y "/sys/class/net/$t_name" 2>/dev/null)
             if [ -n "$created" ]; then
                 local diff=$(($(date +%s) - created))
                 local d=$((diff / 86400)); local h=$(( (diff % 86400) / 3600 )); local m=$(( (diff % 3600) / 60 ))
@@ -73,9 +85,10 @@ render_matrix() {
         ping -c 1 -W 1 "$tip" >/dev/null 2>&1 && { link_raw="● ONLINE "; link_color="${G}"; }
 
         local h_ports=""; local g_ports=""; local subnets=("$c_sub")
-        for v_lip in $(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1); do
+        for v_lip in $(ip -4 addr show dev "$t_name" label "${t_name}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1); do
             subnets+=("$(echo "$v_lip" | cut -d'.' -f1-3)")
         done
+        
         if [ -f "/etc/haproxy/haproxy.cfg" ]; then
             local h_tmp=""
             for sub in "${subnets[@]}"; do
@@ -84,26 +97,30 @@ render_matrix() {
             done
             h_ports=$(echo -e "$h_tmp" | grep -v '^$' | sort -un | paste -sd "," -)
         fi
+        
         if [ -f "/etc/gost/config.json" ] && command -v jq >/dev/null 2>&1; then
             local g_tmp=""
             for sub in "${subnets[@]}"; do
-                local p=$(jq -r '.ServeNodes[]' /etc/gost/config.json 2>/dev/null | grep "${sub}\." | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/')
+                local p=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | grep "${sub}\." | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/')
                 [ -n "$p" ] && g_tmp="$g_tmp\n$p"
             done
             g_ports=$(echo -e "$g_tmp" | grep -v '^$' | sort -un | paste -sd "," -)
         fi
+        
         [ -z "$h_ports" ] && h_ports="None"; [ -z "$g_ports" ] && g_ports="None"
         [ ${#h_ports} -gt 50 ] && h_ports="${h_ports:0:47}..."
         [ ${#g_ports} -gt 50 ] && g_ports="${g_ports:0:47}..."
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        local left_part="▼ Interface: $T_NAME"
+        local left_part="▼ Interface: $t_name"
         local right_part="State: $stat_raw   Link: $link_raw   Uptime: $sys_uptime"
         local spaces=$(printf '%*s' "$(( 94 - ${#left_part} - ${#right_part} ))" "")
-        echo -e "  ${B}│${NC} ${title_color}▼ Interface: ${W}$T_NAME${NC}${spaces}${DIM}State: ${stat_color}${stat_raw}${NC}   ${DIM}Link: ${link_color}${link_raw}${NC}   ${DIM}Uptime: ${W}${sys_uptime}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${title_color}▼ Interface: ${W}$t_name${NC}${spaces}${DIM}State: ${stat_color}${stat_raw}${NC}   ${DIM}Link: ${link_color}${link_raw}${NC}   ${DIM}Uptime: ${W}${sys_uptime}${NC} ${B}│${NC}"
         echo -e "  ${B}├──────────────────────────────┬─────────────────────────────────────────────────────────────────┤${NC}"
-        print_row_2col "Tunnel Infrastructure" "${C}Tunnel Infrastructure${NC}" "$proto_lbl Engine" "${W}$proto_lbl Engine${NC}"
-        print_row_2col "Public Endpoint IPs" "${DIM}Public Endpoint IPs${NC}" "Local: $LOCAL_PUB   Remote: $REMOTE_PUB" "${DIM}Local:${NC} ${W}$LOCAL_PUB${NC}   ${DIM}Remote:${NC} ${W}$REMOTE_PUB${NC}"
+        print_row_2col "Tunnel Infrastructure" "${C}Tunnel Infrastructure${NC}" "$proto_lbl" "${W}$proto_lbl${NC}"
+        
+        local l_pub=${LOCAL_PUB:-Unknown}; local r_pub=${REMOTE_PUB:-${T_REMOTE:-Unknown}}
+        print_row_2col "Public Endpoint IPs" "${DIM}Public Endpoint IPs${NC}" "Local: $l_pub   Remote: $r_pub" "${DIM}Local:${NC} ${W}$l_pub${NC}   ${DIM}Remote:${NC} ${W}$r_pub${NC}"
         echo -e "  ${B}├──────────────────────────────┼─────────────────────────────────────────────────────────────────┤${NC}"
         print_row_2col "Core IPv4 Network" "${DIM}Core IPv4 Network${NC}" "Local: $lip   Remote: $tip" "${DIM}Local:${NC} ${G}$lip${NC}   ${DIM}Remote:${NC} ${Y}$tip${NC}"
         print_row_2col "Active Port Mappings" "${Y}Active Port Mappings${NC}" "HAProxy: $h_ports" "${C}HAProxy:${NC} ${W}$h_ports${NC}"
@@ -120,3 +137,5 @@ render_matrix() {
 }
 
 while true; do draw_header; render_matrix; break; done
+EOF_MINTERFACE
+chmod +x /usr/bin/minterface

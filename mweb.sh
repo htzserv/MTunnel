@@ -2,7 +2,7 @@ systemctl stop mweb 2>/dev/null
 
 cat << 'EOF_MWEB' > /usr/bin/mweb
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v3.4.0 (Golden Master) ---
+# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v3.5.0 (WaterWall Integration) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -162,11 +162,14 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 if iface == 'FRP Engine':
                     os.system("systemctl restart frps 2>/dev/null; systemctl restart frpc 2>/dev/null")
                     os.system("date +%s > /etc/mstats/uptimes/frp_engine 2>/dev/null")
+                elif iface.startswith('ww_'):
+                    os.system(f"systemctl restart mwall@{iface} 2>/dev/null")
+                    os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
                 elif iface.replace('_', '').replace('-', '').isalnum():
                     subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
                     subprocess.run(['sleep', '1'])
                     subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True)
-                    os.system(f"date +%s > /etc/mstats/uptimes/{iface}")
+                    os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')
             self.end_headers()
@@ -262,6 +265,7 @@ cat <<'EOF' > index.html
         .tun-title { font-size: 1.1rem; font-weight: 700; display: flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono', monospace; color: var(--text-main); }
         .tun-badges { display: flex; gap: 10px; flex-wrap: wrap;}
         .badge { padding: 4px 10px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;}
+        
         .b-purple { background: rgba(192, 132, 252, 0.1); color: var(--purple); border: 1px solid rgba(192, 132, 252, 0.2); }
         .b-blue { background: rgba(56, 189, 248, 0.1); color: var(--sky); border: 1px solid rgba(56, 189, 248, 0.2); }
         .b-green { background: rgba(52, 211, 153, 0.1); color: var(--green); border: 1px solid rgba(52, 211, 153, 0.2); }
@@ -450,8 +454,12 @@ cat <<'EOF' > index.html
                 } else {
                     for(let tObj of data.tunnels) {
                         let stBadge = tObj.state === "ONLINE" ? "<span class='badge b-green'>ONLINE</span>" : "<span class='badge b-red'>OFFLINE</span>";
-                        let typeBadge = tObj.type.includes("VXLAN") ? "<span class='badge b-purple'>VXLAN/L2</span>" : 
-                                        (tObj.type.includes("Proxy") ? "<span class='badge b-yellow'>FRP/L4</span>" : "<span class='badge b-blue'>GRE/L3</span>");
+                        
+                        let typeBadge = "";
+                        if (tObj.type.includes("VXLAN")) typeBadge = "<span class='badge b-purple'>VXLAN/L2</span>";
+                        else if (tObj.type.includes("MWALL")) typeBadge = "<span class='badge' style='background:rgba(20, 184, 166, 0.1); color:#14b8a6; border:1px solid rgba(20, 184, 166, 0.2);'>WATERWALL/L3</span>";
+                        else if (tObj.type.includes("Proxy")) typeBadge = "<span class='badge b-yellow'>FRP/L4</span>";
+                        else typeBadge = "<span class='badge b-blue'>GRE/L3</span>";
                         
                         let pingHtml = "<span class='text-slate'>---</span>";
                         if(tObj.state === "ONLINE") {
@@ -545,7 +553,7 @@ while true; do
     remote_list=()
     first_tun=true
     
-    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
+    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/mwall/tunnels/*.conf; do
         if [ -f "$conf" ]; then
             source "$conf"
             is_vx=false; name="$T_NAME"
@@ -576,6 +584,7 @@ while true; do
             
             type_txt="GRE"
             [ "$is_vx" = true ] && type_txt="VXLAN"
+            [[ "$conf" == *"/mwall/"* ]] && type_txt="MWALL"
             
             if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
             TUNNELS_JSON+="{\"iface\":\"$name\", \"type\":\"$type_txt\", \"endpoint\":\"$rip\", \"state\":\"$st_badge\", \"ping\":\"$ping_res\", \"uptime\":\"$t_uptime\", \"rx_spd\":\"$(format_speed $rx_s)\", \"tx_spd\":\"$(format_speed $tx_s)\", \"rx_tot\":\"$(format_total $r_new)\", \"tx_tot\":\"$(format_total $t_new)\", \"comb_spd\":\"$(format_speed $comb_spd)\", \"comb_tot\":\"$(format_total $comb_tot)\"}"

@@ -1,6 +1,6 @@
 cat << 'EOF_MWIRE' > /usr/bin/mwire
 #!/bin/bash
-# --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.3.0 (Force Cache & UI) ---
+# --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.3.2 (Session Bugfix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 WG_DIR="/etc/wireguard"
@@ -21,12 +21,12 @@ draw_percentage() {
     local pid=$1; local text=$2; local progress=0
     tput civis
     while kill -0 $pid 2>/dev/null; do
-        progress=$((progress + 1))
-        [ $progress -gt 95 ] && progress=95
-        printf "\r  ${C}⟳${NC} ${W}%-25s${NC} ${C}%3d%%${NC}" "$text" "$progress"
+        ((progress++))
+        if (( progress > 95 )); then progress=95; fi
+        printf "\r  %b⟳%b %b%-25s%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$C" "$progress" "$NC"
         sleep 0.2
     done
-    printf "\r  ${G}✔${NC} ${W}%-25s${NC} ${G}100%%${NC} \n" "$text"
+    printf "\r  %b✔%b %b%-25s%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$NC"
     tput cnorm
 }
 
@@ -63,13 +63,13 @@ draw_mwire_header() {
         active_peers=$(wg show wg0 peers 2>/dev/null | wc -l)
     fi
     clear; echo ""
-    local str1=" MWIRE Crypto Matrix 1.3.0 "
+    local str1=" MWIRE Crypto Matrix 1.3.2 "
     local str2=" IP: $s_ip "
     local str3=" SERVER: $srv_status "
     local str4=" PEERS: $active_peers "
     local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} ))
     local pad_len=$(( 92 - raw_len ))
-    [ "$pad_len" -lt 0 ] && pad_len=0
+    if (( pad_len < 0 )); then pad_len=0; fi
     local padding=$(printf '%*s' "$pad_len" "")
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} SERVER:${NC}${srv_color} ${srv_status} ${NC}${B}│${NC}${DIM} PEERS:${NC}${Y} ${active_peers} ${NC}${padding}${B}│${NC}"
@@ -77,6 +77,9 @@ draw_mwire_header() {
 }
 
 init_wg_server() {
+    mkdir -p "$WG_DIR" "$PEER_DIR" 2>/dev/null # <-- باگ نشست فعال فیکس شد
+    chmod 700 "$WG_DIR" "$PEER_DIR" 2>/dev/null
+
     if [ -f "$WG_CONF" ]; then
         echo -e "\n  ${Y}● WireGuard Server is already initialized!${NC}"
         sleep 1.5; return
@@ -129,6 +132,8 @@ EOF
 }
 
 generate_peer() {
+    mkdir -p "$WG_DIR" "$PEER_DIR" 2>/dev/null # <-- فیکس
+
     if [ ! -f "$WG_CONF" ]; then
         echo -e "\n  ${R}● Initialize WireGuard server core first (Option 1)!${NC}"
         sleep 2; return
@@ -280,6 +285,8 @@ remove_peer_or_server() {
 }
 
 import_client_config() {
+    mkdir -p "$WG_DIR" 2>/dev/null # <-- فیکس
+
     if [ -f "$WG_CONF" ]; then
         echo -e "\n  ${R}● WireGuard configuration already exists on this server!${NC}"
         echo -e "  ${DIM}├─ If you want to import a new one, delete the old one first (Option 4).${NC}"

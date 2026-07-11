@@ -1,6 +1,6 @@
 cat << 'EOF_MSTATS' > /usr/bin/mstats
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.6.1 (Golden Master) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.7.0 (WaterWall Integration) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -33,7 +33,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 2.6.1 "
+    local str1=" MStats Omni-Radar Core 2.7.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     if (( pad_len < 0 )); then pad_len=0; fi
@@ -124,9 +124,11 @@ show_live_radar() {
         for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
         local vx_ifs=""
         for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
+        local ww_ifs=""
+        for conf in /etc/mwall/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && ww_ifs="$ww_ifs $T_NAME"; done
         local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
 
-        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs"
+        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $ww_ifs $wg_ifs"
         for iface in $all_ifs; do
             if [ -z "${rx_old[$iface]}" ] && [ -d "/sys/class/net/$iface" ]; then
                 rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface")
@@ -161,6 +163,7 @@ show_live_radar() {
 
         [ -n "$phys_ifs" ] && render_category "WAN / PHYS" "${W}" "$phys_ifs"
         [ -n "$gre_ifs" ] && render_category "GRE / L3" "${C}" "$gre_ifs"
+        [ -n "$ww_ifs" ] && render_category "WATERWALL / L3" "${C}" "$ww_ifs"
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs"
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
 
@@ -196,6 +199,7 @@ show_total_usage() {
     local all_tuns=""
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
     for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $BR_NAME"; done
+    for conf in /etc/mwall/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
     [ -f "/etc/wireguard/wg0.conf" ] && all_tuns="$all_tuns wg0"
     
     echo -e "  ${B}╭──────────────────┬───────────────────────┬───────────────────────┬────────────────────────╮${NC}"
@@ -212,7 +216,7 @@ show_total_usage() {
 
     if [ -n "$all_tuns" ]; then
         echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, WG)"
+        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, WATERWALL, WG)"
         echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
         for iface in $all_tuns; do
             [ ! -d "/sys/class/net/$iface" ] && continue
@@ -269,7 +273,7 @@ show_connection_tracker() {
     echo -e "  ${DIM}┌─[ LIVE CONNECTION TRACKER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Scanning TCP/UDP sockets for Core Engines...${NC}\n"
 
-    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|frps|frpc' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
+    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|frps|frpc|waterwall' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "CORE ENGINE" "CONNECTIONS"
@@ -283,7 +287,7 @@ show_connection_tracker() {
         if [ -z "$top_ports" ]; then printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections to Core Engines."
         else
             while read -r count port; do
-                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy|frps|frpc)' | head -n 1)
+                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy|frps|frpc|waterwall)' | head -n 1)
                 [ -z "$app_name" ] && app_name="Unknown"; app_name=${app_name^^}
                 printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
                 ((rank++))
@@ -299,7 +303,6 @@ show_connection_tracker() {
     if [ -z "$core_ports" ]; then
         printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
     else
-        # --- BULLETPROOF AWK EXTRACTOR FOR IPs ---
         local top_ips=$(ss -tnH state established 2>/dev/null | awk -v cp="^(${core_ports})$" '{
             local_addr = $(NF-1); remote_addr = $NF;
             n = split(local_addr, a, ":"); port = a[n];
@@ -328,8 +331,10 @@ qos_manager() {
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
     local vx_ifs=""
     for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
+    local ww_ifs=""
+    for conf in /etc/mwall/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && ww_ifs="$ww_ifs $T_NAME"; done
     local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
-    local all_tuns="$gre_ifs $vx_ifs $wg_ifs"
+    local all_tuns="$gre_ifs $vx_ifs $ww_ifs $wg_ifs"
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"

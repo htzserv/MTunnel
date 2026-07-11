@@ -1,6 +1,6 @@
 cat << 'EOF_MWIRE' > /usr/bin/mwire
 #!/bin/bash
-# --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.2.1 (UI Patch) ---
+# --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.3.0 (Force Cache & UI) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 WG_DIR="/etc/wireguard"
@@ -31,20 +31,26 @@ draw_percentage() {
 }
 
 check_dependencies() {
-    if ! command -v wg >/dev/null 2>&1 || ! command -v qrencode >/dev/null 2>&1; then
-        echo -e ""
+    mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+    
+    if ! ls "$LOCAL_DIR/packages"/wireguard*.deb >/dev/null 2>&1; then
+        echo -e "\n  ${DIM}● Caching Crypto Packages for Offline Use...${NC}"
         (
-            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-            if ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
-                dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-                apt-get install -f -y -q >/dev/null 2>&1
-            else
-                apt-get update -y -q >/dev/null 2>&1
-                apt-get install -d -y -q wireguard wireguard-tools qrencode >/dev/null 2>&1
-                cp /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
-                apt-get install -y -q wireguard wireguard-tools qrencode >/dev/null 2>&1
-            fi
-        ) >/dev/null 2>&1 &
+            apt-get update -y -q >/dev/null 2>&1
+            apt-get clean >/dev/null 2>&1
+            apt-get install --download-only -y -q wireguard wireguard-tools qrencode >/dev/null 2>&1
+            apt-get install --download-only -y -q --reinstall wireguard wireguard-tools qrencode >/dev/null 2>&1
+            cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
+        ) &
+        draw_percentage $! "Building Local Cache"
+        sleep 1
+    fi
+
+    if ! command -v wg >/dev/null 2>&1 || ! command -v qrencode >/dev/null 2>&1; then
+        (
+            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
+            apt-get install -f -y -q >/dev/null 2>&1
+        ) &
         draw_percentage $! "Deploying Crypto Core"
         sleep 1
     fi
@@ -57,7 +63,7 @@ draw_mwire_header() {
         active_peers=$(wg show wg0 peers 2>/dev/null | wc -l)
     fi
     clear; echo ""
-    local str1=" MWIRE Crypto Matrix 1.2.1 "
+    local str1=" MWIRE Crypto Matrix 1.3.0 "
     local str2=" IP: $s_ip "
     local str3=" SERVER: $srv_status "
     local str4=" PEERS: $active_peers "

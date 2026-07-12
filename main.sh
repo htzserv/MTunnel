@@ -1,4 +1,3 @@
-cat << 'EOF_MAIN' > /usr/bin/mtunnel
 #!/bin/bash
 # --- MDesign Master Core | Central Dashboard v4.1.1 (UI Bugfix) ---
 
@@ -182,5 +181,3 @@ while true; do
         0) clear; exit 0 ;;
     esac
 done
-EOF_MAIN
-chmod +x /usr/bin/mtunnel

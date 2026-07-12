@@ -468,5 +468,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MWALL
-chmod +x /usr/bin/mwall

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MWALL Engine (mwall.sh) | MDesign Core v1.2.0 (Bulletproof vIP & Link Status) ---
+# --- MWALL Engine (mwall.sh) | MDesign Core v1.3.1 (Auto Dependency Fix) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mwall/tunnels"
@@ -45,19 +45,24 @@ draw_percentage() {
 }
 
 check_ww_binary() {
+    # چک کردن و نصب پیش‌نیازهای حیاتی لینوکس
+    if ! dpkg -s libatomic1 >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+        echo -e "\n  ${DIM}● Installing Core Dependencies (libatomic1, unzip)...${NC}"
+        ( apt-get update -y -q && apt-get install -y -q unzip libatomic1 ) >/dev/null 2>&1 &
+        draw_percentage $! "Installing OS Libs"
+    fi
+
     if [ ! -f "/usr/local/bin/waterwall" ]; then
-        echo -e "\n  ${DIM}● Deploying WaterWall Core Engine...${NC}"
+        echo -e "  ${DIM}● Deploying WaterWall Core Engine...${NC}"
         (
-            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+            mkdir -p "$LOCAL_DIR/packages" /tmp/ww_bin 2>/dev/null
             wget -qO /tmp/ww.zip "https://github.com/radkesvat/WaterWall/releases/download/v1.46.0/Waterwall-linux-clang-x64.zip" || \
             wget -qO /tmp/ww.zip "https://github.com/radkesvat/WaterWall/releases/latest/download/Waterwall-linux-x64.zip"
-            apt-get install -y -q unzip >/dev/null 2>&1
             unzip -q -o /tmp/ww.zip -d /tmp/ww_bin 2>/dev/null
-            WW_BIN=$(find /tmp/ww_bin -type f -name "*aterwall*" | head -n 1)
+            WW_BIN=$(find /tmp/ww_bin -type f -iname "*waterwall*" | head -n 1)
             if [ -n "$WW_BIN" ]; then
                 cp "$WW_BIN" /usr/local/bin/waterwall
                 chmod +x /usr/local/bin/waterwall
-                cp /usr/local/bin/waterwall "$LOCAL_DIR/"
             fi
             rm -rf /tmp/ww.zip /tmp/ww_bin
         ) >/dev/null 2>&1 &
@@ -68,6 +73,7 @@ check_ww_binary() {
 
 apply_tunnel() {
     local conf="$1"
+    local is_startup="$2"
     [ ! -s "$conf" ] && return
     source "$conf"
     
@@ -93,14 +99,14 @@ EOF
     },
     {
       "name": "tun", "type": "TunBuilder",
-      "settings": { "interface": "${T_NAME}", "ipv4": "${local_tun}/30", "mtu": 1400 }
+      "settings": { "name": "${T_NAME}", "interface": "${T_NAME}", "ipv4": "${local_tun}/30", "mtu": 1400 }
     }
 EOF
     else
         cat <<EOF >> "$CONF_DIR/${T_NAME}.json"
     {
       "name": "tun", "type": "TunBuilder",
-      "settings": { "interface": "${T_NAME}", "ipv4": "${local_tun}/30", "mtu": 1400 },
+      "settings": { "name": "${T_NAME}", "interface": "${T_NAME}", "ipv4": "${local_tun}/30", "mtu": 1400 },
       "next": "obfs"
     },
     {
@@ -121,12 +127,29 @@ EOF
     systemctl enable mwall@${T_NAME} >/dev/null 2>&1
     systemctl restart mwall@${T_NAME} >/dev/null 2>&1
     
-    # --- Bulletproof IFACE Waiter ---
     local t_wait=0
-    while ! ip link show "$T_NAME" >/dev/null 2>&1; do
-        sleep 0.5; ((t_wait++))
-        [ $t_wait -ge 12 ] && break
+    local t_success=false
+    while [ $t_wait -lt 10 ]; do
+        if ip link show "$T_NAME" >/dev/null 2>&1; then
+            t_success=true
+            break
+        fi
+        sleep 1
+        ((t_wait++))
     done
+
+    if [ "$t_success" = false ]; then
+        if [ "$is_startup" != "startup" ]; then
+            echo -e "\n  ${R}● ERROR: WaterWall failed to construct interface [${T_NAME}]!${NC}"
+            echo -e "  ${DIM}├─ Fetching diagnostic logs from WaterWall Core:${NC}"
+            journalctl -u mwall@${T_NAME}.service -n 6 --no-pager | sed 's/^/  │ /'
+            echo -e "  ${DIM}└─ Rolling back config to prevent ghost tunnels...${NC}"
+            sleep 5
+        fi
+        systemctl stop mwall@${T_NAME} 2>/dev/null
+        rm -f "$conf" "$CONF_DIR/${T_NAME}.json"
+        return
+    fi
 
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
@@ -156,7 +179,7 @@ EOF
 }
 
 apply_all_tunnels() {
-    for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_tunnel "$conf"; done
+    for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_tunnel "$conf" "startup"; done
 }
 
 draw_mwall_header() {
@@ -174,10 +197,7 @@ draw_mwall_header() {
             if ss -tn state established 2>/dev/null | grep -q "${REMOTE_PUB}:${WW_PORT}\b"; then is_connected=true; fi
         fi
 
-        if ip link show "$T_NAME" >/dev/null 2>&1; then
-            local st=$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)
-            if [[ "$st" == "up" || "$st" == "unknown" ]]; then ((active_tunnels++)); fi
-        fi
+        if ip link show "$T_NAME" >/dev/null 2>&1; then ((active_tunnels++)); fi
         total_vips=$((total_vips + MAX_IPS))
     done
 
@@ -188,7 +208,7 @@ draw_mwall_header() {
     fi
 
     clear; echo ""
-    local str1=" MWALL Core 1.2.0 "
+    local str1=" MWALL Core 1.3.1 "
     local str2=" IP: $s_ip "
     local str3=" TUNNELS: $active_tunnels "
     local str4=" V-IPS: $total_vips "
@@ -362,7 +382,7 @@ edit_tunnel() {
         echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_remote
         [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
         [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
-        apply_tunnel "$sel_conf"
+        apply_tunnel "$sel_conf" "update"
         echo -e "  ${G}● WaterWall Node re-routed successfully!${NC}"; sleep 1.5
     fi
 }
@@ -427,8 +447,11 @@ while true; do
            conf_path="$CONF_DIR/${t_name}.conf"
            
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nWW_PASS=$ww_pass\nWW_PORT=$ww_port\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub" > "$conf_path"
-           apply_tunnel "$conf_path"
-           echo -e "  ${G}● WaterWall Tunnel [${t_name}] deployed (Subnet: ${core_sub}.x)${NC}"; sleep 1.5 ;;
+           
+           apply_tunnel "$conf_path" "new"
+           if ip link show "$t_name" >/dev/null 2>&1; then
+               echo -e "  ${G}● WaterWall Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"; sleep 1.5
+           fi ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels configured yet!${NC}" && sleep 1.5 && continue
@@ -441,7 +464,7 @@ while true; do
                echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
                echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
                sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
-               apply_tunnel "$sel_conf"
+               apply_tunnel "$sel_conf" "update"
                echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
            fi ;;
         3) 

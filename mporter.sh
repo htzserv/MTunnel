@@ -1,4 +1,3 @@
-cat << 'EOF_MPORTER' > /usr/bin/mporter
 #!/bin/bash
 # --- MDesign Modular Core (mporter.sh) | MPorter Manager v5.3.0 (MWall Integration) ---
 
@@ -689,5 +688,3 @@ while true; do
         0) clear; exit 0 ;;
     esac
 done
-EOF_MPORTER
-chmod +x /usr/bin/mporter

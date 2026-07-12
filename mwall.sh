@@ -1,4 +1,3 @@
-cat << 'EOF_MWALL' > /usr/bin/mwall
 #!/bin/bash
 # --- MWALL Engine (mwall.sh) | MDesign Core v1.2.0 (Bulletproof vIP & Link Status) ---
 

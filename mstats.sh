@@ -1,4 +1,3 @@
-cat << 'EOF_MSTATS' > /usr/bin/mstats
 #!/bin/bash
 # --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.7.0 (WaterWall Integration) ---
 
@@ -513,5 +512,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MSTATS
-chmod +x /usr/bin/mstats

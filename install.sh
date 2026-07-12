@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v4.2.2 (Stable TTY Release) ---
+# --- MDesign Master Core | Central Installer v4.2.3 (Auto-Launch Force) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
@@ -36,4 +36,8 @@ for file in "${MODULES[@]}"; do
 done
 
 echo -e "  ${G}● Installation Complete! Local Backup Saved.${NC}"
-echo -e "  ${DIM}└─${NC} ${Y}Type ${W}mtunnel${Y} and press Enter to launch the dashboard!${NC}\n"
+echo -e "  ${DIM}└─ Launching Central Dashboard...${NC}\n"
+sleep 1.5
+
+# هکِ کیبورد برای باز شدنِ ۱۰۰٪ اتوماتیک داشبورد
+exec /usr/bin/mtunnel < /dev/tty

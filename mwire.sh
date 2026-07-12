@@ -1,4 +1,3 @@
-cat << 'EOF_MWIRE' > /usr/bin/mwire
 #!/bin/bash
 # --- MWIRE Crypto Secure Matrix (mwire.sh) | MDesign Core v1.3.2 (Session Bugfix) ---
 
@@ -344,5 +343,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MWIRE
-chmod +x /usr/bin/mwire

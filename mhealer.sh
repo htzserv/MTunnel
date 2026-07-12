@@ -1,4 +1,3 @@
-cat << 'EOF_MHEALER' > /usr/bin/mhealer
 #!/bin/bash
 # --- MDesign Modular Core (mhealer.sh) | MHealer Autonomous CPR v1.4.0 (Pure Healer) ---
 
@@ -157,5 +156,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MHEALER
-chmod +x /usr/bin/mhealer

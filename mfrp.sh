@@ -1,4 +1,3 @@
-cat << 'EOF_MFRP' > /usr/bin/mfrp
 #!/bin/bash
 # --- MFRP Reverse Proxy Matrix (mfrp.sh) | MDesign Core v2.4.1 (Golden Master) ---
 
@@ -316,5 +315,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MFRP
-chmod +x /usr/bin/mfrp

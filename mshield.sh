@@ -1,4 +1,3 @@
-cat << 'EOF_MSHIELD' > /usr/bin/mshield
 #!/bin/bash
 # --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & Kharej Receiver v2.3.1 ---
 
@@ -216,5 +215,3 @@ while true; do
         0) exit 0 ;;
     esac
 done
-EOF_MSHIELD
-chmod +x /usr/bin/mshield

@@ -1,6 +1,3 @@
-systemctl stop mweb 2>/dev/null
-
-cat << 'EOF_MWEB' > /usr/bin/mweb
 #!/bin/bash
 # --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v3.5.0 (WaterWall Integration) ---
 
@@ -655,7 +652,3 @@ while true; do
 EOF
     sleep 1.2
 done
-EOF_MWEB
-
-chmod +x /usr/bin/mweb
-systemctl restart mweb

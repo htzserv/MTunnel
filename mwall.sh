@@ -1,6 +1,6 @@
 cat << 'EOF_MWALL' > /usr/bin/mwall
 #!/bin/bash
-# --- MWALL Engine (mwall.sh) | MDesign Core v1.1.0 (Full Options & Hot-Swap) ---
+# --- MWALL Engine (mwall.sh) | MDesign Core v1.2.0 (Bulletproof vIP & Link Status) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mwall/tunnels"
@@ -122,7 +122,13 @@ EOF
     systemctl enable mwall@${T_NAME} >/dev/null 2>&1
     systemctl restart mwall@${T_NAME} >/dev/null 2>&1
     
-    sleep 3
+    # --- Bulletproof IFACE Waiter ---
+    local t_wait=0
+    while ! ip link show "$T_NAME" >/dev/null 2>&1; do
+        sleep 0.5; ((t_wait++))
+        [ $t_wait -ge 12 ] && break
+    done
+
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
     ip link set dev "$T_NAME" up 2>/dev/null
@@ -144,7 +150,7 @@ EOF
             o3=$(( (0x${hash:4:2} % 254) + 1 ))
             last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
-            ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null
+            ip addr add "$nip/32" dev "$T_NAME" 2>/dev/null
             echo $((idx + 1)) > "$s_file"
         done
     fi
@@ -156,22 +162,45 @@ apply_all_tunnels() {
 
 draw_mwall_header() {
     local s_ip=$(get_local_ip); local active_tunnels=0; local total_vips=0
+    local is_connected=false
+    local link_status="${DIM}OFFLINE${NC}"
+    local link_raw="OFFLINE"
+
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue; source "$conf"
-        if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then ((active_tunnels++)); fi
+        
+        if [ "$TYPE" == "1" ]; then
+            if ss -tn state established 2>/dev/null | grep -q ":${WW_PORT}\b"; then is_connected=true; fi
+        else
+            if ss -tn state established 2>/dev/null | grep -q "${REMOTE_PUB}:${WW_PORT}\b"; then is_connected=true; fi
+        fi
+
+        if ip link show "$T_NAME" >/dev/null 2>&1; then
+            local st=$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)
+            if [[ "$st" == "up" || "$st" == "unknown" ]]; then ((active_tunnels++)); fi
+        fi
         total_vips=$((total_vips + MAX_IPS))
     done
+
+    if [ "$is_connected" = true ]; then 
+        link_status="${G}● CONNECTED${NC}"; link_raw="● CONNECTED"
+    elif [ "$active_tunnels" -gt 0 ]; then
+        link_status="${Y}○ WAITING${NC}"; link_raw="○ WAITING"
+    fi
+
     clear; echo ""
-    local str1=" MWALL Core 1.1.0 (WaterWall) "
+    local str1=" MWALL Core 1.2.0 "
     local str2=" IP: $s_ip "
-    local str3=" ACTIVE TUNNELS: $active_tunnels "
-    local str4=" TOTAL V-IPS: $total_vips "
-    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} ))
+    local str3=" TUNNELS: $active_tunnels "
+    local str4=" V-IPS: $total_vips "
+    local str5=" LINK: $link_raw "
+    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} + 1 + ${#str5} ))
     local pad_len=$(( 92 - raw_len ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
+    
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} ACTIVE TUNNELS:${NC}${G} ${active_tunnels} ${NC}${B}│${NC}${DIM} TOTAL V-IPS:${NC}${Y} ${total_vips} ${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} TUNNELS:${NC}${G} ${active_tunnels} ${NC}${B}│${NC}${DIM} V-IPS:${NC}${Y} ${total_vips} ${NC}${B}│${NC}${DIM} LINK:${NC} ${link_status} ${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -179,7 +208,16 @@ show_mwall_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue; source "$conf"
-        mapfile -t v_ips < <(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+        
+        local c_sub="${CORE_SUBNET:-10.88.${TUN_ID}}"
+        local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+        local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
+
+        mapfile -t all_ips < <(ip -4 addr show dev "$T_NAME" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
+        local v_ips=()
+        for ip in "${all_ips[@]}"; do
+            if [[ "$ip" != "$main_lip" ]]; then v_ips+=("$ip"); fi
+        done
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         printf "  ${B}│${NC} %b▼ Tunnel: %-80s%b ${B}│${NC}\n" "${Y}" "${T_NAME} [L3-WaterWall]" "${NC}"
@@ -187,10 +225,6 @@ show_mwall_monitor() {
         printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
         echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
 
-        local c_sub="${CORE_SUBNET:-10.88.${TUN_ID}}"
-        local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
-        local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
-        
         ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         if [ $? -eq 0 ]; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"

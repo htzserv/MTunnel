@@ -1,4 +1,3 @@
-cat << 'EOF_MINTERFACE' > /usr/bin/minterface
 #!/bin/bash
 # --- MDesign Modular Core (minterface.sh) | Interface Mapper v2.0.0 ---
 
@@ -137,5 +136,3 @@ render_matrix() {
 }
 
 while true; do draw_header; render_matrix; break; done
-EOF_MINTERFACE
-chmod +x /usr/bin/minterface

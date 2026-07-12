@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v4.2.5 (Clean Exec) ---
+# --- MDesign Master Core | Central Installer v4.2.6 (Bulletproof Launch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
@@ -24,6 +24,9 @@ for file in "${MODULES[@]}"; do
         echo -e "  ${R}● Critical Error: Failed to download $file. Check network or GitHub URL.${NC}"
         exit 1
     fi
+    
+    # جادوی اصلی: پاک کردن کاراکترهای مخرب ویندوزی (CRLF) که باعث کرش لینوکس می‌شن
+    sed -i 's/\r$//' "$LOCAL_DIR/$file"
 done
 
 echo -e "  ${DIM}├─ Deploying binary modules to system core...${NC}"
@@ -39,4 +42,9 @@ echo -e "  ${G}● Installation Complete! Local Backup Saved.${NC}"
 echo -e "  ${DIM}└─ Launching Central Dashboard...${NC}\n"
 sleep 1.5
 
-exec mtunnel
+# اجرای قدرتمند داشبورد با تضمین اتصال کیبورد
+if [ -t 0 ]; then
+    bash /usr/bin/mtunnel
+else
+    bash /usr/bin/mtunnel < /dev/tty
+fi

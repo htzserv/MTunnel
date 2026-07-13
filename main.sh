@@ -1,11 +1,12 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.0.0 (Custom GitHub Structure) ---
+# --- MDesign Master Core | Central Dashboard v7.4.0 (Fixed GitHub Paths) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
 
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
-REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main/main"
+# 🌟 آدرس اصلاح شد 🌟
+REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 LOCAL_DIR="/root/mtunnel"
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
@@ -42,7 +43,7 @@ run_mod() {
             cat "$LOCAL_DIR/${mod}.sh" > "/usr/bin/$mod"
             chmod +x "/usr/bin/$mod"
         else 
-            echo -e "  ${R}● Error: Module not found in 'main' folder!${NC}"; sleep 2; return
+            echo -e "  ${R}● Error: Module not found on GitHub!${NC}"; sleep 2; return
         fi
     fi
     $mod
@@ -59,7 +60,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}                      ${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -79,14 +80,8 @@ show_tunnel_hub() {
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core Dashboard${NC}\n"
         echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
         case $t_opt in
-            1) run_mod "mgre" ;; 
-            2) run_mod "mxlan" ;; 
-            3) run_mod "mwire" ;; 
-            4) run_mod "ml2tp" ;; 
-            5) run_mod "mhysteria" ;; 
-            6) run_mod "mfrp" ;; 
-            7) run_mod "mbackhaul" ;; 
-            0) break ;;
+            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mwire" ;; 4) run_mod "ml2tp" ;; 
+            5) run_mod "mhysteria" ;; 6) run_mod "mfrp" ;; 7) run_mod "mbackhaul" ;; 0) break ;;
         esac
     done
 }
@@ -112,12 +107,8 @@ while true; do
 
     case $opt in
         1) show_tunnel_hub ;;
-        2) run_mod "mporter" ;; 
-        3) run_mod "minterface" ;; 
-        4) run_mod "mshield" ;;
-        5) run_mod "mstats" ;; 
-        6) run_mod "mhealer" ;; 
-        7) run_mod "mdiag" ;;
+        2) run_mod "mporter" ;; 3) run_mod "minterface" ;; 4) run_mod "mshield" ;;
+        5) run_mod "mstats" ;; 6) run_mod "mhealer" ;; 7) run_mod "mdiag" ;;
         
         8)
            echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOADER ]${NC}"
@@ -131,7 +122,6 @@ while true; do
            if unzip -t /tmp/repo.zip >/dev/null 2>&1; then
                (
                    unzip -q -o /tmp/repo.zip -d /tmp/ 2>/dev/null
-                   # کپی کردن فقط از پوشه packages داخل زیپ
                    cp -rf /tmp/MTunnel-main/packages/* "$LOCAL_DIR/packages/" 2>/dev/null
                    chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null
                    
@@ -146,8 +136,7 @@ while true; do
                echo -e "\n  ${G}● All Binary Files successfully downloaded and installed!${NC}"; sleep 2
            else
                echo -e "\n  ${R}● Error downloading zip archive from GitHub!${NC}"; sleep 2
-           fi
-           ;;
+           fi ;;
 
         9) 
            echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
@@ -165,17 +154,13 @@ while true; do
                    cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null; chmod +x "/usr/bin/$mod_name" 2>/dev/null
                done
                echo -e "\n  ${G}● Core scripts fully upgraded!${NC}"; sleep 1.5; exec "$0"
-           else 
-               echo -e "\n  ${R}● Update aborted due to network errors.${NC}"; sleep 2
-           fi
-           ;;
+           else echo -e "\n  ${R}● Update aborted due to network errors.${NC}"; sleep 2; fi ;;
 
         10)
            echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
            if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
                echo -e "  ${R}● No offline scripts found in /root/mtunnel/!${NC}"; sleep 2; continue
            fi
-           
            for file in "$LOCAL_DIR"/*.sh; do
                mod_name=$(basename "$file" .sh)
                [ "$mod_name" == "main" ] && mod_name="mtunnel"
@@ -183,14 +168,11 @@ while true; do
                cat "$file" > "/usr/bin/$mod_name" 2>/dev/null
                chmod +x "/usr/bin/$mod_name" 2>/dev/null
            done
-           
            [ -f "$LOCAL_DIR/packages/bh" ] && { cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh 2>/dev/null; chmod +x /usr/local/bin/bh 2>/dev/null; }
            [ -f "$LOCAL_DIR/packages/gost" ] && { cp "$LOCAL_DIR/packages/gost" /usr/local/bin/gost 2>/dev/null; chmod +x /usr/local/bin/gost 2>/dev/null; }
            [ -f "$LOCAL_DIR/packages/frps" ] && { cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps 2>/dev/null; chmod +x /usr/local/bin/frps 2>/dev/null; }
            [ -f "$LOCAL_DIR/packages/frpc" ] && { cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc 2>/dev/null; chmod +x /usr/local/bin/frpc 2>/dev/null; }
-           
-           echo -e "\n  ${G}● Local Deployment Complete!${NC}"; sleep 1.5; exec "$0"
-           ;;
+           echo -e "\n  ${G}● Local Deployment Complete!${NC}"; sleep 1.5; exec "$0" ;;
            
         11)
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL infrastructure traces? (y/n): ${NC}"; read del_confirm
@@ -198,11 +180,7 @@ while true; do
                systemctl stop mgre.service ml2tp.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service frps frpc mhysteria@* mbackhaul@* 2>/dev/null
                rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /usr/bin/m* /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frp* /root/mtunnel
                echo -e "  ${G}● Purge complete. System is vanilla.${NC}\n"; exit 0
-           fi
-           ;;
-           
-        0) 
-           clear; exit 0 
-           ;;
+           fi ;;
+        0) clear; exit 0 ;;
     esac
 done

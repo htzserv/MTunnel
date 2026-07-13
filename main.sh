@@ -1,10 +1,12 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v6.1.0 (Binary Downloader Included) ---
+# --- MDesign Master Core | Central Dashboard v7.1.0 (Dual-Folder Engine) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
+
+# آدرس‌های گیت‌هاب بر اساس ساختار دو پوشه‌ای (main و packages)
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
-REPO_RAW="https://raw.githubusercontent.com/htzserv/MTunnel/main/mtunnel"
+REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main/main"
 LOCAL_DIR="/root/mtunnel"
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
@@ -15,7 +17,6 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-# --- انیمیشن و پروگرس بار ---
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=25; local progress=0
     tput civis
@@ -36,12 +37,12 @@ run_mod() {
     if [ ! -x "/usr/bin/$mod" ]; then
         echo -e "\n  ${Y}● Fetching module [${W}${mod}${Y}] on-demand from GitHub...${NC}"
         mkdir -p "$LOCAL_DIR" 2>/dev/null
-        wget --timeout=10 --tries=2 -qO "$LOCAL_DIR/${mod}.sh" "$REPO_RAW/${mod}.sh?v=$(date +%s)"
+        wget --timeout=10 --tries=2 -qO "$LOCAL_DIR/${mod}.sh" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)"
         if [ -s "$LOCAL_DIR/${mod}.sh" ]; then
             sed -i 's/\r$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null
             cat "$LOCAL_DIR/${mod}.sh" > "/usr/bin/$mod"
             chmod +x "/usr/bin/$mod"
-        else echo -e "  ${R}● Error: Module not found!${NC}"; sleep 2; return; fi
+        else echo -e "  ${R}● Error: Module not found in 'main' folder!${NC}"; sleep 2; return; fi
     fi
     $mod
 }
@@ -57,7 +58,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v6.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}                      ${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -95,7 +96,7 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC} ${DIM}(Mhealer)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Network Diagnostics Tools${NC} ${DIM}(Mdiag)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Download Binary Files${NC}      ${DIM}(Fetch Backhaul, Gost, FRP, etc.)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Download Binary Packages${NC}   ${DIM}(Fetch Backhaul, Gost, FRP from GitHub)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Update Core Scripts${NC}        ${DIM}(Sync .sh files from GitHub)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${R}Nuclear Wipe${NC}               ${DIM}(Delete ALL Tunnels & Traces)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
@@ -107,9 +108,9 @@ while true; do
         5) run_mod "mstats" ;; 6) run_mod "mhealer" ;; 7) run_mod "mdiag" ;;
         
         8)
-           echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOAODER ]${NC}"
-           echo -e "  ${C}●${NC} ${W}Downloading required engines from GitHub repository...${NC}"
-           mkdir -p "$LOCAL_DIR" 2>/dev/null
+           echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOADER ]${NC}"
+           echo -e "  ${C}●${NC} ${W}Downloading required packages from GitHub repository...${NC}"
+           mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
            apt-get install -y -q unzip >/dev/null 2>&1
            
            ( wget -qO /tmp/repo.zip "$REPO_ZIP" ) &
@@ -118,12 +119,13 @@ while true; do
            if unzip -t /tmp/repo.zip >/dev/null 2>&1; then
                (
                    unzip -q -o /tmp/repo.zip -d /tmp/ 2>/dev/null
-                   cp -rf /tmp/MTunnel-main/mtunnel/* "$LOCAL_DIR/" 2>/dev/null
+                   cp -rf /tmp/MTunnel-main/packages/* "$LOCAL_DIR/packages/" 2>/dev/null
+                   chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null
                    
-                   [ -f "$LOCAL_DIR/bh" ] && { cp "$LOCAL_DIR/bh" /usr/local/bin/bh; chmod +x /usr/local/bin/bh; }
-                   [ -f "$LOCAL_DIR/gost" ] && { cp "$LOCAL_DIR/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; }
-                   [ -f "$LOCAL_DIR/frps" ] && { cp "$LOCAL_DIR/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; }
-                   [ -f "$LOCAL_DIR/frpc" ] && { cp "$LOCAL_DIR/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; }
+                   [ -f "$LOCAL_DIR/packages/bh" ] && { cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh; chmod +x /usr/local/bin/bh; }
+                   [ -f "$LOCAL_DIR/packages/gost" ] && { cp "$LOCAL_DIR/packages/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; }
+                   [ -f "$LOCAL_DIR/packages/frps" ] && { cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; }
+                   [ -f "$LOCAL_DIR/packages/frpc" ] && { cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; }
                    
                    rm -rf /tmp/MTunnel-main /tmp/repo.zip
                ) &
@@ -135,11 +137,11 @@ while true; do
 
         9) 
            echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
-           mkdir -p "$LOCAL_DIR/packages" 2>/dev/null; CACHE_BUST=$(date +%s); download_success=true
+           mkdir -p "$LOCAL_DIR" 2>/dev/null; CACHE_BUST=$(date +%s); download_success=true
            MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
            for file in "${MODULES[@]}"; do
                echo -e "  ${DIM}├─ Fetching $file...${NC}"
-               wget --timeout=10 --tries=2 -qO "$LOCAL_DIR/$file" "$REPO_RAW/${file}?v=$CACHE_BUST"
+               wget --timeout=10 --tries=2 -qO "$LOCAL_DIR/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
                if [ ! -s "$LOCAL_DIR/$file" ]; then download_success=false; break; fi
                sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null
            done

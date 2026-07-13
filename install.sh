@@ -1,9 +1,7 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v7.1.0 (Lite / Silent Edition) ---
+# --- MDesign Master Core | Central Installer v7.2.0 (Bulletproof) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-
-# مسیر پوشه اسکریپت‌ها تو گیت‌هاب
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main/main"
 LOCAL_DIR="/root/mtunnel"
 
@@ -15,7 +13,6 @@ echo -e "  ${B}╰────────────────────�
 echo -e "  ${Y}● Fetching Core Scripts (Lite Version) from Github...${NC}"
 mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 CACHE_BUST=$(date +%s)
-
 MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
 
 for file in "${MODULES[@]}"; do
@@ -35,7 +32,6 @@ echo -e "\n  ${G}● Core Scripts Installed Successfully!${NC}"
 echo -e "  ${DIM}└─ Taking over terminal and launching Dashboard...${NC}\n"
 sleep 1.5
 
-# اجرای ضدگلوله (بدون ارور success)
 if [ -t 0 ]; then
     bash /usr/bin/mtunnel
 else

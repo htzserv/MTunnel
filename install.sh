@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v7.2.0 (Bulletproof) ---
+# --- MDesign Master Core | Central Installer v7.3.0 (Bulletproof Auto-Launch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main/main"
@@ -26,15 +26,24 @@ for file in "${MODULES[@]}"; do
     
     cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null
     chmod +x "/usr/bin/$mod_name" 2>/dev/null
+    
+    # 🌟 ساخت بکاپ اجرایی برای دور زدن باگ لینوکس 🌟
+    if [ "$mod_name" == "mtunnel" ]; then
+        cp "/usr/bin/$mod_name" "/usr/local/bin/$mod_name" 2>/dev/null
+        chmod +x "/usr/local/bin/$mod_name" 2>/dev/null
+    fi
 done
 
 echo -e "\n  ${G}● Core Scripts Installed Successfully!${NC}"
 echo -e "  ${DIM}└─ Taking over terminal and launching Dashboard...${NC}\n"
 sleep 1.5
 
+# پاک کردن کَشِ مسیرها برای اجرای قطعی
+hash -r 2>/dev/null
+
 if [ -t 0 ]; then
-    bash /usr/bin/mtunnel
+    mtunnel
 else
-    bash /usr/bin/mtunnel < /dev/tty
+    mtunnel < /dev/tty
 fi
 exit 0

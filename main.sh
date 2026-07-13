@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.3.0 (Stable & Local Deploy) ---
+# --- MDesign Master Core | Central Dashboard v8.0.0 (Custom GitHub Structure) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -59,7 +59,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}                      ${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -79,8 +79,14 @@ show_tunnel_hub() {
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core Dashboard${NC}\n"
         echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
         case $t_opt in
-            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mwire" ;; 4) run_mod "ml2tp" ;; 
-            5) run_mod "mhysteria" ;; 6) run_mod "mfrp" ;; 7) run_mod "mbackhaul" ;; 0) break ;;
+            1) run_mod "mgre" ;; 
+            2) run_mod "mxlan" ;; 
+            3) run_mod "mwire" ;; 
+            4) run_mod "ml2tp" ;; 
+            5) run_mod "mhysteria" ;; 
+            6) run_mod "mfrp" ;; 
+            7) run_mod "mbackhaul" ;; 
+            0) break ;;
         esac
     done
 }
@@ -125,6 +131,7 @@ while true; do
            if unzip -t /tmp/repo.zip >/dev/null 2>&1; then
                (
                    unzip -q -o /tmp/repo.zip -d /tmp/ 2>/dev/null
+                   # کپی کردن فقط از پوشه packages داخل زیپ
                    cp -rf /tmp/MTunnel-main/packages/* "$LOCAL_DIR/packages/" 2>/dev/null
                    chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null
                    
@@ -166,7 +173,7 @@ while true; do
         10)
            echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
            if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
-               echo -e "  ${R}● No offline files found in /root/mtunnel/!${NC}"; sleep 2; continue
+               echo -e "  ${R}● No offline scripts found in /root/mtunnel/!${NC}"; sleep 2; continue
            fi
            
            for file in "$LOCAL_DIR"/*.sh; do

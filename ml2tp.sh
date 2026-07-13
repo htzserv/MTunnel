@@ -1,17 +1,60 @@
 #!/bin/bash
-# --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v1.1.0 (NAT-Bypass & GitHub Edition) ---
+# --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v1.2.0 (Offline & Auto-Patch Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/ml2tp/tunnels"
 SERVICE_FILE="/etc/systemd/system/ml2tp.service"
 STATE_DIR="/etc/ml2tp/states"
+LOCAL_DIR="/root/mtunnel"
 
-mkdir -p "$CONF_DIR" "$STATE_DIR"
+mkdir -p "$CONF_DIR" "$STATE_DIR" "$LOCAL_DIR/packages"
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+draw_progress_bar() {
+    local pid=$1; local text=$2; local width=25; local progress=0
+    tput civis
+    while kill -0 $pid 2>/dev/null; do
+        ((progress++)); if (( progress > 95 )); then progress=95; fi
+        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
+        local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+        printf "\r  %b⟳%b %b%-22s%b %b[%b%b%b%b]%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$M" "$bar" "$DIM" "$empty_bar" "$M" "$NC" "$C" "$progress" "$NC"
+        sleep 0.2
+    done
+    local bar=$(printf "%${width}s" "" | tr ' ' '#')
+    printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
+    tput cnorm
+}
+
+check_dependencies() {
+    local missing=0
+    modinfo l2tp_eth >/dev/null 2>&1 || missing=1
+    
+    if [ "$missing" -eq 1 ]; then
+        echo -e "\n  ${DIM}● Missing L2TP Kernel Modules. Caching and Patching OS...${NC}"
+        (
+            apt-get update -y -q >/dev/null 2>&1
+            
+            # دانلود و ذخیره در پوشه آفلاینِ سیستم
+            apt-get install --download-only -y -q iproute2 linux-modules-extra-$(uname -r) >/dev/null 2>&1
+            cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
+            
+            # نصب قطعی فایل‌های کَش شده
+            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
+            apt-get install -f -y -q >/dev/null 2>&1
+            
+            modprobe l2tp_core 2>/dev/null
+            modprobe l2tp_netlink 2>/dev/null
+            modprobe l2tp_eth 2>/dev/null
+            modprobe l2tp_ip 2>/dev/null
+        ) >/dev/null 2>&1 &
+        draw_progress_bar $! "Patching Linux Kernel"
+        sleep 1
+    fi
 }
 
 apply_tunnel() {
@@ -24,22 +67,19 @@ apply_tunnel() {
     
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
     
-    # پاکسازی سشن و تونل قبلی
     ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1
     ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1
     ip link del "$T_NAME" >/dev/null 2>&1
 
-    # فعال‌سازی ماژول‌های حیاتی کرنل (تضمین اجرای L2TP)
     modprobe l2tp_core 2>/dev/null
     modprobe l2tp_netlink 2>/dev/null
     modprobe l2tp_eth 2>/dev/null
+    modprobe l2tp_ip 2>/dev/null
 
-    # 🌟 سیستم هوشمند بای‌پس NAT 🌟
-    # پیدا کردن آی‌پی واقعیِ بایند شده روی کارت شبکه برای جلوگیری از ارور "Cannot assign requested address"
+    # موتورِ بای‌پسِ فایروال و NAT ابری
     local REAL_LOCAL=$(ip route get "$REMOTE_PUB" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1)
     [ -z "$REAL_LOCAL" ] && REAL_LOCAL=$(hostname -I | awk '{print $1}')
 
-    # ساخت تونل L2TPv3 بر بستر UDP با لاگ‌گیریِ دقیق ارورها
     ERR_TUN=$(ip l2tp add tunnel tunnel_id "$TUN_ID" peer_tunnel_id "$TUN_ID" encap udp local "$REAL_LOCAL" remote "$REMOTE_PUB" udp_sport "$TUN_PORT" udp_dport "$TUN_PORT" 2>&1)
     ERR_SES=$(ip l2tp add session name "$T_NAME" tunnel_id "$TUN_ID" session_id "$TUN_ID" peer_session_id "$TUN_ID" 2>&1)
     
@@ -83,7 +123,7 @@ draw_ml2tp_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" ML2TP Core 1.1.0 (NAT-Bypass) "
+    local str1=" ML2TP Core 1.2.0 (NAT-Bypass) "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -228,6 +268,7 @@ while true; do
     echo -ne "  ${C}ML2TP ❯❯ ${NC}"; read opt
     case $opt in
         1) 
+           check_dependencies
            echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${C}L2TPv3 Native Engine (Layer 3 over UDP)${NC}\n  ${DIM}└────────────────────────────────────────────────────────${NC}"
            
            while true; do

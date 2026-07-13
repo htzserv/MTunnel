@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v6.0.0 (Native L2TP) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v6.1.0 (Hysteria2 & L2TPv3 Sync) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -179,13 +179,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 6.0.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 6.1.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 6.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 6.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -237,6 +237,7 @@ smart_map() {
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && active_ifs+=($(grep -E "^T_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'")); done
     for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && active_ifs+=($(grep -E "^BR_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'")); done
     for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && active_ifs+=($(grep -E "^T_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'")); done
+    for conf in /etc/mhysteria/tunnels/*.conf; do [ -f "$conf" ] && active_ifs+=($(grep -E "^T_NAME=" "$conf" | cut -d= -f2 | tr -d '"' | tr -d "'")); done
     shopt -u nullglob
 
     local gre_ifs=()
@@ -332,7 +333,8 @@ smart_map() {
         if [[ "$selected_if" != "Manual" ]]; then
             if [ -f "/etc/mgre/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mgre/tunnels/${selected_if}.conf" | cut -d= -f2)
             elif [ -f "/etc/mgre/vxlan/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mgre/vxlan/${selected_if}.conf" | cut -d= -f2)
-            elif [ -f "/etc/ml2tp/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/ml2tp/tunnels/${selected_if}.conf" | cut -d= -f2); fi
+            elif [ -f "/etc/ml2tp/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/ml2tp/tunnels/${selected_if}.conf" | cut -d= -f2)
+            elif [ -f "/etc/mhysteria/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mhysteria/tunnels/${selected_if}.conf" | cut -d= -f2); fi
         fi
         
         if [ -z "$remote_pub" ]; then echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
@@ -451,7 +453,8 @@ edit_mapping() {
                     local remote_pub=""
                     if [ -f "/etc/mgre/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mgre/tunnels/${selected_if}.conf" | cut -d= -f2)
                     elif [ -f "/etc/mgre/vxlan/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mgre/vxlan/${selected_if}.conf" | cut -d= -f2)
-                    elif [ -f "/etc/ml2tp/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/ml2tp/tunnels/${selected_if}.conf" | cut -d= -f2); fi
+                    elif [ -f "/etc/ml2tp/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/ml2tp/tunnels/${selected_if}.conf" | cut -d= -f2)
+                    elif [ -f "/etc/mhysteria/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mhysteria/tunnels/${selected_if}.conf" | cut -d= -f2); fi
                     
                     if [ -z "$remote_pub" ]; then echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
                     else echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"; fi

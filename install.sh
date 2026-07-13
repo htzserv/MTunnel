@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v4.2.6 (Bulletproof Launch) ---
+# --- MDesign Master Core | Central Installer v4.3.0 (Native L2TP Era) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
@@ -15,7 +15,7 @@ mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 
 echo -e "  ${Y}● Fetching latest Core Modules from Github...${NC}"
 CACHE_BUST=$(date +%s)
-MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mwall.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
 
 for file in "${MODULES[@]}"; do
     echo -e "  ${DIM}├─ Syncing $file...${NC}"
@@ -24,8 +24,6 @@ for file in "${MODULES[@]}"; do
         echo -e "  ${R}● Critical Error: Failed to download $file. Check network or GitHub URL.${NC}"
         exit 1
     fi
-    
-    # جادوی اصلی: پاک کردن کاراکترهای مخرب ویندوزی (CRLF) که باعث کرش لینوکس می‌شن
     sed -i 's/\r$//' "$LOCAL_DIR/$file"
 done
 
@@ -33,7 +31,6 @@ echo -e "  ${DIM}├─ Deploying binary modules to system core...${NC}"
 for file in "${MODULES[@]}"; do
     mod_name="${file%.sh}"
     [ "$mod_name" == "main" ] && mod_name="mtunnel"
-    
     cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name"
     chmod +x "/usr/bin/$mod_name"
 done
@@ -42,9 +39,4 @@ echo -e "  ${G}● Installation Complete! Local Backup Saved.${NC}"
 echo -e "  ${DIM}└─ Launching Central Dashboard...${NC}\n"
 sleep 1.5
 
-# اجرای قدرتمند داشبورد با تضمین اتصال کیبورد
-if [ -t 0 ]; then
-    bash /usr/bin/mtunnel
-else
-    bash /usr/bin/mtunnel < /dev/tty
-fi
+if [ -t 0 ]; then bash /usr/bin/mtunnel; else bash /usr/bin/mtunnel < /dev/tty; fi

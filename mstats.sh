@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v2.7.0 (WaterWall Integration) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v3.0.0 (L2TPv3 Native) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -18,8 +18,7 @@ draw_percentage() {
     local pid=$1; local text=$2; local progress=0
     tput civis
     while kill -0 $pid 2>/dev/null; do
-        ((progress++))
-        if (( progress > 95 )); then progress=95; fi
+        ((progress++)); if (( progress > 95 )); then progress=95; fi
         printf "\r  %b⟳%b %b%-25s%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$C" "$progress" "$NC"
         sleep 0.2
     done
@@ -32,7 +31,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 2.7.0 "
+    local str1=" MStats Omni-Radar Core 3.0.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     if (( pad_len < 0 )); then pad_len=0; fi
@@ -123,11 +122,11 @@ show_live_radar() {
         for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
         local vx_ifs=""
         for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
-        local ww_ifs=""
-        for conf in /etc/mwall/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && ww_ifs="$ww_ifs $T_NAME"; done
+        local l2tp_ifs=""
+        for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && l2tp_ifs="$l2tp_ifs $T_NAME"; done
         local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
 
-        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $ww_ifs $wg_ifs"
+        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $l2tp_ifs $wg_ifs"
         for iface in $all_ifs; do
             if [ -z "${rx_old[$iface]}" ] && [ -d "/sys/class/net/$iface" ]; then
                 rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface")
@@ -137,9 +136,7 @@ show_live_radar() {
         local frp_active=false
         if systemctl is-active --quiet frps 2>/dev/null || systemctl is-active --quiet frpc 2>/dev/null; then
             frp_active=true
-            if [ -z "${rx_old["FRP_TUNNEL"]}" ]; then
-                rx_old["FRP_TUNNEL"]=$(get_frp_rx); tx_old["FRP_TUNNEL"]=$(get_frp_tx)
-            fi
+            if [ -z "${rx_old["FRP_TUNNEL"]}" ]; then rx_old["FRP_TUNNEL"]=$(get_frp_rx); tx_old["FRP_TUNNEL"]=$(get_frp_tx); fi
         fi
 
         local active_count=0
@@ -162,7 +159,7 @@ show_live_radar() {
 
         [ -n "$phys_ifs" ] && render_category "WAN / PHYS" "${W}" "$phys_ifs"
         [ -n "$gre_ifs" ] && render_category "GRE / L3" "${C}" "$gre_ifs"
-        [ -n "$ww_ifs" ] && render_category "WATERWALL / L3" "${C}" "$ww_ifs"
+        [ -n "$l2tp_ifs" ] && render_category "L2TPv3 / L3" "${Y}" "$l2tp_ifs"
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs"
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
 
@@ -171,7 +168,6 @@ show_live_radar() {
             local r_new=$(get_frp_rx); local t_new=$(get_frp_tx)
             local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
             active_count=$((active_count + 1))
-            
             local c_rx="${DIM}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
             local c_tx="${DIM}"; [ "$tx_sec" -gt 0 ] && c_tx="${Y}"
             
@@ -198,7 +194,7 @@ show_total_usage() {
     local all_tuns=""
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
     for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $BR_NAME"; done
-    for conf in /etc/mwall/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
+    for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
     [ -f "/etc/wireguard/wg0.conf" ] && all_tuns="$all_tuns wg0"
     
     echo -e "  ${B}╭──────────────────┬───────────────────────┬───────────────────────┬────────────────────────╮${NC}"
@@ -215,7 +211,7 @@ show_total_usage() {
 
     if [ -n "$all_tuns" ]; then
         echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, WATERWALL, WG)"
+        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, L2TP, WG)"
         echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
         for iface in $all_tuns; do
             [ ! -d "/sys/class/net/$iface" ] && continue
@@ -260,8 +256,7 @@ show_connection_tracker() {
             local s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
             local local_ports=$(awk -F'=' '/^localPort/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' ' | sort -u | xargs | sed 's/ /,/g')
             if [ -n "$s_addr" ]; then
-                local p_str="${local_ports:0:17}"
-                [ ${#local_ports} -gt 17 ] && p_str="${p_str}..."
+                local p_str="${local_ports:0:17}"; [ ${#local_ports} -gt 17 ] && p_str="${p_str}..."
                 printf "  ${B}│${NC} ${Y}%-7s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC}\n" "FRP" "Client (KH)" "$s_addr" "$p_str"
                 has_frp=true
             fi
@@ -272,21 +267,20 @@ show_connection_tracker() {
     echo -e "  ${DIM}┌─[ LIVE CONNECTION TRACKER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Scanning TCP/UDP sockets for Core Engines...${NC}\n"
 
-    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|frps|frpc|waterwall' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
+    local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|frps|frpc' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${C}%-13s${NC} ${B}│${NC} ${M}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "RANK" "LOCAL PORT" "CORE ENGINE" "CONNECTIONS"
     echo -e "  ${B}├─────────┼───────────────┼─────────────────┼─────────────┤${NC}"
     
-    if [ -z "$core_ports" ]; then
-        printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Proxy/Tunnel services running."
+    if [ -z "$core_ports" ]; then printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active Proxy/Tunnel services running."
     else
         local top_ports=$(ss -tun state established 2>/dev/null | awk 'NR>1 {print $4}' | rev | cut -d: -f1 | rev | grep -E "^($core_ports)$" | sort | uniq -c | sort -nr | head -n 5)
         local rank=1
         if [ -z "$top_ports" ]; then printf "  ${B}│${NC} ${DIM}%-51s${NC} ${B}│${NC}\n" "  No active external connections to Core Engines."
         else
             while read -r count port; do
-                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy|frps|frpc|waterwall)' | head -n 1)
+                local app_name=$(ss -tulpn 2>/dev/null | grep ":$port " | grep -iE -o '(gost|haproxy|frps|frpc)' | head -n 1)
                 [ -z "$app_name" ] && app_name="Unknown"; app_name=${app_name^^}
                 printf "  ${B}│${NC} ${DIM}#%-6s${NC} ${B}│${NC} ${W}Port %-8s${NC} ${B}│${NC} ${Y}%-15s${NC} ${B}│${NC} ${G}%-11s${NC} ${B}│${NC}\n" "$rank" "$port" "$app_name" "$count"
                 ((rank++))
@@ -299,12 +293,10 @@ show_connection_tracker() {
     printf "  ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${Y}%-24s${NC} ${B}│${NC} ${M}%-11s${NC} ${B}│${NC}\n" "RANK" "TOP CLIENT IPs (PEERS)" "CONNECTIONS"
     echo -e "  ${B}├─────────┼──────────────────────────┼─────────────┤${NC}"
     
-    if [ -z "$core_ports" ]; then
-        printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
+    if [ -z "$core_ports" ]; then printf "  ${B}│${NC} ${DIM}%-46s${NC} ${B}│${NC}\n" "  No active external clients."
     else
         local top_ips=$(ss -tnH state established 2>/dev/null | awk -v cp="^(${core_ports})$" '{
-            local_addr = $(NF-1); remote_addr = $NF;
-            n = split(local_addr, a, ":"); port = a[n];
+            local_addr = $(NF-1); remote_addr = $NF; n = split(local_addr, a, ":"); port = a[n];
             if(port ~ cp) print remote_addr;
         }' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 5)
         
@@ -330,10 +322,10 @@ qos_manager() {
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
     local vx_ifs=""
     for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
-    local ww_ifs=""
-    for conf in /etc/mwall/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && ww_ifs="$ww_ifs $T_NAME"; done
+    local l2tp_ifs=""
+    for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && l2tp_ifs="$l2tp_ifs $T_NAME"; done
     local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
-    local all_tuns="$gre_ifs $vx_ifs $ww_ifs $wg_ifs"
+    local all_tuns="$gre_ifs $vx_ifs $l2tp_ifs $wg_ifs"
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"
@@ -370,9 +362,7 @@ qos_manager() {
     if [ "$speed_val" -gt 0 ]; then
         tc qdisc add dev "$target_if" root tbf rate ${speed_val}mbit burst 1mbit latency 400ms 2>/dev/null
         echo -e "\n  ${G}● Speed limit of ${speed_val} Mbps successfully applied to ${target_if}.${NC}"
-    else
-        echo -e "\n  ${G}● Speed limit removed. ${target_if} is now UNLIMITED.${NC}"
-    fi
+    else echo -e "\n  ${G}● Speed limit removed. ${target_if} is now UNLIMITED.${NC}"; fi
     sleep 2
 }
 
@@ -384,22 +374,16 @@ iperf_benchmark() {
     mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
     if ! ls "$LOCAL_DIR/packages"/iperf3*.deb >/dev/null 2>&1; then
         echo -e "  ${DIM}● Caching iPerf3 Packages for Offline Use...${NC}"
-        (
-            apt-get update -y -q >/dev/null 2>&1
-            apt-get clean >/dev/null 2>&1
-            apt-get install --download-only -y -q iperf3 >/dev/null 2>&1
-            apt-get install --download-only -y -q --reinstall iperf3 >/dev/null 2>&1
-            cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
-        ) >/dev/null 2>&1 &
+        ( apt-get update -y -q >/dev/null 2>&1; apt-get clean >/dev/null 2>&1
+          apt-get install --download-only -y -q iperf3 >/dev/null 2>&1
+          apt-get install --download-only -y -q --reinstall iperf3 >/dev/null 2>&1
+          cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null ) >/dev/null 2>&1 &
         draw_percentage $! "Building Local Cache"
         sleep 1
     fi
 
     if ! command -v iperf3 >/dev/null 2>&1; then
-        (
-            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-            apt-get install -f -y -q >/dev/null 2>&1
-        ) >/dev/null 2>&1 &
+        ( dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; apt-get install -f -y -q >/dev/null 2>&1 ) >/dev/null 2>&1 &
         draw_percentage $! "Deploying iPerf3 Engine"
         sleep 1
     fi
@@ -413,19 +397,15 @@ iperf_benchmark() {
     echo -ne "  ${C}Select Mode ❯❯ ${NC}"; read i_mode
 
     if [ "$i_mode" == "1" ]; then
-        echo -ne "  ${C}●${NC} ${W}Port to listen on [Default: 5201]: ${NC}"; read i_port
-        i_port=${i_port:-5201}
+        echo -ne "  ${C}●${NC} ${W}Port to listen on [Default: 5201]: ${NC}"; read i_port; i_port=${i_port:-5201}
         echo -e "\n  ${G}● iPerf3 Server is starting on port ${W}${i_port}${G}... (Press Ctrl+C to close server)${NC}"
         echo -e "  ${DIM}──────────────────────────────────────────────────────────────${NC}"
         iperf3 -s -p "$i_port"
         echo -ne "\n  ${Y}● Server process finished. Press Enter to return...${NC}"; read
     elif [ "$i_mode" == "2" ]; then
-        echo -ne "  ${C}●${NC} ${W}Target Server IP (e.g. Tunnel IP): ${NC}"; read i_ip
-        [ -z "$i_ip" ] && return
-        echo -ne "  ${C}●${NC} ${W}Target Port [Default: 5201]: ${NC}"; read i_port
-        i_port=${i_port:-5201}
-        echo -ne "  ${C}●${NC} ${W}Parallel Streams (Bypass limits) [Default: 4]: ${NC}"; read i_p
-        i_p=${i_p:-4}
+        echo -ne "  ${C}●${NC} ${W}Target Server IP (e.g. Tunnel IP): ${NC}"; read i_ip; [ -z "$i_ip" ] && return
+        echo -ne "  ${C}●${NC} ${W}Target Port [Default: 5201]: ${NC}"; read i_port; i_port=${i_port:-5201}
+        echo -ne "  ${C}●${NC} ${W}Parallel Streams (Bypass limits) [Default: 4]: ${NC}"; read i_p; i_p=${i_p:-4}
         echo -ne "  ${C}●${NC} ${W}Reverse Mode (Test Download Speed)? (y/n) [n]: ${NC}"; read i_rev
         local rev_flag=""; [ "$i_rev" == "y" ] && rev_flag="-R"
 
@@ -450,15 +430,12 @@ manage_web_ui() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Start / Deploy Web Dashboard${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restart Web Dashboard${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Stop Web Dashboard${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
+        echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}WEB-CTRL ❯❯ ${NC}"; read w_opt
         
         case $w_opt in
             1)
-                if [ ! -f "/usr/bin/mweb" ]; then
-                    echo -e "\n  ${R}● Error: 'mweb' daemon script not found! Please install it first.${NC}"; sleep 2; continue
-                fi
+                if [ ! -f "/usr/bin/mweb" ]; then echo -e "\n  ${R}● Error: 'mweb' script not found!${NC}"; sleep 2; continue; fi
                 echo -ne "\n  ${C}●${NC} ${W}Enter port for Web Dashboard (Default: 1000): ${NC}"; read custom_port
                 WEB_PORT=${custom_port:-1000}
                 mkdir -p /etc/mweb 2>/dev/null
@@ -503,12 +480,7 @@ while true; do
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MSTATS ❯❯ ${NC}"; read opt
     case $opt in
-        1) show_live_radar ;;
-        2) show_total_usage ;;
-        3) show_connection_tracker ;;
-        4) qos_manager ;;
-        5) iperf_benchmark ;;
-        6) manage_web_ui ;;
-        0) break ;;
+        1) show_live_radar ;; 2) show_total_usage ;; 3) show_connection_tracker ;;
+        4) qos_manager ;; 5) iperf_benchmark ;; 6) manage_web_ui ;; 0) break ;;
     esac
 done

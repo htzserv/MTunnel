@@ -1,12 +1,11 @@
 #!/bin/bash
-# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Multiplexer Engine v1.3.0 ---
+# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Multiplexer Engine v2.0.0 (Multi-Protocol) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
 SERVICE_TPL="/etc/systemd/system/mbackhaul@.service"
 LOCAL_DIR="/root/mtunnel/packages"
 
-# 🌟 آدرس اصلاح شد: مستقیم از پوشه packages می‌خونه 🌟
 REPO_PKGS="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR" 2>/dev/null
@@ -56,7 +55,7 @@ draw_header() {
     local s_ip=$(get_local_ip); local active=0
     for conf in "$CONF_DIR"/*.toml; do [ -f "$conf" ] && ((active++)); done
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer Engine v1.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${G}${active}${NC} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer Engine v2.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${G}${active}${NC} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -69,13 +68,23 @@ list_nodes() {
         local name=$(basename "$conf" .toml)
         local status="${R}OFFLINE${NC}"; systemctl is-active --quiet "mbackhaul@$name" && status="${G}ONLINE${NC}"
         
-        local mode="Unknown"; local port=""; local remote=""
-        if grep -q "\[server\]" "$conf"; then mode="${M}KHAREJ (Server)${NC}"; port=$(grep 'bind =' "$conf" | grep -oP ':\K[0-9]+' | tr -d '"')
-        elif grep -q "\[client\]" "$conf"; then mode="${C}IRAN (Client)${NC}"; remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+'); fi
+        local mode="Unknown"; local port=""; local remote=""; local proto="tcp"
+        if grep -q "\[server\]" "$conf"; then 
+            mode="${M}KHAREJ (Server)${NC}"
+            port=$(grep 'bind =' "$conf" | grep -oP ':[0-9]+' | head -1 | tr -d ':')
+            proto=$(grep 'bind =' "$conf" | grep -oP '"\K[a-zA-Z]+(?=://)')
+        elif grep -q "\[client\]" "$conf"; then 
+            mode="${C}IRAN (Client)${NC}"
+            remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+')
+            proto=$(grep 'remote =' "$conf" | grep -oP '"\K[a-zA-Z]+(?=://)')
+        fi
+        
+        [ -z "$proto" ] && proto="tcp"
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
         echo -e "  ${B}│${NC} ${DIM}Node Name :${NC} ${W}$name${NC}  ${DIM}Status:${NC} $status"
         echo -e "  ${B}│${NC} ${DIM}Mode      :${NC} $mode"
+        echo -e "  ${B}│${NC} ${DIM}Protocol  :${NC} ${Y}${proto^^}${NC}"
         [ -n "$port" ] && echo -e "  ${B}│${NC} ${DIM}Bind Port :${NC} ${Y}$port${NC}"
         [ -n "$remote" ] && echo -e "  ${B}│${NC} ${DIM}Target IP :${NC} ${Y}$remote${NC}"
         
@@ -86,6 +95,24 @@ list_nodes() {
         echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     done
     [ "$count" -eq 0 ] && echo -e "  ${DIM}No Backhaul nodes configured yet.${NC}"
+}
+
+select_protocol() {
+    echo -e "\n  ${DIM}┌─[ BACKHAUL TRANSPORT PROTOCOL ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC}    ${DIM}(Standard Raw TCP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}TCPMUX${NC} ${DIM}(Multiplexed TCP, Excellent for Iran)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}WS${NC}     ${DIM}(WebSocket, CDN & HTTP friendly)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}WSS${NC}    ${DIM}(Secure WS, Encrypted)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}GRPC${NC}   ${DIM}(gRPC Transport)${NC}"
+    echo -ne "  ${C}Select Protocol [Default 1] ❯❯ ${NC}"; read p_opt
+    
+    case $p_opt in
+        2) scheme="tcpmux"; s_suffix=""; c_suffix="" ;;
+        3) scheme="ws"; s_suffix="/?path=/mdesign"; c_suffix="/?path=/mdesign" ;;
+        4) scheme="wss"; s_suffix="/?path=/mdesign"; c_suffix="/?path=/mdesign&insecure=true" ;;
+        5) scheme="grpc"; s_suffix=""; c_suffix="?insecure=true" ;;
+        *) scheme="tcp"; s_suffix=""; c_suffix="" ;;
+    esac
 }
 
 while true; do
@@ -103,16 +130,19 @@ while true; do
            echo -ne "\n  ${C}●${NC} ${W}Node Name (e.g. bh_kharej): ${NC}"; read b_name
            echo -ne "  ${C}●${NC} ${W}Listen Port for Backhaul Tunnel (e.g. 7000): ${NC}"; read b_port
            echo -ne "  ${C}●${NC} ${W}Secret Token (Password): ${NC}"; read b_token
+           select_protocol
            
+           bind_url="${scheme}://0.0.0.0:${b_port}${s_suffix}"
            conf_path="$CONF_DIR/${b_name}.toml"
+           
            cat <<EOF > "$conf_path"
 [server]
-bind = "0.0.0.0:$b_port"
+bind = "$bind_url"
 token = "$b_token"
 channel_size = 4096
 EOF
            apply_service; systemctl enable "mbackhaul@$b_name" >/dev/null 2>&1; systemctl restart "mbackhaul@$b_name"
-           echo -e "  ${G}● Kharej Server Node Deployed!${NC}"; sleep 1.5 ;;
+           echo -e "\n  ${G}● Kharej Server Node Deployed successfully using [${scheme^^}]!${NC}"; sleep 1.5 ;;
            
         2)
            check_binary
@@ -122,11 +152,14 @@ EOF
            echo -ne "  ${C}●${NC} ${W}Secret Token (Must match Kharej): ${NC}"; read b_token
            echo -ne "  ${C}●${NC} ${W}Multiplex Connections [Default: 8]: ${NC}"; read b_conn; b_conn=${b_conn:-8}
            echo -ne "  ${C}●${NC} ${W}Ports to forward (e.g. 80,443,2053): ${NC}"; read raw_ports
+           select_protocol
            
+           remote_url="${scheme}://${r_ip}:${r_port}${c_suffix}"
            conf_path="$CONF_DIR/${b_name}.toml"
+           
            cat <<EOF > "$conf_path"
 [client]
-remote = "$r_ip:$r_port"
+remote = "$remote_url"
 token = "$b_token"
 connections = $b_conn
 EOF
@@ -141,7 +174,7 @@ EOF
            done
            
            apply_service; systemctl enable "mbackhaul@$b_name" >/dev/null 2>&1; systemctl restart "mbackhaul@$b_name"
-           echo -e "  ${G}● Iran Client Node Deployed and Ports Mapped!${NC}"; sleep 1.5 ;;
+           echo -e "\n  ${G}● Iran Client Node Deployed and Ports Mapped using [${scheme^^}]!${NC}"; sleep 1.5 ;;
            
         3)
            configs=($(ls "$CONF_DIR"/*.toml 2>/dev/null))

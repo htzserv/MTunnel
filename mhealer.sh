@@ -1,158 +1,125 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | MHealer Autonomous CPR v1.4.0 (Pure Healer) ---
+# --- MDesign Modular Core (mhealer.sh) | Autonomous Healer v2.3.0 ---
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
-LOG_FILE="/var/log/mhealer.log"
-CONF_FILE="/etc/mhealer/mhealer.conf"
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 SVC_FILE="/etc/systemd/system/mhealer.service"
+CONF_FILE="/etc/mhealer.conf"
+LOG_FILE="/var/log/mhealer.log"
 
-mkdir -p /etc/mhealer 2>/dev/null
-[ ! -f "$LOG_FILE" ] && touch "$LOG_FILE"
+[ -f "$CONF_FILE" ] && source "$CONF_FILE"
+HEAL_INTERVAL=${HEAL_INTERVAL:-30}
 
-if [ ! -f "$CONF_FILE" ]; then
-    echo "CHECK_INTERVAL=15" > "$CONF_FILE"
-    echo "PING_TARGET=1.1.1.1" >> "$CONF_FILE"
-fi
-source "$CONF_FILE"
-CHECK_INTERVAL=${CHECK_INTERVAL:-15}
-PING_TARGET=${PING_TARGET:-1.1.1.1}
+get_local_ip() {
+    local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
+    echo "${ip:-Unknown}"
+}
 
-draw_mhealer_header() {
-    local d_stat="${R}OFFLINE${NC}"
-    if systemctl is-active --quiet mhealer.service 2>/dev/null; then d_stat="${G}ACTIVE & WATCHING${NC}"; fi
+draw_header() {
+    local s_ip=$(get_local_ip)
+    local h_stat="${DIM}OFFLINE${NC}"
+    if systemctl is-active --quiet mhealer.service 2>/dev/null; then h_stat="${G}ACTIVE${NC} ${DIM}(${HEAL_INTERVAL}s)${NC}"; fi
     clear; echo ""
-    local str1=" MHealer Autonomous CPR 1.4.0 "
-    local raw_len=$(( ${#str1} ))
-    local pad_len=$(( 92 - raw_len - 22 ))
-    [ "$pad_len" -lt 0 ] && pad_len=0
-    local padding=$(printf '%*s' "$pad_len" "")
+    local str1=" MHealer Autonomous Bot 2.3.0 "
+    local raw_len=$(( ${#str1} + 4 + ${#s_ip} + 12 ))
+    local pad=$(( 92 - raw_len - 15 )); [ "$pad" -lt 0 ] && pad=0; local padding=$(printf '%*s' "$pad" "")
+    
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} Core AI:${NC} ${d_stat} ${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Bot:${NC} ${h_stat} ${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
-# --- 1. CORE BACKGROUND DAEMON ---
-if [[ "$1" == "--daemon" ]]; then
-    log_msg() { 
-        echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-        local lines=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
-        if [ "$lines" -gt 3000 ]; then
-            tail -n 2000 "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+generate_daemon() {
+    cat <<'EOF' > /usr/local/bin/mhealer_daemon.sh
+#!/bin/bash
+source /etc/mhealer.conf
+
+check_and_heal() {
+    local conf="$1"; local type="$2"; local iface=""; local tip=""
+    source "$conf"
+    
+    if [ "$type" == "gre" ]; then
+        iface="$T_NAME"
+        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+    elif [ "$type" == "l2tp" ]; then
+        iface="$T_NAME"
+        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+    elif [ "$type" == "vxlan" ]; then
+        iface="$BR_NAME"
+        local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
+        tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+    fi
+
+    if ! ping -c 2 -W 2 "$tip" >/dev/null 2>&1; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') | HEAL TRIGGERED | $iface ($tip) is DOWN." >> /var/log/mhealer.log
+        if [ "$type" == "gre" ]; then /usr/bin/mgre --apply
+        elif [ "$type" == "l2tp" ]; then systemctl restart ml2tp.service
+        elif [ "$type" == "vxlan" ]; then systemctl restart mxlan.service
         fi
-    }
-    
-    log_msg "🤖 MHealer AI Activated. Pure Healer Mode. Interval: ${CHECK_INTERVAL}s"
-    
-    while true; do
-        local gre_ifs=""
-        for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
-        local vx_ifs=""
-        for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $VX_NAME"; done
-        
-        local all_tuns="$gre_ifs $vx_ifs"
-        
-        for tun in $all_tuns; do
-            if [ -d "/sys/class/net/$tun" ]; then
-                local state=$(cat /sys/class/net/$tun/operstate 2>/dev/null)
-                if [[ "$state" == "down" || "$state" == "unknown" ]]; then
-                    log_msg "⚠️  Tunnel [$tun] Link is DOWN. Initiating Auto-Repair CPR..."
-                    ip link set "$tun" down; sleep 1; ip link set "$tun" up; sleep 2
-                    local check_state=$(cat /sys/class/net/$tun/operstate 2>/dev/null)
-                    if [[ "$check_state" == "up" || "$check_state" == "unknown" ]]; then
-                        log_msg "✅ Tunnel [$tun] successfully revived via Link Reset."
-                    else
-                        log_msg "🚨 CPR failed for [$tun]. Link remains offline."
-                    fi
-                fi
-            fi
-        done
-        sleep "$CHECK_INTERVAL"
-    done
-    exit 0
-fi
-
-# --- 2. CLI CONTROL PANEL ---
-install_daemon() {
-    echo -e "\n  ${DIM}● Configuring SystemD Service for MHealer Core...${NC}"
-    cat <<EOF > "$SVC_FILE"
-[Unit]
-Description=MDesign Autonomous Healer AI
-After=network.target
-[Service]
-Type=simple
-ExecStart=/usr/bin/mhealer --daemon
-Restart=always
-RestartSec=5
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload; systemctl enable mhealer.service >/dev/null 2>&1; systemctl start mhealer.service
-    echo -e "  ${G}● MHealer AI is now successfully running in the background.${NC}"; sleep 2
-}
-
-restart_daemon() {
-    echo -e "\n  ${DIM}● Restarting MHealer Core...${NC}"
-    if systemctl is-active --quiet mhealer.service 2>/dev/null; then
-        systemctl restart mhealer.service
-        echo -e "  ${G}● Core AI Engine successfully restarted.${NC}"
-    else
-        echo -e "  ${Y}● Core is not running. Start it first.${NC}"
+        sleep 5
     fi
-    sleep 2
-}
-
-stop_daemon() {
-    echo -e "\n  ${Y}● Putting MHealer Core to sleep...${NC}"
-    systemctl stop mhealer.service 2>/dev/null; systemctl disable mhealer.service >/dev/null 2>&1
-    echo -e "  ${R}● Core is now OFFLINE.${NC}"; sleep 2
-}
-
-view_logs() {
-    draw_mhealer_header
-    echo -e "\n  ${DIM}┌─[ AI DIAGNOSTIC LOGS ]${NC} ${C}(Press Ctrl+C to exit)${NC}\n"
-    if [ -f "$LOG_FILE" ]; then
-        tail -n 20 -f "$LOG_FILE" | while read line; do
-            if [[ "$line" == *"✅"* ]]; then echo -e "  ${G}${line}${NC}"
-            elif [[ "$line" == *"⚠️"* ]]; then echo -e "  ${Y}${line}${NC}"
-            elif [[ "$line" == *"🚨"* ]]; then echo -e "  ${R}${line}${NC}"
-            elif [[ "$line" == *"🤖"* ]]; then echo -e "  ${C}${line}${NC}"
-            else echo -e "  ${DIM}${line}${NC}"; fi
-        done
-    else
-        echo -e "  ${DIM}No logs generated yet. MHealer needs to run first.${NC}"; read
-    fi
-}
-
-edit_config() {
-    draw_mhealer_header
-    echo -e "\n  ${DIM}┌─[ HEALER AI SENSITIVITY ]${NC}\n"
-    echo -ne "  ${C}●${NC} ${W}Check Interval in seconds (Current: ${CHECK_INTERVAL}): ${NC}"; read n_int
-    echo -ne "  ${C}●${NC} ${W}Ping Target for health check (Current: ${PING_TARGET}): ${NC}"; read n_pt
-    n_int=${n_int:-$CHECK_INTERVAL}; n_pt=${n_pt:-$PING_TARGET}
-    sed -i "s/^CHECK_INTERVAL=.*/CHECK_INTERVAL=$n_int/" "$CONF_FILE"
-    sed -i "s/^PING_TARGET=.*/PING_TARGET=$n_pt/" "$CONF_FILE"
-    echo -e "\n  ${G}● Memory updated. Restarting AI...${NC}"
-    systemctl restart mhealer.service 2>/dev/null
-    sleep 2
 }
 
 while true; do
-    draw_mhealer_header
-    echo -e "\n  ${DIM}┌─[ ROBOTIC CONTROL CENTER ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Awaken & Enable Core${NC} ${DIM}(Install/Start Monitor)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restart Ecosystem${NC}  ${DIM}(Apply Configs)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Put Core to Sleep${NC}  ${DIM}(Disable Monitoring)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}View Live Logs${NC}     ${DIM}(CLI Terminal)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Calibrate AI${NC}       ${DIM}(Interval & Targets)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && check_and_heal "$conf" "gre"; done
+    for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && check_and_heal "$conf" "l2tp"; done
+    for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && check_and_heal "$conf" "vxlan"; done
+    sleep "$HEAL_INTERVAL"
+done
+EOF
+    chmod +x /usr/local/bin/mhealer_daemon.sh
+
+    cat <<EOF > "$SVC_FILE"
+[Unit]
+Description=MHealer Autonomous Tunnel Bot
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/mhealer_daemon.sh
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+}
+
+start_bot() {
+    echo -ne "\n  ${C}●${NC} ${W}Check interval in seconds (Default 30): ${NC}"; read custom_int
+    HEAL_INTERVAL=${custom_int:-30}
+    echo "HEAL_INTERVAL=$HEAL_INTERVAL" > "$CONF_FILE"
+    generate_daemon
+    systemctl enable mhealer.service >/dev/null 2>&1
+    systemctl restart mhealer.service
+    echo -e "  ${G}● Healer Bot deployed and scanning every ${HEAL_INTERVAL}s.${NC}"; sleep 1.5
+}
+
+stop_bot() {
+    systemctl stop mhealer.service 2>/dev/null
+    systemctl disable mhealer.service 2>/dev/null
+    echo -e "\n  ${Y}● Healer Bot deactivated.${NC}"; sleep 1.5
+}
+
+view_logs() {
+    draw_header
+    echo -e "\n  ${DIM}┌─[ HEALER LOGS ]${NC}"
+    if [ ! -s "$LOG_FILE" ]; then echo -e "  ${G}● No drops detected yet. System is stable.${NC}"
+    else tail -n 15 "$LOG_FILE" | sed 's/^/  │ /'; fi
+    echo -e "  ${DIM}└────────────────────────────────────────────────────────${NC}"
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
+}
+
+while true; do
+    draw_header
+    echo -e "\n  ${DIM}┌─[ HEALER ACTIONS ]${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Activate Healer Bot${NC} ${DIM}(Auto-detect & fix drops)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Deactivate Healer Bot${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}View Drop/Heal Logs${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
     echo -ne "  ${C}MHEALER ❯❯ ${NC}"; read opt
+
     case $opt in
-        1) install_daemon ;;
-        2) restart_daemon ;;
-        3) stop_daemon ;;
-        4) view_logs ;;
-        5) edit_config ;;
-        0) break ;;
+        1) start_bot ;; 2) stop_bot ;; 3) view_logs ;; 0) break ;;
     esac
 done

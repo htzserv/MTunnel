@@ -1,10 +1,9 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.1.0 (Dual-Folder Engine) ---
+# --- MDesign Master Core | Central Dashboard v7.2.0 (Stable & Local Deploy) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
 
-# آدرس‌های گیت‌هاب بر اساس ساختار دو پوشه‌ای (main و packages)
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main/main"
 LOCAL_DIR="/root/mtunnel"
@@ -42,7 +41,9 @@ run_mod() {
             sed -i 's/\r$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null
             cat "$LOCAL_DIR/${mod}.sh" > "/usr/bin/$mod"
             chmod +x "/usr/bin/$mod"
-        else echo -e "  ${R}● Error: Module not found in 'main' folder!${NC}"; sleep 2; return; fi
+        else 
+            echo -e "  ${R}● Error: Module not found in 'main' folder!${NC}"; sleep 2; return
+        fi
     fi
     $mod
 }
@@ -58,7 +59,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}                      ${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -98,14 +99,19 @@ while true; do
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Download Binary Packages${NC}   ${DIM}(Fetch Backhaul, Gost, FRP from GitHub)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Update Core Scripts${NC}        ${DIM}(Sync .sh files from GitHub)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${R}Nuclear Wipe${NC}               ${DIM}(Delete ALL Tunnels & Traces)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}       ${DIM}(Install from /root/mtunnel/)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Nuclear Wipe${NC}               ${DIM}(Delete ALL Tunnels & Traces)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
     echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
 
     case $opt in
         1) show_tunnel_hub ;;
-        2) run_mod "mporter" ;; 3) run_mod "minterface" ;; 4) run_mod "mshield" ;;
-        5) run_mod "mstats" ;; 6) run_mod "mhealer" ;; 7) run_mod "mdiag" ;;
+        2) run_mod "mporter" ;; 
+        3) run_mod "minterface" ;; 
+        4) run_mod "mshield" ;;
+        5) run_mod "mstats" ;; 
+        6) run_mod "mhealer" ;; 
+        7) run_mod "mdiag" ;;
         
         8)
            echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOADER ]${NC}"
@@ -133,7 +139,8 @@ while true; do
                echo -e "\n  ${G}● All Binary Files successfully downloaded and installed!${NC}"; sleep 2
            else
                echo -e "\n  ${R}● Error downloading zip archive from GitHub!${NC}"; sleep 2
-           fi ;;
+           fi
+           ;;
 
         9) 
            echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
@@ -151,15 +158,44 @@ while true; do
                    cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null; chmod +x "/usr/bin/$mod_name" 2>/dev/null
                done
                echo -e "\n  ${G}● Core scripts fully upgraded!${NC}"; sleep 1.5; exec "$0"
-           else echo -e "\n  ${R}● Update aborted due to network errors.${NC}"; sleep 2; fi ;;
-           
+           else 
+               echo -e "\n  ${R}● Update aborted due to network errors.${NC}"; sleep 2
+           fi
+           ;;
+
         10)
+           echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
+           if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
+               echo -e "  ${R}● No offline files found in /root/mtunnel/!${NC}"; sleep 2; continue
+           fi
+           
+           for file in "$LOCAL_DIR"/*.sh; do
+               mod_name=$(basename "$file" .sh)
+               [ "$mod_name" == "main" ] && mod_name="mtunnel"
+               sed -i 's/\r$//' "$file" 2>/dev/null
+               cat "$file" > "/usr/bin/$mod_name" 2>/dev/null
+               chmod +x "/usr/bin/$mod_name" 2>/dev/null
+           done
+           
+           [ -f "$LOCAL_DIR/packages/bh" ] && { cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh 2>/dev/null; chmod +x /usr/local/bin/bh 2>/dev/null; }
+           [ -f "$LOCAL_DIR/packages/gost" ] && { cp "$LOCAL_DIR/packages/gost" /usr/local/bin/gost 2>/dev/null; chmod +x /usr/local/bin/gost 2>/dev/null; }
+           [ -f "$LOCAL_DIR/packages/frps" ] && { cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps 2>/dev/null; chmod +x /usr/local/bin/frps 2>/dev/null; }
+           [ -f "$LOCAL_DIR/packages/frpc" ] && { cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc 2>/dev/null; chmod +x /usr/local/bin/frpc 2>/dev/null; }
+           
+           echo -e "\n  ${G}● Local Deployment Complete!${NC}"; sleep 1.5; exec "$0"
+           ;;
+           
+        11)
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL infrastructure traces? (y/n): ${NC}"; read del_confirm
            if [[ "$del_confirm" == "y" ]]; then
                systemctl stop mgre.service ml2tp.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service frps frpc mhysteria@* mbackhaul@* 2>/dev/null
                rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /usr/bin/m* /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frp* /root/mtunnel
                echo -e "  ${G}● Purge complete. System is vanilla.${NC}\n"; exit 0
-           fi ;;
-        0) clear; exit 0 ;;
+           fi
+           ;;
+           
+        0) 
+           clear; exit 0 
+           ;;
     esac
 done

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v1.2.0 (Offline & Auto-Patch Edition) ---
+# --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v2.0.0 (Pure Native Linux Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/ml2tp/tunnels"
@@ -35,22 +35,14 @@ check_dependencies() {
     modinfo l2tp_eth >/dev/null 2>&1 || missing=1
     
     if [ "$missing" -eq 1 ]; then
-        echo -e "\n  ${DIM}● Missing L2TP Kernel Modules. Caching and Patching OS...${NC}"
+        echo -e "\n  ${DIM}● Injecting Native L2TP Kernel Modules...${NC}"
         (
             apt-get update -y -q >/dev/null 2>&1
-            
-            # دانلود و ذخیره در پوشه آفلاینِ سیستم
             apt-get install --download-only -y -q iproute2 linux-modules-extra-$(uname -r) >/dev/null 2>&1
             cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
-            
-            # نصب قطعی فایل‌های کَش شده
             dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
             apt-get install -f -y -q >/dev/null 2>&1
-            
-            modprobe l2tp_core 2>/dev/null
-            modprobe l2tp_netlink 2>/dev/null
-            modprobe l2tp_eth 2>/dev/null
-            modprobe l2tp_ip 2>/dev/null
+            modprobe l2tp_core l2tp_netlink l2tp_eth l2tp_ip 2>/dev/null
         ) >/dev/null 2>&1 &
         draw_progress_bar $! "Patching Linux Kernel"
         sleep 1
@@ -67,21 +59,19 @@ apply_tunnel() {
     
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
     
+    # نابود کردن سشن قبلی به صورت ایمن
     ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1
     ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1
     ip link del "$T_NAME" >/dev/null 2>&1
 
-    modprobe l2tp_core 2>/dev/null
-    modprobe l2tp_netlink 2>/dev/null
-    modprobe l2tp_eth 2>/dev/null
-    modprobe l2tp_ip 2>/dev/null
+    modprobe l2tp_core l2tp_netlink l2tp_eth l2tp_ip 2>/dev/null
 
-    # موتورِ بای‌پسِ فایروال و NAT ابری
     local REAL_LOCAL=$(ip route get "$REMOTE_PUB" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1)
     [ -z "$REAL_LOCAL" ] && REAL_LOCAL=$(hostname -I | awk '{print $1}')
 
-    ERR_TUN=$(ip l2tp add tunnel tunnel_id "$TUN_ID" peer_tunnel_id "$TUN_ID" encap udp local "$REAL_LOCAL" remote "$REMOTE_PUB" udp_sport "$TUN_PORT" udp_dport "$TUN_PORT" 2>&1)
-    ERR_SES=$(ip l2tp add session name "$T_NAME" tunnel_id "$TUN_ID" session_id "$TUN_ID" peer_session_id "$TUN_ID" 2>&1)
+    # ساخت تونل L2TP خالص فقط با دستورات لینوکس
+    ip l2tp add tunnel tunnel_id "$TUN_ID" peer_tunnel_id "$TUN_ID" encap udp local "$REAL_LOCAL" remote "$REMOTE_PUB" udp_sport "$TUN_PORT" udp_dport "$TUN_PORT" 2>/dev/null
+    ip l2tp add session name "$T_NAME" tunnel_id "$TUN_ID" session_id "$TUN_ID" peer_session_id "$TUN_ID" 2>/dev/null
     
     ip link set dev "$T_NAME" mtu 1400 2>/dev/null
     ip link set "$T_NAME" up 2>/dev/null
@@ -95,13 +85,9 @@ apply_tunnel() {
             idx=$(cat "$s_file")
             hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum)
             range_selector=$(( 0x${hash:0:2} % 3 ))
-            if [[ "$range_selector" == "0" ]]; then
-                o1="10"; o2=$(( (0x${hash:2:2} % 254) + 1 ))
-            elif [[ "$range_selector" == "1" ]]; then
-                o1="172"; o2=$(( (0x${hash:2:2} % 16) + 16 ))
-            else
-                o1="192"; o2="168"
-            fi
+            if [[ "$range_selector" == "0" ]]; then o1="10"; o2=$(( (0x${hash:2:2} % 254) + 1 ))
+            elif [[ "$range_selector" == "1" ]]; then o1="172"; o2=$(( (0x${hash:2:2} % 16) + 16 ))
+            else o1="192"; o2="168"; fi
             o3=$(( (0x${hash:4:2} % 254) + 1 ))
             last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
@@ -115,6 +101,22 @@ apply_all_tunnels() {
     for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_tunnel "$conf"; done
 }
 
+setup_service() {
+    cat <<EOF > "$SERVICE_FILE"
+[Unit]
+Description=ML2TP Native Tunnel Service
+After=network.target
+[Service]
+ExecStart=/usr/bin/ml2tp --apply
+Type=oneshot
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload && systemctl enable ml2tp.service >/dev/null 2>&1
+}
+
+# ----------------- UI / CLI -----------------
 draw_ml2tp_header() {
     local s_ip=$(get_local_ip); local active_tunnels=0; local total_vips=0
     for conf in "$CONF_DIR"/*.conf; do
@@ -123,13 +125,12 @@ draw_ml2tp_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" ML2TP Core 1.2.0 (NAT-Bypass) "
+    local str1=" ML2TP Core 2.0.0 (Native L2TPv3) "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
     local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} ))
-    local pad_len=$(( 92 - raw_len ))
-    [ "$pad_len" -lt 0 ] && pad_len=0
+    local pad_len=$(( 92 - raw_len )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} ACTIVE TUNNELS:${NC}${G} ${active_tunnels} ${NC}${B}│${NC}${DIM} TOTAL V-IPS:${NC}${Y} ${total_vips} ${NC}${padding}${B}│${NC}"
@@ -153,8 +154,7 @@ show_ml2tp_monitor() {
         local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         
         ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
-        if [ $? -eq 0 ]; then
-            lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        if [ $? -eq 0 ]; then lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         local m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
@@ -164,8 +164,7 @@ show_ml2tp_monitor() {
         for ((idx=0; idx<total_v; idx++)); do
             local lip="${v_ips[$idx]}"; local base_ip=$(echo "$lip" | cut -d'.' -f1-3); local last=$(echo "$lip" | cut -d'.' -f4); local tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
             ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
-            if [ $? -eq 0 ]; then
-                lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+            if [ $? -eq 0 ]; then lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             local v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
             printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
@@ -188,8 +187,7 @@ show_tunnel_details() {
         local s_key="${SYNC_KEY:-[ NOT SET ]}"
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        local left_p="▼ Tunnel: $T_NAME"
-        local right_p="Role: $t_role"
+        local left_p="▼ Tunnel: $T_NAME"; local right_p="Role: $t_role"
         local pad=$(( 89 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
         echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
         echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
@@ -203,15 +201,13 @@ show_tunnel_details() {
         echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
         
         ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
-        if [ $? -eq 0 ]; then
-            lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        if [ $? -eq 0 ]; then lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         local l4="Core IPs     : ${lip} -> ${tip}"
         local r4_raw="Link: * ${stat_text} (${lat_raw})"
         local pad4=$(( 89 - ${#l4} - ${#r4_raw} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
         echo -e "  ${B}│${NC} ${DIM}Core IPs     :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp4} ${DIM}Link:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${lat_color}(${lat_raw})${NC} ${B}│${NC}"
-        
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
     done
     echo -ne "  ${DIM}Press Enter to return...${NC}"; read
@@ -243,21 +239,6 @@ edit_tunnel() {
         apply_tunnel "$sel_conf"
         echo -e "  ${G}● Pipeline re-routed successfully!${NC}"; sleep 1.5
     fi
-}
-
-setup_service() {
-    cat <<EOF > "$SERVICE_FILE"
-[Unit]
-Description=ML2TP Native Tunnel Service
-After=network.target
-[Service]
-ExecStart=/usr/bin/ml2tp --apply
-Type=oneshot
-RemainAfterExit=yes
-[Install]
-WantedBy=multi-user.target
-EOF
-    systemctl daemon-reload && systemctl enable ml2tp.service >/dev/null 2>&1
 }
 
 if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
@@ -297,11 +278,7 @@ while true; do
                break
            done
            
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
-               [[ -n "$r_ip" ]] && break
-           done
-           
+           while true; do echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip; [[ -n "$r_ip" ]] && break; done
            while true; do echo -ne "  ${C}●${NC} ${W}L2TP UDP Connection Port (e.g. 5000): ${NC}"; read tun_port; [[ -n "$tun_port" ]] && break; done
            
            while true; do
@@ -323,15 +300,8 @@ while true; do
            apply_tunnel "$conf_path"
            setup_service
            
-           if ip link show "$t_name" >/dev/null 2>&1; then
-               echo -e "  ${G}● L2TPv3 Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"; sleep 1.5
-           else
-               echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel creation!${NC}"
-               if [ -n "$ERR_TUN" ]; then echo -e "  ${DIM}├─ TUN Log: $ERR_TUN${NC}"; fi
-               if [ -n "$ERR_SES" ]; then echo -e "  ${DIM}└─ SES Log: $ERR_SES${NC}"; fi
-               rm -f "$conf_path"
-               sleep 4
-           fi ;;
+           if ip link show "$t_name" >/dev/null 2>&1; then echo -e "  ${G}● L2TPv3 Tunnel [${t_name}] deployed successfully!${NC}"; sleep 1.5
+           else echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel!${NC}"; rm -f "$conf_path"; sleep 2; fi ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels configured yet!${NC}" && sleep 1.5 && continue
@@ -372,8 +342,6 @@ while true; do
                rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
                echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
-        5) edit_tunnel ;;
-        6) show_tunnel_details ;;
-        0) break ;;
+        5) edit_tunnel ;; 6) show_tunnel_details ;; 0) break ;;
     esac
 done

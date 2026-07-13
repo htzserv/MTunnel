@@ -6,7 +6,7 @@ CONF_DIR="/etc/mbackhaul/tunnels"
 SERVICE_TPL="/etc/systemd/system/mbackhaul@.service"
 LOCAL_DIR="/root/mtunnel/packages"
 
-# مسیر پوشه پکیج‌ها تو گیت‌هاب شما
+# 🌟 آدرس اصلاح شد: مستقیم از پوشه packages می‌خونه 🌟
 REPO_PKGS="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR" 2>/dev/null

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.0.0 (Native L2TP Era) ---
+# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.0 (Full Edition) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -124,7 +124,6 @@ get_tunnel_ip() {
         local vx_dev="${dev/br_/vx_}"
         rip=$(ip -d link show "$vx_dev" 2>/dev/null | grep -oP 'remote \K[0-9a-fA-F\.:]+' | head -n 1)
     fi
-    # L2TP UDP peer retrieval
     if [ -z "$rip" ] && [[ "$dev" == l2tp_* ]]; then
         local tun_id=$(ip l2tp show session | grep -B1 "name $dev" | grep "tunnel" | grep -oP 'tunnel \K[0-9]+' | head -n 1)
         if [ -n "$tun_id" ]; then rip=$(ip l2tp show tunnel tunnel_id "$tun_id" 2>/dev/null | grep -oP 'peer \K[0-9\.]+'); fi
@@ -159,6 +158,9 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                     os.system("date +%s > /etc/mstats/uptimes/frp_engine 2>/dev/null")
                 elif iface.startswith('l2tp_'):
                     os.system("systemctl restart ml2tp.service 2>/dev/null")
+                    os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
+                elif iface.startswith('hys_'):
+                    os.system(f"systemctl restart mhysteria@{iface} 2>/dev/null")
                     os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
                 elif iface.replace('_', '').replace('-', '').isalnum():
                     subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
@@ -438,6 +440,7 @@ cat <<'EOF' > index.html
                         let typeBadge = "";
                         if (tObj.type.includes("VXLAN")) typeBadge = "<span class='badge b-purple'>VXLAN/L2</span>";
                         else if (tObj.type.includes("L2TPv3")) typeBadge = "<span class='badge' style='background:rgba(20, 184, 166, 0.1); color:#14b8a6; border:1px solid rgba(20, 184, 166, 0.2);'>L2TPv3/L3</span>";
+                        else if (tObj.type.includes("Hys2")) typeBadge = "<span class='badge b-green'>Hysteria2/L3</span>";
                         else if (tObj.type.includes("Proxy")) typeBadge = "<span class='badge b-yellow'>FRP/L4</span>";
                         else typeBadge = "<span class='badge b-blue'>GRE/L3</span>";
                         
@@ -529,7 +532,7 @@ while true; do
     remote_list=()
     first_tun=true
     
-    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/ml2tp/tunnels/*.conf; do
+    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/ml2tp/tunnels/*.conf /etc/mhysteria/tunnels/*.conf; do
         if [ -f "$conf" ]; then
             source "$conf"
             is_vx=false; name="$T_NAME"
@@ -558,6 +561,7 @@ while true; do
             type_txt="GRE"
             [ "$is_vx" = true ] && type_txt="VXLAN"
             [[ "$conf" == *"/ml2tp/"* ]] && type_txt="L2TPv3"
+            [[ "$conf" == *"/mhysteria/"* ]] && type_txt="Hys2"
             
             if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
             TUNNELS_JSON+="{\"iface\":\"$name\", \"type\":\"$type_txt\", \"endpoint\":\"$rip\", \"state\":\"$st_badge\", \"ping\":\"$ping_res\", \"uptime\":\"$t_uptime\", \"rx_spd\":\"$(format_speed $rx_s)\", \"tx_spd\":\"$(format_speed $tx_s)\", \"rx_tot\":\"$(format_total $r_new)\", \"tx_tot\":\"$(format_total $t_new)\", \"comb_spd\":\"$(format_speed $comb_spd)\", \"comb_tot\":\"$(format_total $comb_tot)\"}"

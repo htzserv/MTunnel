@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v2.0.0 ---
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v3.0.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -9,9 +9,7 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-get_configs() {
-    ls /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf 2>/dev/null
-}
+get_configs() { ls /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/ml2tp/tunnels/*.conf 2>/dev/null; }
 
 detect_server_role() {
     local configs=($(get_configs))
@@ -23,11 +21,9 @@ detect_server_role() {
 draw_header() {
     local s_ip=$(get_local_ip); local role=$(detect_server_role)
     clear; echo ""
-    local str1=" MDesign Interface Matrix 2.0.0 "
+    local str1=" MDesign Interface Matrix 3.0.0 "
     local str2=" IP: $s_ip "
-    
-    local configs=($(get_configs))
-    local raw_role="Unknown (No Tunnels)"
+    local configs=($(get_configs)); local raw_role="Unknown (No Tunnels)"
     if [ ${#configs[@]} -gt 0 ]; then
         source "${configs[0]}"
         raw_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access Node)" || echo "KHAREJ (Gateway Node)")
@@ -56,9 +52,9 @@ render_matrix() {
     echo -e "\n  ${Y}● Active Network Interface Blueprint:${NC}"
     for conf in "${configs[@]}"; do
         source "$conf"
-        
-        local is_vx=false; local t_name="$T_NAME"
+        local is_vx=false; local is_l2tp=false; local t_name="$T_NAME"
         if [ -n "$BR_NAME" ]; then is_vx=true; t_name="$BR_NAME"; fi
+        if [[ "$conf" == *"/ml2tp/"* ]]; then is_l2tp=true; fi
 
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
@@ -67,6 +63,7 @@ render_matrix() {
         local proto_lbl="IPv4 GRE Engine"; local title_color="${C}"
         [[ "$TUN_PROTO" == "6to4" ]] && { proto_lbl="6to4 IP6GRE Engine"; title_color="${M}"; }
         [[ "$is_vx" == true ]] && { proto_lbl="VXLAN L2 Bridge"; title_color="${M}"; }
+        [[ "$is_l2tp" == true ]] && { proto_lbl="L2TPv3 Native Kernel Engine"; title_color="${Y}"; }
 
         local stat_raw="● DOWN"; local stat_color="${R}"; local sys_uptime="Offline"
         local state=$(cat /sys/class/net/$t_name/operstate 2>/dev/null)

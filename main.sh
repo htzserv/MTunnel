@@ -1,14 +1,12 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v4.1.1 (UI Bugfix) ---
+# --- MDesign Master Core | Central Dashboard v4.3.0 (Native L2TP Era) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_BASE="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 LOCAL_DIR="/root/mtunnel"
 
-if [[ ! -x "$MTUNNEL_PATH" ]]; then
-    cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null
-fi
+if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -22,16 +20,16 @@ draw_main_header() {
     local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
     local st_wg="○"; local c_wg="${DIM}"; ([ -f "/etc/wireguard/wg0.conf" ] || ip link show wg0 >/dev/null 2>&1) && { st_wg="●"; c_wg="${G}"; }
-    local st_ww="○"; local c_ww="${DIM}"; [ -n "$(ls -A /etc/mwall/tunnels/*.conf 2>/dev/null)" ] && { st_ww="●"; c_ww="${G}"; }
+    local st_l2="○"; local c_l2="${DIM}"; [ -n "$(ls -A /etc/ml2tp/tunnels/*.conf 2>/dev/null)" ] && { st_l2="●"; c_l2="${G}"; }
     local st_hap="○"; local c_hap="${DIM}"; pgrep -x "haproxy" >/dev/null 2>&1 && { st_hap="●"; c_hap="${G}"; }
     local st_gost="○"; local c_gost="${DIM}"; pgrep -x "gost" >/dev/null 2>&1 && { st_gost="●"; c_gost="${G}"; }
     local st_frp="○"; local c_frp="${DIM}"; pgrep -f "frp[sc]" >/dev/null 2>&1 && { st_frp="●"; c_frp="${G}"; }
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v4.1.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v4.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub:  GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  WaterWall:${NC}${c_ww}${st_ww}${NC}${DIM}  │  HAProxy:${NC}${c_hap}${st_hap}${NC}${DIM}  Gost:${NC}${c_gost}${st_gost}${NC}${DIM}  FRP:${NC}${c_frp}${st_frp}${NC}    ${B}│${NC}"
+    echo -e "  ${B}│${NC}${DIM} Hub:  GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TPv3:${NC}${c_l2}${st_l2}${NC}${DIM}   │  HAProxy:${NC}${c_hap}${st_hap}${NC}${DIM}  Gost:${NC}${c_gost}${st_gost}${NC}${DIM}  FRP:${NC}${c_frp}${st_frp}${NC}    ${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -42,12 +40,12 @@ show_tunnel_hub() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}      ${DIM}[Layer 3 Routing]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}    ${DIM}[Layer 2 Bridge]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}WireGuard Crypto Matrix (Mwire)${NC}      ${DIM}[High-Speed VPN]${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}WaterWall Stealth Engine (Mwall)${NC}     ${DIM}[Anti-DPI L3 Tunnel]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}L2TPv3 Native Engine (Ml2tp)${NC}         ${DIM}[Kernel UDP Tunnel]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}FRP Reverse Proxy Engine (Mfrp)${NC}      ${DIM}[NAT Bypass Tunnel]${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core Dashboard${NC}\n"
         echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
         case $t_opt in
-            1) m_call="mgre" ;; 2) m_call="mxlan" ;; 3) m_call="mwire" ;; 4) m_call="mwall" ;; 5) m_call="mfrp" ;; 0) break ;;
+            1) m_call="mgre" ;; 2) m_call="mxlan" ;; 3) m_call="mwire" ;; 4) m_call="ml2tp" ;; 5) m_call="mfrp" ;; 0) break ;;
         esac
         [ -n "$m_call" ] && { [ -f "/usr/bin/$m_call" ] && $m_call || (echo -e "\n  ${R}● Module missing! Run Update.${NC}"; sleep 1.5); unset m_call; }
     done
@@ -56,7 +54,7 @@ show_tunnel_hub() {
 while true; do
     draw_main_header; echo ""
     echo -e "  ${DIM}┌─[ CORE NETWORK & ROUTING ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub${NC} ${DIM}(GRE / VXLAN / WG / WW / FRP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub${NC} ${DIM}(GRE / VXLAN / WG / L2TP / FRP)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover${NC} ${DIM}(Mporter)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC} ${DIM}(Minterface)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SECURITY & ANALYTICS ]${NC}\n  ${DIM}│${NC}"
@@ -84,14 +82,16 @@ while true; do
            echo -e "\n  ${Y}● Syncing components from GitHub to $LOCAL_DIR...${NC}"
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
            CACHE_BUST=$(date +%s)
-           # رفع باگ: mwall.sh الان تو لیست هست
-           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mwall.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           
+           # جایگزین شدنِ mwall با ml2tp تو لیست دانلودها!
+           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
            download_success=true
            
            for file in "${MODULES[@]}"; do
                echo -e "  ${DIM}├─ Fetching $file...${NC}"
                wget --timeout=10 --tries=2 -qO "$LOCAL_DIR/$file" "$REPO_BASE/${file}?v=$CACHE_BUST"
                if [ ! -s "$LOCAL_DIR/$file" ]; then download_success=false; break; fi
+               sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null
            done
            
            if [ "$download_success" = true ]; then
@@ -109,37 +109,14 @@ while true; do
         9)
            echo -e "\n  ${M}● Initializing Offline/Local Deployment Engine...${NC}"
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-           
            if [ -d "$LOCAL_DIR" ] && ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
-               echo -e "  ${G}● Found pre-existing offline workspace in ${W}$LOCAL_DIR${G}!${NC}"
+               echo -e "  ${G}● Found pre-existing offline workspace!${NC}"
            else
-               echo -e "  ${Y}● No workspace found in ${W}$LOCAL_DIR${Y}.${NC}"
-               echo -ne "  ${C}● Enter direct link to a full Backup ZIP (or press Enter to cancel): ${NC}"; read zip_url
-               if [ -n "$zip_url" ]; then
-                   echo -e "  ${DIM}├─ Downloading Backup ZIP...${NC}"
-                   wget --timeout=15 -qO "/tmp/mtunnel_offline.zip" "$zip_url"
-                   if [ -s "/tmp/mtunnel_offline.zip" ]; then
-                       echo -e "  ${DIM}├─ Extracting and organizing files...${NC}"
-                       if ! command -v unzip >/dev/null 2>&1; then apt-get update >/dev/null 2>&1; apt-get install unzip -y >/dev/null 2>&1; fi
-                       rm -rf /tmp/mtunnel_extract; mkdir -p /tmp/mtunnel_extract
-                       unzip -q -o "/tmp/mtunnel_offline.zip" -d "/tmp/mtunnel_extract"
-                       
-                       find "/tmp/mtunnel_extract" -type f -name "*.sh" -exec cp {} "$LOCAL_DIR/" \;
-                       find "/tmp/mtunnel_extract" -type f -name "gost" -exec cp {} "$LOCAL_DIR/" \;
-                       find "/tmp/mtunnel_extract" -type f -name "frp*" -exec cp {} "$LOCAL_DIR/" \;
-                       find "/tmp/mtunnel_extract" -type f -name "*aterwall*" -exec cp {} "$LOCAL_DIR/" \;
-                       find "/tmp/mtunnel_extract" -type f -name "*.deb" -exec cp {} "$LOCAL_DIR/packages/" \;
-                       rm -rf "/tmp/mtunnel_offline.zip" "/tmp/mtunnel_extract"
-                   else
-                       echo -e "  ${R}● Download failed! Check the link or network.${NC}"; sleep 2; continue
-                   fi
-               else
-                   echo -e "  ${Y}● Offline Update Cancelled.${NC}"; sleep 1; continue
-               fi
+               echo -e "  ${Y}● No offline components ready! Please update online first.${NC}"; sleep 2; continue
            fi
 
            echo -e "\n  ${DIM}├─ Deploying Dashboard Scripts...${NC}"
-           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "mwall.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
            for file in "${MODULES[@]}"; do
                if [ -f "$LOCAL_DIR/$file" ]; then
                    mod_name="${file%.sh}"
@@ -150,32 +127,18 @@ while true; do
                fi
            done
            
-           if [ -f "$LOCAL_DIR/gost" ]; then
-               cp "$LOCAL_DIR/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; echo -e "  ${G}  ✔ deployed binary: ${W}gost${NC}"
-           fi
-           if [ -f "$LOCAL_DIR/frps" ]; then
-               cp "$LOCAL_DIR/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; echo -e "  ${G}  ✔ deployed binary: ${W}frps${NC}"
-           fi
-           if [ -f "$LOCAL_DIR/frpc" ]; then
-               cp "$LOCAL_DIR/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; echo -e "  ${G}  ✔ deployed binary: ${W}frpc${NC}"
-           fi
-           if [ -f "$LOCAL_DIR/waterwall" ]; then
-               cp "$LOCAL_DIR/waterwall" /usr/local/bin/waterwall; chmod +x /usr/local/bin/waterwall; echo -e "  ${G}  ✔ deployed binary: ${W}waterwall${NC}"
-           fi
+           if [ -f "$LOCAL_DIR/gost" ]; then cp "$LOCAL_DIR/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; fi
+           if [ -f "$LOCAL_DIR/frps" ]; then cp "$LOCAL_DIR/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; fi
+           if [ -f "$LOCAL_DIR/frpc" ]; then cp "$LOCAL_DIR/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; fi
            
-           if ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
-               echo -e "\n  ${DIM}├─ Installing Local OS Packages (.deb)...${NC}"
-               dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-               echo -e "  ${G}  ✔ installed system dependencies!${NC}"
-           fi
            echo -e "\n  ${G}● Total Offline Deployment Complete!${NC}"; sleep 2.5; exec "$0" ;;
 
         10)
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL infrastructure traces? (y/n): ${NC}"; read del_confirm
            if [[ "$del_confirm" == "y" ]]; then
-               systemctl stop mgre.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service frps frpc 2>/dev/null
+               systemctl stop mgre.service ml2tp.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service frps frpc 2>/dev/null
                systemctl stop mwall@* 2>/dev/null
-               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/mwall /usr/bin/m* /usr/local/bin/frp* /usr/local/bin/waterwall
+               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mwall /opt/waterwall /usr/bin/m* /usr/local/bin/frp* /usr/local/bin/waterwall
                echo -e "  ${G}● Purge complete. System is vanilla.${NC}\n"; exit 0
            fi ;;
         0) clear; exit 0 ;;

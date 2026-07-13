@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v3.0.0 (L2TPv3 Native) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar v4.0.0 (Full Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -31,7 +31,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 3.0.0 "
+    local str1=" MStats Omni-Radar Core 4.0.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     if (( pad_len < 0 )); then pad_len=0; fi
@@ -96,15 +96,8 @@ init_frp_counters() {
     fi
 }
 
-get_frp_rx() {
-    local rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "FRP_CNT_RX" | awk '{sum+=$2} END {print sum}')
-    echo "${rx:-0}"
-}
-
-get_frp_tx() {
-    local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "FRP_CNT_TX" | awk '{sum+=$2} END {print sum}')
-    echo "${tx:-0}"
-}
+get_frp_rx() { local rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "FRP_CNT_RX" | awk '{sum+=$2} END {print sum}'); echo "${rx:-0}"; }
+get_frp_tx() { local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "FRP_CNT_TX" | awk '{sum+=$2} END {print sum}'); echo "${tx:-0}"; }
 
 show_live_radar() {
     tput civis; clear; declare -A rx_old tx_old
@@ -124,9 +117,11 @@ show_live_radar() {
         for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
         local l2tp_ifs=""
         for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && l2tp_ifs="$l2tp_ifs $T_NAME"; done
+        local hys_ifs=""
+        for conf in /etc/mhysteria/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && hys_ifs="$hys_ifs $T_NAME"; done
         local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
 
-        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $l2tp_ifs $wg_ifs"
+        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $l2tp_ifs $hys_ifs $wg_ifs"
         for iface in $all_ifs; do
             if [ -z "${rx_old[$iface]}" ] && [ -d "/sys/class/net/$iface" ]; then
                 rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface")
@@ -159,7 +154,8 @@ show_live_radar() {
 
         [ -n "$phys_ifs" ] && render_category "WAN / PHYS" "${W}" "$phys_ifs"
         [ -n "$gre_ifs" ] && render_category "GRE / L3" "${C}" "$gre_ifs"
-        [ -n "$l2tp_ifs" ] && render_category "L2TPv3 / L3" "${Y}" "$l2tp_ifs"
+        [ -n "$l2tp_ifs" ] && render_category "L2TP / L3" "${Y}" "$l2tp_ifs"
+        [ -n "$hys_ifs" ] && render_category "HYS2 / QUIC" "${G}" "$hys_ifs"
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs"
         [ -n "$wg_ifs" ] && render_category "WG CRYPTO" "${G}" "$wg_ifs"
 
@@ -195,6 +191,7 @@ show_total_usage() {
     for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
     for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $BR_NAME"; done
     for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
+    for conf in /etc/mhysteria/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
     [ -f "/etc/wireguard/wg0.conf" ] && all_tuns="$all_tuns wg0"
     
     echo -e "  ${B}╭──────────────────┬───────────────────────┬───────────────────────┬────────────────────────╮${NC}"
@@ -211,7 +208,7 @@ show_total_usage() {
 
     if [ -n "$all_tuns" ]; then
         echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, L2TP, WG)"
+        printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, L2TP, HYS2, WG)"
         echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
         for iface in $all_tuns; do
             [ ! -d "/sys/class/net/$iface" ] && continue
@@ -318,14 +315,12 @@ qos_manager() {
     echo -e "\n  ${DIM}┌─[ QoS & TRAFFIC SHAPING MANAGER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Limit bandwidth on specific Virtual Fabrics to prevent saturation.${NC}\n"
     
-    local gre_ifs=""
-    for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && gre_ifs="$gre_ifs $T_NAME"; done
-    local vx_ifs=""
-    for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && vx_ifs="$vx_ifs $BR_NAME"; done
-    local l2tp_ifs=""
-    for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && l2tp_ifs="$l2tp_ifs $T_NAME"; done
-    local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
-    local all_tuns="$gre_ifs $vx_ifs $l2tp_ifs $wg_ifs"
+    local all_tuns=""
+    for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
+    for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $BR_NAME"; done
+    for conf in /etc/ml2tp/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
+    for conf in /etc/mhysteria/tunnels/*.conf; do [ -f "$conf" ] && source "$conf" && all_tuns="$all_tuns $T_NAME"; done
+    [ -f "/etc/wireguard/wg0.conf" ] && all_tuns="$all_tuns wg0"
     
     echo -e "  ${B}╭─────┬──────────────────┬──────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-3s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "IDX" "INTERFACE" "CURRENT BANDWIDTH LIMIT"

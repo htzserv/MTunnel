@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.0.0 (Phantom Edition) ---
+# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.1.0 (Parser Fixes) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -65,7 +65,7 @@ draw_header() {
     [ "$total" -gt 0 ] && [ "$active" -lt "$total" ] && c_stat="${R}$active / $total (ISSUES)${NC}"
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer v6.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${c_stat} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer v6.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${c_stat} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -133,6 +133,7 @@ select_protocol() {
     echo -e "  ${DIM}├─${NC} ${W}5${NC}  ${DIM}❯${NC} ${G}ws${NC}              ${DIM}11${NC} ${DIM}❯${NC} ${G}quic${NC}"
     echo -e "  ${DIM}└─${NC} ${W}6${NC}  ${DIM}❯${NC} ${G}mws${NC}             ${DIM}12${NC} ${DIM}❯${NC} ${M}webtransport${NC}"
     echo -ne "\n  ${C}Select Protocol [Default 3] ❯❯ ${NC}"; read p_opt
+    p_opt=$(echo "$p_opt" | tr -d '\r' | tr -d ' ')
     
     case $p_opt in
         1) scheme="tcp"; s_suffix=""; c_suffix="" ;;
@@ -153,11 +154,20 @@ select_protocol() {
 
 configure_spoofing() {
     echo -ne "\n  ${C}●${NC} ${M}Enable L3 IP Spoofing (IPIP Fake Traffic)? (y/n) [n]: ${NC}"; read use_spoof
+    use_spoof=$(echo "$use_spoof" | tr -d '\r' | tr -d ' ')
     if [[ "$use_spoof" == "y" ]]; then
         echo -e "  ${DIM}Tip: Destination IP should be a whitelisted domestic IP (e.g. Bank, Aparat)${NC}"
         echo -ne "  ${C}●${NC} ${W}Spoof Destination IP (e.g. 185.166.104.6): ${NC}"; read sp_dst
         echo -ne "  ${C}●${NC} ${W}Spoof Source IP (e.g. 185.143.234.120): ${NC}"; read sp_src
-        spoof_conf="\nprofile = \"ipip\"\nspoof_dst_ip = \"$sp_dst\"\nspoof_src_ip = \"$sp_src\""
+        
+        sp_dst=$(echo "$sp_dst" | tr -d '\r' | tr -d ' ')
+        sp_src=$(echo "$sp_src" | tr -d '\r' | tr -d ' ')
+        
+        # 🌟 باگِ Newline در فایل TOML دقیقاً اینجا برطرف شد 🌟
+        spoof_conf="
+profile = \"ipip\"
+spoof_dst_ip = \"$sp_dst\"
+spoof_src_ip = \"$sp_src\""
     else
         spoof_conf=""
     fi
@@ -171,6 +181,7 @@ view_logs() {
     for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .toml)"; done
     echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Index: ${NC}"; read d_idx
+    d_idx=$(echo "$d_idx" | tr -d '\r' | tr -d ' ')
     
     if [[ -n "${configs[$d_idx]}" ]]; then
         local name=$(basename "${configs[$d_idx]}" .toml); local conf="${configs[$d_idx]}"
@@ -207,6 +218,7 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Diagnose & View Logs${NC} ${DIM}(Live Troubleshooting)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MBACKHAUL ❯❯ ${NC}"; read opt
+    opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
 
     case $opt in
         1)
@@ -214,6 +226,11 @@ while true; do
            echo -ne "\n  ${C}●${NC} ${W}Node Name (e.g. bh_kharej): ${NC}"; read b_name
            echo -ne "  ${C}●${NC} ${W}Listen Port for Backhaul Tunnel (e.g. 7000): ${NC}"; read b_port
            echo -ne "  ${C}●${NC} ${W}Secret Token (Password): ${NC}"; read b_token
+           
+           b_name=$(echo "$b_name" | tr -d '\r' | tr -d ' ')
+           b_port=$(echo "$b_port" | tr -d '\r' | tr -d ' ')
+           b_token=$(echo "$b_token" | tr -d '\r')
+           
            select_protocol
            configure_spoofing
            
@@ -237,6 +254,14 @@ EOF
            echo -ne "  ${C}●${NC} ${W}Secret Token (Must match Kharej): ${NC}"; read b_token
            echo -ne "  ${C}●${NC} ${W}Multiplex Connections [Default: 8]: ${NC}"; read b_conn; b_conn=${b_conn:-8}
            echo -ne "  ${C}●${NC} ${W}Ports to forward (e.g. 80,443,2053): ${NC}"; read raw_ports
+           
+           b_name=$(echo "$b_name" | tr -d '\r' | tr -d ' ')
+           r_ip=$(echo "$r_ip" | tr -d '\r' | tr -d ' ')
+           r_port=$(echo "$r_port" | tr -d '\r' | tr -d ' ')
+           b_token=$(echo "$b_token" | tr -d '\r')
+           b_conn=$(echo "$b_conn" | tr -d '\r' | tr -d ' ')
+           raw_ports=$(echo "$raw_ports" | tr -d '\r')
+           
            select_protocol
            configure_spoofing
            
@@ -269,6 +294,8 @@ EOF
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .toml)"; done
            echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Index (or 'all'): ${NC}"; read del_idx
+           del_idx=$(echo "$del_idx" | tr -d '\r' | tr -d ' ')
+           
            if [[ "$del_idx" == "all" ]]; then
                for conf in "${configs[@]}"; do
                    name=$(basename "$conf" .toml)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v2.0.0 (Pure Native Linux Edition) ---
+# --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v2.1.0 (Sanitized) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/ml2tp/tunnels"
@@ -31,21 +31,17 @@ draw_progress_bar() {
 }
 
 check_dependencies() {
-    local missing=0
-    modinfo l2tp_eth >/dev/null 2>&1 || missing=1
-    
+    local missing=0; modinfo l2tp_eth >/dev/null 2>&1 || missing=1
     if [ "$missing" -eq 1 ]; then
         echo -e "\n  ${DIM}● Injecting Native L2TP Kernel Modules...${NC}"
         (
             apt-get update -y -q >/dev/null 2>&1
             apt-get install --download-only -y -q iproute2 linux-modules-extra-$(uname -r) >/dev/null 2>&1
             cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
-            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-            apt-get install -f -y -q >/dev/null 2>&1
+            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; apt-get install -f -y -q >/dev/null 2>&1
             modprobe l2tp_core l2tp_netlink l2tp_eth l2tp_ip 2>/dev/null
         ) >/dev/null 2>&1 &
-        draw_progress_bar $! "Patching Linux Kernel"
-        sleep 1
+        draw_progress_bar $! "Patching Linux Kernel"; sleep 1
     fi
 }
 
@@ -58,38 +54,27 @@ apply_tunnel() {
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
     
     iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 >/dev/null 2>&1
-    
-    # نابود کردن سشن قبلی به صورت ایمن
     ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1
-    ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1
-    ip link del "$T_NAME" >/dev/null 2>&1
-
+    ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1; ip link del "$T_NAME" >/dev/null 2>&1
     modprobe l2tp_core l2tp_netlink l2tp_eth l2tp_ip 2>/dev/null
 
     local REAL_LOCAL=$(ip route get "$REMOTE_PUB" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1)
     [ -z "$REAL_LOCAL" ] && REAL_LOCAL=$(hostname -I | awk '{print $1}')
 
-    # ساخت تونل L2TP خالص فقط با دستورات لینوکس
     ip l2tp add tunnel tunnel_id "$TUN_ID" peer_tunnel_id "$TUN_ID" encap udp local "$REAL_LOCAL" remote "$REMOTE_PUB" udp_sport "$TUN_PORT" udp_dport "$TUN_PORT" 2>/dev/null
     ip l2tp add session name "$T_NAME" tunnel_id "$TUN_ID" session_id "$TUN_ID" peer_session_id "$TUN_ID" 2>/dev/null
-    
-    ip link set dev "$T_NAME" mtu 1400 2>/dev/null
-    ip link set "$T_NAME" up 2>/dev/null
+    ip link set dev "$T_NAME" mtu 1400 2>/dev/null; ip link set "$T_NAME" up 2>/dev/null
     ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1360 2>/dev/null
 
     if [[ "$MAX_IPS" -gt 0 ]]; then
-        local s_file="${STATE_DIR}/${T_NAME}.state"
-        echo "0" > "$s_file"
+        local s_file="${STATE_DIR}/${T_NAME}.state"; echo "0" > "$s_file"
         for ((i=1; i<=MAX_IPS; i++)); do
-            idx=$(cat "$s_file")
-            hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum)
-            range_selector=$(( 0x${hash:0:2} % 3 ))
+            idx=$(cat "$s_file"); hash=$(echo "${SYNC_KEY}_${idx}" | sha256sum); range_selector=$(( 0x${hash:0:2} % 3 ))
             if [[ "$range_selector" == "0" ]]; then o1="10"; o2=$(( (0x${hash:2:2} % 254) + 1 ))
             elif [[ "$range_selector" == "1" ]]; then o1="172"; o2=$(( (0x${hash:2:2} % 16) + 16 ))
             else o1="192"; o2="168"; fi
-            o3=$(( (0x${hash:4:2} % 254) + 1 ))
-            last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
+            o3=$(( (0x${hash:4:2} % 254) + 1 )); last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
             ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null
             echo $((idx + 1)) > "$s_file"
@@ -97,9 +82,7 @@ apply_tunnel() {
     fi
 }
 
-apply_all_tunnels() {
-    for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_tunnel "$conf"; done
-}
+apply_all_tunnels() { for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_tunnel "$conf"; done; }
 
 setup_service() {
     cat <<EOF > "$SERVICE_FILE"
@@ -116,7 +99,6 @@ EOF
     systemctl daemon-reload && systemctl enable ml2tp.service >/dev/null 2>&1
 }
 
-# ----------------- UI / CLI -----------------
 draw_ml2tp_header() {
     local s_ip=$(get_local_ip); local active_tunnels=0; local total_vips=0
     for conf in "$CONF_DIR"/*.conf; do
@@ -125,13 +107,9 @@ draw_ml2tp_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" ML2TP Core 2.0.0 (Native L2TPv3) "
-    local str2=" IP: $s_ip "
-    local str3=" ACTIVE TUNNELS: $active_tunnels "
-    local str4=" TOTAL V-IPS: $total_vips "
-    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} ))
-    local pad_len=$(( 92 - raw_len )); [ "$pad_len" -lt 0 ] && pad_len=0
-    local padding=$(printf '%*s' "$pad_len" "")
+    local str1=" ML2TP Core 2.1.0 (Native L2TPv3) "
+    local raw_len=$(( ${#str1} + 1 + 5 + ${#s_ip} + 1 + 17 + ${#active_tunnels} + 1 + 14 + ${#total_vips} ))
+    local pad_len=$(( 92 - raw_len )); [ "$pad_len" -lt 0 ] && pad_len=0; local padding=$(printf '%*s' "$pad_len" "")
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} ACTIVE TUNNELS:${NC}${G} ${active_tunnels} ${NC}${B}│${NC}${DIM} TOTAL V-IPS:${NC}${Y} ${total_vips} ${NC}${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -204,13 +182,12 @@ show_tunnel_details() {
         if [ $? -eq 0 ]; then lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
-        local l4="Core IPs     : ${lip} -> ${tip}"
-        local r4_raw="Link: * ${stat_text} (${lat_raw})"
+        local l4="Core IPs     : ${lip} -> ${tip}"; local r4_raw="Link: * ${stat_text} (${lat_raw})"
         local pad4=$(( 89 - ${#l4} - ${#r4_raw} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
         echo -e "  ${B}│${NC} ${DIM}Core IPs     :${NC} ${G}${lip}${NC} ${DIM}->${NC} ${Y}${tip}${NC}${sp4} ${DIM}Link:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${lat_color}(${lat_raw})${NC} ${B}│${NC}"
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
     done
-    echo -ne "  ${DIM}Press Enter to return...${NC}"; read
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
 edit_tunnel() {
@@ -218,26 +195,24 @@ edit_tunnel() {
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
     
     echo -e "\n  ${B}╭────────────────── Select Tunnel to Edit ───────────────────╮${NC}"
-    for i in "${!configs[@]}"; do
-        local conf_name=$(basename "${configs[$i]}" .conf)
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
-    done
+    for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
     echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Go Back"
+    printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Return"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Tunnel Index or 'q': ${NC}"; read t_idx
-    
+    t_idx=$(echo "$t_idx" | tr -d '\r')
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
         local sel_conf="${configs[$t_idx]}"; source "$sel_conf"
         echo -e "\n  ${DIM}┌─[ HOT-SWAP PUBLIC IPs ]${NC}"
         echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_local
+        new_local=$(echo "$new_local" | tr -d '\r' | tr -d ' ')
         echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_remote
+        new_remote=$(echo "$new_remote" | tr -d '\r' | tr -d ' ')
         [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
         [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
-        apply_tunnel "$sel_conf"
-        echo -e "  ${G}● Pipeline re-routed successfully!${NC}"; sleep 1.5
+        apply_tunnel "$sel_conf"; echo -e "  ${G}● Pipeline re-routed successfully!${NC}"; sleep 1.5
     fi
 }
 
@@ -247,99 +222,58 @@ while true; do
     draw_ml2tp_header
     echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New L2TPv3 Tunnel (UDP)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Ports${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit${NC}\n"
     echo -ne "  ${C}ML2TP ❯❯ ${NC}"; read opt
+    opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1) 
            check_dependencies
            echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${C}L2TPv3 Native Engine (Layer 3 over UDP)${NC}\n  ${DIM}└────────────────────────────────────────────────────────${NC}"
-           
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Server) | 2:KHAREJ (Client) | q:Back]: ${NC}"; read s_type
-               [[ "$s_type" == "q" || "$s_type" == "1" || "$s_type" == "2" ]] && break
-           done
+           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Server) | 2:KHAREJ (Client) | q:Back]: ${NC}"; read s_type; s_type=$(echo "$s_type" | tr -d '\r' | tr -d ' '); [[ "$s_type" == "q" || "$s_type" == "1" || "$s_type" == "2" ]] && break; done
            [[ "$s_type" == "q" ]] && continue
-           
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4 chars, e.g. fa): ${NC}"; read suffix
-               [[ "$suffix" == "q" ]] && break
-               [[ -z "$suffix" ]] && continue
-               t_name="l2tp_$suffix"
-               if [ "${#t_name}" -gt 15 ]; then echo -e "  ${R}● Error: Name too long!${NC}"; else break; fi
-           done
+           while true; do echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4 chars, e.g. fa): ${NC}"; read suffix; suffix=$(echo "$suffix" | tr -d '\r' | tr -d ' '); [[ "$suffix" == "q" ]] && break; [[ -z "$suffix" ]] && continue; t_name="l2tp_$suffix"; if [ "${#t_name}" -gt 15 ]; then echo -e "  ${R}● Error: Name too long!${NC}"; else break; fi; done
            [[ "$suffix" == "q" ]] && continue
-           
-           if [ -f "$CONF_DIR/${t_name}.conf" ]; then
-               echo -e "\n  ${R}● Error: Interface [${W}${t_name}${R}] already exists!${NC}"; sleep 2; continue
-           fi
-           
+           if [ -f "$CONF_DIR/${t_name}.conf" ]; then echo -e "\n  ${R}● Error: Interface [${W}${t_name}${R}] already exists!${NC}"; sleep 2; continue; fi
            local_ip=$(get_local_ip)
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}] (Enter for default): ${NC}"; read custom_ip
-               [ -n "$custom_ip" ] && local_ip=$custom_ip
-               break
-           done
-           
-           while true; do echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip; [[ -n "$r_ip" ]] && break; done
-           while true; do echo -ne "  ${C}●${NC} ${W}L2TP UDP Connection Port (e.g. 5000): ${NC}"; read tun_port; [[ -n "$tun_port" ]] && break; done
-           
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read tun_id
-               if grep -q "TUN_ID=$tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Network ID in use!${NC}"; continue; fi
-               [[ -n "$tun_id" ]] && break
-           done
+           while true; do echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}] (Enter for default): ${NC}"; read custom_ip; custom_ip=$(echo "$custom_ip" | tr -d '\r' | tr -d ' '); [ -n "$custom_ip" ] && local_ip=$custom_ip; break; done
+           while true; do echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip; r_ip=$(echo "$r_ip" | tr -d '\r' | tr -d ' '); [[ -n "$r_ip" ]] && break; done
+           while true; do echo -ne "  ${C}●${NC} ${W}L2TP UDP Connection Port (e.g. 5000): ${NC}"; read tun_port; tun_port=$(echo "$tun_port" | tr -d '\r' | tr -d ' '); [[ -n "$tun_port" ]] && break; done
+           while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read tun_id; tun_id=$(echo "$tun_id" | tr -d '\r' | tr -d ' '); if grep -q "TUN_ID=$tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Network ID in use!${NC}"; continue; fi; [[ -n "$tun_id" ]] && break; done
            
            hash_c=$(echo -n "core_${tun_id}" | sha256sum); class_selector=$(( tun_id % 3 ))
            if [ "$class_selector" == "1" ]; then c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
            elif [ "$class_selector" == "2" ]; then c1="172"; c2=$(( (0x${hash:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
            else c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
            
-           core_sub="${c1}.${c2}.${c3}"
-           conf_path="$CONF_DIR/${t_name}.conf"
-           
+           core_sub="${c1}.${c2}.${c3}"; conf_path="$CONF_DIR/${t_name}.conf"
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_PORT=$tun_port\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub" > "$conf_path"
            
-           apply_tunnel "$conf_path"
-           setup_service
-           
+           apply_tunnel "$conf_path"; setup_service
            if ip link show "$t_name" >/dev/null 2>&1; then echo -e "  ${G}● L2TPv3 Tunnel [${t_name}] deployed successfully!${NC}"; sleep 1.5
            else echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel!${NC}"; rm -f "$conf_path"; sleep 2; fi ;;
         2)
-           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels configured yet!${NC}" && sleep 1.5 && continue
+           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null)); [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels configured yet!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Tunnel for vIPs ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Select Index: ${NC}"; read t_idx
+           echo -ne "  ${C}●${NC} ${W}Select Index: ${NC}"; read t_idx; t_idx=$(echo "$t_idx" | tr -d '\r')
            if [[ -n "${configs[$t_idx]}" ]]; then
                sel_conf="${configs[$t_idx]}"; source "$sel_conf"
-               echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n
-               echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k
+               echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; n=$(echo "$n" | tr -d '\r')
+               echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; k=$(echo "$k" | tr -d '\r')
                sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
-               apply_tunnel "$sel_conf"
-               echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
+               apply_tunnel "$sel_conf"; echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
            fi ;;
-        3) 
-           while true; do draw_ml2tp_header; show_ml2tp_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+        3) while true; do draw_ml2tp_header; show_ml2tp_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
         4)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Erase ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Enter Index or 'all': ${NC}"; read del_idx
+           echo -ne "  ${C}●${NC} ${W}Enter Index or 'all': ${NC}"; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
-               for conf in "${configs[@]}"; do
-                   source "$conf"
-                   ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1
-                   ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1
-                   ip link del "$T_NAME" >/dev/null 2>&1
-                   rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"
-               done
+               for conf in "${configs[@]}"; do source "$conf"; ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1; ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1; ip link del "$T_NAME" >/dev/null 2>&1; rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"; done
                echo -e "  ${G}● All tunnels purged.${NC}"; sleep 1.5
            elif [[ -n "${configs[$del_idx]}" ]]; then
-               source "${configs[$del_idx]}"
-               ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1
-               ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1
-               ip link del "$T_NAME" >/dev/null 2>&1
-               rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
+               source "${configs[$del_idx]}"; ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1; ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1; ip link del "$T_NAME" >/dev/null 2>&1; rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
                echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         5) edit_tunnel ;; 6) show_tunnel_details ;; 0) break ;;

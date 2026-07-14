@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.0 (Full Edition) ---
+# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.0 (Backhaul Integrated) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -80,6 +80,39 @@ get_frp_tx() {
     echo "${tx:-0}"
 }
 
+# --- NEW: BACKHAUL COUNTERS INJECTION ---
+init_bh_counters() {
+    for conf in /etc/mbackhaul/tunnels/*.toml; do
+        [ ! -f "$conf" ] && continue
+        local name=$(basename "$conf" .toml)
+        if grep -q "\[server\]" "$conf"; then
+            local port=$(awk -F'=' '/^bind/ {print $2}' "$conf" | grep -oP ':[0-9]+' | head -1 | tr -d ':')
+            if [ -n "$port" ]; then
+                iptables -t mangle -C INPUT -p tcp --dport "$port" -m comment --comment "MBH_RX_${name}" >/dev/null 2>&1 || iptables -t mangle -A INPUT -p tcp --dport "$port" -m comment --comment "MBH_RX_${name}" 2>/dev/null
+                iptables -t mangle -C OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
+            fi
+        elif grep -q "\[client\]" "$conf"; then
+            local remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
+            local r_ip=$(echo "$remote" | cut -d: -f1); local r_port=$(echo "$remote" | cut -d: -f2)
+            if [ -n "$r_ip" ] && [ -n "$r_port" ]; then
+                iptables -t mangle -C INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" >/dev/null 2>&1 || iptables -t mangle -A INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" 2>/dev/null
+                iptables -t mangle -C OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
+            fi
+        fi
+    done
+}
+
+get_bh_rx() {
+    local rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "MBH_RX_$1" | awk '{sum+=$2} END {print sum}')
+    echo "${rx:-0}"
+}
+
+get_bh_tx() {
+    local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "MBH_TX_$1" | awk '{sum+=$2} END {print sum}')
+    echo "${tx:-0}"
+}
+# ----------------------------------------
+
 get_uptime() {
     local iface=$1
     if ! ip link show "$iface" >/dev/null 2>&1 || [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" == "down" ]; then echo "---"; return; fi
@@ -156,6 +189,8 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 if iface == 'FRP Engine':
                     os.system("systemctl restart frps 2>/dev/null; systemctl restart frpc 2>/dev/null")
                     os.system("date +%s > /etc/mstats/uptimes/frp_engine 2>/dev/null")
+                elif os.path.exists(f"/etc/mbackhaul/tunnels/{iface}.toml"):
+                    os.system(f"systemctl restart mbackhaul@{iface} 2>/dev/null")
                 elif iface.startswith('l2tp_'):
                     os.system("systemctl restart ml2tp.service 2>/dev/null")
                     os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
@@ -442,6 +477,7 @@ cat <<'EOF' > index.html
                         else if (tObj.type.includes("L2TPv3")) typeBadge = "<span class='badge' style='background:rgba(20, 184, 166, 0.1); color:#14b8a6; border:1px solid rgba(20, 184, 166, 0.2);'>L2TPv3/L3</span>";
                         else if (tObj.type.includes("Hys2")) typeBadge = "<span class='badge b-green'>Hysteria2/L3</span>";
                         else if (tObj.type.includes("Proxy")) typeBadge = "<span class='badge b-yellow'>FRP/L4</span>";
+                        else if (tObj.type.includes("Backhaul")) typeBadge = "<span class='badge b-red'>MBACKHAUL/L4</span>";
                         else typeBadge = "<span class='badge b-blue'>GRE/L3</span>";
                         
                         let pingHtml = "<span class='text-slate'>---</span>";
@@ -596,6 +632,46 @@ while true; do
         if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
         TUNNELS_JSON+="{\"iface\":\"$frp_name\", \"type\":\"$frp_type\", \"endpoint\":\"$frp_rip\", \"state\":\"$frp_state\", \"ping\":\"$frp_ping\", \"uptime\":\"$frp_uptime\", \"rx_spd\":\"$(format_speed $rx_s_f)\", \"tx_spd\":\"$(format_speed $tx_s_f)\", \"rx_tot\":\"$(format_total $r_new_f)\", \"tx_tot\":\"$(format_total $t_new_f)\", \"comb_spd\":\"$(format_speed $comb_spd_f)\", \"comb_tot\":\"$(format_total $comb_tot_f)\"}"
     fi
+
+    # --- NEW: BACKHAUL DATA COLLECTION ---
+    init_bh_counters
+    for conf in /etc/mbackhaul/tunnels/*.toml; do
+        [ ! -f "$conf" ] && continue
+        bh_name=$(basename "$conf" .toml)
+        bh_type="Backhaul"
+        bh_state="OFFLINE"
+        systemctl is-active --quiet "mbackhaul@$bh_name" 2>/dev/null && bh_state="ONLINE"
+        
+        bh_rip="Unknown"
+        if grep -q "\[server\]" "$conf"; then
+            bh_type="Backhaul (Server)"
+            bh_rip="Listening..."
+        elif grep -q "\[client\]" "$conf"; then
+            bh_type="Backhaul (Client)"
+            bh_rip=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d: -f1)
+            [ -n "$bh_rip" ] && remote_list+=("$bh_rip")
+        fi
+        
+        bh_ping="---"
+        if [ "$bh_state" == "ONLINE" ] && grep -q "\[client\]" "$conf" && [ -n "$bh_rip" ]; then
+            bh_ping=$(ping -c 1 -W 1 "$bh_rip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+        fi
+        
+        bh_uptime="Active"
+        [ "$bh_state" == "ONLINE" ] && bh_uptime=$(get_frp_uptime "mbackhaul@$bh_name")
+
+        r_new_b=$(get_bh_rx "$bh_name"); t_new_b=$(get_bh_tx "$bh_name")
+        r_old_b=${rx_old["BH_$bh_name"]:-$r_new_b}; t_old_b=${tx_old["BH_$bh_name"]:-$t_new_b}
+        rx_s_b=$((r_new_b - r_old_b)); [ "$rx_s_b" -lt 0 ] && rx_s_b=0
+        tx_s_b=$((t_new_b - t_old_b)); [ "$tx_s_b" -lt 0 ] && tx_s_b=0
+        rx_old["BH_$bh_name"]=$r_new_b; tx_old["BH_$bh_name"]=$t_new_b
+
+        comb_spd_b=$((rx_s_b + tx_s_b)); comb_tot_b=$((r_new_b + t_new_b))
+
+        if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
+        TUNNELS_JSON+="{\"iface\":\"$bh_name\", \"type\":\"$bh_type\", \"endpoint\":\"$bh_rip\", \"state\":\"$bh_state\", \"ping\":\"$bh_ping\", \"uptime\":\"$bh_uptime\", \"rx_spd\":\"$(format_speed $rx_s_b)\", \"tx_spd\":\"$(format_speed $tx_s_b)\", \"rx_tot\":\"$(format_total $r_new_b)\", \"tx_tot\":\"$(format_total $t_new_b)\", \"comb_spd\":\"$(format_speed $comb_spd_b)\", \"comb_tot\":\"$(format_total $comb_tot_b)\"}"
+    done
+    # ----------------------------------------
 
     TUNNELS_JSON+="]"
 

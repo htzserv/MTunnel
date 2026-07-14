@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.1.5 (Phantom Edition) ---
+# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.2.0 (Editor Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -65,7 +65,7 @@ draw_header() {
     [ "$total" -gt 0 ] && [ "$active" -lt "$total" ] && c_stat="${R}$active / $total (ISSUES)${NC}"
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer v6.1.5${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${c_stat} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer v6.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${c_stat} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -92,8 +92,6 @@ list_nodes() {
             fi
         elif grep -q "\[client\]" "$conf"; then 
             mode="${C}IRAN (Client)${NC}"
-            
-            # --- REGEX FIX: Stripping protocol prefix safely ---
             local raw_remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
             remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
             proto=$(grep 'remote =' "$conf" | grep -oP '"\K[a-zA-Z0-9]+(?=://)')
@@ -107,7 +105,6 @@ list_nodes() {
         fi
         
         [ -z "$proto" ] && proto="tcp"
-        
         local spoof_badge=""
         if grep -q 'profile = "ipip"' "$conf"; then spoof_badge="${M}[IPIP SPOOFED]${NC}"; fi
 
@@ -165,13 +162,124 @@ configure_spoofing() {
         sp_dst=$(echo "$sp_dst" | tr -d '\r' | tr -d ' ')
         sp_src=$(echo "$sp_src" | tr -d '\r' | tr -d ' ')
         
-        # --- TOML SYNTAX FIX ---
         spoof_conf="
 profile = \"ipip\"
 spoof_dst_ip = \"$sp_dst\"
 spoof_src_ip = \"$sp_src\""
     else
         spoof_conf=""
+    fi
+}
+
+show_node_details() {
+    local configs=($(ls "$CONF_DIR"/*.toml 2>/dev/null))
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No nodes found!${NC}"; sleep 1.5; return; fi
+
+    echo -e "\n  ${Y}● Deployed Backhaul Configurations:${NC}"
+    for conf in "${configs[@]}"; do
+        local name=$(basename "$conf" .toml)
+        local t_role="Unknown"; local t_token="[ NOT SET ]"
+        local t_bind="-" ; local t_remote="-"
+        
+        if grep -q "\[server\]" "$conf"; then
+            t_role="KHAREJ (Server)"
+            t_bind=$(grep 'bind =' "$conf" | cut -d'"' -f2)
+            t_token=$(grep 'token =' "$conf" | cut -d'"' -f2)
+        elif grep -q "\[client\]" "$conf"; then
+            t_role="IRAN (Client)"
+            t_remote=$(grep 'remote =' "$conf" | cut -d'"' -f2)
+            t_token=$(grep 'token =' "$conf" | cut -d'"' -f2)
+        fi
+
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        local left_p="▼ Node: $name"
+        local right_p="Role: $t_role"
+        local pad=$(( 89 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
+        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
+        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
+        
+        local l1="Auth Token   : ${t_token}"; local r1="Type: L4 Multiplexer"
+        local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
+        echo -e "  ${B}│${NC} ${M}Auth Token   :${NC} ${W}${t_token}${NC}${sp1} ${DIM}Type:${NC} ${W}L4 Multiplexer${NC} ${B}│${NC}"
+        
+        if [ "$t_role" == "KHAREJ (Server)" ]; then
+            local l2="Bind Address : ${t_bind}"; local r2=""
+            local pad2=$(( 89 - ${#l2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+            echo -e "  ${B}│${NC} ${C}Bind Address :${NC} ${Y}${t_bind}${NC}${sp2} ${B}│${NC}"
+        else
+            local l2="Remote Target: ${t_remote}"; local r2=""
+            local pad2=$(( 89 - ${#l2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+            echo -e "  ${B}│${NC} ${C}Remote Target:${NC} ${Y}${t_remote}${NC}${sp2} ${B}│${NC}"
+            
+            local ports=$(grep 'local =' "$conf" | grep -oP ':\K[0-9]+' | tr -d '"' | paste -sd "," -)
+            local l3="Fwd Ports    : ${ports:-None}"
+            local pad3=$(( 89 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
+            echo -e "  ${B}│${NC} ${G}Fwd Ports    :${NC} ${W}${ports:-None}${NC}${sp3} ${B}│${NC}"
+        fi
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    done
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+}
+
+edit_node() {
+    local configs=($(ls "$CONF_DIR"/*.toml 2>/dev/null))
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No nodes configured yet!${NC}"; sleep 1.5; return; fi
+    
+    echo -e "\n  ${B}╭────────────────── Select Node to Edit ───────────────────╮${NC}"
+    for i in "${!configs[@]}"; do
+        local conf_name=$(basename "${configs[$i]}" .toml)
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
+    done
+    echo -e "  ${B}├────────────────────────────────────────────────────────────┤${NC}"
+    printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${DIM}%-53s${NC} ${B}│${NC}\n" "q" "Cancel and Return"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo -ne "  ${C}●${NC} ${W}Select Node Index or 'q': ${NC}"; read t_idx
+    t_idx=$(echo "$t_idx" | tr -d '\r' | tr -d ' ')
+    
+    [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
+    
+    if [[ -n "${configs[$t_idx]}" ]]; then
+        local sel_conf="${configs[$t_idx]}"
+        local name=$(basename "$sel_conf" .toml)
+        echo -e "\n  ${DIM}┌─[ EDIT NODE SETTINGS ]${NC}"
+        
+        local current_token=$(grep 'token =' "$sel_conf" | cut -d'"' -f2)
+        echo -ne "  ${C}●${NC} ${W}New Auth Token [${Y}$current_token${W}] (Enter to skip): ${NC}"; read new_token
+        new_token=$(echo "$new_token" | tr -d '\r')
+        [ -n "$new_token" ] && sed -i "s/^token =.*/token = \"$new_token\"/" "$sel_conf"
+
+        if grep -q "\[server\]" "$sel_conf"; then
+            local current_bind=$(grep 'bind =' "$sel_conf" | cut -d'"' -f2)
+            echo -ne "  ${C}●${NC} ${W}New Bind Address [${Y}$current_bind${W}] (Enter to skip): ${NC}"; read new_bind
+            new_bind=$(echo "$new_bind" | tr -d '\r' | tr -d ' ')
+            [ -n "$new_bind" ] && sed -i "s|^bind =.*|bind = \"$new_bind\"|" "$sel_conf"
+        elif grep -q "\[client\]" "$sel_conf"; then
+            local current_remote=$(grep 'remote =' "$sel_conf" | cut -d'"' -f2)
+            echo -ne "  ${C}●${NC} ${W}New Remote Address [${Y}$current_remote${W}] (Enter to skip): ${NC}"; read new_remote
+            new_remote=$(echo "$new_remote" | tr -d '\r' | tr -d ' ')
+            [ -n "$new_remote" ] && sed -i "s|^remote =.*|remote = \"$new_remote\"|" "$sel_conf"
+            
+            echo -ne "  ${C}●${NC} ${W}Do you want to reconfigure Forwarded Ports? (y/n) [n]: ${NC}"; read edit_ports
+            edit_ports=$(echo "$edit_ports" | tr -d '\r' | tr -d ' ')
+            if [[ "$edit_ports" == "y" ]]; then
+                echo -ne "  ${C}●${NC} ${W}Enter ALL ports you want to forward (e.g. 80,443,2053): ${NC}"; read raw_ports
+                raw_ports=$(echo "$raw_ports" | tr -d '\r')
+                sed -i '/\[\[client.ports\]\]/,$d' "$sel_conf"
+                
+                local clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
+                for p in $clean_ports; do
+                    cat <<EOF >> "$sel_conf"
+
+[[client.ports]]
+local = "0.0.0.0:$p"
+remote = "127.0.0.1:$p"
+EOF
+                done
+            fi
+        fi
+        
+        systemctl restart "mbackhaul@$name" 2>/dev/null
+        echo -e "  ${G}● Node re-configured successfully!${NC}"; sleep 1.5
     fi
 }
 
@@ -203,10 +311,10 @@ view_logs() {
             else echo -e "  ${DIM}├─ Remote Link:${NC} ${R}BLOCKED! Cannot reach Kharej Server IP/Port.${NC}"; fi
         fi
         
-        echo -e "  ${M}├─[ LIVE SYSTEM LOGS (Last 20 Lines) ]──────────────────────${NC}"
-        journalctl -u "mbackhaul@$name" -n 20 --no-pager | sed 's/^/  │ /'
+        echo -e "  ${M}├─[ LIVE SYSTEM LOGS (Last 30 Lines) ]──────────────────────${NC}"
+        journalctl -u "mbackhaul@$name" -n 30 --no-pager | sed 's/^/  │ /'
         echo -e "  ${M}└───────────────────────────────────────────────────────────${NC}"
-        echo -e "  ${DIM}Tip: Press 'q' to exit if log stuck. If blocked, try WSS or TCPMUX.${NC}"
+        echo -e "  ${DIM}Tip: Check logs carefully. Are you using wss/tcpmux but port is blocked?${NC}"
         echo -ne "\n  ${C}Press Enter to return to menu...${NC}"; read dummy
     fi
 }
@@ -216,8 +324,10 @@ while true; do
     echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup KHAREJ Node${NC} ${DIM}(Server Mode)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Setup IRAN Node${NC}   ${DIM}(Client Mode + Port Forwarding)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Delete Node${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Diagnose & View Logs${NC} ${DIM}(Live Troubleshooting)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}View Node Configurations${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit Node Settings${NC}   ${DIM}(IP / Port / Token)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Delete Node${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Diagnose & View Logs${NC} ${DIM}(Live Troubleshooting)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MBACKHAUL ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
@@ -280,7 +390,7 @@ EOF
                cat <<EOF >> "$conf_path"
 
 [[client.ports]]
-local = ":$p"
+local = "0.0.0.0:$p"
 remote = "127.0.0.1:$p"
 EOF
            done
@@ -288,7 +398,9 @@ EOF
            apply_service; systemctl enable "mbackhaul@$b_name" >/dev/null 2>&1; systemctl restart "mbackhaul@$b_name"
            echo -e "\n  ${G}● Iran Client Node Deployed and Ports Mapped!${NC}"; sleep 1.5 ;;
            
-        3)
+        3) show_node_details ;;
+        4) edit_node ;;
+        5)
            configs=($(ls "$CONF_DIR"/*.toml 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && continue
            echo -e "\n  ${B}╭────────────────── Select Node to Delete ──────────────────╮${NC}"
@@ -308,7 +420,7 @@ EOF
                rm -f "${configs[$del_idx]}"
            fi
            echo -e "  ${G}● Purged!${NC}"; sleep 1 ;;
-        4) view_logs ;;
+        6) view_logs ;;
         0) break ;;
     esac
 done

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.1.5 (Bugfix Edition) ---
+# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.1.5 (Phantom Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -92,15 +92,14 @@ list_nodes() {
             fi
         elif grep -q "\[client\]" "$conf"; then 
             mode="${C}IRAN (Client)${NC}"
-            # 🌟 باگِ جدا کردن آی‌پی از پروتکل اینجا حل شد 🌟
+            
+            # --- REGEX FIX: Stripping protocol prefix safely ---
             local raw_remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
             remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
             proto=$(grep 'remote =' "$conf" | grep -oP '"\K[a-zA-Z0-9]+(?=://)')
             grep -q "nodelay=true" "$conf" && proto="${proto}_nodelay"
             
-            local r_ip=$(echo "$raw_remote" | cut -d: -f1)
-            local r_port=$(echo "$raw_remote" | cut -d: -f2)
-            
+            local r_ip=$(echo "$raw_remote" | cut -d: -f1); local r_port=$(echo "$raw_remote" | cut -d: -f2)
             if [[ "$sys_stat" == *RUNNING* ]]; then
                 if timeout 1 bash -c "</dev/tcp/$r_ip/$r_port" 2>/dev/null; then net_stat="${G}[Connected]${NC}"
                 else net_stat="${R}[Unreachable/Blocked]${NC}"; sys_stat="${Y}● RECONNECTING${NC}"; fi
@@ -108,6 +107,7 @@ list_nodes() {
         fi
         
         [ -z "$proto" ] && proto="tcp"
+        
         local spoof_badge=""
         if grep -q 'profile = "ipip"' "$conf"; then spoof_badge="${M}[IPIP SPOOFED]${NC}"; fi
 
@@ -162,11 +162,10 @@ configure_spoofing() {
         echo -e "  ${DIM}Tip: Destination IP should be a whitelisted domestic IP (e.g. Bank, Aparat)${NC}"
         echo -ne "  ${C}●${NC} ${W}Spoof Destination IP (e.g. 185.166.104.6): ${NC}"; read sp_dst
         echo -ne "  ${C}●${NC} ${W}Spoof Source IP (e.g. 185.143.234.120): ${NC}"; read sp_src
-        
         sp_dst=$(echo "$sp_dst" | tr -d '\r' | tr -d ' ')
         sp_src=$(echo "$sp_src" | tr -d '\r' | tr -d ' ')
         
-        # 🌟 باگِ نابودکننده‌ی فایل TOML دقیقاً اینجا با ایجاد خط جدیدِ واقعی حل شد 🌟
+        # --- TOML SYNTAX FIX ---
         spoof_conf="
 profile = \"ipip\"
 spoof_dst_ip = \"$sp_dst\"
@@ -208,7 +207,7 @@ view_logs() {
         journalctl -u "mbackhaul@$name" -n 20 --no-pager | sed 's/^/  │ /'
         echo -e "  ${M}└───────────────────────────────────────────────────────────${NC}"
         echo -e "  ${DIM}Tip: Press 'q' to exit if log stuck. If blocked, try WSS or TCPMUX.${NC}"
-        echo -ne "\n  ${C}Press Enter to return to menu...${NC}"; read
+        echo -ne "\n  ${C}Press Enter to return to menu...${NC}"; read dummy
     fi
 }
 
@@ -229,7 +228,6 @@ while true; do
            echo -ne "\n  ${C}●${NC} ${W}Node Name (e.g. bh_kharej): ${NC}"; read b_name
            echo -ne "  ${C}●${NC} ${W}Listen Port for Backhaul Tunnel (e.g. 7000): ${NC}"; read b_port
            echo -ne "  ${C}●${NC} ${W}Secret Token (Password): ${NC}"; read b_token
-           
            b_name=$(echo "$b_name" | tr -d '\r' | tr -d ' ')
            b_port=$(echo "$b_port" | tr -d '\r' | tr -d ' ')
            b_token=$(echo "$b_token" | tr -d '\r')
@@ -298,7 +296,6 @@ EOF
            echo -e "  ${B}╰───────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Index (or 'all'): ${NC}"; read del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r' | tr -d ' ')
-           
            if [[ "$del_idx" == "all" ]]; then
                for conf in "${configs[@]}"; do
                    name=$(basename "$conf" .toml)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MHysteria Modular Core | Hysteria2+WG Engine v1.0.0 ---
+# --- MHysteria Modular Core | Hysteria2+WG Engine v1.1.0 (Sanitized) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mhysteria/tunnels"
@@ -40,7 +40,6 @@ apply_tunnel() {
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
     local wg_port=$((20000 + TUN_ID))
     
-    # تولید کلیدهای WG از روی SYNC_KEY
     IR_PRIV=$(python3 -c "import hashlib, base64; print(base64.b64encode(hashlib.sha256(b'${SYNC_KEY}_IRAN').digest()).decode())")
     KH_PRIV=$(python3 -c "import hashlib, base64; print(base64.b64encode(hashlib.sha256(b'${SYNC_KEY}_KHAREJ').digest()).decode())")
     IR_PUB=$(echo "$IR_PRIV" | wg pubkey); KH_PUB=$(echo "$KH_PRIV" | wg pubkey)
@@ -150,7 +149,7 @@ draw_header() {
         if ip link show "$T_NAME" >/dev/null 2>&1; then ((active_tunnels++)); fi
     done
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MHysteria QUIC Engine v1.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MHysteria QUIC Engine v1.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -158,17 +157,19 @@ while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Hysteria2+WG Tunnel${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit${NC}\n"
     echo -ne "  ${C}MHYSTERIA ❯❯ ${NC}"; read opt
+    opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1) 
            check_deps
-           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Client) | 2:KHAREJ (Server) | q:Back]: ${NC}"; read s_type; [[ "$s_type" =~ ^[12q]$ ]] && break; done
+           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Client) | 2:KHAREJ (Server) | q:Back]: ${NC}"; read s_type; s_type=$(echo "$s_type" | tr -d '\r' | tr -d ' '); [[ "$s_type" =~ ^[12q]$ ]] && break; done
            [[ "$s_type" == "q" ]] && continue
-           while true; do echo -ne "  ${C}●${NC} ${W}Interface Suffix (e.g. fa): ${NC}"; read suffix; t_name="hys_$suffix"; break; done
-           local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip; [ -n "$custom_ip" ] && local_ip=$custom_ip
-           echo -ne "  ${C}●${NC} ${W}Remote Public IP: ${NC}"; read r_ip
-           echo -ne "  ${C}●${NC} ${W}Hysteria Obfs Password: ${NC}"; read h_pass
-           echo -ne "  ${C}●${NC} ${W}Hysteria UDP Port (e.g. 443): ${NC}"; read t_port
-           echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read t_id; echo -ne "  ${C}●${NC} ${W}vIP Master Sync Key: ${NC}"; read s_key
+           while true; do echo -ne "  ${C}●${NC} ${W}Interface Suffix (e.g. fa): ${NC}"; read suffix; suffix=$(echo "$suffix" | tr -d '\r' | tr -d ' '); t_name="hys_$suffix"; break; done
+           local_ip=$(get_local_ip); echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip; custom_ip=$(echo "$custom_ip" | tr -d '\r' | tr -d ' '); [ -n "$custom_ip" ] && local_ip=$custom_ip
+           echo -ne "  ${C}●${NC} ${W}Remote Public IP: ${NC}"; read r_ip; r_ip=$(echo "$r_ip" | tr -d '\r' | tr -d ' ')
+           echo -ne "  ${C}●${NC} ${W}Hysteria Obfs Password: ${NC}"; read h_pass; h_pass=$(echo "$h_pass" | tr -d '\r')
+           echo -ne "  ${C}●${NC} ${W}Hysteria UDP Port (e.g. 443): ${NC}"; read t_port; t_port=$(echo "$t_port" | tr -d '\r' | tr -d ' ')
+           echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read t_id; t_id=$(echo "$t_id" | tr -d '\r' | tr -d ' ')
+           echo -ne "  ${C}●${NC} ${W}vIP Master Sync Key: ${NC}"; read s_key; s_key=$(echo "$s_key" | tr -d '\r')
            
            c_sub="10.99.$t_id"
            conf_path="$CONF_DIR/${t_name}.conf"
@@ -177,12 +178,12 @@ while true; do
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null)); [ ${#configs[@]} -eq 0 ] && continue
            for i in "${!configs[@]}"; do echo "  $i ❯ $(basename "${configs[$i]}" .conf)"; done
-           echo -ne "  Index: "; read t_idx; sel_conf="${configs[$t_idx]}"
-           echo -ne "  vIP Count: "; read n; sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}Synced!${NC}"; sleep 1 ;;
+           echo -ne "  Index: "; read t_idx; t_idx=$(echo "$t_idx" | tr -d '\r'); sel_conf="${configs[$t_idx]}"
+           echo -ne "  vIP Count: "; read n; n=$(echo "$n" | tr -d '\r'); sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}Synced!${NC}"; sleep 1 ;;
         3)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            for i in "${!configs[@]}"; do echo "  $i ❯ $(basename "${configs[$i]}" .conf)"; done
-           echo -ne "  Index (or 'all'): "; read del_idx
+           echo -ne "  Index (or 'all'): "; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r' | tr -d ' ')
            if [[ "$del_idx" == "all" ]]; then
                for conf in "${configs[@]}"; do source "$conf"; systemctl stop mhysteria@$T_NAME 2>/dev/null; systemctl disable mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "$conf"; done
            else

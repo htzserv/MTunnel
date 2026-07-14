@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.0 (Backhaul Integrated) ---
+# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.1 (Regex Fix) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -80,7 +80,6 @@ get_frp_tx() {
     echo "${tx:-0}"
 }
 
-# --- NEW: BACKHAUL COUNTERS INJECTION ---
 init_bh_counters() {
     for conf in /etc/mbackhaul/tunnels/*.toml; do
         [ ! -f "$conf" ] && continue
@@ -92,8 +91,9 @@ init_bh_counters() {
                 iptables -t mangle -C OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
             fi
         elif grep -q "\[client\]" "$conf"; then
-            local remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
-            local r_ip=$(echo "$remote" | cut -d: -f1); local r_port=$(echo "$remote" | cut -d: -f2)
+            # 🌟 باگ کشنده Regex در رادار فایروال اینجا حل شد 🌟
+            local raw_remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
+            local r_ip=$(echo "$raw_remote" | cut -d: -f1); local r_port=$(echo "$raw_remote" | cut -d: -f2)
             if [ -n "$r_ip" ] && [ -n "$r_port" ]; then
                 iptables -t mangle -C INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" >/dev/null 2>&1 || iptables -t mangle -A INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" 2>/dev/null
                 iptables -t mangle -C OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
@@ -111,7 +111,6 @@ get_bh_tx() {
     local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "MBH_TX_$1" | awk '{sum+=$2} END {print sum}')
     echo "${tx:-0}"
 }
-# ----------------------------------------
 
 get_uptime() {
     local iface=$1
@@ -648,7 +647,9 @@ while true; do
             bh_rip="Listening..."
         elif grep -q "\[client\]" "$conf"; then
             bh_type="Backhaul (Client)"
-            bh_rip=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d: -f1)
+            # 🌟 باگ کشنده Regex در کالکتور وب اینجا حل شد 🌟
+            local raw_remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
+            bh_rip=$(echo "$raw_remote" | cut -d: -f1)
             [ -n "$bh_rip" ] && remote_list+=("$bh_rip")
         fi
         

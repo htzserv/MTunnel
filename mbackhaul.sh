@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.1.0 (Parser Fixes) ---
+# --- MDesign Modular Core (mbackhaul.sh) | Backhaul Engine v6.1.5 (Bugfix Edition) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -65,7 +65,7 @@ draw_header() {
     [ "$total" -gt 0 ] && [ "$active" -lt "$total" ] && c_stat="${R}$active / $total (ISSUES)${NC}"
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer v6.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${c_stat} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MBackhaul Multiplexer v6.1.5${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}NODES:${NC} ${c_stat} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -92,11 +92,15 @@ list_nodes() {
             fi
         elif grep -q "\[client\]" "$conf"; then 
             mode="${C}IRAN (Client)${NC}"
+            # 🌟 باگِ جدا کردن آی‌پی از پروتکل اینجا حل شد 🌟
+            local raw_remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
             remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
             proto=$(grep 'remote =' "$conf" | grep -oP '"\K[a-zA-Z0-9]+(?=://)')
             grep -q "nodelay=true" "$conf" && proto="${proto}_nodelay"
             
-            local r_ip=$(echo "$remote" | cut -d: -f1); local r_port=$(echo "$remote" | cut -d: -f2)
+            local r_ip=$(echo "$raw_remote" | cut -d: -f1)
+            local r_port=$(echo "$raw_remote" | cut -d: -f2)
+            
             if [[ "$sys_stat" == *RUNNING* ]]; then
                 if timeout 1 bash -c "</dev/tcp/$r_ip/$r_port" 2>/dev/null; then net_stat="${G}[Connected]${NC}"
                 else net_stat="${R}[Unreachable/Blocked]${NC}"; sys_stat="${Y}● RECONNECTING${NC}"; fi
@@ -104,7 +108,6 @@ list_nodes() {
         fi
         
         [ -z "$proto" ] && proto="tcp"
-        
         local spoof_badge=""
         if grep -q 'profile = "ipip"' "$conf"; then spoof_badge="${M}[IPIP SPOOFED]${NC}"; fi
 
@@ -163,7 +166,7 @@ configure_spoofing() {
         sp_dst=$(echo "$sp_dst" | tr -d '\r' | tr -d ' ')
         sp_src=$(echo "$sp_src" | tr -d '\r' | tr -d ' ')
         
-        # 🌟 باگِ Newline در فایل TOML دقیقاً اینجا برطرف شد 🌟
+        # 🌟 باگِ نابودکننده‌ی فایل TOML دقیقاً اینجا با ایجاد خط جدیدِ واقعی حل شد 🌟
         spoof_conf="
 profile = \"ipip\"
 spoof_dst_ip = \"$sp_dst\"
@@ -195,8 +198,8 @@ view_logs() {
             if ss -tuln 2>/dev/null | grep -q ":$port "; then echo -e "  ${DIM}├─ Network I/O:${NC} ${G}Port $port is successfully opened and listening.${NC}"
             else echo -e "  ${DIM}├─ Network I/O:${NC} ${R}PORT ERROR! Port $port is in use or blocked.${NC}"; fi
         elif grep -q "\[client\]" "$conf"; then
-            local remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
-            local r_ip=$(echo "$remote" | cut -d: -f1); local r_port=$(echo "$remote" | cut -d: -f2)
+            local raw_remote=$(grep 'remote =' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
+            local r_ip=$(echo "$raw_remote" | cut -d: -f1); local r_port=$(echo "$raw_remote" | cut -d: -f2)
             if timeout 1 bash -c "</dev/tcp/$r_ip/$r_port" 2>/dev/null; then echo -e "  ${DIM}├─ Remote Link:${NC} ${G}Handshake with $r_ip:$r_port SUCCESSFUL.${NC}"
             else echo -e "  ${DIM}├─ Remote Link:${NC} ${R}BLOCKED! Cannot reach Kharej Server IP/Port.${NC}"; fi
         fi
@@ -252,14 +255,14 @@ EOF
            echo -ne "  ${C}●${NC} ${W}Kharej Server Public IP: ${NC}"; read r_ip
            echo -ne "  ${C}●${NC} ${W}Kharej Backhaul Port (e.g. 7000): ${NC}"; read r_port
            echo -ne "  ${C}●${NC} ${W}Secret Token (Must match Kharej): ${NC}"; read b_token
-           echo -ne "  ${C}●${NC} ${W}Multiplex Connections [Default: 8]: ${NC}"; read b_conn; b_conn=${b_conn:-8}
+           echo -ne "  ${C}●${NC} ${W}Multiplex Connections [Default: 8]: ${NC}"; read b_conn
            echo -ne "  ${C}●${NC} ${W}Ports to forward (e.g. 80,443,2053): ${NC}"; read raw_ports
            
            b_name=$(echo "$b_name" | tr -d '\r' | tr -d ' ')
            r_ip=$(echo "$r_ip" | tr -d '\r' | tr -d ' ')
            r_port=$(echo "$r_port" | tr -d '\r' | tr -d ' ')
            b_token=$(echo "$b_token" | tr -d '\r')
-           b_conn=$(echo "$b_conn" | tr -d '\r' | tr -d ' ')
+           b_conn=$(echo "$b_conn" | tr -d '\r' | tr -d ' '); b_conn=${b_conn:-8}
            raw_ports=$(echo "$raw_ports" | tr -d '\r')
            
            select_protocol

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v6.1.0 (Hysteria2 & L2TPv3 Sync) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v6.2.0 (Sanitized) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -106,6 +106,7 @@ fix_and_install() {
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Both Cores${NC} ${DIM}(Dual-Core Setup)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Install ❯❯ ${NC}"; read -t 30 core_opt
+    core_opt=$(echo "$core_opt" | tr -d '\r' | tr -d ' ')
 
     if [[ "$core_opt" =~ ^[1-3]$ ]]; then
         echo ""
@@ -179,13 +180,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 6.1.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 6.2.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 6.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 6.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -228,6 +229,7 @@ smart_map() {
     echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC}"
     echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC}"
     echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read fwd_engine
+    fwd_engine=$(echo "$fwd_engine" | tr -d '\r' | tr -d ' ')
     
     if [ "$fwd_engine" != "1" ] && [ "$fwd_engine" != "2" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
     if [ "$fwd_engine" == "2" ] && ! command -v jq >/dev/null 2>&1; then echo -e "  ${R}● Gost requires 'jq'. Run Installer (1) first.${NC}"; sleep 2; return; fi
@@ -245,7 +247,8 @@ smart_map() {
 
     if [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -e "\n  ${R}● No MDesign Tunnel interfaces found!${NC}"
-        echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip; selected_ips=("$manual_ip"); selected_if="Manual"
+        echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip
+        manual_ip=$(echo "$manual_ip" | tr -d '\r' | tr -d ' '); selected_ips=("$manual_ip"); selected_if="Manual"
     else
         echo -e "\n  ${B}╭────────────────── Available Interfaces ────────────────────╮${NC}"
         for i in "${!gre_ifs[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-52s${NC} ${B}│${NC}\n" "$i" "${gre_ifs[$i]}"; done
@@ -253,21 +256,25 @@ smart_map() {
         printf "  ${B}│${NC}  ${Y}m${NC} ${C}❯${NC} ${M}%-52s${NC} ${B}│${NC}\n" "Manual IP Entry (Bypass Interfaces)"
         echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
         echo -ne "  ${C}●${NC} ${W}Select Interface (0-$(( ${#gre_ifs[@]} - 1 )) or 'm'): ${NC}"; read if_choice
+        if_choice=$(echo "$if_choice" | tr -d '\r' | tr -d ' ')
         
         if [[ "$if_choice" == "m" ]]; then
-            echo -ne "\n  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip; selected_ips=("$manual_ip"); selected_if="Manual"
+            echo -ne "\n  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip
+            manual_ip=$(echo "$manual_ip" | tr -d '\r' | tr -d ' '); selected_ips=("$manual_ip"); selected_if="Manual"
         elif [[ -n "${gre_ifs[$if_choice]}" ]]; then 
             selected_if="${gre_ifs[$if_choice]}"
             local map_ips=($(ip -o -4 addr show "$selected_if" 2>/dev/null | awk '{print $4}' | cut -d/ -f1))
             if [ ${#map_ips[@]} -eq 0 ]; then
                 echo -e "  ${R}● No active IPs found on ${selected_if}!${NC}"
-                echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip; selected_ips=("$manual_ip"); selected_if="Manual"
+                echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target IP manually: ${NC}"; read manual_ip
+                manual_ip=$(echo "$manual_ip" | tr -d '\r' | tr -d ' '); selected_ips=("$manual_ip"); selected_if="Manual"
             else
                 echo -e "\n  ${B}╭────────────────── IPs on ${selected_if} ──────────────────╮${NC}"
                 for i in "${!map_ips[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${G}%-50s${NC} ${B}│${NC}\n" "$i" "${map_ips[$i]}"; done
                 echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
                 echo -e "  ${DIM}Tip: Enter 'a' to randomize across all IPs.${NC}"
                 echo -ne "  ${C}●${NC} ${W}Select Index (0-$(( ${#map_ips[@]} - 1 ))) or 'a': ${NC}"; read ip_choice
+                ip_choice=$(echo "$ip_choice" | tr -d '\r' | tr -d ' ')
                 
                 if [[ "$ip_choice" == "a" ]]; then selected_ips=("${map_ips[@]}")
                 elif [[ -n "${map_ips[$ip_choice]}" ]]; then selected_ips=("${map_ips[$ip_choice]}")
@@ -277,6 +284,7 @@ smart_map() {
     fi
 
     echo -ne "\n  ${C}●${NC} ${W}Enter Local Ports (e.g. 80,443,1080): ${NC}"; read raw_ports
+    raw_ports=$(echo "$raw_ports" | tr -d '\r')
     clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
     
     echo -e "\n  ${Y}● Applying Mappings...${NC}"
@@ -318,6 +326,8 @@ smart_map() {
     [ "$fwd_engine" == "2" ] && systemctl restart gost 2>/dev/null
 
     echo -ne "\n  ${C}●${NC} ${W}Enable OBFS Stealth (Bypass Filtering) for these ports? (y/n): ${NC}"; read enable_obfs
+    enable_obfs=$(echo "$enable_obfs" | tr -d '\r' | tr -d ' ')
+    
     if [[ "$enable_obfs" == "y" ]]; then
         if [ ! -f /usr/local/bin/gost ]; then
             echo -e "  ${DIM}● Caching & Deploying Gost engine for OBFS layer...${NC}"
@@ -337,11 +347,18 @@ smart_map() {
             elif [ -f "/etc/mhysteria/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mhysteria/tunnels/${selected_if}.conf" | cut -d= -f2); fi
         fi
         
-        if [ -z "$remote_pub" ]; then echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
-        else echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"; fi
+        if [ -z "$remote_pub" ]; then 
+            echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
+            remote_pub=$(echo "$remote_pub" | tr -d '\r' | tr -d ' ')
+        else 
+            echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"
+        fi
         
         echo -ne "  ${C}●${NC} ${W}Enter Kharej Stealth Port (Target Receiver): ${NC}"; read stealth_port
+        stealth_port=$(echo "$stealth_port" | tr -d '\r' | tr -d ' ')
         echo -ne "  ${C}●${NC} ${W}Select Protocol [1: TLS | 2: WS | 3: WSS] (Default 1): ${NC}"; read t_proto
+        t_proto=$(echo "$t_proto" | tr -d '\r' | tr -d ' ')
+        
         local method="relay+tls"; [ "$t_proto" == "2" ] && method="relay+ws"; [ "$t_proto" == "3" ] && method="relay+wss"
 
         mkdir -p "$OBFS_DIR"
@@ -367,7 +384,7 @@ smart_map() {
         build_obfs_runner
         echo -e "\n  ${G}● OBFS Stealth Layer configured and Ghost Counters applied!${NC}"
     fi
-    echo -ne "\n  ${G}● Success! Press Enter...${NC}"; read
+    echo -ne "\n  ${G}● Success! Press Enter...${NC}"; read dummy
 }
 
 edit_mapping() {
@@ -385,6 +402,7 @@ edit_mapping() {
     for i in "${!ip_arr[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-52s${NC} ${B}│${NC}\n" "$i" "${ip_arr[$i]}"; done
     echo -e "  ${B}╰──────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}Select Index ❯❯ ${NC}"; read ip_idx
+    ip_idx=$(echo "$ip_idx" | tr -d '\r' | tr -d ' ')
 
     local target_ip="${ip_arr[$ip_idx]}"
     if [ -z "$target_ip" ]; then echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
@@ -408,13 +426,17 @@ edit_mapping() {
         else echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Enable OBFS Stealth for this IP${NC}"; fi
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}Select Action ❯❯ ${NC}"; read edit_opt
+        edit_opt=$(echo "$edit_opt" | tr -d '\r' | tr -d ' ')
 
         case $edit_opt in
             1) 
                 echo -ne "\n  ${C}●${NC} ${W}Enter New Ports to Add (e.g. 80,443): ${NC}"; read raw_ports
+                raw_ports=$(echo "$raw_ports" | tr -d '\r')
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
                 echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} | ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC}"
                 echo -ne "  ${C}Select Engine ❯❯ ${NC}"; read e_opt
+                e_opt=$(echo "$e_opt" | tr -d '\r' | tr -d ' ')
+                
                 for p in $clean_ports; do
                     if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then continue; fi
                     if [ "$e_opt" == "1" ]; then echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
@@ -434,6 +456,7 @@ edit_mapping() {
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
             2)
                 echo -ne "\n  ${C}●${NC} ${W}Enter Ports to Remove (e.g. 80,443): ${NC}"; read raw_ports
+                raw_ports=$(echo "$raw_ports" | tr -d '\r')
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
                 for p in $clean_ports; do
                     sed -i "/frontend ft_$p$/,/server srv_$p/d" "$H_CONF"
@@ -456,11 +479,18 @@ edit_mapping() {
                     elif [ -f "/etc/ml2tp/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/ml2tp/tunnels/${selected_if}.conf" | cut -d= -f2)
                     elif [ -f "/etc/mhysteria/tunnels/${selected_if}.conf" ]; then remote_pub=$(grep "REMOTE_PUB" "/etc/mhysteria/tunnels/${selected_if}.conf" | cut -d= -f2); fi
                     
-                    if [ -z "$remote_pub" ]; then echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
-                    else echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"; fi
+                    if [ -z "$remote_pub" ]; then 
+                        echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP: ${NC}"; read remote_pub
+                        remote_pub=$(echo "$remote_pub" | tr -d '\r' | tr -d ' ')
+                    else 
+                        echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"
+                    fi
                     
                     echo -ne "  ${C}●${NC} ${W}Enter Kharej Stealth Port: ${NC}"; read stealth_port
+                    stealth_port=$(echo "$stealth_port" | tr -d '\r' | tr -d ' ')
                     echo -ne "  ${C}●${NC} ${W}Select Protocol [1: TLS | 2: WS | 3: WSS] (Default 1): ${NC}"; read t_proto
+                    t_proto=$(echo "$t_proto" | tr -d '\r' | tr -d ' ')
+                    
                     local method="relay+tls"; [ "$t_proto" == "2" ] && method="relay+ws"; [ "$t_proto" == "3" ] && method="relay+wss"
 
                     mkdir -p "$OBFS_DIR"
@@ -523,7 +553,7 @@ show_table() {
         done
     fi
     echo -e "  ${B}╰──────────────┴────────────────────────────────────────────┴────────────────────────────────╯${NC}"
-    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
 auto_restart_cron() {
@@ -531,6 +561,8 @@ auto_restart_cron() {
     echo -e "\n  ${DIM}┌─[ AUTO-RESTART SCHEDULER ]${NC}\n  ${DIM}│${NC} ${W}Set interval for automatic core restarts.${NC}\n  ${DIM}│${NC} ${DIM}Enter '0' for both to disable the scheduler.${NC}"
     echo -ne "  ${DIM}├─${NC} ${C}Every X Hours (0-23) ❯❯ ${NC}"; read cron_h
     echo -ne "  ${DIM}└─${NC} ${C}Every X Minutes (0-59) ❯❯ ${NC}"; read cron_m
+    cron_h=$(echo "$cron_h" | tr -d '\r' | tr -d ' ')
+    cron_m=$(echo "$cron_m" | tr -d '\r' | tr -d ' ')
 
     if ! [[ "$cron_h" =~ ^[0-9]+$ ]] || ! [[ "$cron_m" =~ ^[0-9]+$ ]]; then echo -e "\n  ${R}● Invalid input! Numbers only.${NC}"; sleep 2; return; fi
     crontab -l 2>/dev/null | grep -v "systemctl restart haproxy.*gost" | crontab - 2>/dev/null
@@ -549,6 +581,7 @@ manual_restart() {
     draw_header
     echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Restart Both Engines${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read r_opt
+    r_opt=$(echo "$r_opt" | tr -d '\r' | tr -d ' ')
     echo ""
     case $r_opt in
         1) systemctl restart haproxy 2>/dev/null; echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
@@ -563,10 +596,14 @@ while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Core Engines${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Multipoint)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix (OBFS Stats)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Wipe Mappings (Reset Forwarding & OBFS)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Everything (Nuclear Wipe)${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Auto-Restart Scheduler (Cron)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
     echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -t 30 opt
+    opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
     case $opt in
         1) fix_and_install ;; 2) smart_map ;; 3) edit_mapping ;; 4) show_table ;;
-        5) echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm; [[ "$confirm" == "y" ]] && wipe_all_mappings ;;
+        5) echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm
+           confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
+           [[ "$confirm" == "y" ]] && wipe_all_mappings ;;
         6) echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
+           confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
            if [[ "$confirm" == "y" ]]; then 
                systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
                systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null

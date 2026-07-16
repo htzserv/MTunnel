@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.2.0 (Light Theme Default & Floating Lang) ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.3.0 (Smart Interface Selector) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -168,8 +168,9 @@ get_tunnel_ip() {
     echo "$rip"
 }
 
+# 🐍 PYTHON API SERVER 🐍
 cat << 'PY_EOF' > server.py
-import http.server, socketserver, subprocess, urllib.parse, sys, os, json, hashlib
+import http.server, socketserver, subprocess, urllib.parse, sys, os, json, hashlib, random
 
 PORT = int(sys.argv[1])
 USER = sys.argv[2]
@@ -228,14 +229,37 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
             elif action == 'add_port':
                 port = data.get('port')
                 dst_ip = data.get('dst_ip')
+                iface = data.get('iface')
                 engine = data.get('engine')
+
+                # 🌟 SMART IP SELECTION LOGIC 🌟
+                if iface and iface != 'manual':
+                    try:
+                        cmd = f"ip -o -4 addr show {iface} | awk '{{print $4}}' | cut -d/ -f1"
+                        out = subprocess.check_output(cmd, shell=True).decode().strip().split()
+                        if out:
+                            selected_ip = random.choice(out)
+                            parts = selected_ip.split('.')
+                            target_last = "2" if parts[3] == "1" else "1"
+                            dst_ip = f"{parts[0]}.{parts[1]}.{parts[2]}.{target_last}"
+                        else:
+                            self.wfile.write(json.dumps({"status": "error", "message": f"No IPs found on {iface}"}).encode())
+                            return
+                    except Exception as e:
+                        self.wfile.write(json.dumps({"status": "error", "message": "Interface Error"}).encode())
+                        return
+
+                if not dst_ip:
+                    self.wfile.write(json.dumps({"status": "error", "message": "Missing Target IP"}).encode())
+                    return
+
                 if engine == 'haproxy':
                     cmd = f"echo '\\nfrontend ft_{port}\\n    bind *:{port}\\n    default_backend bk_{port}\\nbackend bk_{port}\\n    server srv_{port} {dst_ip}:{port} check inter 5000' >> /etc/haproxy/haproxy.cfg && systemctl restart haproxy"
                     os.system(cmd)
                 elif engine == 'gost':
                     cmd = f"if command -v jq >/dev/null 2>&1; then jq '.ServeNodes += [\"tcp://:{port}/{dst_ip}:{port}\"]' /etc/gost/config.json > /tmp/g.json && mv /tmp/g.json /etc/gost/config.json && systemctl restart gost; fi"
                     os.system(cmd)
-                self.wfile.write(json.dumps({"status": "success", "message": f"Port {port} Mapped!"}).encode())
+                self.wfile.write(json.dumps({"status": "success", "message": f"Port {port} Mapped to {dst_ip}"}).encode())
             return
 
     def do_GET(self):
@@ -280,7 +304,6 @@ cat <<'EOF' > index.html
         body { background-color: var(--bg-base); background-image: radial-gradient(circle at 50% 0%, var(--glow) 0%, transparent 40%); color: var(--text-main); font-family: 'Inter', sans-serif; }
         body[dir="rtl"] { font-family: 'Vazirmatn', sans-serif; }
         
-        /* Floating Elements */
         .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--sky); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; cursor: pointer; box-shadow: 0 10px 25px rgba(56, 189, 248, 0.5); z-index: 1001; border: none; transition: 0.3s; }
         body[dir="rtl"] .fab { right: auto; left: 30px; }
         .fab:hover { transform: scale(1.1) rotate(90deg); }
@@ -288,7 +311,6 @@ cat <<'EOF' > index.html
         .lang-floater { position: fixed; bottom: 30px; left: 30px; z-index: 1000; display: flex; flex-direction: column; gap: 15px; background: var(--card-bg); padding: 15px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 10px 30px var(--shadow); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); }
         body[dir="rtl"] .lang-floater { left: auto; right: 30px; }
 
-        /* Modals and Toasts */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); z-index: 2000; display: none; align-items: center; justify-content: center; opacity: 0; transition: 0.3s; }
         .modal-content { background: var(--card-bg); border: 1px solid var(--border); padding: 30px; border-radius: 16px; width: 100%; max-width: 450px; transform: scale(0.9); transition: 0.3s; }
         .modal-overlay.active { display: flex; opacity: 1; }
@@ -318,7 +340,6 @@ cat <<'EOF' > index.html
         @keyframes slideInRtl { to { transform: translateX(0); } }
         @keyframes fadeOutRtl { to { opacity: 0; transform: translateY(-20px); } }
 
-        /* Original Layout */
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
@@ -428,14 +449,20 @@ cat <<'EOF' > index.html
         <div class="modal-content">
             <span class="modal-close" onclick="closeModal()">✖</span>
             <h3 style="margin-bottom: 20px; color: var(--sky);" id="lbl-mod-title">Forward New Port</h3>
+            
             <div class="input-group">
                 <label class="t-lbl" style="display:block; margin-bottom:5px;" id="lbl-mod-port">Local Port</label>
                 <input type="number" id="m_port" placeholder="e.g. 443">
             </div>
+            
             <div class="input-group">
-                <label class="t-lbl" style="display:block; margin-bottom:5px;" id="lbl-mod-ip">Target Core IP</label>
-                <input type="text" id="m_ip" placeholder="e.g. 10.76.1.2" dir="ltr">
+                <label class="t-lbl" style="display:block; margin-bottom:5px;" id="lbl-mod-iface">Target Core Interface</label>
+                <select id="m_iface" onchange="toggleManualIp()">
+                    <option value="manual" id="lbl-mod-manual">Manual IP Entry</option>
+                </select>
+                <input type="text" id="m_ip" style="display:none; margin-top:10px;" placeholder="e.g. 10.76.1.2" dir="ltr">
             </div>
+
             <div class="input-group">
                 <label class="t-lbl" style="display:block; margin-bottom:5px;" id="lbl-mod-eng">Engine</label>
                 <select id="m_engine">
@@ -499,7 +526,7 @@ cat <<'EOF' > index.html
                 hw_sync: "REMOTE HARDWARE (KHAREJ)", kh_cpu: "REMOTE CPU", kh_ram: "REMOTE RAM",
                 btn_res: "Restart Tunnel", wait: "⏳ WAIT", done: "✅ DONE",
                 offline: "OFFLINE", timeout: "TIMEOUT", no_tun: "No active tunnels found.",
-                mod_title: "Forward New Port", mod_port: "Local Port", mod_ip: "Target Core IP", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out successfully."
+                mod_title: "Forward New Port", mod_port: "Local Port", mod_iface: "Target Core Interface", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out successfully.", manual_ip: "Manual IP Entry"
             },
             fa: {
                 hw_title: "رادار سخت‌افزار ناوگان", tun_title: "ماتریس تونل‌های فعال",
@@ -512,7 +539,7 @@ cat <<'EOF' > index.html
                 hw_sync: "سخت‌افزار سرور خارج", kh_cpu: "پردازنده خارج", kh_ram: "رم خارج",
                 btn_res: "راه‌اندازی مجدد", wait: "⏳ صبر کنید", done: "✅ انجام شد",
                 offline: "قطع ارتباط", timeout: "تایم‌اوت", no_tun: "تونل فعالی یافت نشد.",
-                mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_ip: "آی‌پی مقصد (سرور خارج)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خروج با موفقیت انجام شد."
+                mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_iface: "اینترفیس هدف (تونل مپینگ)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خروج با موفقیت انجام شد.", manual_ip: "ورود دستی آی‌پی"
             }
         };
 
@@ -529,7 +556,8 @@ cat <<'EOF' > index.html
             document.getElementById('lbl-tun-title').innerText = t('tun_title');
             document.getElementById('lbl-mod-title').innerText = t('mod_title');
             document.getElementById('lbl-mod-port').innerText = t('mod_port');
-            document.getElementById('lbl-mod-ip').innerText = t('mod_ip');
+            document.getElementById('lbl-mod-iface').innerText = t('mod_iface');
+            document.getElementById('lbl-mod-manual').innerText = t('manual_ip');
             document.getElementById('lbl-mod-eng').innerText = t('mod_eng');
             document.getElementById('lbl-mod-btn').innerText = t('mod_btn');
             document.getElementById('lbl-login-btn').innerText = t('login_btn');
@@ -562,6 +590,7 @@ cat <<'EOF' > index.html
         let isFetching = false;
         let isRestarting = false;
         let hwData = {};
+        let latestTunnels = [];
 
         const geoCache = {};
         function getFlagEmoji(countryCode) {
@@ -617,7 +646,23 @@ cat <<'EOF' > index.html
             showToast(t('out'));
         }
 
-        function openModal() { document.getElementById('action-modal').classList.add('active'); }
+        function toggleManualIp() {
+            let sel = document.getElementById('m_iface').value;
+            document.getElementById('m_ip').style.display = sel === 'manual' ? 'block' : 'none';
+        }
+
+        function openModal() { 
+            let sel = document.getElementById('m_iface');
+            sel.innerHTML = `<option value="manual" id="lbl-mod-manual">${t('manual_ip')}</option>`;
+            latestTunnels.forEach(tObj => {
+                if(tObj.type.includes("GRE") || tObj.type.includes("VXLAN") || tObj.type.includes("L2TP") || tObj.type.includes("Hys2") || tObj.type.includes("WG")) {
+                    sel.innerHTML += `<option value="${tObj.iface}">${tObj.iface} (${tObj.type})</option>`;
+                }
+            });
+            toggleManualIp();
+            document.getElementById('action-modal').classList.add('active'); 
+        }
+        
         function closeModal() { document.getElementById('action-modal').classList.remove('active'); }
 
         async function apiPost(action, payload) {
@@ -635,9 +680,13 @@ cat <<'EOF' > index.html
         function submitAction() {
             let p = document.getElementById('m_port').value;
             let i = document.getElementById('m_ip').value;
+            let iface = document.getElementById('m_iface').value;
             let e = document.getElementById('m_engine').value;
-            if(!p || !i) { showToast("Fill all fields", true); return; }
-            apiPost('add_port', {port: p, dst_ip: i, engine: e});
+            
+            if(!p) { showToast("Port is required", true); return; }
+            if(iface === 'manual' && !i) { showToast("IP is required for Manual entry", true); return; }
+            
+            apiPost('add_port', {port: p, dst_ip: i, iface: iface, engine: e});
             closeModal();
             document.getElementById('m_port').value = '';
         }
@@ -669,6 +718,7 @@ cat <<'EOF' > index.html
                 let r = await fetch('/api_data.json?t=' + Date.now());
                 if (!r.ok) throw new Error('API down');
                 let data = await r.json();
+                latestTunnels = data.tunnels;
                 document.getElementById('sync-dot').className = 'status-dot dot-green';
 
                 let hwHtml = `

@@ -1,12 +1,12 @@
-cat << 'EOF_MSTATS' > /usr/bin/mstats
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v2.5.0 (Backhaul Synced) ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.5.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
 WEB_SVC_FILE="/etc/systemd/system/mweb.service"
 source "$CONF_FILE" 2>/dev/null
 WEB_PORT=${WEB_PORT:-1000}
+CONF_BH="/etc/mbackhaul/tunnels"
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -19,7 +19,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 2.5.0 "
+    local str1=" MStats Omni-Radar Core 3.5.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -49,24 +49,26 @@ format_total() {
 }
 
 get_iface_rx() {
-    local r_base=$(cat /sys/class/net/$1/statistics/rx_bytes 2>/dev/null || echo 0)
+    local r_base=0
+    if [ -d "/sys/class/net/$1" ]; then
+        r_base=$(cat /sys/class/net/$1/statistics/rx_bytes 2>/dev/null || echo 0)
+    fi
     local obfs_rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "OBFS_CNT_RX_$1" | awk '{sum+=$2} END {print sum}')
     [ -n "$obfs_rx" ] && r_base=$((r_base + obfs_rx))
-    local bh_rx=$(iptables -xnvL INPUT 2>/dev/null | grep "MBH_RX_$1" | awk '{sum+=$2} END {print sum}')
-    [ -n "$bh_rx" ] && r_base=$((r_base + bh_rx))
     echo "$r_base"
 }
 
 get_iface_tx() {
-    local t_base=$(cat /sys/class/net/$1/statistics/tx_bytes 2>/dev/null || echo 0)
+    local t_base=0
+    if [ -d "/sys/class/net/$1" ]; then
+        t_base=$(cat /sys/class/net/$1/statistics/tx_bytes 2>/dev/null || echo 0)
+    fi
     local obfs_tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "OBFS_CNT_TX_$1" | awk '{sum+=$2} END {print sum}')
     [ -n "$obfs_tx" ] && t_base=$((t_base + obfs_tx))
-    local bh_tx=$(iptables -xnvL OUTPUT 2>/dev/null | grep "MBH_TX_$1" | awk '{sum+=$2} END {print sum}')
-    [ -n "$bh_tx" ] && t_base=$((t_base + bh_tx))
     echo "$t_base"
 }
 
-# --- NEW: BACKHAUL PHANTOM TRACKERS ---
+# --- BACKHAUL PHANTOM RULES ---
 clean_bh_rules() {
     iptables -S INPUT 2>/dev/null | grep "MBH_RX_" | sed 's/^-A /-D /' | while read rule; do iptables $rule 2>/dev/null; done
     iptables -S OUTPUT 2>/dev/null | grep "MBH_TX_" | sed 's/^-A /-D /' | while read rule; do iptables $rule 2>/dev/null; done
@@ -74,7 +76,7 @@ clean_bh_rules() {
 
 setup_bh_rules() {
     clean_bh_rules
-    for conf in /etc/mbackhaul/tunnels/*.toml; do
+    for conf in "$CONF_BH"/*.toml; do
         [ ! -f "$conf" ] && continue
         local name=$(basename "$conf" .toml)
         if grep -q "\[server\]" "$conf"; then
@@ -97,7 +99,17 @@ setup_bh_rules() {
         fi
     done
 }
-# --------------------------------------
+
+get_bh_rx() {
+    local bytes=$(iptables -xnvL INPUT 2>/dev/null | grep "MBH_RX_$1" | awk '{sum+=$2} END {print sum}')
+    echo "${bytes:-0}"
+}
+
+get_bh_tx() {
+    local bytes=$(iptables -xnvL OUTPUT 2>/dev/null | grep "MBH_TX_$1" | awk '{sum+=$2} END {print sum}')
+    echo "${bytes:-0}"
+}
+# ------------------------------
 
 show_live_radar() {
     setup_bh_rules
@@ -117,12 +129,16 @@ show_live_radar() {
         local wg_ifs=""; [ -f "/etc/wireguard/wg0.conf" ] && wg_ifs="wg0"
         
         local bh_nodes=""
-        for conf in /etc/mbackhaul/tunnels/*.toml; do [ -f "$conf" ] && bh_nodes="$bh_nodes $(basename "$conf" .toml)"; done
+        for conf in "$CONF_BH"/*.toml; do [ -f "$conf" ] && bh_nodes="$bh_nodes $(basename "$conf" .toml)"; done
 
         local all_ifs="$phys_ifs $gre_ifs $vx_ifs $wg_ifs $bh_nodes"
         for iface in $all_ifs; do
             if [ -z "${rx_old[$iface]}" ]; then
-                rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface")
+                if [[ " $bh_nodes " =~ " $iface " ]]; then
+                    rx_old[$iface]=$(get_bh_rx "$iface"); tx_old[$iface]=$(get_bh_tx "$iface")
+                else
+                    rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface")
+                fi
             fi
         done
 
@@ -130,10 +146,18 @@ show_live_radar() {
         render_category() {
             local cat_name=$1; local cat_color=$2; local if_list=$3
             for iface in $if_list; do
-                if [ ! -d "/sys/class/net/$iface" ] && [[ ! " $bh_nodes " =~ " $iface " ]]; then continue; fi
                 local r_old=${rx_old[$iface]:-0}; local t_old=${tx_old[$iface]:-0}
-                local r_new=$(get_iface_rx "$iface"); local t_new=$(get_iface_tx "$iface")
+                local r_new=0; local t_new=0
+                
+                if [[ " $bh_nodes " =~ " $iface " ]]; then
+                    r_new=$(get_bh_rx "$iface"); t_new=$(get_bh_tx "$iface")
+                else
+                    if [ ! -d "/sys/class/net/$iface" ]; then continue; fi
+                    r_new=$(get_iface_rx "$iface"); t_new=$(get_iface_tx "$iface")
+                fi
+                
                 local rx_sec=$((r_new - r_old)); local tx_sec=$((t_new - t_old))
+                [ "$rx_sec" -lt 0 ] && rx_sec=0; [ "$tx_sec" -lt 0 ] && tx_sec=0
                 
                 active_count=$((active_count + 1))
                 local c_rx="${DIM}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
@@ -172,8 +196,7 @@ show_total_usage() {
     [ -f "/etc/wireguard/wg0.conf" ] && all_tuns="$all_tuns wg0"
     
     local bh_nodes=""
-    for conf in /etc/mbackhaul/tunnels/*.toml; do [ -f "$conf" ] && bh_nodes="$bh_nodes $(basename "$conf" .toml)"; done
-    all_tuns="$all_tuns $bh_nodes"
+    for conf in "$CONF_BH"/*.toml; do [ -f "$conf" ] && bh_nodes="$bh_nodes $(basename "$conf" .toml)"; done
     
     echo -e "  ${B}╭──────────────────┬───────────────────────┬───────────────────────┬────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "INTERFACE" "▼ TOTAL DOWNLOAD" "▲ TOTAL UPLOAD" "∑ COMBINED TRAFFIC"
@@ -187,14 +210,19 @@ show_total_usage() {
         printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
     done
 
-    if [ -n "$all_tuns" ] && [ "$all_tuns" != " " ]; then
+    if [ -n "$all_tuns" ] || [ -n "$bh_nodes" ]; then
         echo -e "  ${B}├──────────────────┴───────────────────────┴───────────────────────┴────────────────────────┤${NC}"
         printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" " VIRTUAL FABRICS (GRE, VXLAN, WG, BACKHAUL)"
         echo -e "  ${B}├──────────────────┬───────────────────────┬───────────────────────┬────────────────────────┤${NC}"
         for iface in $all_tuns; do
-            if [ ! -d "/sys/class/net/$iface" ] && [[ ! " $bh_nodes " =~ " $iface " ]]; then continue; fi
-            local rx=$(get_iface_rx "$iface"); local tx=$(get_iface_tx "$iface"); local total=$((rx + tx))
-            printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
+            if [ -d "/sys/class/net/$iface" ]; then
+                local rx=$(get_iface_rx "$iface"); local tx=$(get_iface_tx "$iface"); local total=$((rx + tx))
+                printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
+            fi
+        done
+        for iface in $bh_nodes; do
+            local rx=$(get_bh_rx "$iface"); local tx=$(get_bh_tx "$iface"); local total=$((rx + tx))
+            printf "  ${B}│${NC} ${Y}%-16s${NC} ${B}│${NC} ${C}%-21s${NC} ${B}│${NC} ${M}%-21s${NC} ${B}│${NC} ${G}%-22s${NC} ${B}│${NC}\n" "$iface" "$(format_total $rx)" "$(format_total $tx)" "$(format_total $total)"
         done
     fi
     echo -e "  ${B}╰──────────────────┴───────────────────────┴───────────────────────┴────────────────────────╯${NC}"
@@ -206,7 +234,6 @@ show_connection_tracker() {
     echo -e "\n  ${DIM}┌─[ MDESIGN CONNECTION TRACKER ]${NC}"
     echo -e "  ${C}●${NC} ${W}Exclusive Core Engine Filter (HAProxy, Gost, MBackhaul)...${NC}\n"
 
-    # 🌟 BH SYNCHRONIZED: Added 'bh' to the regex to track backhaul clients 🌟
     local core_ports=$(ss -tulpn 2>/dev/null | grep -iE 'gost|haproxy|bh' | awk '{print $5}' | rev | cut -d: -f1 | rev | grep -E '^[0-9]+$' | sort -u | tr '\n' '|' | sed 's/|$//')
 
     echo -e "  ${B}╭─────────┬───────────────┬─────────────────┬─────────────╮${NC}"
@@ -371,6 +398,7 @@ manage_web_ui() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Start / Deploy Web Dashboard${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restart Web Dashboard${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Stop Web Dashboard${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Reset Username & Password${NC} ${DIM}(New Security Credentials)${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}WEB-CTRL ❯❯ ${NC}"; read w_opt
@@ -385,7 +413,10 @@ manage_web_ui() {
                 custom_port=$(echo "$custom_port" | tr -d '\r' | tr -d ' ')
                 WEB_PORT=${custom_port:-1000}
                 mkdir -p /etc/mweb 2>/dev/null
-                echo "WEB_PORT=$WEB_PORT" > "$CONF_FILE"
+                
+                # Keep old user/pass if exists, update port
+                local old_u=${W_USER:-admin}; local old_p=${W_PASS:-admin}
+                echo -e "WEB_PORT=$WEB_PORT\nWEB_USER=$old_u\nWEB_PASS=$old_p" > "$CONF_FILE"
                 
                 cat <<EOF > "$WEB_SVC_FILE"
 [Unit]
@@ -409,6 +440,20 @@ EOF
                 systemctl stop mweb.service 2>/dev/null; systemctl disable mweb.service >/dev/null 2>&1
                 rm -rf /tmp/mweb_daemon
                 echo -e "\n  ${R}● Web UI has been safely shut down.${NC}"; sleep 2; break ;;
+            4)
+                echo -ne "\n  ${C}●${NC} ${W}New Panel Username: ${NC}"; read n_usr
+                echo -ne "  ${C}●${NC} ${W}New Panel Password: ${NC}"; read n_pwd
+                n_usr=$(echo "$n_usr" | tr -d '\r' | tr -d ' ')
+                n_pwd=$(echo "$n_pwd" | tr -d '\r' | tr -d ' ')
+                if [ -n "$n_usr" ] && [ -n "$n_pwd" ]; then
+                    sed -i "s/^WEB_USER=.*/WEB_USER=$n_usr/" "$CONF_FILE" 2>/dev/null || echo "WEB_USER=$n_usr" >> "$CONF_FILE"
+                    sed -i "s/^WEB_PASS=.*/WEB_PASS=$n_pwd/" "$CONF_FILE" 2>/dev/null || echo "WEB_PASS=$n_pwd" >> "$CONF_FILE"
+                    W_USER=$n_usr; W_PASS=$n_pwd
+                    systemctl restart mweb.service 2>/dev/null
+                    echo -e "  ${G}● Panel credentials updated successfully! New Session required.${NC}"; sleep 2
+                else
+                    echo -e "  ${R}● Invalid Input!${NC}"; sleep 1.5
+                fi ;;
             0) break ;;
         esac
     done
@@ -436,5 +481,3 @@ while true; do
         0) break ;;
     esac
 done
-EOF_MSTATS
-chmod +x /usr/bin/mstats

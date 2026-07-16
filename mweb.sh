@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.4.0 (Live Web Restarter) ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.5.0 (Unified Navbar View) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -207,11 +207,9 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
         if self.path == '/api/action':
             action = data.get('action')
             
-            # 🌟 ASYNC WEB RESTART 🌟
             if action == 'restart_web':
                 self.wfile.write(json.dumps({"status": "success", "message": "Restarting Web UI..."}).encode())
                 self.wfile.flush()
-                # Run the restart command in the background after 1 second so the response completes safely
                 os.system("(sleep 1 && systemctl restart mweb.service) &")
                 return
 
@@ -311,22 +309,7 @@ cat <<'EOF' > index.html
         * { box-sizing: border-box; margin: 0; padding: 0; transition: background-color 0.3s, color 0.3s, border-color 0.3s; }
         body { background-color: var(--bg-base); background-image: radial-gradient(circle at 50% 0%, var(--glow) 0%, transparent 40%); color: var(--text-main); font-family: 'Inter', sans-serif; }
         body[dir="rtl"] { font-family: 'Vazirmatn', sans-serif; }
-        
-        /* Floating Elements */
-        .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--sky); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; cursor: pointer; box-shadow: 0 10px 25px rgba(56, 189, 248, 0.5); z-index: 1001; border: none; transition: 0.3s; }
-        body[dir="rtl"] .fab { right: auto; left: 30px; }
-        .fab:hover { transform: scale(1.1) rotate(90deg); }
 
-        /* 🌟 NEW: Secondary Restart FAB 🌟 */
-        .fab-restart { bottom: 105px; right: 35px; width: 50px; height: 50px; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); box-shadow: 0 5px 15px var(--shadow); }
-        body[dir="rtl"] .fab-restart { right: auto; left: 35px; }
-        .fab-restart:hover { background: var(--purple); border-color: var(--purple); color: #fff; transform: scale(1.1) rotate(180deg); }
-        .fab-restart svg { width: 22px; height: 22px; }
-
-        .lang-floater { position: fixed; bottom: 30px; left: 30px; z-index: 1000; display: flex; flex-direction: column; gap: 15px; background: var(--card-bg); padding: 15px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 10px 30px var(--shadow); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); }
-        body[dir="rtl"] .lang-floater { left: auto; right: 30px; }
-
-        /* Modals and Toasts */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); z-index: 2000; display: none; align-items: center; justify-content: center; opacity: 0; transition: 0.3s; }
         .modal-content { background: var(--card-bg); border: 1px solid var(--border); padding: 30px; border-radius: 16px; width: 100%; max-width: 450px; transform: scale(0.9); transition: 0.3s; }
         .modal-overlay.active { display: flex; opacity: 1; }
@@ -356,29 +339,29 @@ cat <<'EOF' > index.html
         @keyframes slideInRtl { to { transform: translateX(0); } }
         @keyframes fadeOutRtl { to { opacity: 0; transform: translateY(-20px); } }
 
-        /* Original Layout */
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
+        /* 🌟 Unified Sidebar for ALL buttons 🌟 */
         .sidebar {
             position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
-            display: flex; flex-direction: column; gap: 28px; z-index: 1000;
-            background: var(--card-bg); padding: 30px 18px; border-radius: 24px;
+            display: flex; flex-direction: column; gap: 20px; z-index: 1000;
+            background: var(--card-bg); padding: 25px 15px; border-radius: 24px;
             border: 1px solid var(--border); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
             box-shadow: 0 10px 30px var(--shadow);
         }
         body[dir="rtl"] .sidebar { left: auto; right: 20px; }
 
         .side-btn {
-            width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
+            width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
             cursor: pointer; border: 2px solid transparent; transition: 0.3s;
             background: rgba(255,255,255,0.05); color: var(--text-main); position: relative;
         }
         .side-btn:hover { transform: scale(1.05); }
         .side-btn.active { border-color: var(--sky); background: rgba(56, 189, 248, 0.15); box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); }
         body.light-mode .side-btn.active { background: rgba(14, 165, 233, 0.15); }
-        .side-btn svg.icon-sys { width: 26px; height: 26px; }
-        .side-btn svg.icon-flag { width: 32px; height: auto; border-radius: 4px;}
+        .side-btn svg.icon-sys { width: 24px; height: 24px; transition: 0.3s; }
+        .side-btn:active svg.icon-sys { transform: scale(0.9); }
 
         .section-title { font-size: 1.1rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 10px; margin-bottom: 20px; letter-spacing: 0.5px;}
         .status-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 8px currentColor; flex-shrink: 0;}
@@ -423,14 +406,20 @@ cat <<'EOF' > index.html
         .text-sky { color: var(--sky); } .text-pink { color: var(--pink); } 
         .text-green { color: var(--green); } .text-muted { color: var(--text-muted); } .text-yellow { color: var(--yellow); }
         
+        /* 📱 Mobile Specific Adjustments 📱 */
         @media (max-width: 950px) { 
-            .wrapper { padding-left: 15px; padding-right: 15px; padding-bottom: 120px;}
-            .sidebar { top: auto; bottom: 20px; left: 50%; transform: translateX(-50%); flex-direction: row; padding: 15px 30px; gap: 30px; border-radius: 24px; width: max-content; margin: 0 auto; }
+            .wrapper { padding-left: 15px; padding-right: 15px; padding-bottom: 100px;}
+            
+            /* Unified Bottom Navigation Bar */
+            .sidebar { 
+                top: auto; bottom: 20px; left: 50%; transform: translateX(-50%); 
+                flex-direction: row; padding: 10px 15px; gap: 12px; 
+                border-radius: 20px; width: max-content; max-width: 95vw; overflow-x: auto;
+            }
             body[dir="rtl"] .sidebar { right: 50%; transform: translateX(50%); }
-            .lang-floater { bottom: 100px; left: 20px; flex-direction: row; }
-            body[dir="rtl"] .lang-floater { left: auto; right: 20px; }
-            .fab { bottom: 100px; }
-            .fab-restart { bottom: 175px; }
+            .side-btn { width: 44px; height: 44px; border-radius: 12px; }
+            .side-btn svg.icon-sys { width: 22px; height: 22px; }
+
             .fleet-grid, .tunnels-grid { grid-template-columns: 1fr; }
             .t-row.split { grid-template-columns: 1fr; gap: 10px; } 
             .t-row.split > div, .t-row { flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; }
@@ -441,9 +430,14 @@ cat <<'EOF' > index.html
             .tun-header { flex-direction: column; align-items: flex-start; gap: 15px; }
             body[dir="ltr"] .btn-restart, body[dir="rtl"] .btn-restart { width: 100%; text-align: center; float: none; }
         }
+        @media (max-width: 400px) {
+            .sidebar { padding: 8px 10px; gap: 8px; border-radius: 18px;}
+            .side-btn { width: 38px; height: 38px; border-radius: 10px; }
+            .side-btn svg.icon-sys { width: 20px; height: 20px; }
+        }
         @media (min-width: 951px) {
-            .wrapper { padding-left: 110px; }
-            body[dir="rtl"] .wrapper { padding-left: 15px; padding-right: 110px; }
+            .wrapper { padding-left: 100px; }
+            body[dir="rtl"] .wrapper { padding-left: 15px; padding-right: 100px; }
         }
     </style>
 </head>
@@ -493,21 +487,31 @@ cat <<'EOF' > index.html
     </div>
 
     <div id="app-core">
+        <!-- 🌟 UNIFIED SIDEBAR (NAVBAR) 🌟 -->
         <div class="sidebar">
+            <!-- 1. Theme -->
             <div class="side-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
                 <svg class="icon-sys" id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"></svg>
             </div>
+            
+            <!-- 2. Language Toggle (Single Button) -->
+            <div class="side-btn" id="btn-lang" onclick="toggleLang()" title="Switch Language" style="font-weight:700; font-size:1.1rem; color:var(--text-main);">
+                <!-- Dynamic Content Injected via JS -->
+            </div>
+
+            <!-- 3. Add Port -->
+            <div class="side-btn" onclick="openModal()" title="Add Port Mapping" style="color:var(--sky); border-color:rgba(56, 189, 248, 0.3);">
+                <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </div>
+
+            <!-- 4. Restart Web Server -->
+            <div class="side-btn" id="btn-restart-web" onclick="restartWeb()" title="Restart Web Server" style="color:var(--yellow); border-color:rgba(251, 191, 36, 0.3);">
+                <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </div>
+
+            <!-- 5. Logout -->
             <div class="side-btn" onclick="logout()" title="Logout" style="color:var(--red); border-color:rgba(248, 113, 113, 0.3);">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-            </div>
-        </div>
-
-        <div class="lang-floater">
-            <div class="side-btn" id="btn-en" onclick="setLang('en')" title="English" style="width:40px; height:40px; border-radius:10px;">
-                <svg class="icon-flag" viewBox="0 0 60 40" style="width:24px; border-radius:3px;"><rect width="60" height="40" fill="#fff"/><rect width="60" height="4" y="4" fill="#d21034"/><rect width="60" height="4" y="12" fill="#d21034"/><rect width="60" height="4" y="20" fill="#d21034"/><rect width="60" height="4" y="28" fill="#d21034"/><rect width="60" height="4" y="36" fill="#d21034"/><rect width="30" height="22" fill="#002664"/></svg>
-            </div>
-            <div class="side-btn" id="btn-fa" onclick="setLang('fa')" title="فارسی" style="width:40px; height:40px; border-radius:10px;">
-                <svg class="icon-flag" viewBox="0 0 60 40" style="width:24px; border-radius:3px;"><rect width="60" height="40" fill="#fff"/><rect width="60" height="13.3" fill="#239f40"/><rect width="60" height="13.3" y="26.6" fill="#da0000"/><circle cx="30" cy="20" r="4" fill="#da0000"/></svg>
             </div>
         </div>
 
@@ -527,11 +531,6 @@ cat <<'EOF' > index.html
                 </div>
             </div>
         </div>
-
-        <button class="fab" onclick="openModal()">+</button>
-        <button class="fab fab-restart" onclick="restartWeb()" id="btn-restart-web" title="Restart Web Server">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-        </button>
     </div>
 
     <script>
@@ -548,7 +547,7 @@ cat <<'EOF' > index.html
                 btn_res: "Restart Tunnel", wait: "⏳ WAIT", done: "✅ DONE",
                 offline: "OFFLINE", timeout: "TIMEOUT", no_tun: "No active tunnels found.",
                 mod_title: "Forward New Port", mod_port: "Local Port", mod_iface: "Target Core Interface", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out successfully.", manual_ip: "Manual IP Entry",
-                rst_web: "Restarting Web Service...", web_on: "Web UI is back online!"
+                rst_web: "Restarting Web Service...", web_on: "Web UI is back online!", toggle_lang: "فا"
             },
             fa: {
                 hw_title: "رادار سخت‌افزار ناوگان", tun_title: "ماتریس تونل‌های فعال",
@@ -562,18 +561,26 @@ cat <<'EOF' > index.html
                 btn_res: "راه‌اندازی مجدد", wait: "⏳ صبر کنید", done: "✅ انجام شد",
                 offline: "قطع ارتباط", timeout: "تایم‌اوت", no_tun: "تونل فعالی یافت نشد.",
                 mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_iface: "اینترفیس هدف (تونل مپینگ)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خروج با موفقیت انجام شد.", manual_ip: "ورود دستی آی‌پی",
-                rst_web: "در حال ری‌استارت پنل...", web_on: "وب‌سرور ران شد!"
+                rst_web: "در حال ری‌استارت پنل...", web_on: "وب‌سرور ران شد!", toggle_lang: "EN"
             }
         };
 
         let currentLang = localStorage.getItem('mdesign_lang') || 'en';
         function t(key) { return i18n[currentLang][key]; }
 
+        function toggleLang() {
+            let newLang = currentLang === 'en' ? 'fa' : 'en';
+            setLang(newLang);
+        }
+
         function setLang(l) {
             currentLang = l; localStorage.setItem('mdesign_lang', l);
             document.body.dir = l === 'fa' ? 'rtl' : 'ltr';
-            document.getElementById('btn-en').classList.toggle('active', l === 'en');
-            document.getElementById('btn-fa').classList.toggle('active', l === 'fa');
+            
+            // Set dynamic language toggle label
+            document.getElementById('btn-lang').innerText = t('toggle_lang');
+            if(l === 'fa') { document.getElementById('btn-lang').style.fontFamily = 'Inter'; }
+            else { document.getElementById('btn-lang').style.fontFamily = 'Vazirmatn'; }
             
             document.getElementById('lbl-hw-title').innerText = t('hw_title');
             document.getElementById('lbl-tun-title').innerText = t('tun_title');
@@ -729,16 +736,23 @@ cat <<'EOF' > index.html
             });
         }
 
-        // 🌟 NEW: Live Web Restart Function 🌟
         function restartWeb() {
             let btn = document.getElementById('btn-restart-web');
-            btn.style.opacity = "0.5"; btn.style.pointerEvents = "none";
+            let icon = btn.querySelector('svg');
+            
+            // Visual feedback: Spin the icon and disable button
+            icon.style.transform = "rotate(360deg)";
+            icon.style.transition = "transform 1s ease-in-out";
+            btn.style.opacity = "0.5"; 
+            btn.style.pointerEvents = "none";
             showToast(t('rst_web'));
             
             apiPost('restart_web', {}).then(r => {
+                // Wait for the backend service to fully restart (approx 3-4s)
                 setTimeout(() => {
                     btn.style.opacity = "1";
                     btn.style.pointerEvents = "auto";
+                    icon.style.transform = "rotate(0deg)"; // Reset rotation
                     showToast(t('web_on'));
                     fetchRoutine(); 
                 }, 4000); 
@@ -916,7 +930,18 @@ while true; do
             remote_list+=("$REMOTE_PUB")
             
             ping_res=""
-            if [[ "$st_badge" == "ONLINE" ]]; then ping_res=$(ping -c 1 -W 1 "$rip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}'); fi
+            local inner_rip=""
+            if [ -n "$CORE_SUBNET" ]; then
+                inner_rip="${CORE_SUBNET}.$([ "$TYPE" == "1" ] && echo "2" || echo "1")"
+            fi
+            
+            if [[ "$st_badge" == "ONLINE" ]]; then
+                local target_ping="$inner_rip"
+                [ -z "$target_ping" ] && target_ping="$rip"
+                ping_res=$(ping -c 1 -W 1 "$target_ping" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+                [ -z "$ping_res" ] && st_badge="OFFLINE"
+            fi
+            
             t_uptime=$(get_uptime "$name")
             
             type_txt="GRE"
@@ -1004,7 +1029,7 @@ while true; do
     for ((i=0; i<total_r; i++)); do remotes_json+="\"${unique_remotes[$i]}\""; [ $i -lt $((total_r - 1)) ] && remotes_json+=","; done
     remotes_json+="]"
 
-    cat <<EOF > api_data.json
+    cat <<EOF > /tmp/mweb_daemon/api_data.json
 {
     "local": {"ip": "${MY_PUB_IP}", "cpu": "${cpu_load}%", "ram": "${ram_usage}%", "uptime": "${sys_uptime}"},
     "remotes": ${remotes_json},

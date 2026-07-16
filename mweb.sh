@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.6.0 (Unified Neon UI & Flag Toggles) ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.7.0 (Full Neon Palette) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -342,7 +342,7 @@ cat <<'EOF' > index.html
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
-        /* 🌟 Unified Sidebar for ALL buttons with Neon Frames 🌟 */
+        /* 🌟 Unified Sidebar with Custom Neon Palettes 🌟 */
         .sidebar {
             position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
             display: flex; flex-direction: column; gap: 20px; z-index: 1000;
@@ -360,14 +360,18 @@ cat <<'EOF' > index.html
         
         .side-btn:hover { transform: scale(1.05); border-color: var(--border); background: rgba(255,255,255,0.1); }
         
-        /* Neon Frame Hover Effects */
+        /* Specific Neon Hover Effects */
         .side-btn.btn-neon-sky:hover { border-color: var(--sky); background: rgba(56, 189, 248, 0.15); box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); color: var(--sky) !important; }
         .side-btn.btn-neon-yellow:hover { border-color: var(--yellow); background: rgba(251, 191, 36, 0.15); box-shadow: 0 0 15px rgba(251, 191, 36, 0.4); color: var(--yellow) !important; }
         .side-btn.btn-neon-red:hover { border-color: var(--red); background: rgba(248, 113, 113, 0.15); box-shadow: 0 0 15px rgba(248, 113, 113, 0.4); color: var(--red) !important; }
+        .side-btn.btn-neon-purple:hover { border-color: var(--purple); background: rgba(192, 132, 252, 0.15); box-shadow: 0 0 15px rgba(192, 132, 252, 0.4); color: var(--purple) !important; }
+        .side-btn.btn-neon-green:hover { border-color: var(--green); background: rgba(52, 211, 153, 0.15); box-shadow: 0 0 15px rgba(52, 211, 153, 0.4); color: var(--green) !important; }
         
         body.light-mode .side-btn.btn-neon-sky:hover { background: rgba(14, 165, 233, 0.15); }
         body.light-mode .side-btn.btn-neon-yellow:hover { background: rgba(217, 119, 6, 0.15); }
         body.light-mode .side-btn.btn-neon-red:hover { background: rgba(220, 38, 38, 0.15); }
+        body.light-mode .side-btn.btn-neon-purple:hover { background: rgba(147, 51, 234, 0.15); }
+        body.light-mode .side-btn.btn-neon-green:hover { background: rgba(5, 150, 105, 0.15); }
 
         .side-btn svg.icon-sys { width: 24px; height: 24px; transition: 0.3s; }
         .side-btn:active svg.icon-sys { transform: scale(0.9); }
@@ -419,7 +423,6 @@ cat <<'EOF' > index.html
         @media (max-width: 950px) { 
             .wrapper { padding-left: 15px; padding-right: 15px; padding-bottom: 100px;}
             
-            /* Unified Bottom Navigation Bar */
             .sidebar { 
                 top: auto; bottom: 20px; left: 50%; transform: translateX(-50%); 
                 flex-direction: row; padding: 10px 15px; gap: 12px; 
@@ -445,8 +448,8 @@ cat <<'EOF' > index.html
             .side-btn svg.icon-sys { width: 20px; height: 20px; }
         }
         @media (min-width: 951px) {
-            .wrapper { padding-left: 100px; }
-            body[dir="rtl"] .wrapper { padding-left: 15px; padding-right: 100px; }
+            .wrapper { padding-left: 110px; }
+            body[dir="rtl"] .wrapper { padding-left: 15px; padding-right: 110px; }
         }
     </style>
 </head>
@@ -496,22 +499,29 @@ cat <<'EOF' > index.html
     </div>
 
     <div id="app-core">
+        <!-- 🌟 UNIFIED SIDEBAR (NAVBAR) WITH FULL NEON PALETTE 🌟 -->
         <div class="sidebar">
-            <div class="side-btn btn-neon-sky" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
+            <!-- 1. Theme (Neon Purple) -->
+            <div class="side-btn btn-neon-purple" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
                 <svg class="icon-sys" id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"></svg>
             </div>
             
-            <div class="side-btn btn-neon-sky" id="btn-lang" onclick="toggleLang()" title="Switch Language">
-                </div>
+            <!-- 2. Language Toggle (Neon Green) -->
+            <div class="side-btn btn-neon-green" id="btn-lang" onclick="toggleLang()" title="Switch Language">
+                <!-- Dynamic SVG Flag Injected via JS -->
+            </div>
 
+            <!-- 3. Add Port (Neon Sky Blue) -->
             <div class="side-btn btn-neon-sky" onclick="openModal()" title="Add Port Mapping">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </div>
 
+            <!-- 4. Restart Web Server (Neon Yellow) -->
             <div class="side-btn btn-neon-yellow" id="btn-restart-web" onclick="restartWeb()" title="Restart Web Server">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </div>
 
+            <!-- 5. Logout (Neon Red) -->
             <div class="side-btn btn-neon-red" onclick="logout()" title="Logout">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
             </div>
@@ -582,7 +592,6 @@ cat <<'EOF' > index.html
             currentLang = l; localStorage.setItem('mdesign_lang', l);
             document.body.dir = l === 'fa' ? 'rtl' : 'ltr';
             
-            // Set dynamic language flag icon
             document.getElementById('btn-lang').innerHTML = l === 'fa' ? flagFA : flagEN;
             
             document.getElementById('lbl-hw-title').innerText = t('hw_title');
@@ -1004,7 +1013,7 @@ while true; do
         
         bh_ping="---"
         if [ "$bh_state" == "ONLINE" ] && grep -q "\[client\]" "$conf" && [ -n "$bh_rip" ]; then
-            bh_ping=$(ping -c 1 -W 1 "$bh_rip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+            bh_ping=$(ping -c 1 -W 1 "$bh_rip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}');
         fi
         
         bh_uptime="Active"

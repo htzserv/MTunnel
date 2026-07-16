@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.3.0 (Smart Interface Selector) ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.4.0 (Live Web Restarter) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -206,6 +206,15 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
 
         if self.path == '/api/action':
             action = data.get('action')
+            
+            # 🌟 ASYNC WEB RESTART 🌟
+            if action == 'restart_web':
+                self.wfile.write(json.dumps({"status": "success", "message": "Restarting Web UI..."}).encode())
+                self.wfile.flush()
+                # Run the restart command in the background after 1 second so the response completes safely
+                os.system("(sleep 1 && systemctl restart mweb.service) &")
+                return
+
             if action == 'restart_tunnel':
                 target = data.get('target')
                 if target == 'FRP Engine':
@@ -232,7 +241,6 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 iface = data.get('iface')
                 engine = data.get('engine')
 
-                # 🌟 SMART IP SELECTION LOGIC 🌟
                 if iface and iface != 'manual':
                     try:
                         cmd = f"ip -o -4 addr show {iface} | awk '{{print $4}}' | cut -d/ -f1"
@@ -304,13 +312,21 @@ cat <<'EOF' > index.html
         body { background-color: var(--bg-base); background-image: radial-gradient(circle at 50% 0%, var(--glow) 0%, transparent 40%); color: var(--text-main); font-family: 'Inter', sans-serif; }
         body[dir="rtl"] { font-family: 'Vazirmatn', sans-serif; }
         
+        /* Floating Elements */
         .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--sky); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; cursor: pointer; box-shadow: 0 10px 25px rgba(56, 189, 248, 0.5); z-index: 1001; border: none; transition: 0.3s; }
         body[dir="rtl"] .fab { right: auto; left: 30px; }
         .fab:hover { transform: scale(1.1) rotate(90deg); }
 
+        /* 🌟 NEW: Secondary Restart FAB 🌟 */
+        .fab-restart { bottom: 105px; right: 35px; width: 50px; height: 50px; background: var(--card-bg); border: 1px solid var(--border); color: var(--text-muted); box-shadow: 0 5px 15px var(--shadow); }
+        body[dir="rtl"] .fab-restart { right: auto; left: 35px; }
+        .fab-restart:hover { background: var(--purple); border-color: var(--purple); color: #fff; transform: scale(1.1) rotate(180deg); }
+        .fab-restart svg { width: 22px; height: 22px; }
+
         .lang-floater { position: fixed; bottom: 30px; left: 30px; z-index: 1000; display: flex; flex-direction: column; gap: 15px; background: var(--card-bg); padding: 15px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 10px 30px var(--shadow); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); }
         body[dir="rtl"] .lang-floater { left: auto; right: 30px; }
 
+        /* Modals and Toasts */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); z-index: 2000; display: none; align-items: center; justify-content: center; opacity: 0; transition: 0.3s; }
         .modal-content { background: var(--card-bg); border: 1px solid var(--border); padding: 30px; border-radius: 16px; width: 100%; max-width: 450px; transform: scale(0.9); transition: 0.3s; }
         .modal-overlay.active { display: flex; opacity: 1; }
@@ -340,6 +356,7 @@ cat <<'EOF' > index.html
         @keyframes slideInRtl { to { transform: translateX(0); } }
         @keyframes fadeOutRtl { to { opacity: 0; transform: translateY(-20px); } }
 
+        /* Original Layout */
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
@@ -413,6 +430,7 @@ cat <<'EOF' > index.html
             .lang-floater { bottom: 100px; left: 20px; flex-direction: row; }
             body[dir="rtl"] .lang-floater { left: auto; right: 20px; }
             .fab { bottom: 100px; }
+            .fab-restart { bottom: 175px; }
             .fleet-grid, .tunnels-grid { grid-template-columns: 1fr; }
             .t-row.split { grid-template-columns: 1fr; gap: 10px; } 
             .t-row.split > div, .t-row { flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; }
@@ -511,6 +529,9 @@ cat <<'EOF' > index.html
         </div>
 
         <button class="fab" onclick="openModal()">+</button>
+        <button class="fab fab-restart" onclick="restartWeb()" id="btn-restart-web" title="Restart Web Server">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+        </button>
     </div>
 
     <script>
@@ -526,7 +547,8 @@ cat <<'EOF' > index.html
                 hw_sync: "REMOTE HARDWARE (KHAREJ)", kh_cpu: "REMOTE CPU", kh_ram: "REMOTE RAM",
                 btn_res: "Restart Tunnel", wait: "⏳ WAIT", done: "✅ DONE",
                 offline: "OFFLINE", timeout: "TIMEOUT", no_tun: "No active tunnels found.",
-                mod_title: "Forward New Port", mod_port: "Local Port", mod_iface: "Target Core Interface", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out successfully.", manual_ip: "Manual IP Entry"
+                mod_title: "Forward New Port", mod_port: "Local Port", mod_iface: "Target Core Interface", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out successfully.", manual_ip: "Manual IP Entry",
+                rst_web: "Restarting Web Service...", web_on: "Web UI is back online!"
             },
             fa: {
                 hw_title: "رادار سخت‌افزار ناوگان", tun_title: "ماتریس تونل‌های فعال",
@@ -539,7 +561,8 @@ cat <<'EOF' > index.html
                 hw_sync: "سخت‌افزار سرور خارج", kh_cpu: "پردازنده خارج", kh_ram: "رم خارج",
                 btn_res: "راه‌اندازی مجدد", wait: "⏳ صبر کنید", done: "✅ انجام شد",
                 offline: "قطع ارتباط", timeout: "تایم‌اوت", no_tun: "تونل فعالی یافت نشد.",
-                mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_iface: "اینترفیس هدف (تونل مپینگ)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خروج با موفقیت انجام شد.", manual_ip: "ورود دستی آی‌پی"
+                mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_iface: "اینترفیس هدف (تونل مپینگ)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خروج با موفقیت انجام شد.", manual_ip: "ورود دستی آی‌پی",
+                rst_web: "در حال ری‌استارت پنل...", web_on: "وب‌سرور ران شد!"
             }
         };
 
@@ -561,6 +584,8 @@ cat <<'EOF' > index.html
             document.getElementById('lbl-mod-eng').innerText = t('mod_eng');
             document.getElementById('lbl-mod-btn').innerText = t('mod_btn');
             document.getElementById('lbl-login-btn').innerText = t('login_btn');
+            
+            document.getElementById('btn-restart-web').title = t('rst_web');
             
             fetchRoutine();
         }
@@ -701,6 +726,22 @@ cat <<'EOF' > index.html
                     btn.innerHTML = t('btn_res'); btn.style.opacity = "1"; btn.style.pointerEvents = "auto";
                 }
                 setTimeout(() => { isRestarting = false; }, 1500);
+            });
+        }
+
+        // 🌟 NEW: Live Web Restart Function 🌟
+        function restartWeb() {
+            let btn = document.getElementById('btn-restart-web');
+            btn.style.opacity = "0.5"; btn.style.pointerEvents = "none";
+            showToast(t('rst_web'));
+            
+            apiPost('restart_web', {}).then(r => {
+                setTimeout(() => {
+                    btn.style.opacity = "1";
+                    btn.style.pointerEvents = "auto";
+                    showToast(t('web_on'));
+                    fetchRoutine(); 
+                }, 4000); 
             });
         }
 

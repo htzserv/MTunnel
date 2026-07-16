@@ -1,17 +1,11 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.5 (Interactive + Original Design) ---
+# --- MDesign Modular Core (mweb.sh) | Global Enterprise UI v4.5.1 (Interactive + Original Design) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
-if [ ! -f "$CONF_FILE" ]; then
-    echo -e "WEB_PORT=1000\nWEB_USER=admin\nWEB_PASS=admin" > "$CONF_FILE"
-fi
+[ ! -f "$CONF_FILE" ] && echo "WEB_PORT=1000" > "$CONF_FILE"
 source "$CONF_FILE"
-
 PORT=${WEB_PORT:-1000}
-W_USER=${WEB_USER:-admin}
-W_PASS=${WEB_PASS:-admin}
-
 cd /tmp/mweb_daemon
 
 get_local_ip() {
@@ -86,7 +80,6 @@ get_frp_tx() {
     echo "${tx:-0}"
 }
 
-# --- BACKHAUL COUNTERS INJECTION ---
 init_bh_counters() {
     for conf in /etc/mbackhaul/tunnels/*.toml; do
         [ ! -f "$conf" ] && continue
@@ -98,8 +91,9 @@ init_bh_counters() {
                 iptables -t mangle -C OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
             fi
         elif grep -q "\[client\]" "$conf"; then
-            local remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
-            local r_ip=$(echo "$remote" | cut -d: -f1); local r_port=$(echo "$remote" | cut -d: -f2)
+            # 🌟 REGEX FIX: Stripping backhaul protocols (tcpmux:// etc) so iptables doesn't crash
+            local raw_remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
+            local r_ip=$(echo "$raw_remote" | cut -d: -f1); local r_port=$(echo "$raw_remote" | cut -d: -f2)
             if [ -n "$r_ip" ] && [ -n "$r_port" ]; then
                 iptables -t mangle -C INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" >/dev/null 2>&1 || iptables -t mangle -A INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" 2>/dev/null
                 iptables -t mangle -C OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
@@ -117,7 +111,6 @@ get_bh_tx() {
     local tx=$(iptables -t mangle -L OUTPUT -v -n -x 2>/dev/null | grep "MBH_TX_$1" | awk '{sum+=$2} END {print sum}')
     echo "${tx:-0}"
 }
-# ----------------------------------------
 
 get_uptime() {
     local iface=$1
@@ -170,7 +163,6 @@ get_tunnel_ip() {
     echo "$rip"
 }
 
-# 🐍 PYTHON API SERVER (RESTORED INTERACTIVE POST CAPABILITY) 🐍
 cat << 'PY_EOF' > server.py
 import http.server
 import socketserver
@@ -179,12 +171,8 @@ import urllib.parse
 import sys
 import os
 import json
-import hashlib
 
 PORT = int(sys.argv[1])
-USER = sys.argv[2]
-PASS = sys.argv[3]
-SECRET_TOKEN = hashlib.sha256(f"{USER}:{PASS}:MDesignSecure".encode()).hexdigest()
 
 class APIHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -193,51 +181,11 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
-        post_data = self.rfile.read(content_length)
-        try:
-            data = json.loads(post_data.decode('utf-8'))
-        except:
-            data = {}
-
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-
-        if self.path == '/api/login':
-            if data.get('username') == USER and data.get('password') == PASS:
-                self.wfile.write(json.dumps({"status": "success", "token": SECRET_TOKEN}).encode())
-            else:
-                self.wfile.write(json.dumps({"status": "error", "message": "Invalid Credentials"}).encode())
-            return
-
-        if data.get('token') != SECRET_TOKEN:
-            self.wfile.write(json.dumps({"status": "unauthorized"}).encode())
-            return
-
-        if self.path == '/api/action':
-            action = data.get('action')
-            if action == 'restart_tunnel':
-                target = data.get('target')
-                if target == 'FRP Engine':
-                    os.system("systemctl restart frps 2>/dev/null; systemctl restart frpc 2>/dev/null")
-                    os.system("date +%s > /etc/mstats/uptimes/frp_engine 2>/dev/null")
-                elif os.path.exists(f"/etc/mbackhaul/tunnels/{target}.toml"):
-                    os.system(f"systemctl restart mbackhaul@{target} 2>/dev/null")
-                elif target.startswith('l2tp_'):
-                    os.system("systemctl restart ml2tp.service 2>/dev/null")
-                    os.system(f"date +%s > /etc/mstats/uptimes/{target} 2>/dev/null")
-                elif target.startswith('hys_'):
-                    os.system(f"systemctl restart mhysteria@{target} 2>/dev/null")
-                    os.system(f"date +%s > /etc/mstats/uptimes/{target} 2>/dev/null")
-                elif target.replace('_', '').replace('-', '').isalnum():
-                    subprocess.run(['ip', 'link', 'set', target, 'down'], capture_output=True)
-                    subprocess.run(['sleep', '1'])
-                    subprocess.run(['ip', 'link', 'set', target, 'up'], capture_output=True)
-                    os.system(f"date +%s > /etc/mstats/uptimes/{target} 2>/dev/null")
-                self.wfile.write(json.dumps({"status": "success", "message": "Restarted"}).encode())
-                
-            elif action == 'add_port':
+        if self.path == '/api/add_port':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
                 port = data.get('port')
                 dst_ip = data.get('dst_ip')
                 engine = data.get('engine')
@@ -247,25 +195,56 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 elif engine == 'gost':
                     cmd = f"if command -v jq >/dev/null 2>&1; then jq '.ServeNodes += [\"tcp://:{port}/{dst_ip}:{port}\"]' /etc/gost/config.json > /tmp/g.json && mv /tmp/g.json /etc/gost/config.json && systemctl restart gost; fi"
                     os.system(cmd)
+                
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
                 self.wfile.write(json.dumps({"status": "success", "message": f"Port {port} Mapped!"}).encode())
-            else:
-                self.wfile.write(json.dumps({"status": "error", "message": "Unknown Action"}).encode())
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": "Failed to map port."}).encode())
             return
 
-    # Keep GET backward compatibility for local fetch tests
     def do_GET(self):
-        super().do_GET()
+        if self.path.startswith('/restart?iface='):
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            if 'iface' in params:
+                iface = params['iface'][0]
+                if iface == 'FRP Engine':
+                    os.system("systemctl restart frps 2>/dev/null; systemctl restart frpc 2>/dev/null")
+                    os.system("date +%s > /etc/mstats/uptimes/frp_engine 2>/dev/null")
+                elif os.path.exists(f"/etc/mbackhaul/tunnels/{iface}.toml"):
+                    os.system(f"systemctl restart mbackhaul@{iface} 2>/dev/null")
+                elif iface.startswith('l2tp_'):
+                    os.system("systemctl restart ml2tp.service 2>/dev/null")
+                    os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
+                elif iface.startswith('hys_'):
+                    os.system(f"systemctl restart mhysteria@{iface} 2>/dev/null")
+                    os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
+                elif iface.replace('_', '').replace('-', '').isalnum():
+                    subprocess.run(['ip', 'link', 'set', iface, 'down'], capture_output=True)
+                    subprocess.run(['sleep', '1'])
+                    subprocess.run(['ip', 'link', 'set', iface, 'up'], capture_output=True)
+                    os.system(f"date +%s > /etc/mstats/uptimes/{iface} 2>/dev/null")
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"OK")
+        else:
+            super().do_GET()
 
 socketserver.TCPServer.allow_reuse_address = True
 with socketserver.TCPServer(("", PORT), APIHandler) as httpd:
     httpd.serve_forever()
 PY_EOF
 
-python3 server.py "$PORT" "$W_USER" "$W_PASS" >/dev/null 2>&1 &
+python3 server.py "$PORT" >/dev/null 2>&1 &
 PY_PID=$!
 trap "kill $PY_PID; rm -rf /tmp/mweb_daemon; exit" SIGINT SIGTERM
 
-# 🌐 HTML FRONTEND (ORIGINAL DESIGN + INTERACTIVE LAYERS) 🌐
 cat <<'EOF' > index.html
 <!DOCTYPE html>
 <html lang="en">
@@ -296,19 +275,7 @@ cat <<'EOF' > index.html
         body { background-color: var(--bg-base); background-image: radial-gradient(circle at 50% 0%, var(--glow) 0%, transparent 40%); color: var(--text-main); font-family: 'Inter', sans-serif; }
         body[dir="rtl"] { font-family: 'Vazirmatn', sans-serif; }
         
-        /* Interactive Layer Styles */
-        #login-screen { position: fixed; inset: 0; background: var(--bg-base); z-index: 9999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(20px); }
-        .login-box { background: var(--card-bg); border: 1px solid var(--border); padding: 40px; border-radius: 20px; box-shadow: 0 20px 40px var(--shadow); width: 100%; max-width: 400px; text-align: center; }
-        .login-box h2 { margin-bottom: 25px; color: var(--sky); font-weight: 700; letter-spacing: 1px;}
-        .input-group { margin-bottom: 15px; text-align: left; }
-        body[dir="rtl"] .input-group { text-align: right; }
-        .input-group input, .input-group select { width: 100%; padding: 12px 15px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); font-size: 1rem; outline: none; }
-        body.light-mode .input-group input, body.light-mode .input-group select { background: rgba(255,255,255,0.5); color: #000; }
-        .input-group input:focus, .input-group select:focus { border-color: var(--sky); box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
-        .btn-primary { width: 100%; padding: 12px; background: var(--sky); color: #fff; border: none; border-radius: 10px; font-weight: 600; font-size: 1rem; cursor: pointer; margin-top: 10px; }
-        .btn-primary:hover { background: #0284c7; box-shadow: 0 5px 15px rgba(56, 189, 248, 0.4); }
-        #app-core { display: none; opacity: 0; transition: opacity 0.5s; }
-        
+        /* Interactive Layer Styles (Added securely without breaking original layout) */
         .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--sky); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; cursor: pointer; box-shadow: 0 10px 25px rgba(56, 189, 248, 0.5); z-index: 1001; border: none; transition: 0.3s; }
         body[dir="rtl"] .fab { right: auto; left: 30px; }
         .fab:hover { transform: scale(1.1) rotate(90deg); }
@@ -319,6 +286,14 @@ cat <<'EOF' > index.html
         .modal-overlay.active .modal-content { transform: scale(1); }
         .modal-close { float: right; cursor: pointer; color: var(--text-muted); font-size: 20px; }
         body[dir="rtl"] .modal-close { float: left; }
+        
+        .input-group { margin-bottom: 15px; text-align: left; }
+        body[dir="rtl"] .input-group { text-align: right; }
+        .input-group input, .input-group select { width: 100%; padding: 12px 15px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); font-size: 1rem; outline: none; }
+        body.light-mode .input-group input, body.light-mode .input-group select { background: rgba(255,255,255,0.5); color: #0f172a; }
+        .input-group input:focus, .input-group select:focus { border-color: var(--sky); box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
+        .btn-primary { width: 100%; padding: 12px; background: var(--sky); color: #fff; border: none; border-radius: 10px; font-weight: 600; font-size: 1rem; cursor: pointer; margin-top: 10px; }
+        .btn-primary:hover { background: #0284c7; box-shadow: 0 5px 15px rgba(56, 189, 248, 0.4); }
 
         #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
         body[dir="rtl"] #toast-container { right: auto; left: 20px; }
@@ -329,7 +304,7 @@ cat <<'EOF' > index.html
         @keyframes slideInRtl { to { transform: translateX(0); } }
         @keyframes fadeOutRtl { to { opacity: 0; transform: translateY(-20px); } }
 
-        /* User Original Styles */
+        /* Original Layout Elements */
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
@@ -414,6 +389,7 @@ cat <<'EOF' > index.html
             .glass-card { padding: 15px; }
             .tun-header { flex-direction: column; align-items: flex-start; gap: 15px; }
             body[dir="ltr"] .btn-restart, body[dir="rtl"] .btn-restart { width: 100%; text-align: center; float: none; }
+            .fab { bottom: 100px; }
         }
         @media (min-width: 951px) {
             .wrapper { padding-left: 110px; }
@@ -423,21 +399,10 @@ cat <<'EOF' > index.html
 </head>
 <body>
 
+    <!-- Notification Engine -->
     <div id="toast-container"></div>
 
-    <div id="login-screen">
-        <div class="login-box">
-            <h2>MDesign Master Node</h2>
-            <div class="input-group">
-                <input type="text" id="l_user" placeholder="Username" autocomplete="off">
-            </div>
-            <div class="input-group">
-                <input type="password" id="l_pass" placeholder="Password">
-            </div>
-            <button class="btn-primary" onclick="doLogin()" id="lbl-login-btn">Secure Login</button>
-        </div>
-    </div>
-
+    <!-- Interactive Port Forwarding Modal -->
     <div class="modal-overlay" id="action-modal">
         <div class="modal-content">
             <span class="modal-close" onclick="closeModal()">✖</span>
@@ -461,41 +426,37 @@ cat <<'EOF' > index.html
         </div>
     </div>
 
-    <div id="app-core">
-        <div class="sidebar">
-            <div class="side-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
-                <svg class="icon-sys" id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"></svg>
-            </div>
-            <div class="side-btn" id="btn-en" onclick="setLang('en')" title="English">
-                <svg class="icon-flag" viewBox="0 0 60 40"><rect width="60" height="40" fill="#fff"/><rect width="60" height="4" y="4" fill="#d21034"/><rect width="60" height="4" y="12" fill="#d21034"/><rect width="60" height="4" y="20" fill="#d21034"/><rect width="60" height="4" y="28" fill="#d21034"/><rect width="60" height="4" y="36" fill="#d21034"/><rect width="30" height="22" fill="#002664"/></svg>
-            </div>
-            <div class="side-btn" id="btn-fa" onclick="setLang('fa')" title="فارسی">
-                <svg class="icon-flag" viewBox="0 0 60 40"><rect width="60" height="40" fill="#fff"/><rect width="60" height="13.3" fill="#239f40"/><rect width="60" height="13.3" y="26.6" fill="#da0000"/><circle cx="30" cy="20" r="4" fill="#da0000"/></svg>
-            </div>
-            <div class="side-btn" onclick="logout()" title="Logout" style="color:var(--red);">
-                <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
-            </div>
+    <div class="sidebar">
+        <div class="side-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
+            <svg class="icon-sys" id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"></svg>
         </div>
-
-        <div class="wrapper">
-            <div class="container">
-                <div>
-                    <div class="section-title"><div class="status-dot dot-green"></div> <span id="lbl-hw-title">FLEET HARDWARE RADAR</span></div>
-                    <div class="fleet-grid" id="hw-container">
-                        <div class="glass-card hw-border"><div style="text-align:center;" class="text-muted" id="lbl-loading">Loading...</div></div>
-                    </div>
-                </div>
-                <div>
-                    <div class="section-title"><div class="status-dot dot-green" id="sync-dot"></div> <span id="lbl-tun-title">ACTIVE TUNNEL MATRIX</span></div>
-                    <div class="tunnels-grid" id="tun-container">
-                        <div class="glass-card tun-border"><div style="text-align:center;" class="text-muted" id="lbl-fetching">Fetching Tunnels...</div></div>
-                    </div>
-                </div>
-            </div>
+        <div class="side-btn" id="btn-en" onclick="setLang('en')" title="English">
+            <svg class="icon-flag" viewBox="0 0 60 40"><rect width="60" height="40" fill="#fff"/><rect width="60" height="4" y="4" fill="#d21034"/><rect width="60" height="4" y="12" fill="#d21034"/><rect width="60" height="4" y="20" fill="#d21034"/><rect width="60" height="4" y="28" fill="#d21034"/><rect width="60" height="4" y="36" fill="#d21034"/><rect width="30" height="22" fill="#002664"/></svg>
         </div>
-
-        <button class="fab" onclick="openModal()">+</button>
+        <div class="side-btn" id="btn-fa" onclick="setLang('fa')" title="فارسی">
+            <svg class="icon-flag" viewBox="0 0 60 40"><rect width="60" height="40" fill="#fff"/><rect width="60" height="13.3" fill="#239f40"/><rect width="60" height="13.3" y="26.6" fill="#da0000"/><circle cx="30" cy="20" r="4" fill="#da0000"/></svg>
+        </div>
     </div>
+
+    <div class="wrapper">
+        <div class="container">
+            <div>
+                <div class="section-title"><div class="status-dot dot-green"></div> <span id="lbl-hw-title">FLEET HARDWARE RADAR</span></div>
+                <div class="fleet-grid" id="hw-container">
+                    <div class="glass-card hw-border"><div style="text-align:center;" class="text-muted" id="lbl-loading">Loading...</div></div>
+                </div>
+            </div>
+            <div>
+                <div class="section-title"><div class="status-dot dot-green" id="sync-dot"></div> <span id="lbl-tun-title">ACTIVE TUNNEL MATRIX</span></div>
+                <div class="tunnels-grid" id="tun-container">
+                    <div class="glass-card tun-border"><div style="text-align:center;" class="text-muted" id="lbl-fetching">Fetching Tunnels...</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Action Button -->
+    <button class="fab" onclick="openModal()">+</button>
 
     <script>
         const i18n = {
@@ -510,7 +471,7 @@ cat <<'EOF' > index.html
                 hw_sync: "REMOTE HARDWARE (KHAREJ)", kh_cpu: "REMOTE CPU", kh_ram: "REMOTE RAM",
                 btn_res: "Restart Tunnel", wait: "⏳ WAIT", done: "✅ DONE",
                 offline: "OFFLINE", timeout: "TIMEOUT", no_tun: "No active tunnels found.",
-                mod_title: "Forward New Port", mod_port: "Local Port", mod_ip: "Target Core IP", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out."
+                mod_title: "Forward New Port", mod_port: "Local Port", mod_ip: "Target Core IP", mod_eng: "Engine", mod_btn: "Deploy Mapping"
             },
             fa: {
                 hw_title: "رادار سخت‌افزار ناوگان", tun_title: "ماتریس تونل‌های فعال",
@@ -523,7 +484,7 @@ cat <<'EOF' > index.html
                 hw_sync: "سخت‌افزار سرور خارج", kh_cpu: "پردازنده خارج", kh_ram: "رم خارج",
                 btn_res: "راه‌اندازی مجدد", wait: "⏳ صبر کنید", done: "✅ انجام شد",
                 offline: "قطع ارتباط", timeout: "تایم‌اوت", no_tun: "تونل فعالی یافت نشد.",
-                mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_ip: "آی‌پی مقصد (سرور خارج)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خارج شدید."
+                mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_ip: "آی‌پی مقصد (سرور خارج)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات"
             }
         };
 
@@ -535,15 +496,14 @@ cat <<'EOF' > index.html
             document.body.dir = l === 'fa' ? 'rtl' : 'ltr';
             document.getElementById('btn-en').classList.toggle('active', l === 'en');
             document.getElementById('btn-fa').classList.toggle('active', l === 'fa');
+            
             document.getElementById('lbl-hw-title').innerText = t('hw_title');
             document.getElementById('lbl-tun-title').innerText = t('tun_title');
-            
             document.getElementById('lbl-mod-title').innerText = t('mod_title');
             document.getElementById('lbl-mod-port').innerText = t('mod_port');
             document.getElementById('lbl-mod-ip').innerText = t('mod_ip');
             document.getElementById('lbl-mod-eng').innerText = t('mod_eng');
             document.getElementById('lbl-mod-btn').innerText = t('mod_btn');
-            document.getElementById('lbl-login-btn').innerText = t('login_btn');
             
             fetchRoutine();
         }
@@ -558,11 +518,14 @@ cat <<'EOF' > index.html
             document.getElementById('theme-icon').innerHTML = isLight ? iconMoon : iconSun;
         }
 
-        let token = localStorage.getItem('md_token');
-        let isFetching = false;
+        setLang(currentLang);
+        if (localStorage.getItem('mdesign_theme') === 'light') { document.body.classList.add('light-mode'); document.getElementById('theme-icon').innerHTML = iconMoon; } 
+        else { document.getElementById('theme-icon').innerHTML = iconSun; }
+
         let isRestarting = false;
         let hwData = {};
 
+        // --- NEW: UI Logic for Modal & Toast ---
         function showToast(msg, isErr=false) {
             let t = document.createElement('div');
             t.className = 'toast';
@@ -572,81 +535,42 @@ cat <<'EOF' > index.html
             setTimeout(() => t.remove(), 3500);
         }
 
-        async function doLogin() {
-            let u = document.getElementById('l_user').value;
-            let p = document.getElementById('l_pass').value;
-            try {
-                let r = await fetch('/api/login', { method: 'POST', body: JSON.stringify({username: u, password: p}) });
-                let res = await r.json();
-                if(res.status === 'success') {
-                    token = res.token; localStorage.setItem('md_token', token);
-                    document.getElementById('login-screen').style.display = 'none';
-                    document.getElementById('app-core').style.display = 'block';
-                    setTimeout(()=>document.getElementById('app-core').style.opacity = '1', 50);
-                    showToast("Access Granted.");
-                    setLang(currentLang);
-                } else { showToast(res.message, true); }
-            } catch(e) { showToast("Connection Error", true); }
-        }
-
-        function logout() {
-            localStorage.removeItem('md_token'); token = null;
-            document.getElementById('app-core').style.opacity = '0';
-            setTimeout(()=> { document.getElementById('app-core').style.display = 'none'; document.getElementById('login-screen').style.display = 'flex'; }, 300);
-            showToast(t('out'));
-        }
-
         function openModal() { document.getElementById('action-modal').classList.add('active'); }
         function closeModal() { document.getElementById('action-modal').classList.remove('active'); }
 
-        async function apiPost(action, payload) {
-            payload.token = token; payload.action = action;
-            try {
-                let r = await fetch('/api/action', { method: 'POST', body: JSON.stringify(payload) });
-                let res = await r.json();
-                if(res.status === 'unauthorized') { logout(); return null; }
-                if(res.status === 'success') showToast(res.message);
-                else showToast(res.message, true);
-                return res;
-            } catch(e) { showToast("API Error", true); return null; }
-        }
-
-        function submitAction() {
+        async function submitAction() {
             let p = document.getElementById('m_port').value;
             let i = document.getElementById('m_ip').value;
             let e = document.getElementById('m_engine').value;
             if(!p || !i) { showToast("Fill all fields", true); return; }
-            apiPost('add_port', {port: p, dst_ip: i, engine: e});
+            
+            try {
+                let r = await fetch('/api/add_port', {
+                    method: 'POST',
+                    body: JSON.stringify({port: p, dst_ip: i, engine: e})
+                });
+                let res = await r.json();
+                if(res.status === 'success') showToast(res.message);
+                else showToast(res.message, true);
+            } catch(err) {
+                showToast("Connection Error", true);
+            }
             closeModal();
             document.getElementById('m_port').value = '';
         }
+        // ---------------------------------------
 
         function restartTunnel(iface, btn) {
             isRestarting = true;
             btn.innerHTML = t('wait'); btn.style.opacity = "0.5"; btn.style.pointerEvents = "none";
-            apiPost('restart_tunnel', {target: iface}).then(r => {
-                if(r && r.status === 'success') {
-                    btn.innerHTML = t('done'); btn.style.color = "var(--green)"; btn.style.borderColor = "var(--green)";
-                } else {
-                    btn.innerHTML = t('btn_res'); btn.style.opacity = "1"; btn.style.pointerEvents = "auto";
-                }
+            fetch('/restart?iface=' + iface).then(r => {
+                if(r.ok) { btn.innerHTML = t('done'); btn.style.color = "var(--green)"; btn.style.borderColor = "var(--green)"; }
                 setTimeout(() => { isRestarting = false; }, 1500);
-            });
-        }
-
-        // Boot Init
-        if(token) {
-            document.getElementById('login-screen').style.display = 'none';
-            document.getElementById('app-core').style.display = 'block';
-            setTimeout(()=>document.getElementById('app-core').style.opacity = '1', 50);
-            setLang(currentLang);
-        } else {
-            if (localStorage.getItem('mdesign_theme') === 'light') toggleTheme();
+            }).catch(() => { isRestarting = false; });
         }
 
         async function fetchRoutine() {
-            if(!token || isFetching || isRestarting) return;
-            isFetching = true;
+            if (isRestarting) return;
             try {
                 let r = await fetch('/api_data.json?t=' + Date.now());
                 if (!r.ok) throw new Error('API down');
@@ -748,9 +672,9 @@ cat <<'EOF' > index.html
                 if(!isRestarting) document.getElementById('tun-container').innerHTML = tunHtml;
 
             } catch(e) { document.getElementById('sync-dot').className = 'status-dot dot-red'; }
-            finally { isFetching = false; }
         }
         setInterval(fetchRoutine, 1500);
+        fetchRoutine();
     </script>
 </body>
 </html>
@@ -842,6 +766,7 @@ while true; do
         TUNNELS_JSON+="{\"iface\":\"$frp_name\", \"type\":\"$frp_type\", \"endpoint\":\"$frp_rip\", \"state\":\"$frp_state\", \"ping\":\"$frp_ping\", \"uptime\":\"$frp_uptime\", \"rx_spd\":\"$(format_speed $rx_s_f)\", \"tx_spd\":\"$(format_speed $tx_s_f)\", \"rx_tot\":\"$(format_total $r_new_f)\", \"tx_tot\":\"$(format_total $t_new_f)\", \"comb_spd\":\"$(format_speed $comb_spd_f)\", \"comb_tot\":\"$(format_total $comb_tot_f)\"}"
     fi
 
+    # --- NEW: BACKHAUL DATA COLLECTION (REGEX FIXED) ---
     init_bh_counters
     for conf in /etc/mbackhaul/tunnels/*.toml; do
         [ ! -f "$conf" ] && continue
@@ -856,7 +781,8 @@ while true; do
             bh_rip="Listening..."
         elif grep -q "\[client\]" "$conf"; then
             bh_type="Backhaul (Client)"
-            bh_rip=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d: -f1)
+            # 🌟 REGEX FIX: tcpmux/wss is stripped so browser URL parsing doesn't crash 🌟
+            bh_rip=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///' | cut -d: -f1)
             [ -n "$bh_rip" ] && remote_list+=("$bh_rip")
         fi
         
@@ -879,6 +805,7 @@ while true; do
         if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
         TUNNELS_JSON+="{\"iface\":\"$bh_name\", \"type\":\"$bh_type\", \"endpoint\":\"$bh_rip\", \"state\":\"$bh_state\", \"ping\":\"$bh_ping\", \"uptime\":\"$bh_uptime\", \"rx_spd\":\"$(format_speed $rx_s_b)\", \"tx_spd\":\"$(format_speed $tx_s_b)\", \"rx_tot\":\"$(format_total $r_new_b)\", \"tx_tot\":\"$(format_total $t_new_b)\", \"comb_spd\":\"$(format_speed $comb_spd_b)\", \"comb_tot\":\"$(format_total $comb_tot_b)\"}"
     done
+    # ---------------------------------------------------
 
     TUNNELS_JSON+="]"
 

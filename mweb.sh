@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.1.0 (GeoIP + IPv4 Filter + API) ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.2.0 (Light Theme Default & Floating Lang) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -97,8 +97,8 @@ init_bh_counters() {
                 iptables -t mangle -C OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -p tcp --sport "$port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
             fi
         elif grep -q "\[client\]" "$conf"; then
-            local remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1)
-            local r_ip=$(echo "$remote" | cut -d: -f1); local r_port=$(echo "$remote" | cut -d: -f2)
+            local raw_remote=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///')
+            local r_ip=$(echo "$raw_remote" | cut -d: -f1); local r_port=$(echo "$raw_remote" | cut -d: -f2)
             if [ -n "$r_ip" ] && [ -n "$r_port" ]; then
                 iptables -t mangle -C INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" >/dev/null 2>&1 || iptables -t mangle -A INPUT -s "$r_ip" -p tcp --sport "$r_port" -m comment --comment "MBH_RX_${name}" 2>/dev/null
                 iptables -t mangle -C OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -d "$r_ip" -p tcp --dport "$r_port" -m comment --comment "MBH_TX_${name}" 2>/dev/null
@@ -153,10 +153,8 @@ get_frp_uptime() {
     echo "Active"
 }
 
-# 🌟 STRICT IPv4 FILTER (Fixed v6 catching issue) 🌟
 get_tunnel_ip() {
     local dev=$1
-    # Uses \b([0-9]{1,3}\.){3}[0-9]{1,3}\b to strictly match ONLY IPv4 addresses, ignoring IPv6 completely
     local rip=$(ip -d link show "$dev" 2>/dev/null | grep -oP 'remote \K\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | head -n 1)
     [ -z "$rip" ] && rip=$(ip tunnel show "$dev" 2>/dev/null | grep -oP 'remote \K\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | head -n 1)
     if [ -z "$rip" ] && [[ "$dev" == br_* ]]; then
@@ -170,7 +168,6 @@ get_tunnel_ip() {
     echo "$rip"
 }
 
-# 🐍 PYTHON API SERVER 🐍
 cat << 'PY_EOF' > server.py
 import http.server, socketserver, subprocess, urllib.parse, sys, os, json, hashlib
 
@@ -253,7 +250,6 @@ python3 server.py "$PORT" "$W_USER" "$W_PASS" >/dev/null 2>&1 &
 PY_PID=$!
 trap "kill $PY_PID; rm -rf /tmp/mweb_daemon; exit" SIGINT SIGTERM
 
-# 🌐 HTML FRONTEND 🌐
 cat <<'EOF' > index.html
 <!DOCTYPE html>
 <html lang="en">
@@ -284,11 +280,15 @@ cat <<'EOF' > index.html
         body { background-color: var(--bg-base); background-image: radial-gradient(circle at 50% 0%, var(--glow) 0%, transparent 40%); color: var(--text-main); font-family: 'Inter', sans-serif; }
         body[dir="rtl"] { font-family: 'Vazirmatn', sans-serif; }
         
-        /* Interactive Layers */
+        /* Floating Elements */
         .fab { position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; background: var(--sky); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 30px; cursor: pointer; box-shadow: 0 10px 25px rgba(56, 189, 248, 0.5); z-index: 1001; border: none; transition: 0.3s; }
         body[dir="rtl"] .fab { right: auto; left: 30px; }
         .fab:hover { transform: scale(1.1) rotate(90deg); }
 
+        .lang-floater { position: fixed; bottom: 30px; left: 30px; z-index: 1000; display: flex; flex-direction: column; gap: 15px; background: var(--card-bg); padding: 15px; border-radius: 20px; border: 1px solid var(--border); box-shadow: 0 10px 30px var(--shadow); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); }
+        body[dir="rtl"] .lang-floater { left: auto; right: 30px; }
+
+        /* Modals and Toasts */
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(5px); z-index: 2000; display: none; align-items: center; justify-content: center; opacity: 0; transition: 0.3s; }
         .modal-content { background: var(--card-bg); border: 1px solid var(--border); padding: 30px; border-radius: 16px; width: 100%; max-width: 450px; transform: scale(0.9); transition: 0.3s; }
         .modal-overlay.active { display: flex; opacity: 1; }
@@ -387,13 +387,11 @@ cat <<'EOF' > index.html
         
         @media (max-width: 950px) { 
             .wrapper { padding-left: 15px; padding-right: 15px; padding-bottom: 120px;}
-            .sidebar {
-                top: auto; bottom: 20px; left: 50%; transform: translateX(-50%);
-                flex-direction: row; padding: 15px 30px; gap: 30px; border-radius: 24px;
-                width: max-content; margin: 0 auto;
-            }
+            .sidebar { top: auto; bottom: 20px; left: 50%; transform: translateX(-50%); flex-direction: row; padding: 15px 30px; gap: 30px; border-radius: 24px; width: max-content; margin: 0 auto; }
             body[dir="rtl"] .sidebar { right: 50%; transform: translateX(50%); }
-            
+            .lang-floater { bottom: 100px; left: 20px; flex-direction: row; }
+            body[dir="rtl"] .lang-floater { left: auto; right: 20px; }
+            .fab { bottom: 100px; }
             .fleet-grid, .tunnels-grid { grid-template-columns: 1fr; }
             .t-row.split { grid-template-columns: 1fr; gap: 10px; } 
             .t-row.split > div, .t-row { flex-direction: column; align-items: flex-start; gap: 8px; padding: 12px; }
@@ -403,7 +401,6 @@ cat <<'EOF' > index.html
             .glass-card { padding: 15px; }
             .tun-header { flex-direction: column; align-items: flex-start; gap: 15px; }
             body[dir="ltr"] .btn-restart, body[dir="rtl"] .btn-restart { width: 100%; text-align: center; float: none; }
-            .fab { bottom: 100px; }
         }
         @media (min-width: 951px) {
             .wrapper { padding-left: 110px; }
@@ -411,7 +408,7 @@ cat <<'EOF' > index.html
         }
     </style>
 </head>
-<body>
+<body class="light-mode">
     <div id="toast-container"></div>
 
     <div id="login-screen">
@@ -455,15 +452,17 @@ cat <<'EOF' > index.html
             <div class="side-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
                 <svg class="icon-sys" id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"></svg>
             </div>
-            <div class="side-btn" id="btn-en" onclick="setLang('en')" title="English">
-                <svg class="icon-flag" viewBox="0 0 60 40"><rect width="60" height="40" fill="#fff"/><rect width="60" height="4" y="4" fill="#d21034"/><rect width="60" height="4" y="12" fill="#d21034"/><rect width="60" height="4" y="20" fill="#d21034"/><rect width="60" height="4" y="28" fill="#d21034"/><rect width="60" height="4" y="36" fill="#d21034"/><rect width="30" height="22" fill="#002664"/></svg>
-            </div>
-            <div class="side-btn" id="btn-fa" onclick="setLang('fa')" title="فارسی">
-                <svg class="icon-flag" viewBox="0 0 60 40"><rect width="60" height="40" fill="#fff"/><rect width="60" height="13.3" fill="#239f40"/><rect width="60" height="13.3" y="26.6" fill="#da0000"/><circle cx="30" cy="20" r="4" fill="#da0000"/></svg>
-            </div>
-            <!-- دکمه خروج که خواسته بودی 🌟 -->
             <div class="side-btn" onclick="logout()" title="Logout" style="color:var(--red); border-color:rgba(248, 113, 113, 0.3);">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
+            </div>
+        </div>
+
+        <div class="lang-floater">
+            <div class="side-btn" id="btn-en" onclick="setLang('en')" title="English" style="width:40px; height:40px; border-radius:10px;">
+                <svg class="icon-flag" viewBox="0 0 60 40" style="width:24px; border-radius:3px;"><rect width="60" height="40" fill="#fff"/><rect width="60" height="4" y="4" fill="#d21034"/><rect width="60" height="4" y="12" fill="#d21034"/><rect width="60" height="4" y="20" fill="#d21034"/><rect width="60" height="4" y="28" fill="#d21034"/><rect width="60" height="4" y="36" fill="#d21034"/><rect width="30" height="22" fill="#002664"/></svg>
+            </div>
+            <div class="side-btn" id="btn-fa" onclick="setLang('fa')" title="فارسی" style="width:40px; height:40px; border-radius:10px;">
+                <svg class="icon-flag" viewBox="0 0 60 40" style="width:24px; border-radius:3px;"><rect width="60" height="40" fill="#fff"/><rect width="60" height="13.3" fill="#239f40"/><rect width="60" height="13.3" y="26.6" fill="#da0000"/><circle cx="30" cy="20" r="4" fill="#da0000"/></svg>
             </div>
         </div>
 
@@ -548,12 +547,22 @@ cat <<'EOF' > index.html
             document.getElementById('theme-icon').innerHTML = isLight ? iconMoon : iconSun;
         }
 
+        setLang(currentLang);
+        let savedTheme = localStorage.getItem('mdesign_theme');
+        if (savedTheme === 'dark') {
+            document.body.classList.remove('light-mode');
+            document.getElementById('theme-icon').innerHTML = iconSun;
+        } else {
+            document.body.classList.add('light-mode');
+            document.getElementById('theme-icon').innerHTML = iconMoon;
+            if (!savedTheme) localStorage.setItem('mdesign_theme', 'light');
+        }
+
         let token = localStorage.getItem('md_token');
         let isFetching = false;
         let isRestarting = false;
         let hwData = {};
 
-        // 🌟 سیستم هوشمند کش کردن لوکیشن (GeoIP) 🌟
         const geoCache = {};
         function getFlagEmoji(countryCode) {
             if(!countryCode) return '🏳️';
@@ -563,7 +572,7 @@ cat <<'EOF' > index.html
         async function fetchGeo(ip) {
             if(!ip || ip === 'Unknown' || ip === 'Listening...' || ip.startsWith('127.')) return;
             if(geoCache[ip]) return;
-            geoCache[ip] = { flag: '⌛', isp: '...' }; // رزرو برای جلوگیری از درخواست تکراری
+            geoCache[ip] = { flag: '⌛', isp: '...' };
             try {
                 let res = await fetch('https://ipwho.is/' + ip);
                 let data = await res.json();
@@ -651,8 +660,6 @@ cat <<'EOF' > index.html
             document.getElementById('app-core').style.display = 'block';
             setTimeout(()=>document.getElementById('app-core').style.opacity = '1', 50);
             setLang(currentLang);
-        } else {
-            if (localStorage.getItem('mdesign_theme') === 'light') toggleTheme();
         }
 
         async function fetchRoutine() {
@@ -714,7 +721,6 @@ cat <<'EOF' > index.html
                             rRam = `<span style='color:var(--red); font-family:Inter;'>${t('offline')}</span>`;
                         }
 
-                        // 🌟 اضافه کردن قابلیت GeoIP (پرچم + دیتاسنتر) در پنل وب 🌟
                         fetchGeo(tObj.endpoint); 
                         let geo = geoCache[tObj.endpoint];
                         let geoHtml = "";

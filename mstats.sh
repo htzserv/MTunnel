@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | Bandwidth Radar v3.1.0 (Pixel-Perfect Alignment) ---
+# --- MDesign Modular Core (mstats.sh) | Omni-Radar & Stats v3.4.0 (MWeb Integrated) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_BH="/etc/mbackhaul/tunnels"
@@ -13,8 +13,129 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MStats Bandwidth Radar v3.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                              ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MStats Omni-Radar & Stats v3.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                           ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
+}
+
+show_hardware() {
+    draw_header
+    echo -e "\n  ${M}● Scanning Hardware & System Metrics...${NC}"
+    
+    local cpu_usage=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    local mem_info=$(free -m | grep Mem)
+    local ram_total=$(echo $mem_info | awk '{print $2}')
+    local ram_used=$(echo $mem_info | awk '{print $3}')
+    local ram_percent=$(awk "BEGIN {printf \"%.1f\", ($ram_used/$ram_total)*100}")
+    local disk_total=$(df -h / | awk 'NR==2 {print $2}')
+    local disk_used=$(df -h / | awk 'NR==2 {print $3}')
+    local disk_percent=$(df -h / | awk 'NR==2 {print $5}')
+    local uptime=$(uptime -p | sed 's/up //')
+    local load=$(uptime | awk -F'load average:' '{ print $2 }' | xargs)
+
+    echo -e "\n  ${B}╭────────────────── SYSTEM METRICS ──────────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-15s${NC} ${DIM}❯${NC} ${C}%-32s${NC} ${B}│${NC}\n" "CPU Usage" "${cpu_usage}%"
+    printf "  ${B}│${NC} ${W}%-15s${NC} ${DIM}❯${NC} ${M}%-32s${NC} ${B}│${NC}\n" "RAM Usage" "${ram_used}MB / ${ram_total}MB (${ram_percent}%)"
+    printf "  ${B}│${NC} ${W}%-15s${NC} ${DIM}❯${NC} ${Y}%-32s${NC} ${B}│${NC}\n" "Disk Usage (/)" "${disk_used} / ${disk_total} (${disk_percent})"
+    printf "  ${B}│${NC} ${W}%-15s${NC} ${DIM}❯${NC} ${G}%-32s${NC} ${B}│${NC}\n" "System Uptime" "${uptime}"
+    printf "  ${B}│${NC} ${W}%-15s${NC} ${DIM}❯${NC} ${DIM}%-32s${NC} ${B}│${NC}\n" "Load Average" "${load}"
+    echo -e "  ${B}╰────────────────────────────────────────────────────╯${NC}"
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+}
+
+show_connections() {
+    draw_header
+    echo -e "\n  ${Y}● Analyzing Active Network Connections...${NC}"
+    
+    local tcp_estab=$(ss -tn state established 2>/dev/null | wc -l)
+    local tcp_estab=$((tcp_estab - 1)); [ "$tcp_estab" -lt 0 ] && tcp_estab=0
+    local tcp_time=$(ss -tn state time-wait 2>/dev/null | wc -l)
+    local tcp_time=$((tcp_time - 1)); [ "$tcp_time" -lt 0 ] && tcp_time=0
+    local udp_total=$(ss -un 2>/dev/null | wc -l)
+    local udp_total=$((udp_total - 1)); [ "$udp_total" -lt 0 ] && udp_total=0
+
+    echo -e "\n  ${B}╭──────────────── CONNECTION STATES ─────────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-20s${NC} ${DIM}❯${NC} ${G}%-28s${NC} ${B}│${NC}\n" "TCP Established" "${tcp_estab}"
+    printf "  ${B}│${NC} ${W}%-20s${NC} ${DIM}❯${NC} ${Y}%-28s${NC} ${B}│${NC}\n" "TCP Time-Wait" "${tcp_time}"
+    printf "  ${B}│${NC} ${W}%-20s${NC} ${DIM}❯${NC} ${C}%-28s${NC} ${B}│${NC}\n" "UDP Active" "${udp_total}"
+    echo -e "  ${B}├────────────────────────────────────────────────────┤${NC}"
+    echo -e "  ${B}│${NC} ${M}Top 5 Connected Foreign IPs:${NC}                       ${B}│${NC}"
+    
+    local top_ips=$(ss -ntu 2>/dev/null | awk '{print $5}' | cut -d: -f1 | grep -E "^[0-9]" | grep -v "127.0.0.1" | sort | uniq -c | sort -nr | head -n 5)
+    if [ -z "$top_ips" ]; then
+        printf "  ${B}│${NC} ${DIM}%-50s${NC} ${B}│${NC}\n" "No external connections found."
+    else
+        while read count ip; do
+            printf "  ${B}│${NC}   ${DIM}▪${NC} ${W}%-15s${NC} ${DIM}━ ${C}%-5s${NC} ${DIM}connections         ${B}│${NC}\n" "$ip" "$count"
+        done <<< "$top_ips"
+    fi
+    echo -e "  ${B}╰────────────────────────────────────────────────────╯${NC}"
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+}
+
+run_speedtest() {
+    draw_header
+    echo -e "\n  ${C}● Checking Speedtest-CLI module...${NC}"
+    if ! command -v speedtest-cli >/dev/null 2>&1; then
+        echo -e "  ${DIM}Installing speedtest-cli for the first time...${NC}"
+        apt-get update -q -y >/dev/null 2>&1
+        apt-get install -q -y speedtest-cli >/dev/null 2>&1
+    fi
+    echo -e "  ${Y}● Running Network Speed Test. Please wait (Takes ~20s)...${NC}\n"
+    speedtest-cli --simple | sed 's/^/    /'
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+}
+
+run_iperf3() {
+    draw_header
+    echo -e "\n  ${C}● Checking iperf3 module...${NC}"
+    if ! command -v iperf3 >/dev/null 2>&1; then
+        echo -e "  ${DIM}Installing iperf3 for the first time...${NC}"
+        apt-get update -q -y >/dev/null 2>&1
+        apt-get install -q -y iperf3 >/dev/null 2>&1
+    fi
+
+    echo -e "\n  ${DIM}┌─[ IPERF3 SERVER-TO-SERVER BANDWIDTH TEST ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run as Server${NC} ${DIM}(Listen for connections)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Client${NC} ${DIM}(Test Speed to another Server)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Mode ❯❯ ${NC}"; read iperf_mode
+    iperf_mode=$(echo "$iperf_mode" | tr -d '\r' | tr -d ' ')
+
+    case $iperf_mode in
+        1)
+            echo -ne "  ${C}●${NC} ${W}Listen Port [5201]: ${NC}"; read i_port
+            i_port=$(echo "$i_port" | tr -d '\r' | tr -d ' ')
+            [ -z "$i_port" ] && i_port=5201
+            
+            iptables -I INPUT -p tcp --dport "$i_port" -j ACCEPT 2>/dev/null
+            iptables -I INPUT -p udp --dport "$i_port" -j ACCEPT 2>/dev/null
+            
+            echo -e "\n  ${G}● iperf3 Server is RUNNING on port ${i_port}...${NC}"
+            echo -e "  ${DIM}Press [Ctrl+C] to stop listening.${NC}\n"
+            iperf3 -s -p "$i_port"
+            ;;
+        2)
+            echo -ne "  ${C}●${NC} ${W}Target Server IP: ${NC}"; read i_ip
+            i_ip=$(echo "$i_ip" | tr -d '\r' | tr -d ' ')
+            [ -z "$i_ip" ] && return
+            
+            echo -ne "  ${C}●${NC} ${W}Target Port [5201]: ${NC}"; read i_port
+            i_port=$(echo "$i_port" | tr -d '\r' | tr -d ' ')
+            [ -z "$i_port" ] && i_port=5201
+            
+            echo -ne "  ${C}●${NC} ${W}Test Mode [1: Upload to Target | 2: Download from Target (Reverse)]: ${NC}"; read i_rev
+            i_rev=$(echo "$i_rev" | tr -d '\r' | tr -d ' ')
+            
+            local rev_flag=""; local threads="-P 4"
+            [ "$i_rev" == "2" ] && rev_flag="-R"
+            
+            echo -e "\n  ${Y}● Initiating iperf3 Client (4 Threads) to ${i_ip}:${i_port}...${NC}\n"
+            iperf3 -c "$i_ip" -p "$i_port" $threads $rev_flag
+            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+            ;;
+        0) return ;;
+        *) echo -e "  ${R}● Invalid option!${NC}"; sleep 1 ;;
+    esac
 }
 
 live_interfaces_radar() {
@@ -38,7 +159,7 @@ live_interfaces_radar() {
         last_tx[$iface]=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
     done
 
-    trap 'return' SIGINT
+    trap 'tput cnorm; return' SIGINT
     tput civis
     while true; do
         printf "\r\033[K  ${B}╭──────────────┬────────────────────────┬────────────────────────╮${NC}\n"
@@ -149,7 +270,6 @@ live_backhaul_radar() {
             local rx_mbps=$(echo "$rx_diff" | awk '{printf "%.2f Mbps", $1 * 8 / 1024 / 1024}')
             local tx_mbps=$(echo "$tx_diff" | awk '{printf "%.2f Mbps", $1 * 8 / 1024 / 1024}')
             
-            # Use ANSI safely in printf for alignment
             printf "\r\033[K  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${m_color}%-8s${NC} ${B}│${NC} ${G}▼ %-20s${NC} ${B}│${NC} ${C}▲ %-20s${NC} ${B}│${NC}\n" "$name" "$mode" "$rx_mbps" "$tx_mbps"
             
             last_rx[$name]=$cur_rx; last_tx[$name]=$cur_tx
@@ -161,17 +281,44 @@ live_backhaul_radar() {
     done
 }
 
+# --- NEW: Launch Web Dashboard ---
+launch_mweb() {
+    if [ -x "/usr/bin/mweb" ]; then
+        echo -e "\n  ${G}● Launching MDesign Web Enterprise UI...${NC}"
+        echo -e "  ${DIM}Press [Ctrl+C] to stop the web server.${NC}\n"
+        /usr/bin/mweb
+    elif [ -f "/root/mtunnel/mweb.sh" ]; then
+        echo -e "\n  ${G}● Launching MDesign Web Enterprise UI...${NC}"
+        echo -e "  ${DIM}Press [Ctrl+C] to stop the web server.${NC}\n"
+        bash /root/mtunnel/mweb.sh
+    else
+        echo -e "\n  ${R}● MWeb module not found! Please run the installer (Install Core Scripts) to sync it.${NC}"
+        sleep 2
+    fi
+}
+
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ LIVE NETWORK RADAR ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}L3 Interfaces Radar${NC} ${DIM}(GRE, VXLAN, Wireguard, L2TP)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Backhaul L4 Radar${NC}   ${DIM}(Live TCP/UDP/QUIC Multiplexer Stats)${NC}\n  ${DIM}│${NC}"
+    echo -e "\n  ${DIM}┌─[ LIVE NETWORK RADAR & STATS ]${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Hardware & Resource Radar${NC} ${DIM}(CPU, RAM, Disk, Uptime)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Active Connections Analyzer${NC} ${DIM}(Live TCP/UDP Tracker)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}L3 Interfaces Bandwidth${NC} ${DIM}(GRE, VXLAN, Wireguard, L2TP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}L4 Backhaul Bandwidth${NC}   ${DIM}(TCP/UDP/QUIC Multiplexer)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Internet Speed Test${NC}     ${DIM}(Speedtest-CLI Engine)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Server-to-Server Speed${NC} ${DIM}(iperf3 Engine)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}MDesign Web Dashboard${NC}  ${DIM}(Launch Enterprise UI)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MSTATS ❯❯ ${NC}"; read opt
+    opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
 
     case $opt in
-        1) live_interfaces_radar ;;
-        2) live_backhaul_radar ;;
+        1) show_hardware ;;
+        2) show_connections ;;
+        3) live_interfaces_radar ;;
+        4) live_backhaul_radar ;;
+        5) run_speedtest ;;
+        6) run_iperf3 ;;
+        7) launch_mweb ;;
         0) break ;;
     esac
 done

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.0.0 (Strict Mapping & Watchdog Edition) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.2.0 (Deep Purge & Anti-Ghost) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -8,7 +8,7 @@ G_CONF="/etc/gost/config.json"
 OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 
-# --- 🌟 BACKEND WATCHDOG API (Purge Specific IP) 🌟 ---
+# --- 🌟 BACKEND WATCHDOG API (Deep Purge Specific IP) 🌟 ---
 if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
     target_ip="$2"
     t_ports=""
@@ -17,20 +17,41 @@ if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
     t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
     
     for p in $t_ports; do
+        # Deep HAProxy Clean
         sed -i "/frontend ft_$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/bind \*:$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/default_backend bk_$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/backend bk_$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/server srv_$p /d" "$H_CONF" 2>/dev/null
+        sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
         
-        if command -v jq >/dev/null 2>&1; then jq --arg p "$p" 'del(.ServeNodes[] | select(startswith("tcp://:"+$p+"/")))' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null; fi
-        if [ -f "$OBFS_DIR/nat.sh" ]; then sed -i "/--dport $p /d" "$OBFS_DIR/nat.sh" 2>/dev/null; sed -i "/:$p -F/d" "$OBFS_DIR/gost.sh" 2>/dev/null; fi
+        # Deep Gost Clean (Robust Array Deletion)
+        if command -v jq >/dev/null 2>&1; then 
+            jq --arg p "$p" '.ServeNodes = [.ServeNodes[] | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+        fi
+        
+        # Deep OBFS Clean
+        if [ -f "$OBFS_DIR/nat.sh" ]; then 
+            sed -i "/--dport $p /d" "$OBFS_DIR/nat.sh" 2>/dev/null
+            sed -i "/:$p -F/d" "$OBFS_DIR/gost.sh" 2>/dev/null
+        fi
     done
-    sed -i "/-d $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
-    sed -i "/$target_ip/d" "$OBFS_DIR/gost.sh" 2>/dev/null
+    
+    # Remove Trailing Empty Lines
+    sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
+    
+    # Clean Global IP Counters for OBFS
+    if [ -f "$OBFS_DIR/nat.sh" ]; then
+        sed -i "/-d $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
+        sed -i "/\/$target_ip:/d" "$OBFS_DIR/gost.sh" 2>/dev/null
+        sed -i "/-d $target_ip -m comment --comment \"OBFS_CNT_TX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+        sed -i "/-s $target_ip -m comment --comment \"OBFS_CNT_RX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+        sed -i "/# OBFS_CNT_TX_.*_$target_ip/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+    fi
+
     systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
-    echo "$(date) | Watchdog Purged Target IP: $target_ip and associated ports." >> /var/log/mporter-watchdog.log
+    echo "$(date) | Watchdog Deep Purged Target IP: $target_ip and its associated ports." >> /var/log/mporter-watchdog.log
     exit 0
 fi
 
@@ -194,8 +215,8 @@ get_stats() {
     total_ports=$((h_ports + g_ports))
 
     local h_ips=""; local g_ips=""
-    [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null || grep -oP 'server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
     
     local all_ips=$(echo -e "$h_ips\n$g_ips" | grep -v '^$' | sort -u)
     mapped_ips=$(echo "$all_ips" | grep -v '^$' | wc -l)
@@ -206,20 +227,20 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.0.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.2.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
     
     local ip_port_counts=$(echo -e "$h_map\n$g_map" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
 
@@ -343,7 +364,6 @@ smart_map() {
             continue
         fi
         
-        # 🌟 STRICT 1-TO-1 FORWARDING FIX 🌟
         if [ "$fwd_engine" == "1" ]; then
             echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$target_ip"
@@ -355,6 +375,9 @@ smart_map() {
     done
     echo -e "  ${B}╰──────────────┴─────────┴────────────────────────────────────────────╯${NC}"
     
+    # Remove Trailing Empty Lines
+    sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
+
     [ "$fwd_engine" == "1" ] && systemctl restart haproxy 2>/dev/null
     [ "$fwd_engine" == "2" ] && systemctl restart gost 2>/dev/null
 
@@ -447,10 +470,9 @@ edit_mapping() {
         echo -e "  ${DIM}├──────────────────────────────────────────────${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Add New Ports${NC} ${DIM}(Forward extra ports to this IP)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Remove Specific Ports${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Remove ALL Rules for this Interface/IP${NC} ${DIM}(Clean Purge)${NC}"
         
-        if [ "$has_obfs" = true ]; then echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${R}Disable OBFS Stealth for this IP${NC}"
-        else echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Enable OBFS Stealth for this IP${NC}"; fi
+        if [ "$has_obfs" = true ]; then echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Disable OBFS Stealth for this IP${NC}"
+        else echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Enable OBFS Stealth for this IP${NC}"; fi
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}Select Action ❯❯ ${NC}"; read edit_opt
         edit_opt=$(echo "$edit_opt" | tr -d '\r' | tr -d ' ')
@@ -466,7 +488,6 @@ edit_mapping() {
                 
                 for p in $clean_ports; do
                     if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then continue; fi
-                    # 🌟 1-TO-1 STRICT RULE 🌟
                     if [ "$e_opt" == "1" ]; then echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
                     elif [ "$e_opt" == "2" ]; then jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"; fi
                     
@@ -479,11 +500,12 @@ edit_mapping() {
                         echo "/usr/local/bin/gost -L tcp://:$obfs_lport/$target_ip:$p -F $method://$remote_pub:$stealth_port &" >> "$OBFS_DIR/gost.sh"
                     fi
                 done
+                sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
                 [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null; [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
             2)
-                # 🌟 SPECIFIC PORTS REMOVAL FIX 🌟
+                # 🌟 SPECIFIC PORTS DEEP REMOVAL FIX 🌟
                 echo -ne "\n  ${C}●${NC} ${W}Enter Exact Ports to Remove (e.g. 80,443): ${NC}"; read raw_ports
                 raw_ports=$(echo "$raw_ports" | tr -d '\r')
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
@@ -493,25 +515,26 @@ edit_mapping() {
                     sed -i "/default_backend bk_$p$/d" "$H_CONF" 2>/dev/null
                     sed -i "/backend bk_$p$/d" "$H_CONF" 2>/dev/null
                     sed -i "/server srv_$p /d" "$H_CONF" 2>/dev/null
+                    sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
                     
-                    if command -v jq >/dev/null 2>&1; then jq --arg p "$p" 'del(.ServeNodes[] | select(startswith("tcp://:"+$p+"/")))' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null; fi
-                    if [ -f "$OBFS_DIR/nat.sh" ]; then sed -i "/--dport $p /d" "$OBFS_DIR/nat.sh" 2>/dev/null; sed -i "/:$p -F/d" "$OBFS_DIR/gost.sh" 2>/dev/null; fi
+                    if command -v jq >/dev/null 2>&1; then 
+                        jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+                    fi
+                    if [ -f "$OBFS_DIR/nat.sh" ]; then 
+                        sed -i "/--dport $p /d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                        sed -i "/:$p -F/d" "$OBFS_DIR/gost.sh" 2>/dev/null
+                    fi
                 done
+                sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; build_obfs_runner
-                echo -e "  ${G}● Ports removed successfully!${NC}"; sleep 1.5 ;;
+                echo -e "  ${G}● Ports removed securely!${NC}"; sleep 1.5 ;;
             3)
-                # 🌟 DELETE SPECIFIC IP RULES FIX 🌟
-                echo -ne "\n  ${R}● Remove ALL ports mapped to this IP? (y/n): ${NC}"; read del_all
-                del_all=$(echo "$del_all" | tr -d '\r')
-                if [[ "$del_all" == "y" ]]; then
-                    /usr/bin/mporter --purge-ip "$target_ip"
-                    echo -e "  ${G}● All rules for $target_ip purged!${NC}"; sleep 1.5; break
-                fi ;;
-            4)
                 if [ "$has_obfs" = true ]; then
-                    sed -i "/-d $target_ip /d" "$OBFS_DIR/nat.sh"; sed -i "/$target_ip/d" "$OBFS_DIR/gost.sh"
-                    local selected_if=$(get_iface_for_ip "$target_ip")
-                    sed -i "/OBFS_CNT_TX_${selected_if}_${target_ip}/d" "$OBFS_DIR/nat.sh"; sed -i "/OBFS_CNT_TX_${selected_if}.*-d $target_ip /d" "$OBFS_DIR/nat.sh"; sed -i "/OBFS_CNT_RX_${selected_if}.*-s $target_ip /d" "$OBFS_DIR/nat.sh"
+                    sed -i "/-d $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                    sed -i "/\/$target_ip:/d" "$OBFS_DIR/gost.sh" 2>/dev/null
+                    sed -i "/-d $target_ip -m comment --comment \"OBFS_CNT_TX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                    sed -i "/-s $target_ip -m comment --comment \"OBFS_CNT_RX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                    sed -i "/# OBFS_CNT_TX_.*_$target_ip/d" "$OBFS_DIR/nat.sh" 2>/dev/null
                     build_obfs_runner; echo -e "  ${G}● OBFS Disabled for $target_ip.${NC}"; sleep 1.5
                 else
                     local selected_if=$(get_iface_for_ip "$target_ip")
@@ -598,13 +621,84 @@ show_table() {
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
-# --- 🌟 NEW: SMART INTERFACE WATCHDOG 🌟 ---
+purge_menu() {
+    draw_header
+    echo -e "\n  ${DIM}┌─[ DELETE & PURGE MAPPINGS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}Purge Specific Interface${NC} ${DIM}(Removes all IPs on an interface)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Purge Specific Target IP${NC} ${DIM}(Removes a single IP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Wipe ALL Mappings Globally${NC} ${DIM}(Total Reset)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select ❯❯ ${NC}"; read p_opt
+    p_opt=$(echo "$p_opt" | tr -d '\r' | tr -d ' ')
+    
+    local h_map=""; local g_map=""
+    [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    local all_ips=$(echo -e "$h_map\n$g_map" | grep -v '^$' | sort -u)
+
+    case $p_opt in
+        1)
+            if [ -z "$all_ips" ]; then echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; fi
+            declare -A iface_ips
+            for ip in $all_ips; do
+                local iface=$(get_iface_for_ip "$ip")
+                iface_ips["$iface"]+="$ip "
+            done
+            
+            local i=0; local iface_list=()
+            echo -e "\n  ${B}╭────────────────── Select Interface to Purge ─────────────────╮${NC}"
+            for ifc in $(for key in "${!iface_ips[@]}"; do echo $key; done | sort); do
+                iface_list[$i]="$ifc"
+                local ip_arr=(${iface_ips[$ifc]})
+                printf "  ${B}│${NC}  ${Y}%-2d${NC} ${C}❯${NC} ${W}%-15s${NC} ${DIM}(Contains %-2d IPs)${NC}                  ${B}│${NC}\n" "$i" "$ifc" "${#ip_arr[@]}"
+                ((i++))
+            done
+            echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
+            echo -ne "  ${C}Select Index ❯❯ ${NC}"; read idx
+            idx=$(echo "$idx" | tr -d '\r' | tr -d ' ')
+            
+            local selected_ifc="${iface_list[$idx]}"
+            if [ -z "$selected_ifc" ]; then echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
+            
+            echo -ne "  ${Y}● Deep Purge ALL IPs on $selected_ifc? (y/n): ${NC}"; read conf
+            conf=$(echo "$conf" | tr -d '\r' | tr -d ' ')
+            if [[ "$conf" == "y" ]]; then
+                for ip in ${iface_ips[$selected_ifc]}; do
+                    /usr/bin/mporter --purge-ip "$ip" >/dev/null 2>&1
+                done
+                echo -e "  ${G}● Interface $selected_ifc purged successfully!${NC}"; sleep 1.5
+            fi ;;
+        2)
+            if [ -z "$all_ips" ]; then echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; fi
+            local ip_arr=($all_ips)
+            echo -e "\n  ${B}╭────────────────── Select Target IP to Purge ─────────────────╮${NC}"
+            for i in "${!ip_arr[@]}"; do 
+                local ifc=$(get_iface_for_ip "${ip_arr[$i]}")
+                printf "  ${B}│${NC}  ${Y}%-2d${NC} ${C}❯${NC} ${W}%-15s${NC} ${DIM}(%s)${NC}                         ${B}│${NC}\n" "$i" "${ip_arr[$i]}" "$ifc"
+            done
+            echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
+            echo -ne "  ${C}Select Index ❯❯ ${NC}"; read idx
+            idx=$(echo "$idx" | tr -d '\r' | tr -d ' ')
+            
+            local target_ip="${ip_arr[$idx]}"
+            if [ -z "$target_ip" ]; then echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
+            
+            /usr/bin/mporter --purge-ip "$target_ip" >/dev/null 2>&1
+            echo -e "  ${G}● IP $target_ip purged successfully!${NC}"; sleep 1.5 ;;
+        3) 
+            echo -ne "  ${R}● Wipe all active mappings globally? (y/n) ❯❯ ${NC}"; read confirm
+            confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
+            [[ "$confirm" == "y" ]] && wipe_all_mappings ;;
+        0) return ;;
+    esac
+}
+
 setup_watchdog() {
     cat <<'EOF' > /usr/local/bin/mporter-watchdog.sh
 #!/bin/bash
 while true; do
     sleep 30
-    h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' /etc/haproxy/haproxy.cfg 2>/dev/null | sort -u)
+    h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' /etc/haproxy/haproxy.cfg 2>/dev/null | sort -u)
     g_ips=""
     if command -v jq >/dev/null 2>&1 && [ -f "/etc/gost/config.json" ]; then
         g_ips=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)
@@ -614,7 +708,7 @@ while true; do
     for ip in $all_ips; do
         route_dev=$(ip route get "$ip" 2>/dev/null | grep -oP 'dev \K\S+' | head -n 1)
         if [[ ! "$route_dev" =~ ^(gre|l2tp|br_|vx_|hys_|wg|tun|tap) ]]; then
-            /usr/bin/mporter --purge-ip "$ip"
+            /usr/bin/mporter --purge-ip "$ip" >/dev/null 2>&1
         fi
     done
 done
@@ -678,14 +772,12 @@ manual_restart() {
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Core Engines${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Strict 1-to-1)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix (OBFS Stats)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Wipe Mappings (Reset Forwarding & OBFS)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Everything (Nuclear Wipe)${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Core Engines${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Strict 1-to-1)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix (OBFS Stats)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Delete & Purge Mappings (By Interface/IP/All)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Everything (Nuclear Wipe)${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
     echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -t 30 opt
     opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
     case $opt in
         1) fix_and_install ;; 2) smart_map ;; 3) edit_mapping ;; 4) show_table ;;
-        5) echo -ne "  ${Y}● Wipe all active mappings? (y/n) ❯❯ ${NC}"; read confirm
-           confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
-           [[ "$confirm" == "y" ]] && wipe_all_mappings ;;
+        5) purge_menu ;;
         6) echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
            confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
            if [[ "$confirm" == "y" ]]; then 

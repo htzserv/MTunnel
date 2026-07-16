@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.5.0 (Unified Navbar View) ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.6.0 (Unified Neon UI & Flag Toggles) ---
 
 CONF_FILE="/etc/mweb/web.conf"
 mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
@@ -342,7 +342,7 @@ cat <<'EOF' > index.html
         .wrapper { display: flex; min-height: 100vh; padding: 40px 15px; max-width: 1400px; margin: 0 auto; gap: 40px; }
         .container { flex-grow: 1; display: flex; flex-direction: column; gap: 40px; }
 
-        /* 🌟 Unified Sidebar for ALL buttons 🌟 */
+        /* 🌟 Unified Sidebar for ALL buttons with Neon Frames 🌟 */
         .sidebar {
             position: fixed; left: 20px; top: 50%; transform: translateY(-50%);
             display: flex; flex-direction: column; gap: 20px; z-index: 1000;
@@ -354,12 +354,21 @@ cat <<'EOF' > index.html
 
         .side-btn {
             width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
-            cursor: pointer; border: 2px solid transparent; transition: 0.3s;
+            cursor: pointer; border: 2px solid transparent; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             background: rgba(255,255,255,0.05); color: var(--text-main); position: relative;
         }
-        .side-btn:hover { transform: scale(1.05); }
-        .side-btn.active { border-color: var(--sky); background: rgba(56, 189, 248, 0.15); box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); }
-        body.light-mode .side-btn.active { background: rgba(14, 165, 233, 0.15); }
+        
+        .side-btn:hover { transform: scale(1.05); border-color: var(--border); background: rgba(255,255,255,0.1); }
+        
+        /* Neon Frame Hover Effects */
+        .side-btn.btn-neon-sky:hover { border-color: var(--sky); background: rgba(56, 189, 248, 0.15); box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); color: var(--sky) !important; }
+        .side-btn.btn-neon-yellow:hover { border-color: var(--yellow); background: rgba(251, 191, 36, 0.15); box-shadow: 0 0 15px rgba(251, 191, 36, 0.4); color: var(--yellow) !important; }
+        .side-btn.btn-neon-red:hover { border-color: var(--red); background: rgba(248, 113, 113, 0.15); box-shadow: 0 0 15px rgba(248, 113, 113, 0.4); color: var(--red) !important; }
+        
+        body.light-mode .side-btn.btn-neon-sky:hover { background: rgba(14, 165, 233, 0.15); }
+        body.light-mode .side-btn.btn-neon-yellow:hover { background: rgba(217, 119, 6, 0.15); }
+        body.light-mode .side-btn.btn-neon-red:hover { background: rgba(220, 38, 38, 0.15); }
+
         .side-btn svg.icon-sys { width: 24px; height: 24px; transition: 0.3s; }
         .side-btn:active svg.icon-sys { transform: scale(0.9); }
 
@@ -487,30 +496,23 @@ cat <<'EOF' > index.html
     </div>
 
     <div id="app-core">
-        <!-- 🌟 UNIFIED SIDEBAR (NAVBAR) 🌟 -->
         <div class="sidebar">
-            <!-- 1. Theme -->
-            <div class="side-btn" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
+            <div class="side-btn btn-neon-sky" id="btn-theme" onclick="toggleTheme()" title="Toggle Theme">
                 <svg class="icon-sys" id="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"></svg>
             </div>
             
-            <!-- 2. Language Toggle (Single Button) -->
-            <div class="side-btn" id="btn-lang" onclick="toggleLang()" title="Switch Language" style="font-weight:700; font-size:1.1rem; color:var(--text-main);">
-                <!-- Dynamic Content Injected via JS -->
-            </div>
+            <div class="side-btn btn-neon-sky" id="btn-lang" onclick="toggleLang()" title="Switch Language">
+                </div>
 
-            <!-- 3. Add Port -->
-            <div class="side-btn" onclick="openModal()" title="Add Port Mapping" style="color:var(--sky); border-color:rgba(56, 189, 248, 0.3);">
+            <div class="side-btn btn-neon-sky" onclick="openModal()" title="Add Port Mapping">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
             </div>
 
-            <!-- 4. Restart Web Server -->
-            <div class="side-btn" id="btn-restart-web" onclick="restartWeb()" title="Restart Web Server" style="color:var(--yellow); border-color:rgba(251, 191, 36, 0.3);">
+            <div class="side-btn btn-neon-yellow" id="btn-restart-web" onclick="restartWeb()" title="Restart Web Server">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
             </div>
 
-            <!-- 5. Logout -->
-            <div class="side-btn" onclick="logout()" title="Logout" style="color:var(--red); border-color:rgba(248, 113, 113, 0.3);">
+            <div class="side-btn btn-neon-red" onclick="logout()" title="Logout">
                 <svg class="icon-sys" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
             </div>
         </div>
@@ -547,7 +549,7 @@ cat <<'EOF' > index.html
                 btn_res: "Restart Tunnel", wait: "⏳ WAIT", done: "✅ DONE",
                 offline: "OFFLINE", timeout: "TIMEOUT", no_tun: "No active tunnels found.",
                 mod_title: "Forward New Port", mod_port: "Local Port", mod_iface: "Target Core Interface", mod_eng: "Engine", mod_btn: "Deploy Mapping", login_btn: "Secure Login", out: "Logged out successfully.", manual_ip: "Manual IP Entry",
-                rst_web: "Restarting Web Service...", web_on: "Web UI is back online!", toggle_lang: "فا"
+                rst_web: "Restarting Web Service...", web_on: "Web UI is back online!"
             },
             fa: {
                 hw_title: "رادار سخت‌افزار ناوگان", tun_title: "ماتریس تونل‌های فعال",
@@ -561,9 +563,12 @@ cat <<'EOF' > index.html
                 btn_res: "راه‌اندازی مجدد", wait: "⏳ صبر کنید", done: "✅ انجام شد",
                 offline: "قطع ارتباط", timeout: "تایم‌اوت", no_tun: "تونل فعالی یافت نشد.",
                 mod_title: "فوروارد پورت جدید", mod_port: "پورت مبدا", mod_iface: "اینترفیس هدف (تونل مپینگ)", mod_eng: "موتور پردازشی", mod_btn: "اعمال تنظیمات", login_btn: "ورود ایمن", out: "خروج با موفقیت انجام شد.", manual_ip: "ورود دستی آی‌پی",
-                rst_web: "در حال ری‌استارت پنل...", web_on: "وب‌سرور ران شد!", toggle_lang: "EN"
+                rst_web: "در حال ری‌استارت پنل...", web_on: "وب‌سرور ران شد!"
             }
         };
+
+        const flagEN = '<svg class="icon-flag" viewBox="0 0 60 40" style="width:26px; border-radius:4px;"><rect width="60" height="40" fill="#fff"/><rect width="60" height="4" y="4" fill="#d21034"/><rect width="60" height="4" y="12" fill="#d21034"/><rect width="60" height="4" y="20" fill="#d21034"/><rect width="60" height="4" y="28" fill="#d21034"/><rect width="60" height="4" y="36" fill="#d21034"/><rect width="30" height="22" fill="#002664"/></svg>';
+        const flagFA = '<svg class="icon-flag" viewBox="0 0 60 40" style="width:26px; border-radius:4px;"><rect width="60" height="40" fill="#fff"/><rect width="60" height="13.3" fill="#239f40"/><rect width="60" height="13.3" y="26.6" fill="#da0000"/><circle cx="30" cy="20" r="4" fill="#da0000"/></svg>';
 
         let currentLang = localStorage.getItem('mdesign_lang') || 'en';
         function t(key) { return i18n[currentLang][key]; }
@@ -577,10 +582,8 @@ cat <<'EOF' > index.html
             currentLang = l; localStorage.setItem('mdesign_lang', l);
             document.body.dir = l === 'fa' ? 'rtl' : 'ltr';
             
-            // Set dynamic language toggle label
-            document.getElementById('btn-lang').innerText = t('toggle_lang');
-            if(l === 'fa') { document.getElementById('btn-lang').style.fontFamily = 'Inter'; }
-            else { document.getElementById('btn-lang').style.fontFamily = 'Vazirmatn'; }
+            // Set dynamic language flag icon
+            document.getElementById('btn-lang').innerHTML = l === 'fa' ? flagFA : flagEN;
             
             document.getElementById('lbl-hw-title').innerText = t('hw_title');
             document.getElementById('lbl-tun-title').innerText = t('tun_title');
@@ -740,7 +743,6 @@ cat <<'EOF' > index.html
             let btn = document.getElementById('btn-restart-web');
             let icon = btn.querySelector('svg');
             
-            // Visual feedback: Spin the icon and disable button
             icon.style.transform = "rotate(360deg)";
             icon.style.transition = "transform 1s ease-in-out";
             btn.style.opacity = "0.5"; 
@@ -748,11 +750,10 @@ cat <<'EOF' > index.html
             showToast(t('rst_web'));
             
             apiPost('restart_web', {}).then(r => {
-                // Wait for the backend service to fully restart (approx 3-4s)
                 setTimeout(() => {
                     btn.style.opacity = "1";
                     btn.style.pointerEvents = "auto";
-                    icon.style.transform = "rotate(0deg)"; // Reset rotation
+                    icon.style.transform = "rotate(0deg)";
                     showToast(t('web_on'));
                     fetchRoutine(); 
                 }, 4000); 

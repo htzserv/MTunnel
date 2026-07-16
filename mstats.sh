@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.5.0 ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.6.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -19,7 +19,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 3.5.0 "
+    local str1=" MStats Omni-Radar Core 3.6.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -414,7 +414,6 @@ manage_web_ui() {
                 WEB_PORT=${custom_port:-1000}
                 mkdir -p /etc/mweb 2>/dev/null
                 
-                # Keep old user/pass if exists, update port
                 local old_u=${W_USER:-admin}; local old_p=${W_PASS:-admin}
                 echo -e "WEB_PORT=$WEB_PORT\nWEB_USER=$old_u\nWEB_PASS=$old_p" > "$CONF_FILE"
                 
@@ -459,6 +458,40 @@ EOF
     done
 }
 
+get_tunnel_ip() {
+    local dev=$1
+    local rip=$(ip -d link show "$dev" 2>/dev/null | grep -oP 'remote \K\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | head -n 1)
+    [ -z "$rip" ] && rip=$(ip tunnel show "$dev" 2>/dev/null | grep -oP 'remote \K\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | head -n 1)
+    if [ -z "$rip" ] && [[ "$dev" == br_* ]]; then
+        local vx_dev="${dev/br_/vx_}"
+        rip=$(ip -d link show "$vx_dev" 2>/dev/null | grep -oP 'remote \K\b([0-9]{1,3}\.){3}[0-9]{1,3}\b' | head -n 1)
+    fi
+    if [ -z "$rip" ] && [[ "$dev" == l2tp_* ]]; then
+        local tun_id=$(ip l2tp show session | grep -B1 "name $dev" | grep "tunnel" | grep -oP 'tunnel \K[0-9]+' | head -n 1)
+        if [ -n "$tun_id" ]; then rip=$(ip l2tp show tunnel tunnel_id "$tun_id" 2>/dev/null | grep -oP 'peer \K\b([0-9]{1,3}\.){3}[0-9]{1,3}\b'); fi
+    fi
+    echo "$rip"
+}
+
+get_uptime() {
+    local iface=$1
+    if ! ip link show "$iface" >/dev/null 2>&1 || [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" == "down" ]; then echo "---"; return; fi
+    local created=""
+    if [ -f "/etc/mstats/uptimes/$iface" ]; then created=$(cat "/etc/mstats/uptimes/$iface" 2>/dev/null); fi
+    if ! [[ "$created" =~ ^[0-9]+$ ]]; then
+        created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
+        [[ "$created" =~ ^[0-9]+$ ]] && echo "$created" > "/etc/mstats/uptimes/$iface"
+    fi
+    if [[ "$created" =~ ^[0-9]+$ ]]; then
+        local now=$(date +%s); local diff=$((now - created)); [ "$diff" -lt 0 ] && diff=0
+        local d=$((diff / 86400)); local h=$(( (diff % 86400) / 3600 )); local m=$(( (diff % 3600) / 60 ))
+        local s_uptime=""
+        [ "$d" -gt 0 ] && s_uptime="${d}d "; [ "$h" -gt 0 ] && s_uptime="${s_uptime}${h}h "; s_uptime="${s_uptime}${m}m"
+        [ "$s_uptime" == "0m" ] && s_uptime="Just now"
+        echo "$s_uptime"
+    else echo "---"; fi
+}
+
 while true; do
     clear; draw_mstats_header
     echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
@@ -480,4 +513,161 @@ while true; do
         6) manage_web_ui ;;
         0) break ;;
     esac
+done & # Terminal loop ends here, background daemon starts
+
+# --- 🌐 BACKGROUND JSON API DAEMON (Fixing Ping Source) 🌐 ---
+declare -A rx_old tx_old
+prev_total=""
+prev_idle=""
+
+while true; do
+    read cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
+    curr_idle=$((idle + iowait)); curr_total=$((user + nice + system + irq + softirq + steal + curr_idle))
+    
+    cpu_load="0.0"
+    if [ -n "$prev_total" ] && [ "$curr_total" -ne "$prev_total" ]; then
+        total_diff=$((curr_total - prev_total)); idle_diff=$((curr_idle - prev_idle))
+        if [ "$total_diff" -gt 0 ]; then cpu_load=$(awk "BEGIN {printf \"%.1f\", 100 * ($total_diff - $idle_diff) / $total_diff}"); fi
+    fi
+    prev_total=$curr_total; prev_idle=$curr_idle
+    ram_usage=$(free -m | awk '/Mem:/ {printf "%.1f", $3/$2 * 100}')
+    sys_uptime=$(uptime -p | sed 's/up //')
+
+    TUNNELS_JSON="["
+    remote_list=()
+    first_tun=true
+    
+    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/ml2tp/tunnels/*.conf /etc/mhysteria/tunnels/*.conf; do
+        if [ -f "$conf" ]; then
+            source "$conf"
+            is_vx=false; name="$T_NAME"
+            if [ -n "$BR_NAME" ]; then is_vx=true; name="$BR_NAME"; fi
+            
+            r_new=$(get_iface_rx "$name"); t_new=$(get_iface_tx "$name")
+            r_old=${rx_old[$name]:-$r_new}; t_old=${tx_old[$name]:-$t_new}
+            rx_s=$((r_new - r_old)); [ "$rx_s" -lt 0 ] && rx_s=0
+            tx_s=$((t_new - t_old)); [ "$tx_s" -lt 0 ] && tx_s=0
+            rx_old[$name]=$r_new; tx_old[$name]=$t_new
+
+            comb_spd=$((rx_s + tx_s)); comb_tot=$((r_new + t_new))
+
+            # Fetch the Public IP (For Web UI Flag/Datacenter parsing)
+            rip=$(get_tunnel_ip "$name" 2>/dev/null); [ -z "$rip" ] && rip=${T_REMOTE:-${REMOTE_IP:-${REMOTE_PUB:-"Unknown"}}}
+            [ "$rip" != "Unknown" ] && remote_list+=("$rip")
+
+            # 🌟 SMART INTERFACE PING LOGIC 🌟
+            st_badge="OFFLINE"
+            ping_res="---"
+            
+            # Calculate the INNER IP of the tunnel for TRUE pinging
+            local inner_rip=""
+            if [ -n "$CORE_SUBNET" ]; then
+                inner_rip="${CORE_SUBNET}.$([ "$TYPE" == "1" ] && echo "2" || echo "1")"
+            fi
+            
+            if ip link show "$name" >/dev/null 2>&1; then
+                local target_ping="$inner_rip"
+                [ -z "$target_ping" ] && target_ping="$rip" # Fallback to public if no inner IP
+                
+                # Ping the Inner Interface to verify traffic passes
+                ping_output=$(ping -c 1 -W 1 "$target_ping" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+                if [ -n "$ping_output" ]; then
+                    st_badge="ONLINE"
+                    ping_res="$ping_output"
+                fi
+            fi
+            
+            t_uptime=$(get_uptime "$name")
+            
+            type_txt="GRE"
+            [ "$is_vx" = true ] && type_txt="VXLAN"
+            [[ "$conf" == *"/ml2tp/"* ]] && type_txt="L2TPv3"
+            [[ "$conf" == *"/mhysteria/"* ]] && type_txt="Hys2"
+            
+            if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
+            TUNNELS_JSON+="{\"iface\":\"$name\", \"type\":\"$type_txt\", \"endpoint\":\"$rip\", \"state\":\"$st_badge\", \"ping\":\"$ping_res\", \"uptime\":\"$t_uptime\", \"rx_spd\":\"$(format_speed $rx_s)\", \"tx_spd\":\"$(format_speed $tx_s)\", \"rx_tot\":\"$(format_total $r_new)\", \"tx_tot\":\"$(format_total $t_new)\", \"comb_spd\":\"$(format_speed $comb_spd)\", \"comb_tot\":\"$(format_total $comb_tot)\"}"
+        fi
+    done
+
+    # FRP Logic
+    init_frp_counters
+    if systemctl is-active --quiet frps 2>/dev/null || systemctl is-active --quiet frpc 2>/dev/null; then
+        # ... (FRP tracking remains unchanged)
+        frp_name="FRP Engine"; frp_type="Proxy"; frp_state="ONLINE"; frp_rip="Listening..."; frp_ping="---"; frp_uptime="Active"
+        if systemctl is-active --quiet frps 2>/dev/null; then
+            frp_uptime=$(get_frp_uptime "frps")
+            b_port=$(awk -F'=' '/^bindPort/ {print $2}' /etc/frp/frps.toml 2>/dev/null | tr -d ' ')
+            if [ -n "$b_port" ]; then
+                active_client=$(ss -tnH state established 2>/dev/null | awk -v p=":${b_port}$" '$(NF-1) ~ p {print $NF; exit}' | rev | cut -d: -f2- | rev | tr -d '[]' | sed 's/^::ffff://' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*|)$')
+                if [ -n "$active_client" ]; then frp_rip="$active_client"; remote_list+=("$active_client"); frp_ping=$(ping -c 1 -W 1 "$active_client" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}'); fi
+            fi
+        elif systemctl is-active --quiet frpc 2>/dev/null; then
+            frp_uptime=$(get_frp_uptime "frpc")
+            s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
+            if [ -n "$s_addr" ]; then frp_rip="$s_addr"; remote_list+=("$s_addr"); frp_ping=$(ping -c 1 -W 1 "$s_addr" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}'); fi
+        fi
+
+        r_new_f=$(get_frp_rx); t_new_f=$(get_frp_tx)
+        r_old_f=${rx_old["FRP_TUNNEL"]:-$r_new_f}; t_old_f=${tx_old["FRP_TUNNEL"]:-$t_new_f}
+        rx_s_f=$((r_new_f - r_old_f)); [ "$rx_s_f" -lt 0 ] && rx_s_f=0
+        tx_s_f=$((t_new_f - t_old_f)); [ "$tx_s_f" -lt 0 ] && tx_s_f=0
+        rx_old["FRP_TUNNEL"]=$r_new_f; tx_old["FRP_TUNNEL"]=$t_new_f
+
+        if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
+        TUNNELS_JSON+="{\"iface\":\"$frp_name\", \"type\":\"$frp_type\", \"endpoint\":\"$frp_rip\", \"state\":\"$frp_state\", \"ping\":\"$frp_ping\", \"uptime\":\"$frp_uptime\", \"rx_spd\":\"$(format_speed $rx_s_f)\", \"tx_spd\":\"$(format_speed $tx_s_f)\", \"rx_tot\":\"$(format_total $r_new_f)\", \"tx_tot\":\"$(format_total $t_new_f)\", \"comb_spd\":\"$(format_speed $((rx_s_f + tx_s_f)))\", \"comb_tot\":\"$(format_total $((r_new_f + t_new_f)))\"}"
+    fi
+
+    # Backhaul Logic
+    init_bh_counters
+    for conf in /etc/mbackhaul/tunnels/*.toml; do
+        [ ! -f "$conf" ] && continue
+        bh_name=$(basename "$conf" .toml)
+        bh_type="Backhaul"
+        bh_state="OFFLINE"
+        systemctl is-active --quiet "mbackhaul@$bh_name" 2>/dev/null && bh_state="ONLINE"
+        
+        bh_rip="Unknown"
+        if grep -q "\[server\]" "$conf"; then
+            bh_type="Backhaul (Server)"
+            bh_rip="Listening..."
+        elif grep -q "\[client\]" "$conf"; then
+            bh_type="Backhaul (Client)"
+            bh_rip=$(awk -F'=' '/^remote/ {print $2}' "$conf" | grep -oP '"\K[^"]+' | cut -d'?' -f1 | sed -E 's/^[a-zA-Z0-9_]+:\/\///' | cut -d: -f1)
+            [ -n "$bh_rip" ] && remote_list+=("$bh_rip")
+        fi
+        
+        bh_ping="---"
+        if [ "$bh_state" == "ONLINE" ] && grep -q "\[client\]" "$conf" && [ -n "$bh_rip" ]; then
+            bh_ping=$(ping -c 1 -W 1 "$bh_rip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+        fi
+        
+        bh_uptime="Active"
+        [ "$bh_state" == "ONLINE" ] && bh_uptime=$(get_frp_uptime "mbackhaul@$bh_name")
+
+        r_new_b=$(get_bh_rx "$bh_name"); t_new_b=$(get_bh_tx "$bh_name")
+        r_old_b=${rx_old["BH_$bh_name"]:-$r_new_b}; t_old_b=${tx_old["BH_$bh_name"]:-$t_new_b}
+        rx_s_b=$((r_new_b - r_old_b)); [ "$rx_s_b" -lt 0 ] && rx_s_b=0
+        tx_s_b=$((t_new_b - t_old_b)); [ "$tx_s_b" -lt 0 ] && tx_s_b=0
+        rx_old["BH_$bh_name"]=$r_new_b; tx_old["BH_$bh_name"]=$t_new_b
+
+        if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
+        TUNNELS_JSON+="{\"iface\":\"$bh_name\", \"type\":\"$bh_type\", \"endpoint\":\"$bh_rip\", \"state\":\"$bh_state\", \"ping\":\"$bh_ping\", \"uptime\":\"$bh_uptime\", \"rx_spd\":\"$(format_speed $rx_s_b)\", \"tx_spd\":\"$(format_speed $tx_s_b)\", \"rx_tot\":\"$(format_total $r_new_b)\", \"tx_tot\":\"$(format_total $t_new_b)\", \"comb_spd\":\"$(format_speed $((rx_s_b + tx_s_b)))\", \"comb_tot\":\"$(format_total $((r_new_b + t_new_b)))\"}"
+    done
+
+    TUNNELS_JSON+="]"
+
+    unique_remotes=($(echo "${remote_list[@]}" | tr ' ' '\n' | sort -u | grep -v '^$'))
+    remotes_json="["
+    total_r=${#unique_remotes[@]}
+    for ((i=0; i<total_r; i++)); do remotes_json+="\"${unique_remotes[$i]}\""; [ $i -lt $((total_r - 1)) ] && remotes_json+=","; done
+    remotes_json+="]"
+
+    cat <<EOF > /tmp/mweb_daemon/api_data.json
+{
+    "local": {"ip": "${MY_PUB_IP}", "cpu": "${cpu_load}%", "ram": "${ram_usage}%", "uptime": "${sys_uptime}"},
+    "remotes": ${remotes_json},
+    "tunnels": ${TUNNELS_JSON}
+}
+EOF
+    sleep 1.2
 done

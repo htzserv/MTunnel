@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.2.0 (Deep Purge & Anti-Ghost) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.0 (Strict Auto-Distribute) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -17,7 +17,6 @@ if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
     t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
     
     for p in $t_ports; do
-        # Deep HAProxy Clean
         sed -i "/frontend ft_$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/bind \*:$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/default_backend bk_$p$/d" "$H_CONF" 2>/dev/null
@@ -25,22 +24,18 @@ if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
         sed -i "/server srv_$p /d" "$H_CONF" 2>/dev/null
         sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
         
-        # Deep Gost Clean (Robust Array Deletion)
         if command -v jq >/dev/null 2>&1; then 
-            jq --arg p "$p" '.ServeNodes = [.ServeNodes[] | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+            jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
         fi
         
-        # Deep OBFS Clean
         if [ -f "$OBFS_DIR/nat.sh" ]; then 
             sed -i "/--dport $p /d" "$OBFS_DIR/nat.sh" 2>/dev/null
             sed -i "/:$p -F/d" "$OBFS_DIR/gost.sh" 2>/dev/null
         fi
     done
     
-    # Remove Trailing Empty Lines
     sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
     
-    # Clean Global IP Counters for OBFS
     if [ -f "$OBFS_DIR/nat.sh" ]; then
         sed -i "/-d $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
         sed -i "/\/$target_ip:/d" "$OBFS_DIR/gost.sh" 2>/dev/null
@@ -177,25 +172,6 @@ fix_and_install() {
     echo -e "\n  ${G}● Initialization Completed Successfully.${NC}"; sleep 2
 }
 
-wipe_all_mappings() {
-    if [ -f "$H_CONF" ]; then
-        echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
-        echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
-        systemctl restart haproxy 2>/dev/null
-    fi
-    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-        echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
-        systemctl restart gost 2>/dev/null
-    fi
-    systemctl stop mporter-obfs 2>/dev/null
-    iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
-    iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
-    iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
-    rm -rf "$OBFS_DIR"
-    build_obfs_runner
-    echo -e "  ${G}● All Engine Mappings & OBFS Rules Wiped Clean.${NC}"; sleep 1.5
-}
-
 get_iface_for_ip() {
     local target_ip=$1
     local subnet=$(echo "$target_ip" | cut -d'.' -f1-3)
@@ -227,13 +203,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.2.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.3.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -294,6 +270,8 @@ smart_map() {
 
     local target_ip=""
     local selected_if=""
+    local is_auto_all=false
+    local selected_ips=()
 
     if [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -e "\n  ${R}● No MDesign Tunnel interfaces found!${NC}"
@@ -322,10 +300,16 @@ smart_map() {
                 echo -e "\n  ${B}╭────────────────── IPs on ${selected_if} ──────────────────╮${NC}"
                 for i in "${!map_ips[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${G}%-50s${NC} ${B}│${NC}\n" "$i" "${map_ips[$i]}"; done
                 echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
-                echo -ne "  ${C}●${NC} ${W}Select EXACT Index to process (0-$(( ${#map_ips[@]} - 1 ))): ${NC}"; read ip_choice
+                # 🌟 RESTORED 'a' OPTION 🌟
+                echo -e "  ${DIM}Tip: Enter 'a' to strictly auto-distribute ports across ALL IPs.${NC}"
+                echo -ne "  ${C}●${NC} ${W}Select EXACT Index to process (0-$(( ${#map_ips[@]} - 1 ))) or 'a': ${NC}"; read ip_choice
                 ip_choice=$(echo "$ip_choice" | tr -d '\r' | tr -d ' ')
                 
-                if [[ -n "${map_ips[$ip_choice]}" ]]; then 
+                if [[ "$ip_choice" == "a" ]]; then
+                    selected_ips=("${map_ips[@]}")
+                    is_auto_all=true
+                    echo -e "  ${G}✔ Auto-Distribute mode enabled for ${#selected_ips[@]} IPs.${NC}"
+                elif [[ -n "${map_ips[$ip_choice]}" ]]; then 
                     local selected_local_ip="${map_ips[$ip_choice]}"
                     local base_ip=$(echo "$selected_local_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$selected_local_ip" | cut -d'.' -f4)
                     local calc_target="${base_ip}.$((last_octet + 1))"
@@ -340,7 +324,7 @@ smart_map() {
         else echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
     fi
 
-    if [ -z "$target_ip" ]; then echo -e "  ${R}● Target IP cannot be empty!${NC}"; sleep 1; return; fi
+    if [ "$is_auto_all" != true ] && [ -z "$target_ip" ]; then echo -e "  ${R}● Target IP cannot be empty!${NC}"; sleep 1; return; fi
 
     echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443,1080): ${NC}"; read raw_ports
     raw_ports=$(echo "$raw_ports" | tr -d '\r')
@@ -351,7 +335,16 @@ smart_map() {
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "Local Port" "Engine" "Target IP"
     echo -e "  ${B}├──────────────┼─────────┼────────────────────────────────────────────┤${NC}"
     
+    local port_idx=0
     for p in $clean_ports; do
+        if [ "$is_auto_all" = true ]; then
+            local selected_local_ip="${selected_ips[$((port_idx % ${#selected_ips[@]}))]}"
+            local base_ip=$(echo "$selected_local_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$selected_local_ip" | cut -d'.' -f4)
+            target_ip="${base_ip}.$((last_octet + 1))"
+            [ "$last_octet" == "1" ] && target_ip="${base_ip}.2"
+            [ "$last_octet" == "2" ] && target_ip="${base_ip}.1"
+        fi
+
         local skip_reason=""
         if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then skip_reason="OS/System"
         elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then skip_reason="HAProxy"
@@ -364,6 +357,7 @@ smart_map() {
             continue
         fi
         
+        # 🌟 STRICT 1-TO-1 FORWARDING 🌟
         if [ "$fwd_engine" == "1" ]; then
             echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$target_ip"
@@ -372,10 +366,10 @@ smart_map() {
             jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${M}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "Gost" "$target_ip"
         fi
+        ((port_idx++))
     done
     echo -e "  ${B}╰──────────────┴─────────┴────────────────────────────────────────────╯${NC}"
     
-    # Remove Trailing Empty Lines
     sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
 
     [ "$fwd_engine" == "1" ] && systemctl restart haproxy 2>/dev/null
@@ -386,7 +380,7 @@ smart_map() {
     
     if [[ "$enable_obfs" == "y" ]]; then
         if [ ! -f /usr/local/bin/gost ]; then
-            echo -e "  ${DIM}● Caching & Deploying Gost engine for OBFS layer...${NC}"
+            echo -e "  ${DIM}● Deploying Gost engine for OBFS layer...${NC}"
             mkdir -p "$LOCAL_DIR" 2>/dev/null
             if [ ! -f "$LOCAL_DIR/gost" ]; then
                 wget -qO "$LOCAL_DIR/gost.gz" https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
@@ -418,17 +412,27 @@ smart_map() {
         local method="relay+tls"; [ "$t_proto" == "2" ] && method="relay+ws"; [ "$t_proto" == "3" ] && method="relay+wss"
 
         mkdir -p "$OBFS_DIR"
+        local port_idx=0
         for p in $clean_ports; do
+            if [ "$is_auto_all" = true ]; then
+                local selected_local_ip="${selected_ips[$((port_idx % ${#selected_ips[@]}))]}"
+                local base_ip=$(echo "$selected_local_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$selected_local_ip" | cut -d'.' -f4)
+                target_ip="${base_ip}.$((last_octet + 1))"
+                [ "$last_octet" == "1" ] && target_ip="${base_ip}.2"
+                [ "$last_octet" == "2" ] && target_ip="${base_ip}.1"
+            fi
+
             local obfs_lport=$((30000 + p)); [ "$obfs_lport" -gt 65535 ] && obfs_lport=$(( p + 10000 ))
             echo "iptables -t nat -A OUTPUT -d $target_ip -p tcp --dport $p -m comment --comment \"MPORTER_OBFS\" -j REDIRECT --to-ports $obfs_lport" >> "$OBFS_DIR/nat.sh"
             echo "/usr/local/bin/gost -L tcp://:$obfs_lport/$target_ip:$p -F $method://$remote_pub:$stealth_port &" >> "$OBFS_DIR/gost.sh"
+            
+            if ! grep -q "OBFS_CNT_TX_${selected_if}_${target_ip}" "$OBFS_DIR/nat.sh" 2>/dev/null; then
+                echo "iptables -t mangle -A OUTPUT -d $target_ip -m comment --comment \"OBFS_CNT_TX_${selected_if}\" 2>/dev/null" >> "$OBFS_DIR/nat.sh"
+                echo "iptables -t mangle -A INPUT -s $target_ip -m comment --comment \"OBFS_CNT_RX_${selected_if}\" 2>/dev/null" >> "$OBFS_DIR/nat.sh"
+                echo "# OBFS_CNT_TX_${selected_if}_${target_ip}" >> "$OBFS_DIR/nat.sh"
+            fi
+            ((port_idx++))
         done
-        
-        if ! grep -q "OBFS_CNT_TX_${selected_if}_${target_ip}" "$OBFS_DIR/nat.sh" 2>/dev/null; then
-            echo "iptables -t mangle -A OUTPUT -d $target_ip -m comment --comment \"OBFS_CNT_TX_${selected_if}\" 2>/dev/null" >> "$OBFS_DIR/nat.sh"
-            echo "iptables -t mangle -A INPUT -s $target_ip -m comment --comment \"OBFS_CNT_RX_${selected_if}\" 2>/dev/null" >> "$OBFS_DIR/nat.sh"
-            echo "# OBFS_CNT_TX_${selected_if}_${target_ip}" >> "$OBFS_DIR/nat.sh"
-        fi
         build_obfs_runner
         echo -e "\n  ${G}● OBFS Stealth Layer configured and Ghost Counters applied!${NC}"
     fi
@@ -505,7 +509,6 @@ edit_mapping() {
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
             2)
-                # 🌟 SPECIFIC PORTS DEEP REMOVAL FIX 🌟
                 echo -ne "\n  ${C}●${NC} ${W}Enter Exact Ports to Remove (e.g. 80,443): ${NC}"; read raw_ports
                 raw_ports=$(echo "$raw_ports" | tr -d '\r')
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
@@ -532,9 +535,10 @@ edit_mapping() {
                 if [ "$has_obfs" = true ]; then
                     sed -i "/-d $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
                     sed -i "/\/$target_ip:/d" "$OBFS_DIR/gost.sh" 2>/dev/null
-                    sed -i "/-d $target_ip -m comment --comment \"OBFS_CNT_TX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
-                    sed -i "/-s $target_ip -m comment --comment \"OBFS_CNT_RX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
-                    sed -i "/# OBFS_CNT_TX_.*_$target_ip/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                    local selected_if=$(get_iface_for_ip "$target_ip")
+                    sed -i "/OBFS_CNT_TX_${selected_if}_${target_ip}/d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                    sed -i "/OBFS_CNT_TX_${selected_if}.*-d $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
+                    sed -i "/OBFS_CNT_RX_${selected_if}.*-s $target_ip /d" "$OBFS_DIR/nat.sh" 2>/dev/null
                     build_obfs_runner; echo -e "  ${G}● OBFS Disabled for $target_ip.${NC}"; sleep 1.5
                 else
                     local selected_if=$(get_iface_for_ip "$target_ip")
@@ -698,7 +702,7 @@ setup_watchdog() {
 #!/bin/bash
 while true; do
     sleep 30
-    h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' /etc/haproxy/haproxy.cfg 2>/dev/null | sort -u)
+    h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' /etc/haproxy/haproxy.cfg 2>/dev/null | sort -u)
     g_ips=""
     if command -v jq >/dev/null 2>&1 && [ -f "/etc/gost/config.json" ]; then
         g_ips=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)

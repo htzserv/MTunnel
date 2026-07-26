@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mhealer.sh) | Autonomous Healer v2.3.0 ---
+# [PATCHED: Fixed flapping issue using failure counter]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 SVC_FILE="/etc/systemd/system/mhealer.service"
@@ -36,6 +37,7 @@ source /etc/mhealer.conf
 
 check_and_heal() {
     local conf="$1"; local type="$2"; local iface=""; local tip=""
+    unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME
     source "$conf"
     
     if [ "$type" == "gre" ]; then
@@ -52,13 +54,23 @@ check_and_heal() {
         tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
     fi
 
+    local FAIL_FILE="/tmp/mhealer_${iface}.fail"
     if ! ping -c 2 -W 2 "$tip" >/dev/null 2>&1; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') | HEAL TRIGGERED | $iface ($tip) is DOWN." >> /var/log/mhealer.log
-        if [ "$type" == "gre" ]; then /usr/bin/mgre --apply
-        elif [ "$type" == "l2tp" ]; then systemctl restart ml2tp.service
-        elif [ "$type" == "vxlan" ]; then systemctl restart mxlan.service
+        local fails=$(cat "$FAIL_FILE" 2>/dev/null || echo "0")
+        fails=$((fails + 1))
+        echo "$fails" > "$FAIL_FILE"
+        
+        if [ "$fails" -ge 3 ]; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') | HEAL TRIGGERED | $iface ($tip) is DOWN for $fails checks." >> /var/log/mhealer.log
+            echo "0" > "$FAIL_FILE"
+            if [ "$type" == "gre" ]; then /usr/bin/mgre --apply
+            elif [ "$type" == "l2tp" ]; then systemctl restart ml2tp.service
+            elif [ "$type" == "vxlan" ]; then systemctl restart mxlan.service
+            fi
+            sleep 5
         fi
-        sleep 5
+    else
+        echo "0" > "$FAIL_FILE"
     fi
 }
 

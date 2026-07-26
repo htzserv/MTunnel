@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.0 (Strict Auto-Distribute) ---
+# [PATCHED: Flawless Purge Logic, HAProxy Wipe Fix, Watchdog Safety & Offline Gost]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -8,10 +9,10 @@ G_CONF="/etc/gost/config.json"
 OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 
-# --- 🌟 BACKEND WATCHDOG API (Deep Purge Specific IP) 🌟 ---
-if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
-    target_ip="$2"
-    t_ports=""
+purge_ip_core() {
+    local target_ip="$1"
+    local t_ports=""
+    
     [ -f "$H_CONF" ] && t_ports+=$(grep "$target_ip:" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
     [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g' | xargs)
     t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
@@ -43,10 +44,14 @@ if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
         sed -i "/-s $target_ip -m comment --comment \"OBFS_CNT_RX_/d" "$OBFS_DIR/nat.sh" 2>/dev/null
         sed -i "/# OBFS_CNT_TX_.*_$target_ip/d" "$OBFS_DIR/nat.sh" 2>/dev/null
     fi
+    echo "$(date) | Deep Purged Target IP: $target_ip and its associated ports." >> /var/log/mporter-watchdog.log
+}
 
+# --- 🌟 BACKEND WATCHDOG API (Deep Purge Specific IP) 🌟 ---
+if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
+    purge_ip_core "$2"
     systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
-    echo "$(date) | Watchdog Deep Purged Target IP: $target_ip and its associated ports." >> /var/log/mporter-watchdog.log
     exit 0
 fi
 
@@ -190,7 +195,7 @@ fix_and_install() {
 get_iface_for_ip() {
     local target_ip=$1
     local subnet=$(echo "$target_ip" | cut -d'.' -f1-3)
-    local iface=$(ip -o -4 addr show 2>/dev/null | grep "$subnet" | awk '{print $2}' | head -n 1)
+    local iface=$(ip -o -4 addr show 2>/dev/null | grep -w "${subnet}\." | awk '{print $2}' | head -n 1)
     if [ -z "$iface" ]; then echo "Unknown"; else echo "$iface"; fi
 }
 
@@ -698,8 +703,10 @@ purge_menu() {
             conf=$(echo "$conf" | tr -d '\r' | tr -d ' ')
             if [[ "$conf" == "y" ]]; then
                 for ip in ${iface_ips[$selected_ifc]}; do
-                    /usr/bin/mporter --purge-ip "$ip" >/dev/null 2>&1
+                    purge_ip_core "$ip"
                 done
+                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
+                [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
                 echo -e "  ${G}● Interface $selected_ifc purged successfully!${NC}"; sleep 1.5
             fi ;;
         2)
@@ -717,18 +724,21 @@ purge_menu() {
             local target_ip="${ip_arr[$idx]}"
             if [ -z "$target_ip" ]; then echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
             
-            /usr/bin/mporter --purge-ip "$target_ip" >/dev/null 2>&1
+            purge_ip_core "$target_ip"
+            systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
+            [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
             echo -e "  ${G}● IP $target_ip purged successfully!${NC}"; sleep 1.5 ;;
         3) 
             echo -ne "  ${R}● Wipe all active mappings globally? (y/n) ❯❯ ${NC}"; read confirm
             confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
             if [[ "$confirm" == "y" ]]; then
-                > "$H_CONF"
+                echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
+                echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
                 echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
                 rm -rf "$OBFS_DIR"
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
                 build_obfs_runner
-                echo -e "  ${G}● All global mappings wiped.${NC}"; sleep 1.5
+                echo -e "  ${G}● All global mappings wiped. Core configs preserved.${NC}"; sleep 1.5
             fi ;;
         0) return ;;
     esac
@@ -747,8 +757,13 @@ while true; do
     all_ips=$(echo -e "$h_ips\n$g_ips" | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | sort -u)
     
     for ip in $all_ips; do
-        route_dev=$(ip route get "$ip" 2>/dev/null | grep -oP 'dev \K\S+' | head -n 1)
-        if [[ ! "$route_dev" =~ ^(gre|l2tp|br_|vx_|hys_|wg|tun|tap) ]]; then
+        subnet=$(echo "$ip" | cut -d'.' -f1-3)
+        found=false
+        grep -qR "CORE_SUBNET=$subnet" /etc/mgre/ /etc/ml2tp/ /etc/mhysteria/ 2>/dev/null && found=true
+        grep -qR "$subnet" /etc/wireguard/ 2>/dev/null && found=true
+        grep -qR "$ip" /etc/mbackhaul/ 2>/dev/null && found=true
+        
+        if [ "$found" = false ]; then
             /usr/bin/mporter --purge-ip "$ip" >/dev/null 2>&1
         fi
     done

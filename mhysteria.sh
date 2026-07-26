@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MHysteria Modular Core | Hysteria2+WG Engine v1.1.0 (Sanitized) ---
-# [PATCHED: Variable scoping fixed during sourcing]
+# [PATCHED: Variable scoping fixed during sourcing & Instant Orphan Cleanup]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mhysteria/tunnels"
@@ -187,8 +187,10 @@ while true; do
            echo -ne "  Index (or 'all'): "; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r' | tr -d ' ')
            if [[ "$del_idx" == "all" ]]; then
                for conf in "${configs[@]}"; do unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"; systemctl stop mhysteria@$T_NAME 2>/dev/null; systemctl disable mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "$conf"; done
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
            else
                unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "${configs[$del_idx]}"; systemctl stop mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "${configs[$del_idx]}"
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
            fi; echo -e "  ${G}Purged!${NC}"; sleep 1 ;;
         0) break ;;
     esac

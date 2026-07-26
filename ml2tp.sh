@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- ML2TP Modular Core (ml2tp.sh) | MDesign Core v2.1.0 (Sanitized) ---
-# [PATCHED: Variable scoping fixed during sourcing]
+# [PATCHED: Variable scoping fixed during sourcing & Instant Orphan Cleanup]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/ml2tp/tunnels"
@@ -272,9 +272,11 @@ while true; do
            echo -ne "  ${C}●${NC} ${W}Enter Index or 'all': ${NC}"; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
                for conf in "${configs[@]}"; do unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"; ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1; ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1; ip link del "$T_NAME" >/dev/null 2>&1; rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"; done
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                echo -e "  ${G}● All tunnels purged.${NC}"; sleep 1.5
            elif [[ -n "${configs[$del_idx]}" ]]; then
                unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "${configs[$del_idx]}"; ip l2tp del session tunnel_id "$TUN_ID" session_id "$TUN_ID" >/dev/null 2>&1; ip l2tp del tunnel tunnel_id "$TUN_ID" >/dev/null 2>&1; ip link del "$T_NAME" >/dev/null 2>&1; rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         5) edit_tunnel ;; 6) show_tunnel_details ;; 0) break ;;

@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.2.0 (Sanitized) ---
-# [PATCHED: Variable scoping fixed during sourcing]
+# [PATCHED: Variable scoping fixed during sourcing & Instant Orphan Cleanup]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/vxlan"
@@ -335,12 +335,14 @@ while true; do
                echo -ne "  ${R}● DANGER: Delete ALL VXLAN fabrics? (y/n): ${NC}"; read confirm_all; confirm_all=$(echo "$confirm_all" | tr -d '\r')
                if [[ "$confirm_all" == "y" ]]; then
                    for conf in "${configs[@]}"; do unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"; ip link del "$VX_NAME" >/dev/null 2>&1; ip link del "$BR_NAME" >/dev/null 2>&1; rm -f "$conf" "${STATE_DIR}/${VX_NAME}.state"; done
+                   [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                    echo -e "  ${G}● All fabrics safely purged.${NC}"; sleep 1.5
                fi; continue
            fi
            if [[ -n "${configs[$del_idx]}" ]]; then
                unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "${configs[$del_idx]}"; ip link del "$VX_NAME" >/dev/null 2>&1; ip link del "$BR_NAME" >/dev/null 2>&1
                rm -f "${configs[$del_idx]}" "${STATE_DIR}/${VX_NAME}.state"
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                echo -e "  ${G}● Fabric [${VX_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         5) edit_fabric ;; 6) show_fabric_details ;; 0) break ;;

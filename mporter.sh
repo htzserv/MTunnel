@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.0 (Strict Auto-Distribute) ---
-# [PATCHED: Flawless Purge Logic, HAProxy Wipe Fix, Watchdog Safety & Offline Gost]
+# [PATCHED: Flawless Purge, Migration Feature, HAProxy Wipe Fix, Watchdog Safety & Offline Gost]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -47,9 +47,33 @@ purge_ip_core() {
     echo "$(date) | Deep Purged Target IP: $target_ip and its associated ports." >> /var/log/mporter-watchdog.log
 }
 
-# --- 🌟 BACKEND WATCHDOG API (Deep Purge Specific IP) 🌟 ---
+# --- 🌟 BACKEND APIs 🌟 ---
 if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
     purge_ip_core "$2"
+    systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
+    [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
+    exit 0
+fi
+
+if [[ "$1" == "--cleanup-orphans" ]]; then
+    h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null | sort -u)
+    g_ips=""
+    if command -v jq >/dev/null 2>&1 && [ -f "$G_CONF" ]; then
+        g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)
+    fi
+    all_ips=$(echo -e "$h_ips\n$g_ips" | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | sort -u)
+    
+    for ip in $all_ips; do
+        subnet=$(echo "$ip" | cut -d'.' -f1-3)
+        found=false
+        grep -qR "CORE_SUBNET=$subnet" /etc/mgre/ /etc/ml2tp/ /etc/mhysteria/ 2>/dev/null && found=true
+        grep -qR "$subnet" /etc/wireguard/ 2>/dev/null && found=true
+        grep -qR "$ip" /etc/mbackhaul/ 2>/dev/null && found=true
+        
+        if [ "$found" = false ]; then
+            purge_ip_core "$ip"
+        fi
+    done
     systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
     exit 0
@@ -513,6 +537,10 @@ edit_mapping() {
         
         if [ "$has_obfs" = true ]; then echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Disable OBFS Stealth for this IP${NC}"
         else echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Enable OBFS Stealth for this IP${NC}"; fi
+        
+        # 🌟 NEW MIGRATE OPTION 🌟
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Migrate Target IP${NC} ${DIM}(Move ports to a new IP)${NC}"
+        
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}Select Action ❯❯ ${NC}"; read edit_opt
         edit_opt=$(echo "$edit_opt" | tr -d '\r' | tr -d ' ')
@@ -620,6 +648,38 @@ edit_mapping() {
                     fi
                     build_obfs_runner; echo -e "  ${G}● OBFS Enabled for $target_ip.${NC}"; sleep 1.5
                 fi ;;
+            4)
+                # 🌟 MIGRATION LOGIC 🌟
+                echo -ne "\n  ${C}●${NC} ${W}Enter New Destination IP: ${NC}"; read new_ip
+                new_ip=$(echo "$new_ip" | tr -d '\r' | tr -d ' ')
+                if ! [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                    echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; continue
+                fi
+                echo -e "  ${DIM}● Migrating $target_ip -> $new_ip ...${NC}"
+                
+                if [ -f "$H_CONF" ]; then
+                    sed -i "s/ $target_ip:/ $new_ip:/g" "$H_CONF"
+                fi
+                
+                if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
+                    jq --arg old "/$target_ip:" --arg new "/$new_ip:" '.ServeNodes = [.ServeNodes[]? | sub($old; $new)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF"
+                fi
+                
+                if [ -f "$OBFS_DIR/nat.sh" ]; then
+                    sed -i "s/\b${target_ip}\b/${new_ip}/g" "$OBFS_DIR/nat.sh"
+                fi
+                if [ -f "$OBFS_DIR/gost.sh" ]; then
+                    sed -i "s/\b${target_ip}\b/${new_ip}/g" "$OBFS_DIR/gost.sh"
+                fi
+                
+                systemctl restart haproxy 2>/dev/null
+                systemctl restart gost 2>/dev/null
+                [ -f "$OBFS_DIR/nat.sh" ] && build_obfs_runner
+                
+                echo -e "  ${G}● IP Successfully Migrated!${NC}"; sleep 1.5
+                target_ip="$new_ip"
+                break
+                ;;
             0) break ;; *) echo -e "  ${R}● Invalid selection!${NC}"; sleep 1 ;;
         esac
     done
@@ -749,24 +809,7 @@ setup_watchdog() {
 #!/bin/bash
 while true; do
     sleep 30
-    h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' /etc/haproxy/haproxy.cfg 2>/dev/null | sort -u)
-    g_ips=""
-    if command -v jq >/dev/null 2>&1 && [ -f "/etc/gost/config.json" ]; then
-        g_ips=$(jq -r '.ServeNodes[]?' /etc/gost/config.json 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)
-    fi
-    all_ips=$(echo -e "$h_ips\n$g_ips" | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | sort -u)
-    
-    for ip in $all_ips; do
-        subnet=$(echo "$ip" | cut -d'.' -f1-3)
-        found=false
-        grep -qR "CORE_SUBNET=$subnet" /etc/mgre/ /etc/ml2tp/ /etc/mhysteria/ 2>/dev/null && found=true
-        grep -qR "$subnet" /etc/wireguard/ 2>/dev/null && found=true
-        grep -qR "$ip" /etc/mbackhaul/ 2>/dev/null && found=true
-        
-        if [ "$found" = false ]; then
-            /usr/bin/mporter --purge-ip "$ip" >/dev/null 2>&1
-        fi
-    done
+    /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1
 done
 EOF
     chmod +x /usr/local/bin/mporter-watchdog.sh

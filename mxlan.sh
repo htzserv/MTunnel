@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.2.0 (Sanitized) ---
+# [PATCHED: Variable scoping fixed during sourcing]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/vxlan"
@@ -17,7 +18,7 @@ get_local_ip() {
 apply_fabric() {
     local conf="$1"
     [ ! -s "$conf" ] && return
-    source "$conf"
+    unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
     
     local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
     local local_br_ip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
@@ -65,7 +66,7 @@ apply_all_fabrics() { for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply
 draw_mxlan_header() {
     local s_ip=$(get_local_ip); local active_fabrics=0; local total_vips=0
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; source "$conf"
+        [ ! -f "$conf" ] && continue; unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
         if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" != "down" ]; then ((active_fabrics++)); fi
         total_vips=$((total_vips + MAX_IPS))
     done
@@ -81,7 +82,7 @@ draw_mxlan_header() {
 show_mxlan_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; source "$conf"
+        [ ! -f "$conf" ] && continue; unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
         mapfile -t v_ips < <(ip -4 addr show dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -120,7 +121,7 @@ show_fabric_details() {
 
     echo -e "\n  ${M}● Deployed Fabrics Registry:${NC}"
     for conf in "${configs[@]}"; do
-        source "$conf"
+        unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
         local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
@@ -187,7 +188,7 @@ edit_fabric() {
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
-        local sel_conf="${configs[$t_idx]}"; source "$sel_conf"
+        local sel_conf="${configs[$t_idx]}"; unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$sel_conf"
         echo -e "\n  ${DIM}┌─[ HOT-SWAP PUBLIC IPs ]${NC}"
         echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_local
         new_local=$(echo "$new_local" | tr -d '\r' | tr -d ' ')
@@ -299,7 +300,7 @@ while true; do
            while true; do echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx; t_idx=$(echo "$t_idx" | tr -d '\r'); [[ "$t_idx" == "q" ]] && break 2; [[ -n "$t_idx" ]] && break; done
            
            if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; source "$sel_conf"
+               sel_conf="${configs[$t_idx]}"; unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$sel_conf"
                echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
                while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; vip_action=$(echo "$vip_action" | tr -d '\r'); [[ "$vip_action" =~ ^[12q]$ ]] && break; done
                [[ "$vip_action" == "q" ]] && continue
@@ -333,12 +334,12 @@ while true; do
            if [[ "$del_idx" == "all" ]]; then
                echo -ne "  ${R}● DANGER: Delete ALL VXLAN fabrics? (y/n): ${NC}"; read confirm_all; confirm_all=$(echo "$confirm_all" | tr -d '\r')
                if [[ "$confirm_all" == "y" ]]; then
-                   for conf in "${configs[@]}"; do source "$conf"; ip link del "$VX_NAME" >/dev/null 2>&1; ip link del "$BR_NAME" >/dev/null 2>&1; rm -f "$conf" "${STATE_DIR}/${VX_NAME}.state"; done
+                   for conf in "${configs[@]}"; do unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"; ip link del "$VX_NAME" >/dev/null 2>&1; ip link del "$BR_NAME" >/dev/null 2>&1; rm -f "$conf" "${STATE_DIR}/${VX_NAME}.state"; done
                    echo -e "  ${G}● All fabrics safely purged.${NC}"; sleep 1.5
                fi; continue
            fi
            if [[ -n "${configs[$del_idx]}" ]]; then
-               source "${configs[$del_idx]}"; ip link del "$VX_NAME" >/dev/null 2>&1; ip link del "$BR_NAME" >/dev/null 2>&1
+               unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "${configs[$del_idx]}"; ip link del "$VX_NAME" >/dev/null 2>&1; ip link del "$BR_NAME" >/dev/null 2>&1
                rm -f "${configs[$del_idx]}" "${STATE_DIR}/${VX_NAME}.state"
                echo -e "  ${G}● Fabric [${VX_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;

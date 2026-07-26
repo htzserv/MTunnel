@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mdiag.sh) | MDiag Omni-Scanner v4.0.0 (Full Edition) ---
+# [PATCHED: Variable scoping fixed during sourcing]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -61,7 +62,7 @@ run_full_infrastructure_scan() {
     local has_any=false
 
     for conf in "$GRE_DIR"/*.conf "$VX_DIR"/*.conf "$L2TP_DIR"/*.conf "$HYS_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; has_any=true; source "$conf"
+        [ ! -f "$conf" ] && continue; has_any=true; unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
         
         local proto_lbl="GRE L3"; local iface="$T_NAME"
         if [ -n "$BR_NAME" ]; then proto_lbl="VXLAN L2"; iface="$BR_NAME"; fi
@@ -108,7 +109,7 @@ deep_ping_analysis() {
     echo -e "\n  ${DIM}┌─[ DEEP PING & PACKET LOSS TEST ]${NC}"
     local all_ips=()
     for conf in "$GRE_DIR"/*.conf "$VX_DIR"/*.conf "$L2TP_DIR"/*.conf "$HYS_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; source "$conf"
+        [ ! -f "$conf" ] && continue; unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
         local tip=""
         if [ -n "$TUN_ID" ]; then
             local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"

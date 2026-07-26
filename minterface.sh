@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (minterface.sh) | Interface Mapper v4.0.0 (Full Edition) ---
+# [PATCHED: Variable scoping fixed during sourcing]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -14,7 +15,7 @@ get_configs() { ls /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/ml2tp/tu
 detect_server_role() {
     local configs=($(get_configs))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "${DIM}Unknown (No Tunnels)${NC}"; return; fi
-    source "${configs[0]}"
+    unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "${configs[0]}"
     [ "$TYPE" == "1" ] && echo -e "${G}IRAN (Access Node)${NC}" || echo -e "${M}KHAREJ (Gateway Node)${NC}"
 }
 
@@ -25,7 +26,7 @@ draw_header() {
     local str2=" IP: $s_ip "
     local configs=($(get_configs)); local raw_role="Unknown (No Tunnels)"
     if [ ${#configs[@]} -gt 0 ]; then
-        source "${configs[0]}"
+        unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "${configs[0]}"
         raw_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access Node)" || echo "KHAREJ (Gateway Node)")
     fi
     local str3=" ROLE: $raw_role "
@@ -51,7 +52,7 @@ render_matrix() {
 
     echo -e "\n  ${Y}● Active Network Interface Blueprint:${NC}"
     for conf in "${configs[@]}"; do
-        source "$conf"
+        unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
         local is_vx=false; local is_l2tp=false; local is_hys=false; local t_name="$T_NAME"
         
         if [ -n "$BR_NAME" ]; then is_vx=true; t_name="$BR_NAME"; fi

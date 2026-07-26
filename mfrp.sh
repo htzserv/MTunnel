@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MFRP Reverse Proxy Matrix (mfrp.sh) | MDesign Core v2.5.0 (Sanitized) ---
+# [PATCHED: Fixed Offline Binary Installation & Removed Redundant Dashboard]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 FRP_DIR="/etc/frp"
@@ -29,22 +30,33 @@ draw_percentage() {
 
 check_frp_binaries() {
     if [ ! -f "/usr/local/bin/frps" ] || [ ! -f "/usr/local/bin/frpc" ]; then
-        echo -e ""
-        (
-            mkdir -p "$LOCAL_DIR" 2>/dev/null
-            if [ ! -f "$LOCAL_DIR/frps" ] || [ ! -f "$LOCAL_DIR/frpc" ]; then
-                wget -qO "/tmp/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.58.0/frp_0.58.0_linux_amd64.tar.gz" >/dev/null 2>&1
-                tar -xzf "/tmp/frp.tar.gz" -C "/tmp/"
-                cp /tmp/frp_*_linux_amd64/frps "$LOCAL_DIR/"
-                cp /tmp/frp_*_linux_amd64/frpc "$LOCAL_DIR/"
-                rm -rf "/tmp/frp.tar.gz" /tmp/frp_*_linux_amd64
-            fi
-            cp "$LOCAL_DIR/frps" /usr/local/bin/frps
-            cp "$LOCAL_DIR/frpc" /usr/local/bin/frpc
+        mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+        if [ -s "$LOCAL_DIR/packages/frps" ] && [ -s "$LOCAL_DIR/packages/frpc" ]; then
+            echo -e "\n  ${G}● Deploying offline FRP Engine from cache...${NC}"
+            cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps
+            cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc
             chmod +x /usr/local/bin/frps /usr/local/bin/frpc
-        ) >/dev/null 2>&1 &
-        draw_percentage $! "Deploying FRP Binaries"
-        sleep 1
+        else
+            echo -e "\n  ${Y}● Downloading FRP Engine from GitHub...${NC}"
+            (
+                wget -qO "/tmp/frp.tar.gz" "https://github.com/fatedier/frp/releases/download/v0.58.0/frp_0.58.0_linux_amd64.tar.gz" >/dev/null 2>&1
+                if [ -s "/tmp/frp.tar.gz" ]; then
+                    tar -xzf "/tmp/frp.tar.gz" -C "/tmp/"
+                    cp /tmp/frp_*_linux_amd64/frps "$LOCAL_DIR/packages/"
+                    cp /tmp/frp_*_linux_amd64/frpc "$LOCAL_DIR/packages/"
+                    rm -rf "/tmp/frp.tar.gz" /tmp/frp_*_linux_amd64
+                    cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps
+                    cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc
+                    chmod +x /usr/local/bin/frps /usr/local/bin/frpc
+                fi
+            ) &
+            draw_percentage $! "Deploying FRP Binaries"
+            sleep 1
+        fi
+        
+        if [ ! -x "/usr/local/bin/frps" ]; then
+            echo -e "\n  ${R}● FATAL ERROR: Failed to install FRP! No internet and no offline cache.${NC}"; sleep 3; exit 1
+        fi
     fi
 }
 
@@ -119,28 +131,6 @@ auth.method = "token"
 auth.token = "$auth_token"
 EOF
 
-    echo -ne "\n  ${C}●${NC} ${W}Enable FRP Built-in Web Dashboard? (y/n) [y]: ${NC}"; read en_dash
-    en_dash=$(echo "$en_dash" | tr -d '\r' | tr -d ' ')
-    if [[ "$en_dash" != "n" ]]; then
-        echo -ne "  ${C}  ├─${NC} ${W}Dashboard Port (e.g. 7500): ${NC}"; read d_port
-        d_port=$(echo "$d_port" | tr -d '\r' | tr -d ' '); [ -z "$d_port" ] && d_port=7500
-        echo -ne "  ${C}  ├─${NC} ${W}Username [admin]: ${NC}"; read d_user
-        d_user=$(echo "$d_user" | tr -d '\r'); [ -z "$d_user" ] && d_user="admin"
-        echo -ne "  ${C}  └─${NC} ${W}Password [admin]: ${NC}"; read d_pass
-        d_pass=$(echo "$d_pass" | tr -d '\r'); [ -z "$d_pass" ] && d_pass="admin"
-        
-        iptables -I INPUT -p tcp --dport "$d_port" -j ACCEPT 2>/dev/null
-        
-        cat <<EOF >> "$FRP_S_CONF"
-
-webServer.addr = "0.0.0.0"
-webServer.port = $d_port
-webServer.user = "$d_user"
-webServer.password = "$d_pass"
-EOF
-        dash_msg="  ${DIM}├─ Web Dashboard: ${C}http://$(get_local_ip):${d_port}${NC} ${DIM}(u: ${d_user} | p: ${d_pass})${NC}"
-    fi
-
     cat <<EOF > /etc/systemd/system/frps.service
 [Unit]
 Description=FRP Server (MDesign Iran Node)
@@ -158,7 +148,6 @@ EOF
     systemctl daemon-reload; systemctl enable frps >/dev/null 2>&1; systemctl restart frps
     echo -e "\n  ${G}● FRPS Server deployed successfully on IRAN!${NC}"
     echo -e "  ${DIM}├─ Bind Port: ${Y}${b_port}${NC}"
-    [ -n "$dash_msg" ] && echo -e "$dash_msg"
     sleep 3
 }
 

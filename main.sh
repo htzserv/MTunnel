@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.4.0 (Offline Fixed) ---
+# --- MDesign Master Core | Central Dashboard v7.4.0 (Offline Fixed + Auto Web UI) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -8,6 +8,28 @@ REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 LOCAL_DIR="/root/mtunnel"
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
+
+# --- 🌟 AUTO-START WEB UI ON FIRST RUN 🌟 ---
+if [ ! -f "/etc/systemd/system/mweb.service" ] && [ -x "/usr/bin/mweb" ]; then
+    mkdir -p /etc/mweb 2>/dev/null
+    if [ ! -f "/etc/mweb/web.conf" ]; then
+        echo -e "WEB_PORT=1000\nWEB_USER=admin\nWEB_PASS=admin" > /etc/mweb/web.conf
+    fi
+    cat <<'EOF' > /etc/systemd/system/mweb.service
+[Unit]
+Description=MDesign Fleet Radar UI
+After=network.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/mweb
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload; systemctl enable mweb.service >/dev/null 2>&1; systemctl start mweb.service >/dev/null 2>&1
+fi
+# ---------------------------------------------
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')

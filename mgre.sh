@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.15 (vIP Manager Integration) ---
-# [PATCHED: Variable scoping fixed during sourcing]
+# [PATCHED: Safe variable defaults replacing 'unset' & Sanity Checks]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -18,8 +18,18 @@ get_local_ip() {
 apply_tunnel() {
     local conf="$1"
     [ ! -s "$conf" ] && return
-    unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6
+    
+    # 🌟 Local scoping avoids cross-contamination between tunnels 🌟
+    local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6=""
     source "$conf"
+    
+    # 🌟 Sanity Check: Abort if critical variables are missing 🌟
+    if [ -z "$T_NAME" ] || [ -z "$REMOTE_PUB" ] || [ -z "$LOCAL_PUB" ] || [ -z "$TUN_ID" ]; then
+        return
+    fi
+    
+    # Ensure MAX_IPS is a valid number
+    if ! [[ "$MAX_IPS" =~ ^[0-9]+$ ]]; then MAX_IPS=0; fi
     
     local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
@@ -74,7 +84,10 @@ apply_all_tunnels() {
 draw_mgre_header() {
     local s_ip=$(get_local_ip); local active_tunnels=0; local total_vips=0
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; unset T_NAME MAX_IPS && source "$conf"
+        [ ! -f "$conf" ] && continue
+        local T_NAME="" MAX_IPS="0"
+        source "$conf"
+        if ! [[ "$MAX_IPS" =~ ^[0-9]+$ ]]; then MAX_IPS=0; fi
         if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then ((active_tunnels++)); fi
         total_vips=$((total_vips + MAX_IPS))
     done
@@ -96,7 +109,9 @@ show_mgre_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     local has_ips=false
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; unset T_NAME TUN_PROTO TYPE TUN_ID && source "$conf"; has_ips=true
+        [ ! -f "$conf" ] && continue
+        local TYPE="" T_NAME="" TUN_PROTO="ipv4" TUN_ID="" CORE_SUBNET=""
+        source "$conf"; has_ips=true
         mapfile -t v_ips < <(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
         local title_color="${C}"; local proto_lbl="IPv4"
         [[ "$TUN_PROTO" == "6to4" ]] && { title_color="${M}"; proto_lbl="IP6GRE"; }
@@ -139,8 +154,10 @@ show_tunnel_details() {
 
     echo -e "\n  ${Y}● Deployed Tunnels Registry (Scanning Network Latency...):${NC}"
     for conf in "${configs[@]}"; do
-        unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6
+        local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6=""
         source "$conf"
+        if ! [[ "$MAX_IPS" =~ ^[0-9]+$ ]]; then MAX_IPS=0; fi
+        
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
@@ -249,7 +266,9 @@ edit_tunnel() {
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
-        local sel_conf="${configs[$t_idx]}"; source "$sel_conf"
+        local sel_conf="${configs[$t_idx]}"
+        local LOCAL_PUB="" REMOTE_PUB=""
+        source "$sel_conf"
         echo -e "\n  ${DIM}┌─[ HOT-SWAP PUBLIC IPs ]${NC}"
         echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_local
         echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_remote
@@ -418,7 +437,9 @@ while true; do
            done
            
            if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; source "$sel_conf"
+               sel_conf="${configs[$t_idx]}"
+               TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6=""
+               source "$sel_conf"
                
                echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}"
                echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}"
@@ -494,21 +515,25 @@ while true; do
                echo -ne "  ${R}● DANGER: Are you sure you want to delete ALL tunnels? (y/n): ${NC}"; read confirm_all
                if [[ "$confirm_all" == "y" ]]; then
                    for conf in "${configs[@]}"; do
-                       unset T_NAME && source "$conf"
+                       T_NAME=""
+                       source "$conf"
                        ip tunnel del "$T_NAME" >/dev/null 2>&1
                        ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
                        rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"
                    done
+                   [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                    echo -e "  ${G}● All tunnels have been safely purged.${NC}"; sleep 1.5
                fi
                continue
            fi
            
            if [[ -n "${configs[$del_idx]}" ]]; then
-               unset T_NAME && source "${configs[$del_idx]}"
+               T_NAME=""
+               source "${configs[$del_idx]}"
                ip tunnel del "$T_NAME" >/dev/null 2>&1
                ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
                rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         5) edit_tunnel ;;

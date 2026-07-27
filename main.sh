@@ -1,5 +1,6 @@
 #!/bin/bash
 # --- MDesign Master Core | Central Dashboard v7.4.0 (Offline Fixed + Auto Web UI) ---
+# [PATCHED: Flawless Nuclear Wipe / Uninstaller added]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -129,7 +130,7 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Update Core Scripts${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Nuclear Wipe${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
     echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
 
@@ -207,10 +208,36 @@ while true; do
            
         11)
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL infrastructure traces? (y/n): ${NC}"; read del_confirm
+           del_confirm=$(echo "$del_confirm" | tr -d '\r' | tr -d ' ')
            if [[ "$del_confirm" == "y" ]]; then
-               systemctl stop mgre.service ml2tp.service mporter.service haproxy gost wg-quick@wg0 mxlan.service mweb.service mstats-web.service frps frpc mhysteria@* mbackhaul@* 2>/dev/null
-               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /usr/bin/m* /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frp* /root/mtunnel
-               echo -e "  ${G}● Purge complete. System is vanilla.${NC}\n"; exit 0
+               echo -e "\n  ${DIM}● 1/4 Stopping and disabling services...${NC}"
+               systemctl stop mgre.service mxlan.service ml2tp.service mporter.service mporter-obfs.service mporter-watchdog.service haproxy gost wg-quick@wg0 mweb.service mhealer.service mshield-obfs.service frps frpc mhysteria@* mbackhaul@* 2>/dev/null
+               systemctl disable mgre.service mxlan.service ml2tp.service mporter.service mporter-obfs.service mporter-watchdog.service haproxy gost wg-quick@wg0 mweb.service mhealer.service mshield-obfs.service frps frpc 2>/dev/null
+               
+               echo -e "  ${DIM}● 2/4 Removing systemd units...${NC}"
+               rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/ml2tp.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/gost.service /etc/systemd/system/frp*.service /etc/systemd/system/mhysteria@.service /etc/systemd/system/mbackhaul@.service
+               systemctl daemon-reload
+               
+               echo -e "  ${DIM}● 3/4 Tearing down network interfaces and routing...${NC}"
+               ip -o link show | grep -E '(gre|br_|vx_|hys_|l2tp_|sit_)' | awk -F': ' '{print $2}' | cut -d@ -f1 | while read iface; do 
+                   ip link del "$iface" 2>/dev/null
+                   ip tunnel del "$iface" 2>/dev/null
+               done
+               
+               # Iptables flush
+               while iptables -D INPUT -j MSHIELD 2>/dev/null; do :; done
+               iptables -F MSHIELD 2>/dev/null; iptables -X MSHIELD 2>/dev/null
+               iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+               iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+               iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+               iptables -t mangle -S FORWARD 2>/dev/null | grep "TCPMSS" | grep -E '(gre|br_|vx_|hys_|l2tp_)' | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
+               
+               echo -e "  ${DIM}● 4/4 Deleting configuration files and binaries...${NC}"
+               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /etc/mshield /etc/mstats /root/mtunnel /var/log/mhealer.log /var/log/mporter-watchdog.log
+               rm -f /usr/bin/m* /usr/local/bin/m* /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps
+               
+               echo -e "\n  ${G}● Purge complete! Server is completely clean and returned to vanilla state.${NC}\n"
+               exit 0
            fi ;;
         0) clear; exit 0 ;;
     esac

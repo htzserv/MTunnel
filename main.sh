@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.4.0 (Offline Fixed + Auto Web UI) ---
-# [PATCHED: Flawless Nuclear Wipe / Uninstaller added]
+# --- MDesign Master Core | Central Dashboard v7.4.0 (Web UI Indicator) ---
+# [PATCHED: Dynamic Header with Web UI Status added]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -80,6 +80,8 @@ run_mod() {
 
 draw_main_header() {
     local s_ip=$(get_local_ip)
+    
+    # 🌟 Tun Status 🌟
     local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
     local st_wg="○"; local c_wg="${DIM}"; ([ -f "/etc/wireguard/wg0.conf" ] || ip link show wg0 >/dev/null 2>&1) && { st_wg="●"; c_wg="${G}"; }
@@ -87,11 +89,30 @@ draw_main_header() {
     local st_hys="○"; local c_hys="${DIM}"; [ -n "$(ls -A /etc/mhysteria/tunnels/*.conf 2>/dev/null)" ] && { st_hys="●"; c_hys="${G}"; }
     local st_bh="○"; local c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.toml 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
 
+    # 🌟 Web UI Status 🌟
+    local web_stat="${DIM}○ OFFLINE${NC}"
+    local raw_web="○ OFFLINE"
+    if systemctl is-active --quiet mweb.service 2>/dev/null; then
+        local w_port="1000"
+        [ -f "/etc/mweb/web.conf" ] && w_port=$(grep "WEB_PORT" /etc/mweb/web.conf | cut -d= -f2 | tr -d ' ' | tr -d '\r')
+        web_stat="${G}● PORT ${w_port}${NC}"
+        raw_web="● PORT ${w_port}"
+    fi
+
+    # 🌟 Dynamic Padding Calculations (Width: 94) 🌟
+    local raw_top=" MDesign Master Core v7.4.0 │ IP: ${s_ip} │ Web: ${raw_web} "
+    local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
+    local padding_top=$(printf '%*s' "$pad_top" "")
+
+    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  WireGuard:${st_wg}  L2TP:${st_l2}  Hys2:${st_hys}  Backhaul:${st_bh} "
+    local pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
+    local padding_bot=$(printf '%*s' "$pad_bot" "")
+
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC}                                                   ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}                      ${B}│${NC}"
+    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 

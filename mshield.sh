@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mshield.sh) | Zero-Trust Firewall & Universal Receiver v3.1.0 ---
-# [PATCHED: Variable scoping fixed during sourcing]
+# [PATCHED: Safe Variable Reset matching 1.sh logic]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -66,7 +66,7 @@ activate_firewall() {
     
     for conf in /etc/ml2tp/tunnels/*.conf /etc/mhysteria/tunnels/*.conf; do
         if [ -f "$conf" ]; then
-            unset TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 VNI_ID BR_NAME TUN_PORT HYS_PASS VX_NAME 2>/dev/null; source "$conf"
+            TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
             [ -n "$TUN_PORT" ] && fw_ports+="${TUN_PORT}\n"
         fi
     done

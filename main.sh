@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MDesign Master Core | Central Dashboard v7.4.0 (Web UI Indicator) ---
-# [PATCHED: Dynamic Header with Web UI Status added]
+# [PATCHED: Safe Nuclear Wipe - No Wildcards for System Binaries]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -255,7 +255,10 @@ while true; do
                
                echo -e "  ${DIM}● 4/4 Deleting configuration files and binaries...${NC}"
                rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /etc/mshield /etc/mstats /root/mtunnel /var/log/mhealer.log /var/log/mporter-watchdog.log
-               rm -f /usr/bin/m* /usr/local/bin/m* /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps
+               
+               # Safe specific deletion! NO WILDCARDS FOR SYSTEM BINARIES.
+               rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mwire /usr/bin/mfrp /usr/bin/ml2tp /usr/bin/mhysteria /usr/bin/mbackhaul /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb
+               rm -f /usr/local/bin/mtunnel /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-watchdog.sh /usr/local/bin/mshield-runner.sh /usr/local/bin/mhealer_daemon.sh /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps
                
                echo -e "\n  ${G}● Purge complete! Server is completely clean and returned to vanilla state.${NC}\n"
                exit 0

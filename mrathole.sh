@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.3.1 (Clean UI) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.3.2 (Syntax Fixed) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -132,7 +132,7 @@ draw_header() {
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.3.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.3.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.4.0 (Real-Time Link Status) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.4.1 (BBR Auto-Tune) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -15,7 +15,23 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-# تابع بررسی واقعی وضعیت اتصال تانل (چک کردن پورت لینک یا لاگ فعال)
+# تابع اتوماتیک بهینه‌سازی سرعت (BBR Auto-Tune) و پاکسازی موقت
+apply_bbr_optimization() {
+    echo -e "  ${DIM}● Applying BBR network acceleration for maximum speed...${NC}"
+    
+    # اعمال تنظیمات BBR به صورت موقت و دائم روی هسته
+    sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
+    sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
+    
+    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    fi
+    if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null; then
+        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    fi
+    sysctl -p >/dev/null 2>&1
+}
+
 check_tunnel_connection() {
     local t_name="$1"
     local t_dir="$CONF_DIR/$t_name"
@@ -23,22 +39,18 @@ check_tunnel_connection() {
     
     TYPE=""; LINK_PORT=""; source "$t_dir/meta.conf"
     
-    # اول بررسی کنیم سرویس systemd روشن است یا نه
     if ! systemctl is-active --quiet mrathole@$t_name; then
         echo "OFFLINE"
         return
     fi
 
-    # اگر سرویس فعال بود، بررسی می‌کنیم آیا کانکشنی روی پورت لینک برقرار شده یا رتهول متصل است
     if [ "$TYPE" == "1" ]; then
-        # سرور ایران: بررسی می‌کنیم آیا کانکشنی روی پورت لینک نشسته است یا خیر (ESTABLISHED)
         if ss -tn sport = ":$LINK_PORT" | grep -q "ESTAB"; then
             echo "ONLINE"
         else
             echo "WAITING"
         fi
     else
-        # کلاینت خارج: اگر سرویس active باشد یعنی به سرور ایران دایل کرده و وصل است
         if systemctl is-active --quiet mrathole@$t_name; then
             echo "ONLINE"
         else
@@ -165,7 +177,7 @@ draw_header() {
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}LINK STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.4.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}LINK STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -406,6 +418,10 @@ while true; do
     case $opt in
         1) 
            install_rathole; setup_service
+           
+           # اتوماتیک BBR برای حل مشکل سرعت و افت پهنای باند
+           apply_bbr_optimization
+           
            echo -e "\n  ${DIM}┌─[ REVERSE DEPLOYMENT ]${NC}"
            echo -e "  ${DIM}│${NC} ${W}Info:${NC} In Reverse tunneling, ${G}IRAN${NC} acts as the Server (Entry), and ${M}KHAREJ${NC} dials in as Client (Exit)."
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Server) | 2:KHAREJ (Client) | q:Back]: ${NC}"; read s_type; s_type=$(echo "$s_type" | tr -d '\r'); [[ "$s_type" =~ ^[12q]$ ]] && break; done

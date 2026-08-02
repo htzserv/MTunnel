@@ -292,14 +292,14 @@ while true; do
            
            while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Suffix Name (e.g. rt1): ${NC}"; read suffix; suffix=$(echo "$suffix" | tr -d '\r'); t_name="rat_$suffix"; break; done
            
-           local r_ip="0.0.0.0"
+           r_ip="0.0.0.0"
            if [ "$s_type" == "2" ]; then
                echo -ne "  ${C}●${NC} ${W}Remote (IRAN) Public IP: ${NC}"; read r_ip; r_ip=$(echo "$r_ip" | tr -d '\r')
            fi
            
            echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5000): ${NC}"; read t_port; t_port=$(echo "$t_port" | tr -d '\r')
            
-           local t_token=$(head -c 8 /dev/urandom | xxd -p)
+           t_token=$(head -c 8 /dev/urandom | xxd -p)
            echo -ne "  ${C}●${NC} ${W}Secret Token [${Y}${t_token}${W}]: ${NC}"; read u_token; u_token=$(echo "$u_token" | tr -d '\r')
            [ -n "$u_token" ] && t_token="$u_token"
            

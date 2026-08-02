@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.5.0 (iPerf3 + Extra Tunnels + Skip Safe) ---
+# --- MDesign Master Core | Central Dashboard v7.5.1 (Rathole & Gost Tunnels Integrated) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -107,6 +107,8 @@ draw_main_header() {
     # 🌟 Tun Status 🌟
     local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
+    local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
+    local st_gs="○"; local c_gst="${DIM}"; [ -n "$(ls -A /etc/mgostun/tunnels/*.json 2>/dev/null)" ] && { st_gs="●"; c_gst="${G}"; }
     local st_wg="○"; local c_wg="${DIM}"; ([ -f "/etc/wireguard/wg0.conf" ] || ip link show wg0 >/dev/null 2>&1) && { st_wg="●"; c_wg="${G}"; }
     local st_l2="○"; local c_l2="${DIM}"; [ -n "$(ls -A /etc/ml2tp/tunnels/*.conf 2>/dev/null)" ] && { st_l2="●"; c_l2="${G}"; }
     local st_hys="○"; local c_hys="${DIM}"; [ -n "$(ls -A /etc/mhysteria/tunnels/*.conf 2>/dev/null)" ] && { st_hys="●"; c_hys="${G}"; }
@@ -123,19 +125,20 @@ draw_main_header() {
     fi
 
     # 🌟 Dynamic Padding Calculations (Width: 94) 🌟
-    local raw_top=" MDesign Master Core v7.4.0 │ IP: ${s_ip} │ Web: ${raw_web} "
+    local raw_top=" MDesign Master Core v7.5.1 │ IP: ${s_ip} │ Web: ${raw_web} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
-    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  WireGuard:${st_wg}  L2TP:${st_l2}  Hys2:${st_hys}  Backhaul:${st_bh} "
+    # Keeping the bottom bar short so it fits nicely
+    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  GostTun:${st_gs}  FRP:○  Extra:${st_wg} "
     local pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
     local padding_bot=$(printf '%*s' "$pad_bot" "")
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  WireGuard:${NC}${c_wg}${st_wg}${NC}${DIM}  L2TP:${NC}${c_l2}${st_l2}${NC}${DIM}  Hys2:${NC}${c_hys}${st_hys}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${padding_bot}${B}│${NC}"
+    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  GostTun:${NC}${c_gst}${st_gs}${NC}${DIM}  FRP:${DIM}○${NC}${DIM}  Extra:${NC}${c_wg}${st_wg}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -161,12 +164,14 @@ show_tunnel_hub() {
         echo -e "  ${DIM}┌─[ PRIMARY INFRASTRUCTURE HUB ]${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}FRP Reverse Proxy Engine (Mfrp)${NC}\n  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${DIM}Additional Tunnels (WG, L2TP, Hys2, BH)${NC}\n  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC} ${DIM}[NEW]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Gost Encapsulation Engine (Mgostun)${NC} ${DIM}[NEW]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}FRP Reverse Proxy Engine (Mfrp)${NC}\n  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${DIM}Additional Tunnels (WG, L2TP, Hys2, BH)${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
         echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
         case $t_opt in
-            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mfrp" ;; 4) show_additional_tunnels ;; 0) break ;;
+            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mrathole" ;; 4) run_mod "mgostun" ;; 5) run_mod "mfrp" ;; 6) show_additional_tunnels ;; 0) break ;;
         esac
     done
 }
@@ -215,6 +220,7 @@ while true; do
                    [ -f "$LOCAL_DIR/packages/gost" ] && [ ! -f "/usr/local/bin/gost" ] && { cp "$LOCAL_DIR/packages/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; }
                    [ -f "$LOCAL_DIR/packages/frps" ] && [ ! -f "/usr/local/bin/frps" ] && { cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; }
                    [ -f "$LOCAL_DIR/packages/frpc" ] && [ ! -f "/usr/local/bin/frpc" ] && { cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; }
+                   [ -f "$LOCAL_DIR/packages/rathole" ] && [ ! -f "/usr/local/bin/rathole" ] && { cp "$LOCAL_DIR/packages/rathole" /usr/local/bin/rathole; chmod +x /usr/local/bin/rathole; }
                    
                    rm -rf /tmp/MTunnel-main /tmp/repo.zip
                ) &
@@ -227,7 +233,7 @@ while true; do
         10) 
            echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
            mkdir -p "$LOCAL_DIR" 2>/dev/null; CACHE_BUST=$(date +%s); download_success=true
-           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
            for file in "${MODULES[@]}"; do
                echo -e "  ${DIM}├─ Fetching $file...${NC}"
                wget --timeout=5 --tries=1 -qO "/tmp/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
@@ -265,7 +271,7 @@ while true; do
                fi
            done
            
-           for bin in bh gost frps frpc; do
+           for bin in bh gost frps frpc rathole; do
                if [ -f "$LOCAL_DIR/packages/$bin" ]; then
                    if [ -f "/usr/local/bin/$bin" ]; then
                        echo -e "  ${DIM}├─ Skipping binary $bin (Already installed)${NC}"
@@ -283,11 +289,11 @@ while true; do
            del_confirm=$(echo "$del_confirm" | tr -d '\r' | tr -d ' ')
            if [[ "$del_confirm" == "y" ]]; then
                echo -e "\n  ${DIM}● 1/4 Stopping and disabling services...${NC}"
-               systemctl stop mgre.service mxlan.service ml2tp.service mporter.service mporter-obfs.service mporter-watchdog.service haproxy gost wg-quick@wg0 mweb.service mhealer.service mshield-obfs.service frps frpc mhysteria@* mbackhaul@* 2>/dev/null
-               systemctl disable mgre.service mxlan.service ml2tp.service mporter.service mporter-obfs.service mporter-watchdog.service haproxy gost wg-quick@wg0 mweb.service mhealer.service mshield-obfs.service frps frpc 2>/dev/null
+               systemctl stop mgre.service mxlan.service ml2tp.service mporter.service mporter-obfs.service mporter-watchdog.service haproxy gost wg-quick@wg0 mweb.service mhealer.service mshield-obfs.service frps frpc mhysteria@* mbackhaul@* mrathole@* mgostun@* 2>/dev/null
+               systemctl disable mgre.service mxlan.service ml2tp.service mporter.service mporter-obfs.service mporter-watchdog.service haproxy gost wg-quick@wg0 mweb.service mhealer.service mshield-obfs.service frps frpc mrathole@* mgostun@* 2>/dev/null
                
                echo -e "  ${DIM}● 2/4 Removing systemd units...${NC}"
-               rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/ml2tp.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/gost.service /etc/systemd/system/frp*.service /etc/systemd/system/mhysteria@.service /etc/systemd/system/mbackhaul@.service
+               rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/ml2tp.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/gost.service /etc/systemd/system/frp*.service /etc/systemd/system/mhysteria@.service /etc/systemd/system/mbackhaul@.service /etc/systemd/system/mrathole@.service /etc/systemd/system/mgostun@.service
                systemctl daemon-reload
                
                echo -e "  ${DIM}● 3/4 Tearing down network interfaces and routing...${NC}"
@@ -305,10 +311,10 @@ while true; do
                iptables -t mangle -S FORWARD 2>/dev/null | grep "TCPMSS" | grep -E '(gre|br_|vx_|hys_|l2tp_)' | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
                
                echo -e "  ${DIM}● 4/4 Deleting configuration files and binaries...${NC}"
-               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /etc/mshield /etc/mstats /root/mtunnel /var/log/mhealer.log /var/log/mporter-watchdog.log
+               rm -rf /etc/mgre /etc/mporter /etc/haproxy /etc/gost /etc/wireguard /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /etc/mshield /etc/mstats /etc/mrathole /etc/mgostun /root/mtunnel /var/log/mhealer.log /var/log/mporter-watchdog.log
                
-               rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mwire /usr/bin/mfrp /usr/bin/ml2tp /usr/bin/mhysteria /usr/bin/mbackhaul /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb
-               rm -f /usr/local/bin/mtunnel /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-watchdog.sh /usr/local/bin/mshield-runner.sh /usr/local/bin/mhealer_daemon.sh /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps
+               rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mwire /usr/bin/mfrp /usr/bin/ml2tp /usr/bin/mhysteria /usr/bin/mbackhaul /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mgostun
+               rm -f /usr/local/bin/mtunnel /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-watchdog.sh /usr/local/bin/mshield-runner.sh /usr/local/bin/mhealer_daemon.sh /usr/local/bin/hysteria /usr/local/bin/bh /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps /usr/local/bin/rathole /usr/local/bin/mrathole-runner /usr/local/bin/mgostun-runner
                
                echo -e "\n  ${G}● Purge complete! Server is completely clean and returned to vanilla state.${NC}\n"
                exit 0

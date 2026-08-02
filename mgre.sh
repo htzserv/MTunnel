@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.15 (vIP Manager Integration) ---
-# [PATCHED: Safe Variable Reset matching 1.sh logic + Orphan Cleanup]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.16 (Auto-Ping & MPorter Integration) ---
+# [PATCHED: Safe Variable Reset matching 1.sh logic + Auto Ping + MPorter Prompt]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -78,7 +78,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.15 "
+    local str1=" MGRE Core 4.2.16 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -388,7 +388,27 @@ while true; do
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
                echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
-               sleep 1.5
+               
+               remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
+               echo -e "\n  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
+               echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
+               ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
+               if [ $? -eq 0 ]; then
+                   lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
+                   echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
+               else
+                   echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
+               fi
+               
+               echo -ne "\n  ${C}●${NC} ${W}Open MPorter to setup port forwarding now? (y/n): ${NC}"; read launch_mporter
+               launch_mporter=$(echo "$launch_mporter" | tr -d '\r' | tr -d ' ')
+               if [[ "$launch_mporter" == "y" ]]; then
+                   if [ -x "/usr/bin/mporter" ]; then
+                       /usr/bin/mporter
+                   else
+                       echo -e "  ${R}● MPorter is not installed!${NC}"; sleep 1.5
+                   fi
+               fi
            else
                echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel creation!${NC}"
                echo -e "  ${DIM}├─ Causes: Invalid IPs, network unreachable, or missing modules.${NC}"

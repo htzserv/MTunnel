@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.0.1 (Offline Cache) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.1.0 (Advanced Management) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -57,6 +57,7 @@ generate_toml() {
         
         IFS=',' read -ra P_ARR <<< "$PORTS"
         for p in "${P_ARR[@]}"; do
+            [ -z "$p" ] && continue
             echo "" >> "$toml"
             echo "[server.services.p${p}_tcp]" >> "$toml"
             echo "type = \"tcp\"" >> "$toml"
@@ -74,6 +75,7 @@ generate_toml() {
         
         IFS=',' read -ra P_ARR <<< "$PORTS"
         for p in "${P_ARR[@]}"; do
+            [ -z "$p" ] && continue
             echo "" >> "$toml"
             echo "[client.services.p${p}_tcp]" >> "$toml"
             echo "type = \"tcp\"" >> "$toml"
@@ -115,7 +117,7 @@ draw_header() {
         fi
     done
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -142,9 +144,109 @@ show_monitor() {
     done
 }
 
+manage_tunnel() {
+    local tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
+    [ ${#tunnels[@]} -eq 0 ] && { echo -e "\n  ${Y}● No tunnels found!${NC}"; sleep 1; return; }
+    
+    echo -e "\n  ${B}╭────────────────── Select Tunnel to Manage ─────────────────╮${NC}"
+    for i in "${!tunnels[@]}"; do
+        local t_name=$(basename "${tunnels[$i]}")
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$t_name"
+    done
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo -ne "  ${C}● Select Index: ${NC}"; read m_idx
+    m_idx=$(echo "$m_idx" | tr -d '\r')
+    
+    [[ -z "${tunnels[$m_idx]}" ]] && return
+    local t_dir="${tunnels[$m_idx]}"
+    local t_name=$(basename "$t_dir")
+    
+    while true; do
+        TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$t_dir/meta.conf"
+        clear; echo -e "\n  ${DIM}┌─[ MANAGING TUNNEL: ${W}${t_name}${DIM} ]${NC}"
+        echo -e "  ⚙️ Role: $([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)") | Link Port: ${LINK_PORT} | IP: ${REMOTE_IP}"
+        echo -e "  🔌 Ports: ${PORTS}"
+        echo -e "  ------------------------------------------------------------"
+        echo -e "  ${W}1${NC} ❯ Manual Restart Service"
+        echo -e "  ${W}2${NC} ❯ Setup Auto-Restart Cronjob (Timer)"
+        echo -e "  ${W}3${NC} ❯ Change Peer/Remote IP (Kharej IP)"
+        echo -e "  ${W}4${NC} ❯ Add Ports"
+        echo -e "  ${W}5${NC} ❯ Remove Ports"
+        echo -e "  ${W}0${NC} ❯ Back to Menu\n"
+        echo -ne "  ${C}ACTION ❯❯ ${NC}"; read act
+        act=$(echo "$act" | tr -d '\r')
+        
+        case $act in
+            1)
+                systemctl restart mrathole@$t_name
+                echo -e "  ${G}● Service restarted successfully!${NC}"; sleep 1.5
+                ;;
+            2)
+                echo -ne "  ${C}●${NC} Enter interval in minutes for auto-restart (e.g. 30, or 0 to disable): "
+                read c_min; c_min=$(echo "$c_min" | tr -d '\r')
+                
+                # Clean up old crontab entries for this specific tunnel
+                crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
+                
+                if [[ "$c_min" =~ ^[0-9]+$ ]] && [ "$c_min" -gt 0 ]; then
+                    (crontab -l 2>/dev/null; echo "*/$c_min * * * * systemctl restart mrathole@$t_name") | crontab -
+                    echo -e "  ${G}● Cronjob set! Service will restart every ${c_min} minutes.${NC}"
+                else
+                    echo -e "  ${Y}● Auto-restart cronjob disabled for this tunnel.${NC}"
+                fi
+                sleep 2
+                ;;
+            3)
+                echo -ne "  ${C}●${NC} Enter new Remote/Kharej IP [Current: ${REMOTE_IP}]: "
+                read n_ip; n_ip=$(echo "$n_ip" | tr -d '\r')
+                if [ -n "$n_ip" ]; then
+                    sed -i "s/^REMOTE_IP=.*/REMOTE_IP=$n_ip/" "$t_dir/meta.conf"
+                    generate_toml "$t_name"
+                    systemctl restart mrathole@$t_name
+                    echo -e "  ${G}● Remote IP updated and service restarted!${NC}"
+                fi
+                sleep 1.5
+                ;;
+            4)
+                echo -ne "  ${C}●${NC} Enter port(s) to add (Comma separated, e.g. 8080,9090): "
+                read add_p; add_p=$(echo "$add_p" | tr -d '\r')
+                if [ -n "$add_p" ]; then
+                    if [ -z "$PORTS" ]; then
+                        NEW_PORTS="$add_p"
+                    else
+                        NEW_PORTS="$PORTS,$add_p"
+                    fi
+                    sed -i "s/^PORTS=.*/PORTS=$NEW_PORTS/" "$t_dir/meta.conf"
+                    generate_toml "$t_name"
+                    systemctl restart mrathole@$t_name
+                    echo -e "  ${G}● Ports added successfully!${NC}"
+                fi
+                sleep 1.5
+                ;;
+            5)
+                echo -e "  Current Ports: ${PORTS}"
+                echo -ne "  ${C}●${NC} Enter port to remove: "
+                read rem_p; rem_p=$(echo "$rem_p" | tr -d '\r')
+                if [ -n "$rem_p" ]; then
+                    # Clean up port string via python/awk/sed pattern
+                    NEW_PORTS=$(echo "$PORTS" | tr ',' '\n' | grep -v "^${rem_p}$" | paste -sd, -)
+                    sed -i "s/^PORTS=.*/PORTS=$NEW_PORTS/" "$t_dir/meta.conf"
+                    generate_toml "$t_name"
+                    systemctl restart mrathole@$t_name
+                    echo -e "  ${G}● Port removed successfully!${NC}"
+                fi
+                sleep 1.5
+                ;;
+            0)
+                break
+                ;;
+        esac
+    done
+}
+
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${C}MRATHOLE ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
@@ -178,8 +280,9 @@ while true; do
            systemctl restart mrathole@$t_name
            
            echo -e "  ${G}● Reverse Tunnel Deployed Successfully!${NC}"; sleep 1.5 ;;
-        2) while true; do draw_header; show_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
-        3)
+        2) manage_tunnel ;;
+        3) while true; do draw_header; show_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+        4)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
            [ ${#tunnels[@]} -eq 0 ] && continue
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ─────────────────╮${NC}"
@@ -188,11 +291,15 @@ while true; do
            if [[ "$del_idx" == "all" ]]; then
                for d in "${tunnels[@]}"; do
                    t_name=$(basename "$d")
-                   systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null; rm -rf "$d"
+                   systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
+                   crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
+                   rm -rf "$d"
                done
            elif [[ -n "${tunnels[$del_idx]}" ]]; then
                t_name=$(basename "${tunnels[$del_idx]}")
-               systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null; rm -rf "${tunnels[$del_idx]}"
+               systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
+               crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
+               rm -rf "${tunnels[$del_idx]}"
            fi; echo -e "  ${G}Purged!${NC}"; sleep 1 ;;
         0) break ;;
     esac

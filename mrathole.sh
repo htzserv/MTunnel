@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.3.2 (Syntax Fixed) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.4.0 (Real-Time Link Status) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -13,6 +13,38 @@ get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+# تابع بررسی واقعی وضعیت اتصال تانل (چک کردن پورت لینک یا لاگ فعال)
+check_tunnel_connection() {
+    local t_name="$1"
+    local t_dir="$CONF_DIR/$t_name"
+    [ ! -f "$t_dir/meta.conf" ] && { echo "OFFLINE"; return; }
+    
+    TYPE=""; LINK_PORT=""; source "$t_dir/meta.conf"
+    
+    # اول بررسی کنیم سرویس systemd روشن است یا نه
+    if ! systemctl is-active --quiet mrathole@$t_name; then
+        echo "OFFLINE"
+        return
+    fi
+
+    # اگر سرویس فعال بود، بررسی می‌کنیم آیا کانکشنی روی پورت لینک برقرار شده یا رتهول متصل است
+    if [ "$TYPE" == "1" ]; then
+        # سرور ایران: بررسی می‌کنیم آیا کانکشنی روی پورت لینک نشسته است یا خیر (ESTABLISHED)
+        if ss -tn sport = ":$LINK_PORT" | grep -q "ESTAB"; then
+            echo "ONLINE"
+        else
+            echo "WAITING"
+        fi
+    else
+        # کلاینت خارج: اگر سرویس active باشد یعنی به سرور ایران دایل کرده و وصل است
+        if systemctl is-active --quiet mrathole@$t_name; then
+            echo "ONLINE"
+        else
+            echo "OFFLINE"
+        fi
+    fi
 }
 
 install_rathole() {
@@ -109,30 +141,31 @@ EOF
 }
 
 draw_header() {
-    local s_ip=$(get_local_ip); local total_tunnels=0; local active_tunnels=0
+    local s_ip=$(get_local_ip); local total_tunnels=0; local online_tunnels=0
     for d in "$CONF_DIR"/*; do
         if [ -d "$d" ]; then
             ((total_tunnels++))
             local t_name=$(basename "$d")
-            if systemctl is-active --quiet mrathole@$t_name; then 
-                ((active_tunnels++))
+            local st=$(check_tunnel_connection "$t_name")
+            if [ "$st" == "ONLINE" ]; then
+                ((online_tunnels++))
             fi
         fi
     done
     
     local status_badge="${R}○ STOPPED${NC}"
     if [ "$total_tunnels" -gt 0 ]; then
-        if [ "$active_tunnels" -eq "$total_tunnels" ]; then
-            status_badge="${G}● ALL ONLINE (${active_tunnels}/${total_tunnels})${NC}"
-        elif [ "$active_tunnels" -gt 0 ]; then
-            status_badge="${Y}◐ PARTIAL (${active_tunnels}/${total_tunnels})${NC}"
+        if [ "$online_tunnels" -eq "$total_tunnels" ]; then
+            status_badge="${G}● CONNECTED (${online_tunnels}/${total_tunnels})${NC}"
+        elif [ "$online_tunnels" -gt 0 ]; then
+            status_badge="${Y}◐ PARTIAL (${online_tunnels}/${total_tunnels})${NC}"
         else
-            status_badge="${R}● OFFLINE (0/${total_tunnels})${NC}"
+            status_badge="${Y}◎ WAITING / NO LINK (0/${total_tunnels})${NC}"
         fi
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.3.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.4.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}LINK STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -145,8 +178,11 @@ show_monitor() {
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
         local peer_text=$([ "$TYPE" == "1" ] && echo "Waiting for Kharej" || echo "${REMOTE_IP}:${LINK_PORT}")
+        
+        local st=$(check_tunnel_connection "$t_name")
         local st_text="OFFLINE"; local st_color="${R}"
-        if systemctl is-active --quiet mrathole@$t_name; then st_text="ONLINE "; st_color="${G}"; fi
+        if [ "$st" == "ONLINE" ]; then st_text="ONLINE "; st_color="${G}";
+        elif [ "$st" == "WAITING" ]; then st_text="WAITING"; st_color="${Y}"; fi
         
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         printf "  ${B}│${NC} %b▼ Tunnel: %-35s%b ${DIM}Role:%b %-40s ${B}│${NC}\n" "${R}" "${t_name}" "${NC}" "${NC}" "${role_text}"
@@ -173,9 +209,12 @@ show_tunnel_details() {
         local r_ip="${REMOTE_IP:-0.0.0.0}"
         local f_ports="${PORTS:-None}"
 
+        local st=$(check_tunnel_connection "$t_name")
         local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
-        if systemctl is-active --quiet mrathole@$t_name; then
-            stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        if [ "$st" == "ONLINE" ]; then
+            stat_icon="●"; stat_text="CONNECTED"; stat_color="${G}"
+        elif [ "$st" == "WAITING" ]; then
+            stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}"
         fi
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -189,9 +228,9 @@ show_tunnel_details() {
         local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
         echo -e "  ${B}│${NC} ${M}Secret Token :${NC} ${W}${s_key}${NC}${sp1} ${DIM}Link Port:${NC} ${W}${l_port}${NC} ${B}│${NC}"
         
-        local l2="Remote IP    : ${r_ip}"; local r2="Status: ${stat_text}"
+        local l2="Remote IP    : ${r_ip}"; local r2="Link State: ${stat_text}"
         local pad2=$(( 89 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}Remote IP    :${NC} ${W}${r_ip}${NC}${sp2} ${DIM}Status:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${C}Remote IP    :${NC} ${W}${r_ip}${NC}${sp2} ${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
 
         local l3="Ports Fwd    : ${f_ports}"
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
@@ -221,8 +260,10 @@ manage_tunnel() {
     while true; do
         TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$t_dir/meta.conf"
         
+        local st=$(check_tunnel_connection "$t_name")
         local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
-        if systemctl is-active --quiet mrathole@$t_name; then stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"; fi
+        if [ "$st" == "ONLINE" ]; then stat_icon="●"; stat_text="CONNECTED"; stat_color="${G}";
+        elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}"; fi
 
         clear
         echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -233,7 +274,7 @@ manage_tunnel() {
         echo -e "  ${B}│${NC} ${DIM}Remote IP :${NC} ${W}${REMOTE_IP}${NC} ${printf '%*s' $(( 65 - ${#REMOTE_IP} )) ""} ${B}│${NC}"
         echo -e "  ${B}│${NC} ${DIM}Token     :${NC} ${Y}${TOKEN}${NC} ${printf '%*s' $(( 65 - ${#TOKEN} )) ""} ${B}│${NC}"
         echo -e "  ${B}│${NC} ${DIM}Ports     :${NC} ${W}${PORTS:-None}${NC} ${printf '%*s' $(( 65 - ${#PORTS} )) ""} ${B}│${NC}"
-        echo -e "  ${B}│${NC} ${DIM}Status    :${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${printf '%*s' $(( 60 )) ""} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${printf '%*s' $(( 55 )) ""} ${B}│${NC}"
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
         
         echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}"

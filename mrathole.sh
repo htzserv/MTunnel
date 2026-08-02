@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.2.1 (Full Fix) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.3.0 (MDesign UI + Details) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -132,7 +132,7 @@ draw_header() {
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.2.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -159,6 +159,48 @@ show_monitor() {
     done
 }
 
+show_tunnel_details() {
+    local configs=($(ls -d "$CONF_DIR"/* 2>/dev/null))
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
+
+    echo -e "\n  ${Y}● Deployed Rathole Tunnels Registry:${NC}"
+    for d in "${configs[@]}"; do
+        TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$d/meta.conf"
+        local t_name=$(basename "$d")
+        local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Server / Entry)" || echo "KHAREJ (Client / Exit)")
+        local s_key="${TOKEN:-[ NOT SET ]}"
+        local l_port="${LINK_PORT:-[ NOT SET ]}"
+        local r_ip="${REMOTE_IP:-0.0.0.0}"
+        local f_ports="${PORTS:-None}"
+
+        local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
+        if systemctl is-active --quiet mrathole@$t_name; then
+            stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        fi
+
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        local left_p="▼ Tunnel: $t_name"
+        local right_p="Role: $t_role"
+        local pad=$(( 89 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
+        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
+        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
+        
+        local l1="Secret Token : ${s_key}"; local r1="Link Port: ${l_port}"
+        local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
+        echo -e "  ${B}│${NC} ${M}Secret Token :${NC} ${W}${s_key}${NC}${sp1} ${DIM}Link Port:${NC} ${W}${l_port}${NC} ${B}│${NC}"
+        
+        local l2="Remote IP    : ${r_ip}"; local r2="Status: ${stat_text}"
+        local pad2=$(( 89 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+        echo -e "  ${B}│${NC} ${C}Remote IP    :${NC} ${W}${r_ip}${NC}${sp2} ${DIM}Status:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+
+        local l3="Ports Fwd    : ${f_ports}"
+        local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
+        echo -e "  ${B}│${NC} ${DIM}Ports Fwd    :${NC} ${Y}${f_ports}${NC}${sp3} ${B}│${NC}"
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    done
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read
+}
+
 manage_tunnel() {
     local tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
     [ ${#tunnels[@]} -eq 0 ] && { echo -e "\n  ${Y}● No tunnels found!${NC}"; sleep 1; return; }
@@ -178,16 +220,29 @@ manage_tunnel() {
     
     while true; do
         TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$t_dir/meta.conf"
-        clear; echo -e "\n  ${DIM}┌─[ MANAGING TUNNEL: ${W}${t_name}${DIM} ]${NC}"
-        echo -e "  ⚙️ Role: $([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)") | Link Port: ${LINK_PORT} | IP: ${REMOTE_IP}"
-        echo -e "  🔌 Ports: ${PORTS}"
-        echo -e "  ------------------------------------------------------------"
-        echo -e "  ${W}1${NC} ❯ Manual Restart Service"
-        echo -e "  ${W}2${NC} ❯ Setup Auto-Restart Cronjob (Timer)"
-        echo -e "  ${W}3${NC} ❯ Change Peer/Remote IP (Kharej IP)"
-        echo -e "  ${W}4${NC} ❯ Add Ports"
-        echo -e "  ${W}5${NC} ❯ Remove Ports"
-        echo -e "  ${W}0${NC} ❯ Back to Menu\n"
+        
+        local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
+        if systemctl is-active --quiet mrathole@$t_name; then stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"; fi
+
+        clear
+        echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "  ${B}│${NC} ${W}MANAGING TUNNEL: ${C}${t_name}${NC}${printf '%*s' $(( 65 - ${#t_name} )) ""}${B}│${NC}"
+        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Role      :${NC} $([ "$TYPE" == "1" ] && echo -e "${G}IRAN (Server)${NC}" || echo -e "${M}KHAREJ (Client)${NC}") ${printf '%*s' $(( 55 )) ""} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Link Port :${NC} ${W}${LINK_PORT}${NC} ${printf '%*s' $(( 65 - ${#LINK_PORT} )) ""} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Remote IP :${NC} ${W}${REMOTE_IP}${NC} ${printf '%*s' $(( 65 - ${#REMOTE_IP} )) ""} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Token     :${NC} ${Y}${TOKEN}${NC} ${printf '%*s' $(( 65 - ${#TOKEN} )) ""} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Ports     :${NC} ${W}${PORTS:-None}${NC} ${printf '%*s' $(( 65 - ${#PORTS} )) ""} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Status    :${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${printf '%*s' $(( 60 )) ""} ${B}│${NC}"
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
+        
+        echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Manual Restart Service${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Setup Auto-Restart Cronjob (Timer)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Change Peer/Remote IP (Kharej IP)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Add Ports${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Remove Ports${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Menu${NC}\n"
         echo -ne "  ${C}ACTION ❯❯ ${NC}"; read act
         act=$(echo "$act" | tr -d '\r')
         
@@ -294,7 +349,8 @@ wipe_rathole() {
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Uninstall Module${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Erase Core & Binaries)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}View Tunnel Configurations & Secrets${NC}"
+  echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Uninstall Module${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Erase Core & Binaries)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${C}MRATHOLE ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
@@ -315,7 +371,8 @@ while true; do
            echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5000): ${NC}"; read t_port; t_port=$(echo "$t_port" | tr -d '\r')
            
            t_token=$(head -c 8 /dev/urandom | xxd -p)
-           echo -ne "  ${C}●${NC} ${W}Secret Token [${Y}${t_token}${W}]: ${NC}"; read u_token; u_token=$(echo "$u_token" | tr -d '\r')
+           echo -e "  ${DIM}● Generated Secret Token: ${Y}${t_token}${NC}"
+           echo -ne "  ${C}●${NC} ${W}Custom Secret Token (Press Enter to keep generated): ${NC}"; read u_token; u_token=$(echo "$u_token" | tr -d '\r')
            [ -n "$u_token" ] && t_token="$u_token"
            
            echo -ne "  ${C}●${NC} ${W}Target Ports to Forward (Comma separated, e.g. 80,443): ${NC}"; read t_ports; t_ports=$(echo "$t_ports" | tr -d '\r')
@@ -329,15 +386,16 @@ while true; do
            
            echo -e "  ${G}● Reverse Tunnel Deployed Successfully!${NC}"; sleep 1.5 ;;
         2) manage_tunnel ;;
-        3) while true; do draw_header; show_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
-        4)
+        3) show_tunnel_details ;;
+        4) while true; do draw_header; show_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+        5)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
            [ ${#tunnels[@]} -eq 0 ] && continue
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ─────────────────╮${NC}"
            for i in "${!tunnels[@]}"; do echo "  $i ❯ $(basename "${tunnels[$i]}")"; done
            echo -ne "  ${C}Index (or 'all'): ${NC}"; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
-               for d in "${tunnels[@]}"; do
+               for d in "${tunnels[@]}"); do
                    t_name=$(basename "$d")
                    systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
                    crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
@@ -349,8 +407,8 @@ while true; do
                crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
                rm -rf "${tunnels[$del_idx]}"
            fi; echo -e "  ${G}Purged!${NC}"; sleep 1 ;;
-        5) uninstall_rathole ;;
-        6) wipe_rathole ;;
+        6) uninstall_rathole ;;
+        7) wipe_rathole ;;
         0) break ;;
     esac
 done

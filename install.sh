@@ -14,7 +14,7 @@ echo -e "  ${B}╰────────────────────�
 echo -e "  ${Y}● Fetching/Checking Core Scripts...${NC}"
 mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 CACHE_BUST=$(date +%s)
-MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh" "mgostun.sh" "mrathole.sh")
 
 for file in "${MODULES[@]}"; do
     echo -e "  ${DIM}├─ Syncing $file...${NC}"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.2.0 (Uninstall & Wipe) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.2.1 (Full Fix) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -109,15 +109,30 @@ EOF
 }
 
 draw_header() {
-    local s_ip=$(get_local_ip); local active_tunnels=0
+    local s_ip=$(get_local_ip); local total_tunnels=0; local active_tunnels=0
     for d in "$CONF_DIR"/*; do
         if [ -d "$d" ]; then
+            ((total_tunnels++))
             local t_name=$(basename "$d")
-            if systemctl is-active --quiet mrathole@$t_name; then ((active_tunnels++)); fi
+            if systemctl is-active --quiet mrathole@$t_name; then 
+                ((active_tunnels++))
+            fi
         fi
     done
+    
+    local status_badge="${R}○ STOPPED${NC}"
+    if [ "$total_tunnels" -gt 0 ]; then
+        if [ "$active_tunnels" -eq "$total_tunnels" ]; then
+            status_badge="${G}● ALL ONLINE (${active_tunnels}/${total_tunnels})${NC}"
+        elif [ "$active_tunnels" -gt 0 ]; then
+            status_badge="${Y}◐ PARTIAL (${active_tunnels}/${total_tunnels})${NC}"
+        else
+            status_badge="${R}● OFFLINE (0/${total_tunnels})${NC}"
+        fi
+    fi
+
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.2.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 

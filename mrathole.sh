@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.3.0 (MDesign UI + Details) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.3.1 (Clean UI) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -132,7 +132,7 @@ draw_header() {
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.3.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -349,8 +349,17 @@ wipe_rathole() {
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}View Tunnel Configurations & Secrets${NC}"
-  echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Uninstall Module${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Erase Core & Binaries)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}View Tunnel Configurations & Secrets${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Uninstall Module${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Erase Core & Binaries)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${C}MRATHOLE ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
@@ -395,7 +404,7 @@ while true; do
            for i in "${!tunnels[@]}"; do echo "  $i ❯ $(basename "${tunnels[$i]}")"; done
            echo -ne "  ${C}Index (or 'all'): ${NC}"; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
-               for d in "${tunnels[@]}"); do
+               for d in "${tunnels[@]}"; do
                    t_name=$(basename "$d")
                    systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
                    crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null

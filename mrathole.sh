@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.1.0 (Advanced Management) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.2.0 (Uninstall & Wipe) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -117,7 +117,7 @@ draw_header() {
         fi
     done
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}TUNNELS:${NC} ${G}${active_tunnels}${NC} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -184,10 +184,7 @@ manage_tunnel() {
             2)
                 echo -ne "  ${C}●${NC} Enter interval in minutes for auto-restart (e.g. 30, or 0 to disable): "
                 read c_min; c_min=$(echo "$c_min" | tr -d '\r')
-                
-                # Clean up old crontab entries for this specific tunnel
                 crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
-                
                 if [[ "$c_min" =~ ^[0-9]+$ ]] && [ "$c_min" -gt 0 ]; then
                     (crontab -l 2>/dev/null; echo "*/$c_min * * * * systemctl restart mrathole@$t_name") | crontab -
                     echo -e "  ${G}● Cronjob set! Service will restart every ${c_min} minutes.${NC}"
@@ -211,11 +208,7 @@ manage_tunnel() {
                 echo -ne "  ${C}●${NC} Enter port(s) to add (Comma separated, e.g. 8080,9090): "
                 read add_p; add_p=$(echo "$add_p" | tr -d '\r')
                 if [ -n "$add_p" ]; then
-                    if [ -z "$PORTS" ]; then
-                        NEW_PORTS="$add_p"
-                    else
-                        NEW_PORTS="$PORTS,$add_p"
-                    fi
+                    [ -z "$PORTS" ] && NEW_PORTS="$add_p" || NEW_PORTS="$PORTS,$add_p"
                     sed -i "s/^PORTS=.*/PORTS=$NEW_PORTS/" "$t_dir/meta.conf"
                     generate_toml "$t_name"
                     systemctl restart mrathole@$t_name
@@ -228,7 +221,6 @@ manage_tunnel() {
                 echo -ne "  ${C}●${NC} Enter port to remove: "
                 read rem_p; rem_p=$(echo "$rem_p" | tr -d '\r')
                 if [ -n "$rem_p" ]; then
-                    # Clean up port string via python/awk/sed pattern
                     NEW_PORTS=$(echo "$PORTS" | tr ',' '\n' | grep -v "^${rem_p}$" | paste -sd, -)
                     sed -i "s/^PORTS=.*/PORTS=$NEW_PORTS/" "$t_dir/meta.conf"
                     generate_toml "$t_name"
@@ -244,9 +236,50 @@ manage_tunnel() {
     done
 }
 
+uninstall_rathole() {
+    echo -ne "\n  ${R}● UNINSTALL: Stop all tunnels, remove services and cronjobs? (y/n): ${NC}"
+    read un_conf; un_conf=$(echo "$un_conf" | tr -d '\r' | tr -d ' ')
+    if [[ "$un_conf" == "y" ]]; then
+        for d in "$CONF_DIR"/*; do
+            [ ! -d "$d" ] && continue
+            local t_name=$(basename "$d")
+            systemctl stop mrathole@$t_name 2>/dev/null
+            systemctl disable mrathole@$t_name 2>/dev/null
+            crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
+        done
+        rm -f "$SERVICE_TPL"
+        systemctl daemon-reload
+        rm -rf "$CONF_DIR"
+        echo -e "  ${G}● MRathole module uninstalled successfully!${NC}"
+        sleep 2
+    fi
+}
+
+wipe_rathole() {
+    echo -ne "\n  ${R}● NUCLEAR WIPE: Completely delete binaries, configs, and logs? (y/n): ${NC}"
+    read wp_conf; wp_conf=$(echo "$wp_conf" | tr -d '\r' | tr -d ' ')
+    if [[ "$wp_conf" == "y" ]]; then
+        for d in "$CONF_DIR"/*; do
+            [ ! -d "$d" ] && continue
+            local t_name=$(basename "$d")
+            systemctl stop mrathole@$t_name 2>/dev/null
+            systemctl disable mrathole@$t_name 2>/dev/null
+            crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
+        done
+        rm -f "$SERVICE_TPL"
+        systemctl daemon-reload
+        rm -rf "/etc/mrathole"
+        rm -f "/usr/local/bin/rathole"
+        rm -f "/usr/bin/mrathole"
+        echo -e "  ${G}● MRathole completely wiped from system!${NC}"
+        sleep 2
+        exit 0
+    fi
+}
+
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Manage Tunnels (Restart, Cronjob, IP, Ports)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Uninstall Module${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Erase Core & Binaries)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${C}MRATHOLE ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
@@ -301,6 +334,8 @@ while true; do
                crontab -l 2>/dev/null | grep -v "mrathole@$t_name" | crontab - 2>/dev/null
                rm -rf "${tunnels[$del_idx]}"
            fi; echo -e "  ${G}Purged!${NC}"; sleep 1 ;;
+        5) uninstall_rathole ;;
+        6) wipe_rathole ;;
         0) break ;;
     esac
 done

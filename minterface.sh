@@ -1,6 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v4.0.0 (Full Edition) ---
-# [PATCHED: Safe Variable Reset matching 1.sh logic]
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v4.0.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -15,7 +14,7 @@ get_configs() { ls /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf /etc/ml2tp/tu
 detect_server_role() {
     local configs=($(get_configs))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "${DIM}Unknown (No Tunnels)${NC}"; return; fi
-    TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "${configs[0]}"
+    TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "${configs[0]}"
     [ "$TYPE" == "1" ] && echo -e "${G}IRAN (Access Node)${NC}" || echo -e "${M}KHAREJ (Gateway Node)${NC}"
 }
 
@@ -26,7 +25,7 @@ draw_header() {
     local str2=" IP: $s_ip "
     local configs=($(get_configs)); local raw_role="Unknown (No Tunnels)"
     if [ ${#configs[@]} -gt 0 ]; then
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "${configs[0]}"
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "${configs[0]}"
         raw_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access Node)" || echo "KHAREJ (Gateway Node)")
     fi
     local str3=" ROLE: $raw_role "
@@ -52,12 +51,12 @@ render_matrix() {
 
     echo -e "\n  ${Y}● Active Network Interface Blueprint:${NC}"
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
         local is_vx=false; local is_l2tp=false; local is_hys=false; local t_name="$T_NAME"
         
         if [ -n "$BR_NAME" ]; then is_vx=true; t_name="$BR_NAME"; fi
-        if [[ "$conf" == *"/ml2tp/"* ]]; then is_l2tp=true; fi
-        if [[ "$conf" == *"/mhysteria/"* ]]; then is_hys=true; fi
+        [[ "$conf" == *"/ml2tp/"* ]] && is_l2tp=true
+        [[ "$conf" == *"/mhysteria/"* ]] && is_hys=true
 
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")

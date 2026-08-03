@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v7.6.0 (Modular Sync Hub) ---
+# --- MDesign Master Core | Central Installer v7.7.0 (Automatic Full Sync) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -8,25 +8,14 @@ LOCAL_DIR="/root/mtunnel"
 
 clear
 echo -e "\n  ${B}╭──────────────────────────────────────────────────────────╮${NC}"
-echo -e "  ${B}│${NC} ${W}MDesign Master Core Setup${NC} ${DIM}| Initializing Workspace...${NC}  ${B}│${NC}"
+echo -e "  ${B}│${NC} ${W}MDesign Master Core Setup${NC} ${DIM}| Auto-Syncing Ecosystem...${NC}  ${B}│${NC}"
 echo -e "  ${B}╰──────────────────────────────────────────────────────────╯${NC}\n"
 
-echo -e "  ${C}Choose Installation Mode:${NC}"
-echo -e "  ${W}1${NC} ❯ Fast Core Install (Essential Tunnels Only)"
-echo -e "  ${W}2${NC} ❯ Full Ecosystem Sync (Core + All Diagnostics, Shields & Healers)"
-echo -ne "\n  ${C}INSTALL MODE ❯❯ ${NC}"; read inst_mode
-inst_mode=$(echo "$inst_mode" | tr -d '\r')
+echo -e "  ${Y}● Fetching Core & Extra Ecosystem Modules...${NC}"
 
-CORE_MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "mweb.sh")
-EXTRA_MODULES=("minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh")
-
-if [ "$inst_mode" == "2" ]; then
-    MODULES=("${CORE_MODULES[@]}" "${EXTRA_MODULES[@]}")
-    echo -e "\n  ${Y}● Fetching All Core & Utility Modules...${NC}"
-else
-    MODULES=("${CORE_MODULES[@]}")
-    echo -e "\n  ${Y}● Fetching Essential Core Scripts...${NC}"
-fi
+CORE_MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mfrp.sh" "mporter.sh" "mweb.sh")
+EXTRA_MODULES=("minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mwire.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh")
+MODULES=("${CORE_MODULES[@]}" "${EXTRA_MODULES[@]}")
 
 mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 CACHE_BUST=$(date +%s)
@@ -66,7 +55,7 @@ if [ ! -x "/usr/bin/mtunnel" ]; then
     exit 1
 fi
 
-echo -e "\n  ${G}● Installation & Sync Completed Successfully!${NC}"
+echo -e "\n  ${G}● Full Ecosystem Installation Completed Successfully!${NC}"
 echo -e "  ${DIM}└─ Launching Central Dashboard...${NC}\n"
 sleep 1.5
 

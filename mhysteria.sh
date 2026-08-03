@@ -1,6 +1,5 @@
 #!/bin/bash
-# --- MHysteria Modular Core | Hysteria2+WG Engine v1.1.0 (Sanitized) ---
-# [PATCHED: Safe Variable Reset matching 1.sh logic + Orphan Cleanup]
+# --- MHysteria Modular Core | Hysteria2+WG Engine v1.1.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mhysteria/tunnels"
@@ -35,7 +34,7 @@ check_deps() {
 apply_tunnel() {
     local conf="$1"
     [ ! -s "$conf" ] && return
-    TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
+    TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
     
     local c_sub="${CORE_SUBNET:-10.99.${TUN_ID}}"
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
@@ -146,7 +145,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 draw_header() {
     local s_ip=$(get_local_ip); local active_tunnels=0
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
+        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"
         if ip link show "$T_NAME" >/dev/null 2>&1; then ((active_tunnels++)); fi
     done
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -186,10 +185,10 @@ while true; do
            for i in "${!configs[@]}"; do echo "  $i ❯ $(basename "${configs[$i]}" .conf)"; done
            echo -ne "  Index (or 'all'): "; read del_idx; del_idx=$(echo "$del_idx" | tr -d '\r' | tr -d ' ')
            if [[ "$del_idx" == "all" ]]; then
-               for conf in "${configs[@]}"; do TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"; systemctl stop mhysteria@$T_NAME 2>/dev/null; systemctl disable mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "$conf"; done
+               for conf in "${configs[@]}"; do TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "$conf"; systemctl stop mhysteria@$T_NAME 2>/dev/null; systemctl disable mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "$conf"; done
                [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
            else
-               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "${configs[$del_idx]}"; systemctl stop mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "${configs[$del_idx]}"
+               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; TUN_PORT=""; HYS_PASS=""; VX_NAME=""; source "${configs[$del_idx]}"; systemctl stop mhysteria@$T_NAME 2>/dev/null; ip link del "$T_NAME" 2>/dev/null; rm -rf "$CONF_DIR/$T_NAME" "${configs[$del_idx]}"
                [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
            fi; echo -e "  ${G}Purged!${NC}"; sleep 1 ;;
         0) break ;;

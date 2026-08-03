@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Installer v7.4.0 (Fixed Offline Deployment) ---
+# --- MDesign Master Core | Central Installer v7.6.0 (Modular Sync Hub) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -11,17 +11,32 @@ echo -e "\n  ${B}╭────────────────────
 echo -e "  ${B}│${NC} ${W}MDesign Master Core Setup${NC} ${DIM}| Initializing Workspace...${NC}  ${B}│${NC}"
 echo -e "  ${B}╰──────────────────────────────────────────────────────────╯${NC}\n"
 
-echo -e "  ${Y}● Fetching/Checking Core Scripts...${NC}"
+echo -e "  ${C}Choose Installation Mode:${NC}"
+echo -e "  ${W}1${NC} ❯ Fast Core Install (Essential Tunnels Only)"
+echo -e "  ${W}2${NC} ❯ Full Ecosystem Sync (Core + All Diagnostics, Shields & Healers)"
+echo -ne "\n  ${C}INSTALL MODE ❯❯ ${NC}"; read inst_mode
+inst_mode=$(echo "$inst_mode" | tr -d '\r')
+
+CORE_MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "mweb.sh")
+EXTRA_MODULES=("minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh")
+
+if [ "$inst_mode" == "2" ]; then
+    MODULES=("${CORE_MODULES[@]}" "${EXTRA_MODULES[@]}")
+    echo -e "\n  ${Y}● Fetching All Core & Utility Modules...${NC}"
+else
+    MODULES=("${CORE_MODULES[@]}")
+    echo -e "\n  ${Y}● Fetching Essential Core Scripts...${NC}"
+fi
+
 mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 CACHE_BUST=$(date +%s)
-MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh" "mgostun.sh" "mrathole.sh")
 
 for file in "${MODULES[@]}"; do
     echo -e "  ${DIM}├─ Syncing $file...${NC}"
-    wget --timeout=5 --tries=1 -qO "/tmp/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
+    wget --timeout=5 --tries=2 -qO "/tmp/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
     
     if [ "$file" == "main.sh" ] && [ ! -s "/tmp/$file" ]; then
-        wget --timeout=5 --tries=1 -qO "/tmp/$file" "$REPO_SCRIPTS/mtunnel.sh?v=$CACHE_BUST"
+        wget --timeout=5 --tries=2 -qO "/tmp/$file" "$REPO_SCRIPTS/mtunnel.sh?v=$CACHE_BUST"
     fi
     
     if [ -s "/tmp/$file" ]; then
@@ -51,7 +66,7 @@ if [ ! -x "/usr/bin/mtunnel" ]; then
     exit 1
 fi
 
-echo -e "\n  ${G}● Core Scripts Installed Successfully!${NC}"
+echo -e "\n  ${G}● Installation & Sync Completed Successfully!${NC}"
 echo -e "  ${DIM}└─ Launching Central Dashboard...${NC}\n"
 sleep 1.5
 

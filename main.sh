@@ -38,19 +38,31 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1; local text=$2; local width=25; local progress=0
-    tput civis
-    while kill -0 $pid 2>/dev/null; do
-        ((progress++)); if (( progress > 95 )); then progress=95; fi
-        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
-        printf "\r  %b⟳%b %b%-22s%b %b[%b%b%b%b]%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$M" "$bar" "$DIM" "$empty_bar" "$M" "$NC" "$C" "$progress" "$NC"
-        sleep 0.2
+    local pid=$1
+    local text=$2
+    local width=${3:-32}
+    local progress=0
+    local filled empty bar rest
+    tput civis 2>/dev/null || true
+
+    while kill -0 "$pid" 2>/dev/null; do
+        progress=$((progress + 2))
+        [ "$progress" -gt 95 ] && progress=95
+        filled=$(( progress * width / 100 ))
+        empty=$(( width - filled ))
+        bar=$(printf "%${filled}s" "" | tr ' ' '-')
+        rest=$(printf "%${empty}s" "" | tr ' ' '-')
+        printf "\r  ${C}→${NC} ${W}%-25s${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}" \
+            "$text" "$bar" "$rest" "$progress"
+        sleep 0.12
     done
-    local bar=$(printf "%${width}s" "" | tr ' ' '#')
-    printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
-    tput cnorm
+
+    bar=$(printf "%${width}s" "" | tr ' ' '-')
+    printf "\r  ${G}✓${NC} ${W}%-25s${NC} ${G}%s${NC} ${G}100%%${NC}\n" \
+        "$text" "$bar"
+    tput cnorm 2>/dev/null || true
 }
+
 
 run_mod() {
     local mod=$1
@@ -63,13 +75,19 @@ run_mod() {
         else
             echo -e "\n  ${Y}● Fetching module [${W}${mod}${Y}] on-demand from GitHub...${NC}"
             mkdir -p "$LOCAL_DIR" 2>/dev/null
-            wget --timeout=5 --tries=1 -qO "/tmp/${mod}.sh" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)"
+            if command -v curl >/dev/null 2>&1; then
+                ( curl -fLsS --retry 2 --connect-timeout 8 --max-time 120                     -o "/tmp/${mod}.sh" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)" ) >/dev/null 2>&1 &
+            else
+                ( wget --timeout=8 --tries=2 -qO "/tmp/${mod}.sh"                     "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)" ) >/dev/null 2>&1 &
+            fi
+            draw_progress_bar $! "Downloading $mod"
             if [ -s "/tmp/${mod}.sh" ]; then
                 mv "/tmp/${mod}.sh" "$LOCAL_DIR/${mod}.sh"
                 sed -i 's/\r$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null
                 cat "$LOCAL_DIR/${mod}.sh" > "/usr/bin/$mod"
                 chmod +x "/usr/bin/$mod"
-            else 
+            else
+                rm -f "/tmp/${mod}.sh"
                 echo -e "  ${R}● Error: Module not found on GitHub and no local cache!${NC}"; sleep 2; return
             fi
         fi
@@ -103,8 +121,8 @@ run_iperf3() {
 
 draw_main_header() {
     local s_ip=$(get_local_ip)
-    
-    # 🌟 Tun Status 🌟
+
+    # Tunnel status indicators
     local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
     local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
@@ -114,7 +132,6 @@ draw_main_header() {
     local st_hys="○"; local c_hys="${DIM}"; [ -n "$(ls -A /etc/mhysteria/tunnels/*.conf 2>/dev/null)" ] && { st_hys="●"; c_hys="${G}"; }
     local st_bh="○"; local c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.toml 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
 
-    # 🌟 Web UI Status 🌟
     local web_stat="${DIM}○ OFFLINE${NC}"
     local raw_web="○ OFFLINE"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then
@@ -124,23 +141,22 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    # 🌟 Dynamic Padding Calculations (Width: 94) 🌟
-    local raw_top=" MDesign Master Core v7.5.1 │ IP: ${s_ip} │ Web: ${raw_web} "
+    local raw_top=" MTunnel • MDesign Master Core v7.5.1 │ IP: ${s_ip} │ Web: ${raw_web} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
-    # Keeping the bottom bar short so it fits nicely
-    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  GostTun:${st_gs}  FRP:○  Extra:${st_wg} "
+    local raw_bot=" GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  Gost:${st_gs}  WG:${st_wg}  L2TP:${st_l2}  Hys:${st_hys} "
     local pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
     local padding_bot=$(printf '%*s' "$pad_bot" "")
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MTunnel${NC} ${DIM}• MDesign Master Core v7.5.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  GostTun:${NC}${c_gst}${st_gs}${NC}${DIM}  FRP:${DIM}○${NC}${DIM}  Extra:${NC}${c_wg}${st_wg}${NC}${padding_bot}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${DIM}STATUS${NC} ${c_gre}${st_gre}${NC} ${DIM}GRE${NC}  ${c_vx}${st_vx}${NC} ${DIM}VXLAN${NC}  ${c_rh}${st_rh}${NC} ${DIM}RATHOLE${NC}  ${c_gst}${st_gs}${NC} ${DIM}GOST${NC}  ${c_wg}${st_wg}${NC} ${DIM}WG${NC}  ${c_l2}${st_l2}${NC} ${DIM}L2TP${NC}  ${c_hys}${st_hys}${NC} ${DIM}HYS${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
+
 
 show_additional_tunnels() {
     while true; do
@@ -230,28 +246,54 @@ while true; do
                echo -e "\n  ${R}● Error downloading zip archive from GitHub!${NC}"; sleep 2
            fi ;;
 
-        10) 
+        10)
            echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
-           mkdir -p "$LOCAL_DIR" 2>/dev/null; CACHE_BUST=$(date +%s); download_success=true
+           mkdir -p "$LOCAL_DIR" 2>/dev/null
+           CACHE_BUST=$(date +%s)
            MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           total_mods=${#MODULES[@]}; done_mods=0; failed_mods=0
            for file in "${MODULES[@]}"; do
-               echo -e "  ${DIM}├─ Fetching $file...${NC}"
-               wget --timeout=5 --tries=1 -qO "/tmp/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
+               mod_name="${file%.sh}"
+               echo -e "  ${DIM}Fetching ${file}...${NC}"
+               if command -v curl >/dev/null 2>&1; then
+                   ( curl -fLsS --retry 2 --connect-timeout 8 --max-time 120 -o "/tmp/$file" \
+                     "$REPO_SCRIPTS/${file}?v=$CACHE_BUST" ) >/dev/null 2>&1 &
+               else
+                   ( wget --timeout=8 --tries=2 -qO "/tmp/$file" \
+                     "$REPO_SCRIPTS/${file}?v=$CACHE_BUST" ) >/dev/null 2>&1 &
+               fi
+               draw_progress_bar $! "Updating $mod_name"
                if [ -s "/tmp/$file" ]; then
                    mv "/tmp/$file" "$LOCAL_DIR/$file"
                    sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null
                else
-                   echo -e "  ${Y}├─ Internet unavailable, keeping offline version for $file${NC}"
+                   rm -f "/tmp/$file"
+                   failed_mods=$((failed_mods + 1))
+                   echo -e "  ${Y}↳ Keeping local version for ${file}${NC}"
                fi
+               done_mods=$((done_mods + 1))
+               local_fill=$((done_mods * 32 / total_mods))
+               local_rest=$((32 - local_fill))
+               printf "  ${C}Overall${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}\n" \
+                   "$(printf "%${local_fill}s" "" | tr ' ' '-')" \
+                   "$(printf "%${local_rest}s" "" | tr ' ' '-')" \
+                   $((done_mods * 100 / total_mods))
            done
            for file in "${MODULES[@]}"; do
                if [ -s "$LOCAL_DIR/$file" ]; then
-                   mod_name="${file%.sh}"; [ "$mod_name" == "main" ] && mod_name="mtunnel"
-                   # Safe cat inplace overwrite
-                   cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null; chmod +x "/usr/bin/$mod_name" 2>/dev/null
+                   mod_name="${file%.sh}"
+                   [ "$mod_name" == "main" ] && mod_name="mtunnel"
+                   cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null
+                   chmod +x "/usr/bin/$mod_name" 2>/dev/null
                fi
            done
-           echo -e "\n  ${G}● Core scripts fully upgraded/synced!${NC}"; sleep 1.5; exec "$0" ;;
+           if [ "$failed_mods" -eq 0 ]; then
+               echo -e "\n  ${G}● Core scripts fully upgraded/synced!${NC}"
+           else
+               echo -e "\n  ${Y}● Update completed with $failed_mods cached module(s) kept.${NC}"
+           fi
+           sleep 1.5
+           exec "$0" ;;
 
         11)
            echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
@@ -284,6 +326,56 @@ while true; do
            done
            echo -e "\n  ${G}● Local Deployment Complete (Active files skipped safely)!${NC}"; sleep 1.5; exec "$0" ;;
            
+11)
+           echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
+           if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
+               echo -e "  ${R}● No offline scripts found in /root/mtunnel/!${NC}"; sleep 2; continue
+           fi
+
+           LOCAL_FILES=("$LOCAL_DIR"/*.sh)
+           total_local=${#LOCAL_FILES[@]}; done_local=0
+           for file in "${LOCAL_FILES[@]}"; do
+               mod_name=$(basename "$file" .sh)
+               [ "$mod_name" == "main" ] && mod_name="mtunnel"
+               if [ -f "/usr/bin/$mod_name" ] && [ "$mod_name" != "mtunnel" ]; then
+                   echo -e "  ${DIM}↳ Skipping ${mod_name} (already deployed)${NC}"
+               else
+                   sed -i 's/\r$//' "$file" 2>/dev/null
+                   cat "$file" > "/usr/bin/$mod_name" 2>/dev/null
+                   chmod +x "/usr/bin/$mod_name" 2>/dev/null
+                   echo -e "  ${G}✓${NC} Deployed ${mod_name}"
+               fi
+               done_local=$((done_local + 1))
+               p=$((done_local * 100 / total_local))
+               fill=$((done_local * 32 / total_local)); rest=$((32 - fill))
+               printf "  ${C}Scripts${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}\n" \
+                   "$(printf "%${fill}s" "" | tr ' ' '-')" \
+                   "$(printf "%${rest}s" "" | tr ' ' '-')" "$p"
+           done
+
+           BINS=(bh gost frps frpc rathole)
+           total_bins=${#BINS[@]}; done_bins=0
+           for bin in "${BINS[@]}"; do
+               if [ -f "$LOCAL_DIR/packages/$bin" ]; then
+                   if [ -f "/usr/local/bin/$bin" ]; then
+                       echo -e "  ${DIM}↳ Skipping binary $bin (already installed)${NC}"
+                   else
+                       cp "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null
+                       chmod +x "/usr/local/bin/$bin" 2>/dev/null
+                       echo -e "  ${G}✓${NC} Installed $bin"
+                   fi
+               fi
+               done_bins=$((done_bins + 1))
+               fill=$((done_bins * 32 / total_bins)); rest=$((32 - fill))
+               printf "  ${C}Binaries${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}\n" \
+                   "$(printf "%${fill}s" "" | tr ' ' '-')" \
+                   "$(printf "%${rest}s" "" | tr ' ' '-')" \
+                   $((done_bins * 100 / total_bins))
+           done
+           echo -e "\n  ${G}● Local Deployment Complete (Active files skipped safely)!${NC}"
+           sleep 1.5
+           exec "$0" ;;
+
         12)
            echo -ne "\n  ${R}● DANGER: Completely wipe ALL infrastructure traces? (y/n): ${NC}"; read del_confirm
            del_confirm=$(echo "$del_confirm" | tr -d '\r' | tr -d ' ')
@@ -322,3 +414,4 @@ while true; do
         0) clear; exit 0 ;;
     esac
 done
+

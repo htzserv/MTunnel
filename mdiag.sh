@@ -16,19 +16,31 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1; local text=$2; local width=25; local progress=0
-    tput civis
-    while kill -0 $pid 2>/dev/null; do
-        progress=$((progress + 1)); [ $progress -gt 95 ] && progress=95
-        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" | tr ' ' '-')
-        printf "\r  ${C}⟳${NC} ${W}%-22s${NC} ${M}[${bar}${DIM}${empty_bar}${M}]${NC} ${C}%3d%%${NC}" "$text" "$progress"
-        sleep 0.15
+    local pid=$1
+    local text=$2
+    local width=${3:-32}
+    local progress=0
+    local filled empty bar rest
+    tput civis 2>/dev/null || true
+
+    while kill -0 "$pid" 2>/dev/null; do
+        progress=$((progress + 2))
+        [ "$progress" -gt 95 ] && progress=95
+        filled=$(( progress * width / 100 ))
+        empty=$(( width - filled ))
+        bar=$(printf "%${filled}s" "" | tr ' ' '-')
+        rest=$(printf "%${empty}s" "" | tr ' ' '-')
+        printf "\r  ${C}→${NC} ${W}%-25s${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}" \
+            "$text" "$bar" "$rest" "$progress"
+        sleep 0.12
     done
-    local bar=$(printf "%${width}s" | tr ' ' '#')
-    printf "\r  ${G}✔${NC} ${W}%-22s${NC} ${G}[${bar}]${NC} ${G}100%%${NC} \n" "$text"
-    tput cnorm
+
+    bar=$(printf "%${width}s" "" | tr ' ' '-')
+    printf "\r  ${G}✓${NC} ${W}%-25s${NC} ${G}%s${NC} ${G}100%%${NC}\n" \
+        "$text" "$bar"
+    tput cnorm 2>/dev/null || true
 }
+
 
 draw_mdiag_header() {
     local s_ip=$(get_local_ip)

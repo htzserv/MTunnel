@@ -16,17 +16,32 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-draw_percentage() {
-    local pid=$1; local text=$2; local progress=0
-    tput civis
-    while kill -0 $pid 2>/dev/null; do
-        ((progress++)); if (( progress > 95 )); then progress=95; fi
-        printf "\r  %b⟳%b %b%-25s%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$C" "$progress" "$NC"
-        sleep 0.2
+draw_progress_bar() {
+    local pid=$1
+    local text=$2
+    local width=${3:-32}
+    local progress=0
+    local filled empty bar rest
+    tput civis 2>/dev/null || true
+
+    while kill -0 "$pid" 2>/dev/null; do
+        progress=$((progress + 2))
+        [ "$progress" -gt 95 ] && progress=95
+        filled=$(( progress * width / 100 ))
+        empty=$(( width - filled ))
+        bar=$(printf "%${filled}s" "" | tr ' ' '-')
+        rest=$(printf "%${empty}s" "" | tr ' ' '-')
+        printf "\r  ${C}→${NC} ${W}%-25s${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}" \
+            "$text" "$bar" "$rest" "$progress"
+        sleep 0.12
     done
-    printf "\r  %b✔%b %b%-25s%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$NC"
-    tput cnorm
+
+    bar=$(printf "%${width}s" "" | tr ' ' '-')
+    printf "\r  ${G}✓${NC} ${W}%-25s${NC} ${G}%s${NC} ${G}100%%${NC}\n" \
+        "$text" "$bar"
+    tput cnorm 2>/dev/null || true
 }
+
 
 check_frp_binaries() {
     if [ ! -f "/usr/local/bin/frps" ] || [ ! -f "/usr/local/bin/frpc" ]; then
@@ -50,7 +65,7 @@ check_frp_binaries() {
                     chmod +x /usr/local/bin/frps /usr/local/bin/frpc
                 fi
             ) &
-            draw_percentage $! "Deploying FRP Binaries"
+            draw_progress_bar $! "Deploying FRP Binaries"
             sleep 1
         fi
         

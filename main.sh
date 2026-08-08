@@ -40,102 +40,87 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1 text=$2 width=36 progress=0 filled empty bar rest
+    local pid=$1 text=$2 width=36 progress=0
     tput civis 2>/dev/null || true
     while kill -0 "$pid" 2>/dev/null; do
         ((progress++)); ((progress > 95)) && progress=95
-        filled=$((progress*width/100)); empty=$((width-filled))
-        bar="$(printf '%*s' "$filled" '' | tr ' ' '-')"
-        rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
-        printf '\r  %b→%b %-26s %b%s%b%s %3d%%' "$C" "$NC" "$text" "$G" "$bar" "$NC" "$rest" "$progress"
+        local filled=$((progress*width/100)) empty=$((width-filled))
+        local bar="$(printf '%*s' "$filled" '' | tr ' ' '-')" rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
+        printf "
+  %b→%b %-26s %b%s%b%b%s%b %3d%%" "$C" "$NC" "$text" "$G" "$bar" "$DIM" "$rest" "$NC" "$progress"
         sleep 0.2
     done
-    bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
-    printf '\r  %b✓%b %-26s %b%s%b %3d%%\n' "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
+    local bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
+    printf "
+  %b✓%b %-26s %b%s%b %3d%%
+" "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
     tput cnorm 2>/dev/null || true
-}
-
-sha256_file() {
-    local f="$1"
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$f" | awk '{print $1}'
-    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$f" | awk '{print $1}'
-    else return 1; fi
-}
-
-manifest_set() {
-    local f="$1" h="$2" manifest="$LOCAL_DIR/.module-manifest" tmp="$LOCAL_DIR/.module-manifest.$$"
-    mkdir -p "$LOCAL_DIR"; touch "$manifest"
-    awk -v f="$f" '$1!=f {print}' "$manifest" > "$tmp" 2>/dev/null || :
-    printf '%s %s\n' "$f" "$h" >> "$tmp"
-    mv -f "$tmp" "$manifest"
-}
-
-same_file() {
-    local a="$1" b="$2"
-    [ -f "$a" ] && [ -f "$b" ] && [ "$(readlink -f "$a" 2>/dev/null)" = "$(readlink -f "$b" 2>/dev/null)" ]
 }
 
 download_file_to_cache() {
     local file="$1" tmp="$LOCAL_DIR/.${file}.$$"
     mkdir -p "$LOCAL_DIR" || return 1
     rm -f "$tmp"
+
     echo -e "  ${C}→${NC} Downloading ${W}${file}${NC} to local cache..."
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$REPO_SCRIPTS/$file" || { rm -f "$tmp"; return 1; }
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/$file" || { rm -f "$tmp"; return 1; }
+        curl -fL --retry 2 --connect-timeout 8 --max-time 120 --progress-bar \
+            -o "$tmp" "$REPO_SCRIPTS/${file}?v=$(date +%s)" || { rm -f "$tmp"; return 1; }
     else
-        return 1
+        wget --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/${file}?v=$(date +%s)" || { rm -f "$tmp"; return 1; }
     fi
+
     [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
     sed -i 's/\r$//' "$tmp" 2>/dev/null || true
     chmod 0755 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$LOCAL_DIR/$file"
+    mv -f "$tmp" "$LOCAL_DIR/${file}"
+}
+
+download_module_to_cache() {
+    local mod="$1"
+    download_file_to_cache "${mod}.sh"
+}
+
+cache_installed_module() {
+    local mod="$1" file="${mod}.sh"
+    [ -s "$LOCAL_DIR/$file" ] && return 0
+    [ -s "/usr/bin/$mod" ] || return 1
+    mkdir -p "$LOCAL_DIR" || return 1
+    cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file" || return 1
+    chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
 }
 
 deploy_cached_module() {
     local mod="$1" file="${mod}.sh"
     [ -s "$LOCAL_DIR/$file" ] || return 1
     sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null || true
-    if ! same_file "$LOCAL_DIR/$file" "/usr/bin/$mod"; then
-        install -m 0755 "$LOCAL_DIR/$file" "/usr/bin/$mod" || return 1
-    else
-        chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
-    fi
+    install -m 0755 "$LOCAL_DIR/$file" "/usr/bin/$mod" || return 1
     if [ "$mod" = "mtunnel" ]; then
-        if ! same_file "$LOCAL_DIR/$file" "/usr/local/bin/mtunnel"; then
-            install -m 0755 "$LOCAL_DIR/$file" /usr/local/bin/mtunnel 2>/dev/null || true
-        fi
-    fi
-    if [ "$mod" = "mstats" ]; then
-        install -m 0755 "$LOCAL_DIR/$file" /usr/bin/mstats 2>/dev/null || true
-        ln -sfn /usr/bin/mstats /usr/bin/mstat 2>/dev/null || true
+        install -m 0755 "$LOCAL_DIR/$file" /usr/local/bin/mtunnel 2>/dev/null || true
     fi
 }
 
 ensure_module() {
     local mod="$1" file="${mod}.sh"
-    local script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || pwd)"
 
-    # Local bundle/cache is always preferred for normal feature launch.
+    # 1) Local cache always wins. This is the offline-first path.
     if [ -s "$LOCAL_DIR/$file" ]; then
-        deploy_cached_module "$mod" && return 0
+        deploy_cached_module "$mod"
+        return $?
     fi
-    if [ -s "$script_dir/$file" ]; then
-        cp -f "$script_dir/$file" "$LOCAL_DIR/$file" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
-        deploy_cached_module "$mod" && return 0
+
+    # 2) If the module is already installed but not cached, backfill the cache.
+    if cache_installed_module "$mod"; then
+        deploy_cached_module "$mod"
+        return $?
     fi
-    # Backfill cache from an already-installed module.
-    if [ -s "/usr/bin/$mod" ]; then
-        cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
-        deploy_cached_module "$mod" && return 0
+
+    # 3) Only now touch GitHub. A successful download is stored permanently.
+    if download_module_to_cache "$mod"; then
+        deploy_cached_module "$mod"
+        return $?
     fi
-    # Lazy download only when the feature is actually opened.
-    if download_file_to_cache "$file"; then
-        deploy_cached_module "$mod" && return 0
-    fi
+
     echo -e "  ${R}✗ ${W}${mod}${R} is not available locally and GitHub download failed.${NC}"
     return 1
 }
@@ -259,10 +244,9 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}iPerf3 Network Speedtest${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Smart Cache & Update Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Update Core Scripts${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Force Download & Install Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
     echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
 
@@ -274,79 +258,85 @@ while true; do
         9)
            echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOADER ]${NC}"
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-           tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
-           rm -f "$tmp_zip"
-           if command -v curl >/dev/null 2>&1; then
-               curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP" &
-               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
-           elif command -v wget >/dev/null 2>&1; then
-               wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP" &
-               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
+           apt-get install -y -q unzip >/dev/null 2>&1
+           
+           ( wget -qO /tmp/repo.zip "$REPO_ZIP" ) &
+           draw_progress_bar $! "Fetching Zip Archive"
+           
+           if unzip -t /tmp/repo.zip >/dev/null 2>&1; then
+               (
+                   unzip -q -o /tmp/repo.zip -d /tmp/ 2>/dev/null
+                   cp -rf /tmp/MTunnel-main/packages/* "$LOCAL_DIR/packages/" 2>/dev/null
+                   chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null
+                   
+                   # Safe Skip logic implemented!
+                   [ -f "$LOCAL_DIR/packages/bh" ] && [ ! -f "/usr/local/bin/bh" ] && { cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh; chmod +x /usr/local/bin/bh; }
+                   [ -f "$LOCAL_DIR/packages/gost" ] && [ ! -f "/usr/local/bin/gost" ] && { cp "$LOCAL_DIR/packages/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; }
+                   [ -f "$LOCAL_DIR/packages/frps" ] && [ ! -f "/usr/local/bin/frps" ] && { cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; }
+                   [ -f "$LOCAL_DIR/packages/frpc" ] && [ ! -f "/usr/local/bin/frpc" ] && { cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; }
+                   [ -f "$LOCAL_DIR/packages/rathole" ] && [ ! -f "/usr/local/bin/rathole" ] && { cp "$LOCAL_DIR/packages/rathole" /usr/local/bin/rathole; chmod +x /usr/local/bin/rathole; }
+                   
+                   rm -rf /tmp/MTunnel-main /tmp/repo.zip
+               ) &
+               draw_progress_bar $! "Extracting & Installing"
+               echo -e "\n  ${G}● Binary Files downloaded (Existing active files skipped safely)!${NC}"; sleep 2
            else
-               rc=1
-           fi
-           if [ "${rc:-1}" -eq 0 ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
-               tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
-               unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
-               pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
-               if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
-                   cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
-                   chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
-                   for bin in bh gost frps frpc rathole; do
-                       if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
-                           install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
-                           echo -e "  ${G}✓${NC} Installed $bin"
-                       fi
-                   done
-                   echo -e "  ${G}● Binary package cache updated. Existing active binaries were preserved.${NC}"
-               else
-                   echo -e "  ${R}● Package directory was not found in the archive.${NC}"
-               fi
-               rm -rf "$tmp_dir"
-           else
-               echo -e "  ${R}● Error downloading or reading the GitHub package archive.${NC}"
-           fi
-           rm -f "$tmp_zip"
-           sleep 1.5 ;;
+               echo -e "\n  ${R}● Error downloading zip archive from GitHub!${NC}"; sleep 2
+           fi ;;
 
         10)
-           echo -e "\n  ${C}● Smart Cache & Update: checking core modules...${NC}"
-           if [ -s "$LOCAL_DIR/install.sh" ]; then MTUNNEL_NO_EXEC=1 bash "$LOCAL_DIR/install.sh" --cache; elif [ -s "/root/mtunnel/install.sh" ]; then MTUNNEL_NO_EXEC=1 bash /root/mtunnel/install.sh --cache; else echo -e "  ${R}✗ Installer is not available locally.${NC}"; fi
-           ;;
-
-        11)
-           echo -e "\n  ${M}● Offline Local Deploy Engine${NC}"
-           failed_local=()
-           for file in "${ALL_MODULES[@]}"; do
+           echo -e "\n  ${Y}● Syncing bootstrap modules from GitHub into local cache...${NC}"
+           mkdir -p "$LOCAL_DIR" 2>/dev/null
+           update_failed=()
+           for file in "${BOOTSTRAP_MODULES[@]}"; do
                mod_name="${file%.sh}"
                [ "$mod_name" = "main" ] && mod_name="mtunnel"
-               if [ -s "$LOCAL_DIR/$file" ]; then
-                   if deploy_cached_module "$mod_name"; then
-                       echo -e "  ${G}✓${NC} $mod_name"
+               echo -e "  ${DIM}├─ Updating $file...${NC}"
+               if download_file_to_cache "$file"; then
+                   deploy_cached_module "$mod_name" || update_failed+=("$file")
+               else
+                   echo -e "  ${Y}├─ Download failed; keeping cached version of $file${NC}"
+                   [ -s "$LOCAL_DIR/$file" ] || update_failed+=("$file")
+               fi
+           done
+           if [ "${#update_failed[@]}" -gt 0 ]; then
+               echo -e "\n  ${Y}● Core update incomplete:${NC} ${update_failed[*]}"
+           else
+               echo -e "\n  ${G}● Bootstrap modules updated and cached locally.${NC}"
+           fi
+           sleep 1.5; exec "$0" ;;
+        11)
+           echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
+           if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
+               echo -e "  ${R}● No offline scripts found in /root/mtunnel/!${NC}"; sleep 2; continue
+           fi
+           for file in "$LOCAL_DIR"/*.sh; do
+               mod_name=$(basename "$file" .sh)
+               [ "$mod_name" == "main" ] && mod_name="mtunnel"
+               
+               if [ -f "/usr/bin/$mod_name" ] && [ "$mod_name" != "mtunnel" ]; then
+                   echo -e "  ${DIM}├─ Skipping script $mod_name (Already deployed)${NC}"
+               else
+                   sed -i 's/\r$//' "$file" 2>/dev/null
+                   cat "$file" > "/usr/bin/$mod_name" 2>/dev/null
+                   chmod +x "/usr/bin/$mod_name" 2>/dev/null
+               fi
+           done
+           
+           for bin in bh gost frps frpc rathole; do
+               if [ -f "$LOCAL_DIR/packages/$bin" ]; then
+                   if [ -f "/usr/local/bin/$bin" ]; then
+                       echo -e "  ${DIM}├─ Skipping binary $bin (Already installed)${NC}"
                    else
-                       failed_local+=("$mod_name")
+                       cp "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null
+                       chmod +x "/usr/local/bin/$bin" 2>/dev/null
+                       echo -e "  ${G}├─ Installed $bin${NC}"
                    fi
                fi
            done
-           if [ "${#failed_local[@]}" -gt 0 ]; then
-               echo -e "  ${Y}● Offline deploy incomplete:${NC} ${failed_local[*]}"
-           else
-               echo -e "  ${G}● Local deployment complete.${NC}"
-           fi
-           sleep 1.5 ;;
-
+           echo -e "\n  ${G}● Local Deployment Complete (Active files skipped safely)!${NC}"; sleep 1.5; exec "$0" ;;
+           
         12)
-           echo -e "\n  ${R}● Force Download & Install Core${NC}"
-           if [ -s "$LOCAL_DIR/install.sh" ]; then
-               MTUNNEL_NO_EXEC=1 bash "$LOCAL_DIR/install.sh" --force
-           elif [ -s "/root/mtunnel/install.sh" ]; then
-               MTUNNEL_NO_EXEC=1 bash /root/mtunnel/install.sh --force
-           else
-               echo -e "  ${R}✗ Installer is not available locally.${NC}"
-           fi
-           sleep 1.5 ;;
-
-        13)
             clear
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe${NC}                                      ${R}│${NC}"

@@ -90,31 +90,19 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1
-    local text=$2
-    local width=${3:-32}
-    local progress=0
-    local filled empty bar rest
-    tput civis 2>/dev/null || true
-
-    while kill -0 "$pid" 2>/dev/null; do
-        progress=$((progress + 2))
-        [ "$progress" -gt 95 ] && progress=95
-        filled=$(( progress * width / 100 ))
-        empty=$(( width - filled ))
-        bar=$(printf "%${filled}s" "" | tr ' ' '-')
-        rest=$(printf "%${empty}s" "" | tr ' ' '-')
-        printf "\r  ${C}→${NC} ${W}%-25s${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}" \
-            "$text" "$bar" "$rest" "$progress"
-        sleep 0.12
+    local pid=$1; local text=$2; local width=25; local progress=0
+    tput civis
+    while kill -0 $pid 2>/dev/null; do
+        ((progress++)); if (( progress > 95 )); then progress=95; fi
+        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
+        local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+        printf "\r  %b⟳%b %b%-22s%b %b[%b%b%b%b]%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$M" "$bar" "$DIM" "$empty_bar" "$M" "$NC" "$C" "$progress" "$NC"
+        sleep 0.2
     done
-
-    bar=$(printf "%${width}s" "" | tr ' ' '-')
-    printf "\r  ${G}✓${NC} ${W}%-25s${NC} ${G}%s${NC} ${G}100%%${NC}\n" \
-        "$text" "$bar"
-    tput cnorm 2>/dev/null || true
+    local bar=$(printf "%${width}s" "" | tr ' ' '#')
+    printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
+    tput cnorm
 }
-
 
 ensure_gost() {
     if [ ! -f /usr/local/bin/gost ]; then

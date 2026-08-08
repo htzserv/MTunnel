@@ -16,32 +16,17 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-draw_progress_bar() {
-    local pid=$1
-    local text=$2
-    local width=${3:-32}
-    local progress=0
-    local filled empty bar rest
-    tput civis 2>/dev/null || true
-
-    while kill -0 "$pid" 2>/dev/null; do
-        progress=$((progress + 2))
-        [ "$progress" -gt 95 ] && progress=95
-        filled=$(( progress * width / 100 ))
-        empty=$(( width - filled ))
-        bar=$(printf "%${filled}s" "" | tr ' ' '-')
-        rest=$(printf "%${empty}s" "" | tr ' ' '-')
-        printf "\r  ${C}→${NC} ${W}%-25s${NC} ${G}%s${DIM}%s${NC} ${C}%3d%%${NC}" \
-            "$text" "$bar" "$rest" "$progress"
-        sleep 0.12
+draw_percentage() {
+    local pid=$1; local text=$2; local progress=0
+    tput civis
+    while kill -0 $pid 2>/dev/null; do
+        ((progress++)); if (( progress > 95 )); then progress=95; fi
+        printf "\r  %b⟳%b %b%-25s%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$C" "$progress" "$NC"
+        sleep 0.2
     done
-
-    bar=$(printf "%${width}s" "" | tr ' ' '-')
-    printf "\r  ${G}✓${NC} ${W}%-25s${NC} ${G}%s${NC} ${G}100%%${NC}\n" \
-        "$text" "$bar"
-    tput cnorm 2>/dev/null || true
+    printf "\r  %b✔%b %b%-25s%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$NC"
+    tput cnorm
 }
-
 
 check_dependencies() {
     mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
@@ -53,12 +38,12 @@ check_dependencies() {
             apt-get install --download-only -y -q --reinstall wireguard wireguard-tools qrencode >/dev/null 2>&1
             cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
         ) &
-        draw_progress_bar $! "Building Local Cache"
+        draw_percentage $! "Building Local Cache"
         sleep 1
     fi
     if ! command -v wg >/dev/null 2>&1 || ! command -v qrencode >/dev/null 2>&1; then
         ( dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; apt-get install -f -y -q >/dev/null 2>&1 ) &
-        draw_progress_bar $! "Deploying Crypto Core"
+        draw_percentage $! "Deploying Crypto Core"
         sleep 1
     fi
 }

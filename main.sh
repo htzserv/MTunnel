@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.5.4 (Fixed Force Download) ---
+# --- MDesign Master Core | Central Dashboard v7.6.0 (BBR Status Header & Clean Menu) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -160,10 +160,17 @@ draw_main_header() {
     local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
     local st_gs="○"; local c_gst="${DIM}"; [ -n "$(ls -A /etc/mgostun/tunnels/*.json 2>/dev/null)" ] && { st_gs="●"; c_gs="${G}"; }
     local st_wg="○"; local c_wg="${DIM}"; ([ -f "/etc/wireguard/wg0.conf" ] || ip link show wg0 >/dev/null 2>&1) && { st_wg="●"; c_wg="${G}"; }
-    local st_l2="○"; local c_l2="${DIM}"; [ -n "$(ls -A /etc/ml2tp/tunnels/*.conf 2>/dev/null)" ] && { st_l2="●"; c_l2="${G}"; }
-    local st_hys="○"; local c_hys="${DIM}"; [ -n "$(ls -A /etc/mhysteria/tunnels/*.conf 2>/dev/null)" ] && { st_hys="●"; c_hys="${G}"; }
-    local st_bh="○"; local c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.toml 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
 
+    # 🌟 بررسی وضعیت BBR 🌟
+    local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+    local bbr_stat="${DIM}○ OFF${NC}"
+    local raw_bbr="○ OFF"
+    if [ "$bbr_cc" == "bbr" ]; then
+        bbr_stat="${G}● ON${NC}"
+        raw_bbr="● ON"
+    fi
+
+    # 🌟 وضعیت Web UI 🌟
     local web_stat="${DIM}○ OFFLINE${NC}"
     local raw_web="○ OFFLINE"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then
@@ -173,7 +180,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v7.5.4 │ IP: ${s_ip} │ Web: ${raw_web} "
+    local raw_top=" MDesign Master Core v7.6.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -183,7 +190,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.4${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.6.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  GostTun:${NC}${c_gst}${st_gs}${NC}${DIM}  FRP:${DIM}○${NC}${DIM}  Extra:${NC}${c_wg}${st_wg}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -311,7 +318,6 @@ while true; do
 
         12)
            echo -e "\n  ${R}● Force Download & Install Core${NC}"
-           # اگر install.sh موجود نبود، ابتدا از گیت‌هاب دانلود می‌شود
            if [ ! -s "$LOCAL_DIR/install.sh" ]; then
                mkdir -p "$LOCAL_DIR" 2>/dev/null
                echo -e "  ${C}→ Fetching install.sh from GitHub...${NC}"

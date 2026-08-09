@@ -6,8 +6,6 @@ MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 LOCAL_DIR="/root/mtunnel"
-BOOTSTRAP_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mweb.sh" "mstats.sh")
-ALL_MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mfrp.sh" "mwire.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
 
@@ -46,88 +44,42 @@ draw_progress_bar() {
         ((progress++)); ((progress > 95)) && progress=95
         local filled=$((progress*width/100)) empty=$((width-filled))
         local bar="$(printf '%*s' "$filled" '' | tr ' ' '-')" rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
-        printf "
-  %b→%b %-26s %b%s%b%b%s%b %3d%%" "$C" "$NC" "$text" "$G" "$bar" "$DIM" "$rest" "$NC" "$progress"
+        printf "  %b→%b %-26s %b%s%b%b%s%b %3d%%" "$C" "$NC" "$text" "$G" "$bar" "$DIM" "$rest" "$NC" "$progress"
         sleep 0.2
     done
     local bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
-    printf "
-  %b✓%b %-26s %b%s%b %3d%%
+    printf "  %b✓%b %-26s %b%s%b %3d%%
 " "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
     tput cnorm 2>/dev/null || true
 }
 
-download_file_to_cache() {
-    local file="$1" tmp="$LOCAL_DIR/.${file}.$$"
-    mkdir -p "$LOCAL_DIR" || return 1
-    rm -f "$tmp"
-
-    echo -e "  ${C}→${NC} Downloading ${W}${file}${NC} to local cache..."
-    if command -v curl >/dev/null 2>&1; then
-        curl -fL --retry 2 --connect-timeout 8 --max-time 120 --progress-bar \
-            -o "$tmp" "$REPO_SCRIPTS/${file}?v=$(date +%s)" || { rm -f "$tmp"; return 1; }
-    else
-        wget --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/${file}?v=$(date +%s)" || { rm -f "$tmp"; return 1; }
-    fi
-
-    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
-    sed -i 's/\r$//' "$tmp" 2>/dev/null || true
-    chmod 0755 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$LOCAL_DIR/${file}"
-}
-
-download_module_to_cache() {
-    local mod="$1"
-    download_file_to_cache "${mod}.sh"
-}
-
-cache_installed_module() {
-    local mod="$1" file="${mod}.sh"
-    [ -s "$LOCAL_DIR/$file" ] && return 0
-    [ -s "/usr/bin/$mod" ] || return 1
-    mkdir -p "$LOCAL_DIR" || return 1
-    cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file" || return 1
-    chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
-}
-
-deploy_cached_module() {
-    local mod="$1" file="${mod}.sh"
-    [ -s "$LOCAL_DIR/$file" ] || return 1
-    sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null || true
-    install -m 0755 "$LOCAL_DIR/$file" "/usr/bin/$mod" || return 1
-    if [ "$mod" = "mtunnel" ]; then
-        install -m 0755 "$LOCAL_DIR/$file" /usr/local/bin/mtunnel 2>/dev/null || true
-    fi
-}
-
-ensure_module() {
-    local mod="$1" file="${mod}.sh"
-
-    # 1) Local cache always wins. This is the offline-first path.
-    if [ -s "$LOCAL_DIR/$file" ]; then
-        deploy_cached_module "$mod"
-        return $?
-    fi
-
-    # 2) If the module is already installed but not cached, backfill the cache.
-    if cache_installed_module "$mod"; then
-        deploy_cached_module "$mod"
-        return $?
-    fi
-
-    # 3) Only now touch GitHub. A successful download is stored permanently.
-    if download_module_to_cache "$mod"; then
-        deploy_cached_module "$mod"
-        return $?
-    fi
-
-    echo -e "  ${R}✗ ${W}${mod}${R} is not available locally and GitHub download failed.${NC}"
-    return 1
-}
-
 run_mod() {
     local mod="$1"
-    ensure_module "$mod" || return 1
+    if [ ! -x "/usr/bin/$mod" ]; then
+        if [ -s "$LOCAL_DIR/${mod}.sh" ]; then
+            echo -e "
+  ${G}→ Deploying local module ${W}$mod${G}...${NC}"
+            sed -i 's/$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null || true
+            install -m 0755 "$LOCAL_DIR/${mod}.sh" "/usr/bin/$mod" || return 1
+        else
+            echo -e "
+  ${Y}→ Module ${W}$mod${Y} is not cached; downloading...${NC}"
+            mkdir -p "$LOCAL_DIR"
+            local tmp="/tmp/${mod}.sh.$$"
+            if command -v curl >/dev/null 2>&1; then
+                curl -fL --retry 2 --connect-timeout 8 --max-time 120 --progress-bar -o "$tmp" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)"
+            else
+                wget --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)"
+            fi
+            if [ -s "$tmp" ]; then
+                mv "$tmp" "$LOCAL_DIR/${mod}.sh"
+                sed -i 's/$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null || true
+                install -m 0755 "$LOCAL_DIR/${mod}.sh" "/usr/bin/$mod" || return 1
+            else
+                rm -f "$tmp"; echo -e "  ${R}✗ Module unavailable locally and online download failed.${NC}"; return 1
+            fi
+        fi
+    fi
     "$mod"
 }
 
@@ -284,27 +236,29 @@ while true; do
                echo -e "\n  ${R}● Error downloading zip archive from GitHub!${NC}"; sleep 2
            fi ;;
 
-        10)
-           echo -e "\n  ${Y}● Syncing bootstrap modules from GitHub into local cache...${NC}"
-           mkdir -p "$LOCAL_DIR" 2>/dev/null
-           update_failed=()
-           for file in "${BOOTSTRAP_MODULES[@]}"; do
-               mod_name="${file%.sh}"
-               [ "$mod_name" = "main" ] && mod_name="mtunnel"
-               echo -e "  ${DIM}├─ Updating $file...${NC}"
-               if download_file_to_cache "$file"; then
-                   deploy_cached_module "$mod_name" || update_failed+=("$file")
+        10) 
+           echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
+           mkdir -p "$LOCAL_DIR" 2>/dev/null; CACHE_BUST=$(date +%s); download_success=true
+           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
+           for file in "${MODULES[@]}"; do
+               echo -e "  ${DIM}├─ Fetching $file...${NC}"
+               wget --timeout=5 --tries=1 -qO "/tmp/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
+               if [ -s "/tmp/$file" ]; then
+                   mv "/tmp/$file" "$LOCAL_DIR/$file"
+                   sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null
                else
-                   echo -e "  ${Y}├─ Download failed; keeping cached version of $file${NC}"
-                   [ -s "$LOCAL_DIR/$file" ] || update_failed+=("$file")
+                   echo -e "  ${Y}├─ Internet unavailable, keeping offline version for $file${NC}"
                fi
            done
-           if [ "${#update_failed[@]}" -gt 0 ]; then
-               echo -e "\n  ${Y}● Core update incomplete:${NC} ${update_failed[*]}"
-           else
-               echo -e "\n  ${G}● Bootstrap modules updated and cached locally.${NC}"
-           fi
-           sleep 1.5; exec "$0" ;;
+           for file in "${MODULES[@]}"; do
+               if [ -s "$LOCAL_DIR/$file" ]; then
+                   mod_name="${file%.sh}"; [ "$mod_name" == "main" ] && mod_name="mtunnel"
+                   # Safe cat inplace overwrite
+                   cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null; chmod +x "/usr/bin/$mod_name" 2>/dev/null
+               fi
+           done
+           echo -e "\n  ${G}● Core scripts fully upgraded/synced!${NC}"; sleep 1.5; exec "$0" ;;
+
         11)
            echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
            if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then

@@ -390,16 +390,22 @@ while true; do
                echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
                
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
-               echo -e "\n  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
-               echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
-               ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
-               if [ $? -eq 0 ]; then
-                   lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                   echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
-               else
-                   echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
-               fi
-               
+                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
+                run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+                if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
+                    echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
+                    echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
+                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
+                    if [ $? -eq 0 ]; then
+                        lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
+                        echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
+                    else
+                        echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
+                    fi
+                else
+                    echo -e "  ${DIM}└─${NC} Initial ping test skipped."
+                fi
+                
                echo -ne "\n  ${C}●${NC} ${W}Open MPorter to setup port forwarding now? (y/n): ${NC}"; read launch_mporter
                launch_mporter=$(echo "$launch_mporter" | tr -d '\r' | tr -d ' ')
                if [[ "$launch_mporter" == "y" ]]; then

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.4.1 (BBR Auto-Tune) ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.4.2 (Fixed) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -15,11 +15,8 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-# تابع اتوماتیک بهینه‌سازی سرعت (BBR Auto-Tune) و پاکسازی موقت
 apply_bbr_optimization() {
-    echo -e "  ${DIM}● Applying BBR network acceleration for maximum speed...${NC}"
-    
-    # اعمال تنظیمات BBR به صورت موقت و دائم روی هسته
+    echo -e "  ${DIM}● Applying BBR network acceleration...${NC}"
     sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
     sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
     
@@ -32,12 +29,13 @@ apply_bbr_optimization() {
     sysctl -p >/dev/null 2>&1
 }
 
+# اصلاح بررسی واقعی وضعیت اتصال
 check_tunnel_connection() {
     local t_name="$1"
     local t_dir="$CONF_DIR/$t_name"
     [ ! -f "$t_dir/meta.conf" ] && { echo "OFFLINE"; return; }
     
-    TYPE=""; LINK_PORT=""; source "$t_dir/meta.conf"
+    TYPE=""; LINK_PORT=""; REMOTE_IP=""; source "$t_dir/meta.conf"
     
     if ! systemctl is-active --quiet mrathole@$t_name; then
         echo "OFFLINE"
@@ -45,17 +43,36 @@ check_tunnel_connection() {
     fi
 
     if [ "$TYPE" == "1" ]; then
-        if ss -tn sport = ":$LINK_PORT" | grep -q "ESTAB"; then
+        if ss -tn sport = ":$LINK_PORT" 2>/dev/null | grep -q "ESTAB"; then
             echo "ONLINE"
         else
             echo "WAITING"
         fi
     else
-        if systemctl is-active --quiet mrathole@$t_name; then
-            echo "ONLINE"
+        if [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
+            if ping -c 1 -W 1 "$REMOTE_IP" >/dev/null 2>&1; then
+                echo "ONLINE"
+            else
+                echo "WAITING"
+            fi
         else
-            echo "OFFLINE"
+            echo "ONLINE"
         fi
+    fi
+}
+
+# دریافت پینگ زنده
+get_peer_ping() {
+    local target_ip="$1"
+    if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then
+        echo "N/A"
+        return
+    fi
+    local ping_val=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null | awk -F'/' 'END {print $5}')
+    if [ -n "$ping_val" ]; then
+        echo "${ping_val%.*} ms"
+    else
+        echo "Timeout"
     fi
 }
 
@@ -101,6 +118,7 @@ generate_toml() {
         
         IFS=',' read -ra P_ARR <<< "$PORTS"
         for p in "${P_ARR[@]}"; do
+            p=$(echo "$p" | tr -d ' ')
             [ -z "$p" ] && continue
             echo "" >> "$toml"
             echo "[server.services.p${p}_tcp]" >> "$toml"
@@ -119,6 +137,7 @@ generate_toml() {
         
         IFS=',' read -ra P_ARR <<< "$PORTS"
         for p in "${P_ARR[@]}"; do
+            p=$(echo "$p" | tr -d ' ')
             [ -z "$p" ] && continue
             echo "" >> "$toml"
             echo "[client.services.p${p}_tcp]" >> "$toml"
@@ -177,10 +196,11 @@ draw_header() {
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.4.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}LINK STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.4.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}LINK STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
+# بخش اصلاح شده نمایش مانیتورینگ زنده + اخذ پینگ
 show_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     for d in "$CONF_DIR"/*; do
@@ -189,15 +209,17 @@ show_monitor() {
         TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$d/meta.conf"
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
-        local peer_text=$([ "$TYPE" == "1" ] && echo "Waiting for Kharej" || echo "${REMOTE_IP}:${LINK_PORT}")
+        local peer_text=$([ "$TYPE" == "1" ] && echo "Waiting Client" || echo "${REMOTE_IP}:${LINK_PORT}")
         
         local st=$(check_tunnel_connection "$t_name")
         local st_text="OFFLINE"; local st_color="${R}"
         if [ "$st" == "ONLINE" ]; then st_text="ONLINE "; st_color="${G}";
         elif [ "$st" == "WAITING" ]; then st_text="WAITING"; st_color="${Y}"; fi
         
+        local current_ping=$(get_peer_ping "$REMOTE_IP")
+
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} %b▼ Tunnel: %-35s%b ${DIM}Role:%b %-40s ${B}│${NC}\n" "${R}" "${t_name}" "${NC}" "${NC}" "${role_text}"
+        printf "  ${B}│${NC} %b▼ Tunnel: %-30s%b ${DIM}Role:%b %-20s ${DIM}Ping:%b %-10s ${B}│${NC}\n" "${R}" "${t_name}" "${NC}" "${NC}" "${role_text}" "${NC}" "${current_ping}"
         echo -e "  ${B}├────────────────────────┬───────────────────────┬───────────────────────┬───────────────────┤${NC}"
         printf "  ${B}│${NC} ${DIM}%-22s${NC} ${B}│${NC} ${DIM}%-21s${NC} ${B}│${NC} ${DIM}%-21s${NC} ${B}│${NC} ${DIM}%-17s${NC} ${B}│${NC}\n" "LINK PORT" "PEER ENDPOINT" "FORWARDED PORTS" "STATUS"
         echo -e "  ${B}├────────────────────────┼───────────────────────┼───────────────────────┼───────────────────┤${NC}"
@@ -252,6 +274,7 @@ show_tunnel_details() {
     echo -ne "  ${DIM}Press Enter to return...${NC}"; read
 }
 
+# بخش کامل و اصلاح شده مدیریت و ویرایش تانل‌ها
 manage_tunnel() {
     local tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
     [ ${#tunnels[@]} -eq 0 ] && { echo -e "\n  ${Y}● No tunnels found!${NC}"; sleep 1; return; }
@@ -317,7 +340,7 @@ manage_tunnel() {
                 sleep 2
                 ;;
             3)
-                echo -ne "  ${C}●${NC} Enter new Remote/Kharej IP [Current: ${REMOTE_IP}]: "
+                echo -ne "  ${C}●${NC} Enter new Remote IP [Current: ${REMOTE_IP}]: "
                 read n_ip; n_ip=$(echo "$n_ip" | tr -d '\r')
                 if [ -n "$n_ip" ]; then
                     sed -i "s/^REMOTE_IP=.*/REMOTE_IP=$n_ip/" "$t_dir/meta.conf"
@@ -418,8 +441,6 @@ while true; do
     case $opt in
         1) 
            install_rathole; setup_service
-           
-           # اتوماتیک BBR برای حل مشکل سرعت و افت پهنای باند
            apply_bbr_optimization
            
            echo -e "\n  ${DIM}┌─[ REVERSE DEPLOYMENT ]${NC}"

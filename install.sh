@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel Core Installer v7.5.7 (Fixed True Force Download & Progress UI) ---
+# --- MTunnel Core Installer v7.5.8 (Strict Force Override) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -9,9 +9,13 @@ REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 BOOTSTRAP_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mbbr.sh" "mweb.sh" "mstats.sh")
 
 IS_FORCE=false
-if [[ "$1" == "--force" ]]; then
-    IS_FORCE=true
-fi
+# بررسی دقیق ورودی --force از پارامترهای ورودی اسکریپت
+for arg in "$@"; do
+    if [[ "$arg" == "--force" ]]; then
+        IS_FORCE=true
+        break
+    fi
+done
 
 mkdir -p "$LOCAL_DIR"
 
@@ -25,14 +29,13 @@ draw_progress() {
     local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
     
     tput civis 2>/dev/null || true
-    # اصلاح درصد تکراری (تبدیل %% به %)
     printf "\r  %b✔%b %b%-20s%b %b[%b%s%b%s%b] %b%3d%%%b" "$G" "$NC" "$W" "$text" "$NC" "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" "$W" "$percent" "$NC"
     tput cnorm 2>/dev/null || true
 }
 
 clear
 echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-echo -e "  ${B}│${NC} ${W}MTunnel Core Installer v7.5.7${NC}                              ${B}│${NC}"
+echo -e "  ${B}│${NC} ${W}MTunnel Core Installer v7.5.8${NC}                              ${B}│${NC}"
 echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
 
 total_mods=${#BOOTSTRAP_MODULES[@]}
@@ -43,8 +46,8 @@ for file in "${BOOTSTRAP_MODULES[@]}"; do
     mod_name="${file%.sh}"
     [ "$mod_name" == "main" ] && target_bin="/usr/bin/mtunnel" || target_bin="/usr/bin/$mod_name"
 
-    # اگر فورس نبود، ابتدا فایل محلی را بررسی کن
-    if [ "$IS_FORCE" != "true" ] && [ -s "$LOCAL_DIR/$file" ]; then
+    # تنها زمانی از فایل لوکال استفاده کن که حالت FORCE فعال نباشد
+    if [ "$IS_FORCE" = false ] && [ -s "$LOCAL_DIR/$file" ]; then
         chmod +x "$LOCAL_DIR/$file"
         if [ "$(readlink -f "$LOCAL_DIR/$file" 2>/dev/null)" != "$(readlink -f "$target_bin" 2>/dev/null)" ]; then
             cp -f "$LOCAL_DIR/$file" "$target_bin" 2>/dev/null
@@ -55,7 +58,7 @@ for file in "${BOOTSTRAP_MODULES[@]}"; do
         continue
     fi
 
-    # در حالت FORCE یا عدم وجود فایل لوکال، اجباراً از گیت‌هاب دانلود کن
+    # حالت FORCE: دانلود حتمی از گیت‌هاب و جایگزینی فایل
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/$file" "$REPO_SCRIPTS/$file" 2>/dev/null
     elif command -v wget >/dev/null 2>&1; then

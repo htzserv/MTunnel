@@ -1,11 +1,13 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.5.1 (Rathole & Gost Tunnels Integrated) ---
+# --- MDesign Master Core | Central Dashboard v7.5.2 (TCP BBR Accelerator Integrated) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 LOCAL_DIR="/root/mtunnel"
+BOOTSTRAP_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mbbr.sh" "mweb.sh" "mstats.sh")
+ALL_MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mfrp.sh" "mwire.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mbbr.sh" "mweb.sh")
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
 
@@ -38,48 +40,106 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1 text=$2 width=36 progress=0
+    local pid=$1 text=$2 width=36 progress=0 filled empty bar rest
     tput civis 2>/dev/null || true
     while kill -0 "$pid" 2>/dev/null; do
         ((progress++)); ((progress > 95)) && progress=95
-        local filled=$((progress*width/100)) empty=$((width-filled))
-        local bar="$(printf '%*s' "$filled" '' | tr ' ' '-')" rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
-        printf "  %b→%b %-26s %b%s%b%b%s%b %3d%%" "$C" "$NC" "$text" "$G" "$bar" "$DIM" "$rest" "$NC" "$progress"
+        filled=$((progress*width/100)); empty=$((width-filled))
+        bar="$(printf '%*s' "$filled" '' | tr ' ' '-')"
+        rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
+        printf '\r  %b→%b %-26s %b%s%b%s %3d%%' "$C" "$NC" "$text" "$G" "$bar" "$NC" "$rest" "$progress"
         sleep 0.2
     done
-    local bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
-    printf "  %b✓%b %-26s %b%s%b %3d%%
-" "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
+    bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
+    printf '\r  %b✓%b %-26s %b%s%b %3d%%\n' "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
     tput cnorm 2>/dev/null || true
+}
+
+sha256_file() {
+    local f="$1"
+    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$f" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$f" | awk '{print $1}'
+    else return 1; fi
+}
+
+manifest_set() {
+    local f="$1" h="$2" manifest="$LOCAL_DIR/.module-manifest" tmp="$LOCAL_DIR/.module-manifest.$$"
+    mkdir -p "$LOCAL_DIR"; touch "$manifest"
+    awk -v f="$f" '$1!=f {print}' "$manifest" > "$tmp" 2>/dev/null || :
+    printf '%s %s\n' "$f" "$h" >> "$tmp"
+    mv -f "$tmp" "$manifest"
+}
+
+same_file() {
+    local a="$1" b="$2"
+    [ -f "$a" ] && [ -f "$b" ] && [ "$(readlink -f "$a" 2>/dev/null)" = "$(readlink -f "$b" 2>/dev/null)" ]
+}
+
+download_file_to_cache() {
+    local file="$1" tmp="$LOCAL_DIR/.${file}.$$"
+    mkdir -p "$LOCAL_DIR" || return 1
+    rm -f "$tmp"
+    echo -e "  ${C}→${NC} Downloading ${W}${file}${NC} to local cache..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$REPO_SCRIPTS/$file" || { rm -f "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/$file" || { rm -f "$tmp"; return 1; }
+    else
+        return 1
+    fi
+    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
+    sed -i 's/\r$//' "$tmp" 2>/dev/null || true
+    chmod 0755 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$LOCAL_DIR/$file"
+}
+
+deploy_cached_module() {
+    local mod="$1" file="${mod}.sh"
+    [ -s "$LOCAL_DIR/$file" ] || return 1
+    sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null || true
+    if ! same_file "$LOCAL_DIR/$file" "/usr/bin/$mod"; then
+        install -m 0755 "$LOCAL_DIR/$file" "/usr/bin/$mod" || return 1
+    else
+        chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
+    fi
+    if [ "$mod" = "mtunnel" ]; then
+        if ! same_file "$LOCAL_DIR/$file" "/usr/local/bin/mtunnel"; then
+            install -m 0755 "$LOCAL_DIR/$file" /usr/local/bin/mtunnel 2>/dev/null || true
+        fi
+    fi
+    if [ "$mod" = "mstats" ]; then
+        install -m 0755 "$LOCAL_DIR/$file" /usr/bin/mstats 2>/dev/null || true
+        ln -sfn /usr/bin/mstats /usr/bin/mstat 2>/dev/null || true
+    fi
+}
+
+ensure_module() {
+    local mod="$1" file="${mod}.sh"
+    local script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || pwd)"
+
+    if [ -s "$LOCAL_DIR/$file" ]; then
+        deploy_cached_module "$mod" && return 0
+    fi
+    if [ -s "$script_dir/$file" ]; then
+        cp -f "$script_dir/$file" "$LOCAL_DIR/$file" 2>/dev/null || true
+        chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
+        deploy_cached_module "$mod" && return 0
+    fi
+    if [ -s "/usr/bin/$mod" ]; then
+        cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file" 2>/dev/null || true
+        chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
+        deploy_cached_module "$mod" && return 0
+    fi
+    if download_file_to_cache "$file"; then
+        deploy_cached_module "$mod" && return 0
+    fi
+    echo -e "  ${R}✗ ${W}${mod}${R} is not available locally and GitHub download failed.${NC}"
+    return 1
 }
 
 run_mod() {
     local mod="$1"
-    if [ ! -x "/usr/bin/$mod" ]; then
-        if [ -s "$LOCAL_DIR/${mod}.sh" ]; then
-            echo -e "
-  ${G}→ Deploying local module ${W}$mod${G}...${NC}"
-            sed -i 's/$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null || true
-            install -m 0755 "$LOCAL_DIR/${mod}.sh" "/usr/bin/$mod" || return 1
-        else
-            echo -e "
-  ${Y}→ Module ${W}$mod${Y} is not cached; downloading...${NC}"
-            mkdir -p "$LOCAL_DIR"
-            local tmp="/tmp/${mod}.sh.$$"
-            if command -v curl >/dev/null 2>&1; then
-                curl -fL --retry 2 --connect-timeout 8 --max-time 120 --progress-bar -o "$tmp" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)"
-            else
-                wget --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/${mod}.sh?v=$(date +%s)"
-            fi
-            if [ -s "$tmp" ]; then
-                mv "$tmp" "$LOCAL_DIR/${mod}.sh"
-                sed -i 's/$//' "$LOCAL_DIR/${mod}.sh" 2>/dev/null || true
-                install -m 0755 "$LOCAL_DIR/${mod}.sh" "/usr/bin/$mod" || return 1
-            else
-                rm -f "$tmp"; echo -e "  ${R}✗ Module unavailable locally and online download failed.${NC}"; return 1
-            fi
-        fi
-    fi
+    ensure_module "$mod" || return 1
     "$mod"
 }
 
@@ -110,17 +170,15 @@ run_iperf3() {
 draw_main_header() {
     local s_ip=$(get_local_ip)
     
-    # 🌟 Tun Status 🌟
     local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
     local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
-    local st_gs="○"; local c_gst="${DIM}"; [ -n "$(ls -A /etc/mgostun/tunnels/*.json 2>/dev/null)" ] && { st_gs="●"; c_gst="${G}"; }
+    local st_gs="○"; local c_gst="${DIM}"; [ -n "$(ls -A /etc/mgostun/tunnels/*.json 2>/dev/null)" ] && { st_gs="●"; c_gs="${G}"; }
     local st_wg="○"; local c_wg="${DIM}"; ([ -f "/etc/wireguard/wg0.conf" ] || ip link show wg0 >/dev/null 2>&1) && { st_wg="●"; c_wg="${G}"; }
     local st_l2="○"; local c_l2="${DIM}"; [ -n "$(ls -A /etc/ml2tp/tunnels/*.conf 2>/dev/null)" ] && { st_l2="●"; c_l2="${G}"; }
     local st_hys="○"; local c_hys="${DIM}"; [ -n "$(ls -A /etc/mhysteria/tunnels/*.conf 2>/dev/null)" ] && { st_hys="●"; c_hys="${G}"; }
     local st_bh="○"; local c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.toml 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
 
-    # 🌟 Web UI Status 🌟
     local web_stat="${DIM}○ OFFLINE${NC}"
     local raw_web="○ OFFLINE"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then
@@ -130,19 +188,17 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    # 🌟 Dynamic Padding Calculations (Width: 94) 🌟
-    local raw_top=" MDesign Master Core v7.5.1 │ IP: ${s_ip} │ Web: ${raw_web} "
+    local raw_top=" MDesign Master Core v7.5.2 │ IP: ${s_ip} │ Web: ${raw_web} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
-    # Keeping the bottom bar short so it fits nicely
     local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  GostTun:${st_gs}  FRP:○  Extra:${st_wg} "
     local pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
     local padding_bot=$(printf '%*s' "$pad_bot" "")
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  GostTun:${NC}${c_gst}${st_gs}${NC}${DIM}  FRP:${DIM}○${NC}${DIM}  Extra:${NC}${c_wg}${st_wg}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -170,8 +226,8 @@ show_tunnel_hub() {
         echo -e "  ${DIM}┌─[ PRIMARY INFRASTRUCTURE HUB ]${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC} ${DIM}[NEW]${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Gost Encapsulation Engine (Mgostun)${NC} ${DIM}[NEW]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Gost Encapsulation Engine (Mgostun)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}FRP Reverse Proxy Engine (Mfrp)${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${DIM}Additional Tunnels (WG, L2TP, Hys2, BH)${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
@@ -186,7 +242,7 @@ while true; do
     draw_main_header; echo ""
     echo -e "  ${DIM}┌─[ CORE NETWORK & ROUTING ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding & Failover (Mporter)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SECURITY & ANALYTICS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Stealth Anti-Probing Shield${NC}"
@@ -195,10 +251,12 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Network Diagnostics Tools${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}iPerf3 Network Speedtest${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Update Core Scripts${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC} ${DIM}[NEW]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Smart Cache & Update Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Force Download & Install Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
     echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
 
@@ -206,91 +264,84 @@ while true; do
         1) show_tunnel_hub ;;
         2) run_mod "mporter" ;; 3) run_mod "minterface" ;; 4) run_mod "mshield" ;;
         5) run_mod "mstats" ;; 6) run_mod "mhealer" ;; 7) run_mod "mdiag" ;; 8) run_iperf3 ;;
+        9) run_mod "mbbr" ;;
         
-        9)
+        10)
            echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOADER ]${NC}"
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-           apt-get install -y -q unzip >/dev/null 2>&1
-           
-           ( wget -qO /tmp/repo.zip "$REPO_ZIP" ) &
-           draw_progress_bar $! "Fetching Zip Archive"
-           
-           if unzip -t /tmp/repo.zip >/dev/null 2>&1; then
-               (
-                   unzip -q -o /tmp/repo.zip -d /tmp/ 2>/dev/null
-                   cp -rf /tmp/MTunnel-main/packages/* "$LOCAL_DIR/packages/" 2>/dev/null
-                   chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null
-                   
-                   # Safe Skip logic implemented!
-                   [ -f "$LOCAL_DIR/packages/bh" ] && [ ! -f "/usr/local/bin/bh" ] && { cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh; chmod +x /usr/local/bin/bh; }
-                   [ -f "$LOCAL_DIR/packages/gost" ] && [ ! -f "/usr/local/bin/gost" ] && { cp "$LOCAL_DIR/packages/gost" /usr/local/bin/gost; chmod +x /usr/local/bin/gost; }
-                   [ -f "$LOCAL_DIR/packages/frps" ] && [ ! -f "/usr/local/bin/frps" ] && { cp "$LOCAL_DIR/packages/frps" /usr/local/bin/frps; chmod +x /usr/local/bin/frps; }
-                   [ -f "$LOCAL_DIR/packages/frpc" ] && [ ! -f "/usr/local/bin/frpc" ] && { cp "$LOCAL_DIR/packages/frpc" /usr/local/bin/frpc; chmod +x /usr/local/bin/frpc; }
-                   [ -f "$LOCAL_DIR/packages/rathole" ] && [ ! -f "/usr/local/bin/rathole" ] && { cp "$LOCAL_DIR/packages/rathole" /usr/local/bin/rathole; chmod +x /usr/local/bin/rathole; }
-                   
-                   rm -rf /tmp/MTunnel-main /tmp/repo.zip
-               ) &
-               draw_progress_bar $! "Extracting & Installing"
-               echo -e "\n  ${G}● Binary Files downloaded (Existing active files skipped safely)!${NC}"; sleep 2
+           tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
+           rm -f "$tmp_zip"
+           if command -v curl >/dev/null 2>&1; then
+               curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP" &
+               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
+           elif command -v wget >/dev/null 2>&1; then
+               wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP" &
+               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
            else
-               echo -e "\n  ${R}● Error downloading zip archive from GitHub!${NC}"; sleep 2
-           fi ;;
-
-        10) 
-           echo -e "\n  ${Y}● Syncing .sh components from GitHub...${NC}"
-           mkdir -p "$LOCAL_DIR" 2>/dev/null; CACHE_BUST=$(date +%s); download_success=true
-           MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mgostun.sh" "mwire.sh" "mfrp.sh" "ml2tp.sh" "mhysteria.sh" "mbackhaul.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mweb.sh")
-           for file in "${MODULES[@]}"; do
-               echo -e "  ${DIM}├─ Fetching $file...${NC}"
-               wget --timeout=5 --tries=1 -qO "/tmp/$file" "$REPO_SCRIPTS/${file}?v=$CACHE_BUST"
-               if [ -s "/tmp/$file" ]; then
-                   mv "/tmp/$file" "$LOCAL_DIR/$file"
-                   sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null
+               rc=1
+           fi
+           if [ "${rc:-1}" -eq 0 ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
+               tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
+               unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
+               pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
+               if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
+                   cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
+                   chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
+                   for bin in bh gost frps frpc rathole; do
+                       if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
+                           install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
+                           echo -e "  ${G}✓${NC} Installed $bin"
+                       fi
+                   done
+                   echo -e "  ${G}● Binary package cache updated. Existing active binaries were preserved.${NC}"
                else
-                   echo -e "  ${Y}├─ Internet unavailable, keeping offline version for $file${NC}"
+                   echo -e "  ${R}● Package directory was not found in the archive.${NC}"
                fi
-           done
-           for file in "${MODULES[@]}"; do
-               if [ -s "$LOCAL_DIR/$file" ]; then
-                   mod_name="${file%.sh}"; [ "$mod_name" == "main" ] && mod_name="mtunnel"
-                   # Safe cat inplace overwrite
-                   cat "$LOCAL_DIR/$file" > "/usr/bin/$mod_name" 2>/dev/null; chmod +x "/usr/bin/$mod_name" 2>/dev/null
-               fi
-           done
-           echo -e "\n  ${G}● Core scripts fully upgraded/synced!${NC}"; sleep 1.5; exec "$0" ;;
+               rm -rf "$tmp_dir"
+           else
+               echo -e "  ${R}● Error downloading or reading the GitHub package archive.${NC}"
+           fi
+           rm -f "$tmp_zip"
+           sleep 1.5 ;;
 
         11)
-           echo -e "\n  ${M}● Initializing Offline Local Deploy Engine...${NC}"
-           if [ ! -d "$LOCAL_DIR" ] || ! ls "$LOCAL_DIR"/*.sh >/dev/null 2>&1; then
-               echo -e "  ${R}● No offline scripts found in /root/mtunnel/!${NC}"; sleep 2; continue
-           fi
-           for file in "$LOCAL_DIR"/*.sh; do
-               mod_name=$(basename "$file" .sh)
-               [ "$mod_name" == "main" ] && mod_name="mtunnel"
-               
-               if [ -f "/usr/bin/$mod_name" ] && [ "$mod_name" != "mtunnel" ]; then
-                   echo -e "  ${DIM}├─ Skipping script $mod_name (Already deployed)${NC}"
-               else
-                   sed -i 's/\r$//' "$file" 2>/dev/null
-                   cat "$file" > "/usr/bin/$mod_name" 2>/dev/null
-                   chmod +x "/usr/bin/$mod_name" 2>/dev/null
-               fi
-           done
-           
-           for bin in bh gost frps frpc rathole; do
-               if [ -f "$LOCAL_DIR/packages/$bin" ]; then
-                   if [ -f "/usr/local/bin/$bin" ]; then
-                       echo -e "  ${DIM}├─ Skipping binary $bin (Already installed)${NC}"
+           echo -e "\n  ${C}● Smart Cache & Update: checking core modules...${NC}"
+           if [ -s "$LOCAL_DIR/install.sh" ]; then MTUNNEL_NO_EXEC=1 bash "$LOCAL_DIR/install.sh" --cache; elif [ -s "/root/mtunnel/install.sh" ]; then MTUNNEL_NO_EXEC=1 bash /root/mtunnel/install.sh --cache; else echo -e "  ${R}✗ Installer is not available locally.${NC}"; fi
+           ;;
+
+        12)
+           echo -e "\n  ${M}● Offline Local Deploy Engine${NC}"
+           failed_local=()
+           for file in "${ALL_MODULES[@]}"; do
+               mod_name="${file%.sh}"
+               [ "$mod_name" = "main" ] && mod_name="mtunnel"
+               if [ -s "$LOCAL_DIR/$file" ]; then
+                   if deploy_cached_module "$mod_name"; then
+                       echo -e "  ${G}✓${NC} $mod_name"
                    else
-                       cp "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null
-                       chmod +x "/usr/local/bin/$bin" 2>/dev/null
-                       echo -e "  ${G}├─ Installed $bin${NC}"
+                       failed_local+=("$mod_name")
                    fi
                fi
            done
-           echo -e "\n  ${G}● Local Deployment Complete (Active files skipped safely)!${NC}"; sleep 1.5; exec "$0" ;;
-           
-        12)
+           if [ "${#failed_local[@]}" -gt 0 ]; then
+               echo -e "  ${Y}● Offline deploy incomplete:${NC} ${failed_local[*]}"
+           else
+               echo -e "  ${G}● Local deployment complete.${NC}"
+           fi
+           sleep 1.5 ;;
+
+        13)
+           echo -e "\n  ${R}● Force Download & Install Core${NC}"
+           if [ -s "$LOCAL_DIR/install.sh" ]; then
+               MTUNNEL_NO_EXEC=1 bash "$LOCAL_DIR/install.sh" --force
+           elif [ -s "/root/mtunnel/install.sh" ]; then
+               MTUNNEL_NO_EXEC=1 bash /root/mtunnel/install.sh --force
+           else
+               echo -e "  ${R}✗ Installer is not available locally.${NC}"
+           fi
+           sleep 1.5 ;;
+
+        14)
             clear
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe${NC}                                      ${R}│${NC}"
@@ -317,7 +368,7 @@ while true; do
                 echo -e "  ${C}[4/4]${NC} Removing MTunnel-owned files..."
                 rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/frp /etc/ml2tp /etc/mhysteria /etc/mbackhaul /etc/mshield /etc/mstats /etc/mrathole /etc/mgostun /root/mtunnel
                 rm -f /var/log/mhealer.log /var/log/mporter-watchdog.log
-                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mwire /usr/bin/mfrp /usr/bin/ml2tp /usr/bin/mhysteria /usr/bin/mbackhaul /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mgostun
+                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mwire /usr/bin/mfrp /usr/bin/ml2tp /usr/bin/mhysteria /usr/bin/mbackhaul /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mgostun /usr/bin/mbbr
                 rm -f /usr/local/bin/mtunnel /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-watchdog.sh /usr/local/bin/mshield-runner.sh /usr/local/bin/mhealer_daemon.sh /usr/local/bin/hysteria /usr/local/bin/mrathole-runner /usr/local/bin/mgostun-runner
                 echo -e "\n  ${G}✓ MTunnel wipe completed. Shared configs were preserved.${NC}\n"
                 exit 0

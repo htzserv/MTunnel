@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.5.2 (TCP BBR Accelerator Integrated) ---
+# --- MDesign Master Core | Central Dashboard v7.5.4 (Fixed Force Download) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -53,21 +53,6 @@ draw_progress_bar() {
     bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
     printf '\r  %b✓%b %-26s %b%s%b %3d%%\n' "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
     tput cnorm 2>/dev/null || true
-}
-
-sha256_file() {
-    local f="$1"
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$f" | awk '{print $1}'
-    elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$f" | awk '{print $1}'
-    else return 1; fi
-}
-
-manifest_set() {
-    local f="$1" h="$2" manifest="$LOCAL_DIR/.module-manifest" tmp="$LOCAL_DIR/.module-manifest.$$"
-    mkdir -p "$LOCAL_DIR"; touch "$manifest"
-    awk -v f="$f" '$1!=f {print}' "$manifest" > "$tmp" 2>/dev/null || :
-    printf '%s %s\n' "$f" "$h" >> "$tmp"
-    mv -f "$tmp" "$manifest"
 }
 
 same_file() {
@@ -188,7 +173,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v7.5.2 │ IP: ${s_ip} │ Web: ${raw_web} "
+    local raw_top=" MDesign Master Core v7.5.4 │ IP: ${s_ip} │ Web: ${raw_web} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -198,7 +183,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.5.4${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  GostTun:${NC}${c_gst}${st_gs}${NC}${DIM}  FRP:${DIM}○${NC}${DIM}  Extra:${NC}${c_wg}${st_wg}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -251,12 +236,11 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Network Diagnostics Tools${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}iPerf3 Network Speedtest${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC} ${DIM}[NEW]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Smart Cache & Update Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Force Download & Install Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Force Download & Install Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
     echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
 
@@ -305,11 +289,6 @@ while true; do
            sleep 1.5 ;;
 
         11)
-           echo -e "\n  ${C}● Smart Cache & Update: checking core modules...${NC}"
-           if [ -s "$LOCAL_DIR/install.sh" ]; then MTUNNEL_NO_EXEC=1 bash "$LOCAL_DIR/install.sh" --cache; elif [ -s "/root/mtunnel/install.sh" ]; then MTUNNEL_NO_EXEC=1 bash /root/mtunnel/install.sh --cache; else echo -e "  ${R}✗ Installer is not available locally.${NC}"; fi
-           ;;
-
-        12)
            echo -e "\n  ${M}● Offline Local Deploy Engine${NC}"
            failed_local=()
            for file in "${ALL_MODULES[@]}"; do
@@ -330,18 +309,28 @@ while true; do
            fi
            sleep 1.5 ;;
 
-        13)
+        12)
            echo -e "\n  ${R}● Force Download & Install Core${NC}"
+           # اگر install.sh موجود نبود، ابتدا از گیت‌هاب دانلود می‌شود
+           if [ ! -s "$LOCAL_DIR/install.sh" ]; then
+               mkdir -p "$LOCAL_DIR" 2>/dev/null
+               echo -e "  ${C}→ Fetching install.sh from GitHub...${NC}"
+               if command -v curl >/dev/null 2>&1; then
+                   curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null
+               elif command -v wget >/dev/null 2>&1; then
+                   wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null
+               fi
+           fi
+
            if [ -s "$LOCAL_DIR/install.sh" ]; then
+               chmod +x "$LOCAL_DIR/install.sh"
                MTUNNEL_NO_EXEC=1 bash "$LOCAL_DIR/install.sh" --force
-           elif [ -s "/root/mtunnel/install.sh" ]; then
-               MTUNNEL_NO_EXEC=1 bash /root/mtunnel/install.sh --force
            else
-               echo -e "  ${R}✗ Installer is not available locally.${NC}"
+               echo -e "  ${R}✗ Failed to fetch installer from GitHub.${NC}"
            fi
            sleep 1.5 ;;
 
-        14)
+        13)
             clear
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe${NC}                                      ${R}│${NC}"

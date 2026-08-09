@@ -3,7 +3,7 @@ B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; 
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"; LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || pwd)"
 MODE="auto"; case "${1:-}" in --offline) MODE="offline";; --online) MODE="online";; -h|--help) echo "Usage: $0 [--offline|--online]"; exit 0;; esac
-CORE_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mweb.sh" "mstats.sh")
+CORE_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mweb.sh" "mstats.sh" "mbbr.sh")
 mkdir -p "$LOCAL_DIR/packages" || { echo -e "${R}Cannot create $LOCAL_DIR${NC}"; exit 1; }
 clear 2>/dev/null || true
 echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"

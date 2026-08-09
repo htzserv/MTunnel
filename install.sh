@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel Core Installer v7.5.5 (Restored UI & Auto-Exec) ---
+# --- MTunnel Core Installer v7.5.6 (White Progress Bar & Auto-Exec) ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -10,6 +10,7 @@ BOOTSTRAP_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mb
 
 mkdir -p "$LOCAL_DIR"
 
+# نوار پیشرفت کاملاً سفید
 draw_progress() {
     local n=$1; local total=$2; local text=$3; local width=25
     [ -z "$total" ] || [ "$total" -le 0 ] && total=1
@@ -20,13 +21,13 @@ draw_progress() {
     local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
     
     tput civis 2>/dev/null || true
-    printf "\r  %b✔%b %b%-20s%b %b[%b%s%b%s%b] %b%3d%%%%%b" "$G" "$NC" "$W" "$text" "$NC" "$M" "$G" "$bar" "$DIM" "$empty_bar" "$NC" "$G" "$percent" "$NC"
+    printf "\r  %b✔%b %b%-20s%b %b[%b%s%b%s%b] %b%3d%%%%%b" "$G" "$NC" "$W" "$text" "$NC" "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" "$W" "$percent" "$NC"
     tput cnorm 2>/dev/null || true
 }
 
 clear
 echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-echo -e "  ${B}│${NC} ${W}MTunnel Core Installer v7.5.5${NC}                              ${B}│${NC}"
+echo -e "  ${B}│${NC} ${W}MTunnel Core Installer v7.5.6${NC}                              ${B}│${NC}"
 echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
 
 total_mods=${#BOOTSTRAP_MODULES[@]}

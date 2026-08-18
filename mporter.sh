@@ -1,5 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.1 (No-Hang Patch) ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.2 (Offline Direct-Link) ---
+# [PATCHED: Auto-Override /usr/bin/mporter, Zero-Hang OS Prepare, Instant Local Deploy]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -9,7 +10,7 @@ OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
-# بروزرسانی اجباری باینری اجرایی در سیستم
+# بروزرسانی و اوررایت قطعی باینری در سیستم
 if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
@@ -175,7 +176,6 @@ install_haproxy_core() {
         mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
         touch /var/lib/haproxy/stats 2>/dev/null
 
-        # 1. کپی مستقیم باینری یا نصب deb
         if [ -s "$P_DIR/haproxy" ]; then
             cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
             cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy 2>/dev/null
@@ -188,7 +188,6 @@ install_haproxy_core() {
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1
         fi
 
-        # ساخت کانفیگ سالم
         cat <<'EOF' > "$H_CONF"
 global
     maxconn 500000
@@ -206,7 +205,6 @@ backend dummy_back
     server local 127.0.0.1:9999
 EOF
 
-        # اجرای بدون ایجاد تاخیر
         systemctl daemon-reload >/dev/null 2>&1
         systemctl enable haproxy >/dev/null 2>&1
         timeout 5 systemctl restart haproxy >/dev/null 2>&1 || true
@@ -306,13 +304,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.3.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.3.2 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.3.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"

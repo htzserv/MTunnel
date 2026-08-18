@@ -243,7 +243,7 @@ while true; do
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Offline Local Deploy${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Offline Local Deploy (Packages & Modules)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Force Download & Install Core${NC}"
     echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
@@ -276,7 +276,7 @@ while true; do
                if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
                    cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
                    chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
-                   for bin in bh gost frps frpc rathole; do
+                   for bin in bh gost frps frpc rathole haproxy; do
                        if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
                            install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
                            echo -e "  ${G}✓${NC} Installed $bin"
@@ -294,25 +294,59 @@ while true; do
            sleep 1.5 ;;
 
         11)
-           echo -e "\n  ${M}● Offline Local Deploy Engine${NC}"
+           echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
+           
+           # ۱. استقرار تمام ماژول‌های اسکریپتی
            failed_local=()
            for file in "${ALL_MODULES[@]}"; do
                mod_name="${file%.sh}"
                [ "$mod_name" = "main" ] && mod_name="mtunnel"
                if [ -s "$LOCAL_DIR/$file" ]; then
                    if deploy_cached_module "$mod_name"; then
-                       echo -e "  ${G}✓${NC} $mod_name"
+                       echo -e "  ${G}✓${NC} Module: $mod_name"
                    else
                        failed_local+=("$mod_name")
                    fi
                fi
            done
-           if [ "${#failed_local[@]}" -gt 0 ]; then
-               echo -e "  ${Y}● Offline deploy incomplete:${NC} ${failed_local[*]}"
-           else
-               echo -e "  ${G}● Local deployment complete.${NC}"
+
+           # ۲. استقرار باینری‌های لوکال موجود در پوشه packages
+           local_pkg_dir="$LOCAL_DIR/packages"
+           [ ! -d "$local_pkg_dir" ] && [ -d "./packages" ] && local_pkg_dir="./packages"
+
+           if [ -d "$local_pkg_dir" ]; then
+               mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
+               
+               # هپروکسی لوکال
+               if [ -f "$local_pkg_dir/haproxy" ]; then
+                   cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy 2>/dev/null || cp -f "$local_pkg_dir/haproxy" /usr/local/sbin/haproxy
+                   chmod +x /usr/sbin/haproxy /usr/local/sbin/haproxy 2>/dev/null
+                   touch /var/lib/haproxy/stats 2>/dev/null
+                   echo -e "  ${G}✓${NC} Binary: haproxy (Local)"
+               fi
+
+               # باینری‌های تانل
+               for b in gost bh backhaul frpc frps rathole hysteria; do
+                   if [ -f "$local_pkg_dir/$b" ]; then
+                       cp -f "$local_pkg_dir/$b" /usr/local/bin/$b
+                       chmod +x "/usr/local/bin/$b"
+                       echo -e "  ${G}✓${NC} Binary: $b (Local)"
+                   fi
+               done
+
+               # فایل‌های deb
+               if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then
+                   dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || apt-get install -f -y >/dev/null 2>&1
+                   echo -e "  ${G}✓${NC} Installed local .deb packages"
+               fi
            fi
-           sleep 1.5 ;;
+
+           if [ "${#failed_local[@]}" -gt 0 ]; then
+               echo -e "  ${Y}● Offline deploy incomplete for some modules:${NC} ${failed_local[*]}"
+           else
+               echo -e "  ${G}● Local deployment and binary sync completed successfully.${NC}"
+           fi
+           sleep 2 ;;
 
         12)
            echo -e "\n  ${R}● Force Download & Install Core${NC}"

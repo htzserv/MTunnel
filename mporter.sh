@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.5.0 ---
-# [PATCHED: Auto Systemd Unit Creation, Instant Offline Deploy, Zero-Hang Core]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.5.5 ---
+# [PATCHED: Robust Systemd Execution, Local Package Engine, Zero-Hang OS Prepare]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -10,18 +10,16 @@ OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
-# ایجاد ساختار مسیرها و ثبت باینری اجرایی
-mkdir -p "$LOCAL_DIR" /etc/haproxy /var/lib/haproxy /etc/gost /usr/sbin /usr/local/sbin /usr/local/bin 2>/dev/null
+mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost /usr/sbin /usr/local/sbin /usr/local/bin 2>/dev/null
 if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
 get_pkg_dir() {
-    if [ -d "$LOCAL_DIR/packages" ]; then echo "$LOCAL_DIR/packages"
-    elif [ -d "$SCRIPT_DIR/packages" ]; then echo "$SCRIPT_DIR/packages"
-    elif [ -d "/root/packages" ]; then echo "/root/packages"
-    elif [ -d "./packages" ]; then echo "./packages"
+    if [ -d "$LOCAL_DIR/packages" ] && [ "$(ls -A "$LOCAL_DIR/packages" 2>/dev/null)" ]; then echo "$LOCAL_DIR/packages"
+    elif [ -d "$SCRIPT_DIR/packages" ] && [ "$(ls -A "$SCRIPT_DIR/packages" 2>/dev/null)" ]; then echo "$SCRIPT_DIR/packages"
+    elif [ -d "./packages" ] && [ "$(ls -A "./packages" 2>/dev/null)" ]; then echo "./packages"
     else echo "$LOCAL_DIR/packages"; fi
 }
 
@@ -115,9 +113,6 @@ ensure_gost() {
         elif ls "$P_DIR"/gost*.tar.gz 1> /dev/null 2>&1; then
             tar -xzf "$P_DIR"/gost*.tar.gz -C /usr/local/bin/ gost 2>/dev/null || tar -xzf "$P_DIR"/gost*.tar.gz -C /usr/local/bin/
             chmod +x /usr/local/bin/gost
-        elif [ -s "$LOCAL_DIR/gost" ]; then
-            cp "$LOCAL_DIR/gost" /usr/local/bin/gost
-            chmod +x /usr/local/bin/gost
         else
             wget --timeout=4 --tries=1 -qO "/tmp/gost.gz" https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
             if [ -s "/tmp/gost.gz" ]; then
@@ -131,7 +126,7 @@ ensure_gost() {
 }
 
 build_obfs_runner() {
-    cat <<'EOF' > /usr/local/bin/mporter-obfs.sh
+    cat <<'EOF_OBFS' > /usr/local/bin/mporter-obfs.sh
 #!/bin/bash
 iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
 iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
@@ -139,9 +134,9 @@ iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /'
 [ -f /etc/mporter/obfs_rules/nat.sh ] && source /etc/mporter/obfs_rules/nat.sh 2>/dev/null
 [ -f /etc/mporter/obfs_rules/gost.sh ] && source /etc/mporter/obfs_rules/gost.sh 2>/dev/null
 wait
-EOF
+EOF_OBFS
     chmod +x /usr/local/bin/mporter-obfs.sh
-    cat <<'EOF' > /etc/systemd/system/mporter-obfs.service
+    cat <<'EOF_SRV' > /etc/systemd/system/mporter-obfs.service
 [Unit]
 Description=MPorter OBFS Stealth Engine
 After=network.target
@@ -152,7 +147,7 @@ Restart=always
 LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_SRV
     systemctl daemon-reload; systemctl enable mporter-obfs >/dev/null 2>&1; systemctl restart mporter-obfs >/dev/null 2>&1
 }
 
@@ -164,21 +159,18 @@ install_haproxy_core() {
 
     if [ -s "$P_DIR/haproxy" ]; then
         cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
-        cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy 2>/dev/null
-        chmod +x /usr/sbin/haproxy /usr/local/sbin/haproxy 2>/dev/null
+        chmod +x /usr/sbin/haproxy 2>/dev/null
     elif ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
         dpkg -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1 || true
-    elif ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
-        dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1 || true
     else
         apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1 || true
     fi
 
     local HAP_BIN="/usr/sbin/haproxy"
-    [ ! -f "$HAP_BIN" ] && HAP_BIN="/usr/local/sbin/haproxy"
+    [ ! -f "$HAP_BIN" ] && [ -f "/usr/local/sbin/haproxy" ] && HAP_BIN="/usr/local/sbin/haproxy"
 
     if [ ! -s "$H_CONF" ]; then
-        cat <<'EOF' > "$H_CONF"
+        cat <<'EOF_HAP' > "$H_CONF"
 global
     maxconn 500000
     daemon
@@ -193,10 +185,10 @@ frontend dummy_check
     default_backend dummy_back
 backend dummy_back
     server local 127.0.0.1:9999
-EOF
+EOF_HAP
     fi
 
-    cat <<EOF > /etc/systemd/system/haproxy.service
+    cat <<EOF_UNIT > /etc/systemd/system/haproxy.service
 [Unit]
 Description=HAProxy Load Balancer
 After=network.target
@@ -209,7 +201,7 @@ LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_UNIT
 
     systemctl daemon-reload >/dev/null 2>&1
     systemctl unmask haproxy >/dev/null 2>&1
@@ -223,7 +215,7 @@ install_gost_core() {
     ensure_gost
     mkdir -p /etc/gost 2>/dev/null
     if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
-cat <<EOF > /etc/systemd/system/gost.service
+cat <<EOF_GST > /etc/systemd/system/gost.service
 [Unit]
 Description=GO Simple Tunnel (MPorter Core)
 After=network.target
@@ -236,7 +228,7 @@ LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_GST
     systemctl daemon-reload >/dev/null 2>&1
     systemctl enable gost >/dev/null 2>&1
     systemctl restart gost >/dev/null 2>&1 || true
@@ -302,13 +294,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.5.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.5.5 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.5.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.5.5${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -628,7 +620,8 @@ edit_mapping() {
                     fi
                 done
                 sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
-                [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null; [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
+                [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null
+                [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
             2)

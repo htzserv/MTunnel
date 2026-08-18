@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.2 (Offline Direct-Link) ---
-# [PATCHED: Auto-Override /usr/bin/mporter, Zero-Hang OS Prepare, Instant Local Deploy]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.5.0 ---
+# [PATCHED: Auto Systemd Unit Creation, Instant Offline Deploy, Zero-Hang Core]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -10,15 +10,16 @@ OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
-# بروزرسانی و اوررایت قطعی باینری در سیستم
+# ایجاد ساختار مسیرها و ثبت باینری اجرایی
+mkdir -p "$LOCAL_DIR" /etc/haproxy /var/lib/haproxy /etc/gost /usr/sbin /usr/local/sbin /usr/local/bin 2>/dev/null
 if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
 get_pkg_dir() {
-    if [ -d "$SCRIPT_DIR/packages" ]; then echo "$SCRIPT_DIR/packages"
-    elif [ -d "$LOCAL_DIR/packages" ]; then echo "$LOCAL_DIR/packages"
+    if [ -d "$LOCAL_DIR/packages" ]; then echo "$LOCAL_DIR/packages"
+    elif [ -d "$SCRIPT_DIR/packages" ]; then echo "$SCRIPT_DIR/packages"
     elif [ -d "/root/packages" ]; then echo "/root/packages"
     elif [ -d "./packages" ]; then echo "./packages"
     else echo "$LOCAL_DIR/packages"; fi
@@ -100,21 +101,6 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-draw_progress_bar() {
-    local pid=$1; local text=$2; local width=25; local progress=0
-    tput civis 2>/dev/null || true
-    while kill -0 $pid 2>/dev/null; do
-        ((progress++)); if (( progress > 95 )); then progress=95; fi
-        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
-        printf "\r  %b⟳%b %b%-22s%b %b[%b%b%b%b]%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$M" "$bar" "$DIM" "$empty_bar" "$M" "$NC" "$C" "$progress" "$NC"
-        sleep 0.1
-    done
-    local bar=$(printf "%${width}s" "" | tr ' ' '#')
-    printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
-    tput cnorm 2>/dev/null || true
-}
-
 ensure_gost() {
     if [ ! -f /usr/local/bin/gost ]; then
         local P_DIR=$(get_pkg_dir)
@@ -171,23 +157,27 @@ EOF
 }
 
 install_haproxy_core() {
-    (
-        local P_DIR=$(get_pkg_dir)
-        mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
-        touch /var/lib/haproxy/stats 2>/dev/null
+    echo -ne "  ${C}⟳${NC} ${W}Deploying HAProxy Engine...${NC} "
+    local P_DIR=$(get_pkg_dir)
+    mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
+    touch /var/lib/haproxy/stats 2>/dev/null
 
-        if [ -s "$P_DIR/haproxy" ]; then
-            cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
-            cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy 2>/dev/null
-            chmod +x /usr/sbin/haproxy /usr/local/sbin/haproxy 2>/dev/null
-        elif ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
-            DEBIAN_FRONTEND=noninteractive dpkg --force-all -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1
-        elif ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
-            DEBIAN_FRONTEND=noninteractive dpkg --force-all -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-        else
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1
-        fi
+    if [ -s "$P_DIR/haproxy" ]; then
+        cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
+        cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy 2>/dev/null
+        chmod +x /usr/sbin/haproxy /usr/local/sbin/haproxy 2>/dev/null
+    elif ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
+        dpkg -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1 || true
+    elif ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
+        dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1 || true
+    else
+        apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1 || true
+    fi
 
+    local HAP_BIN="/usr/sbin/haproxy"
+    [ ! -f "$HAP_BIN" ] && HAP_BIN="/usr/local/sbin/haproxy"
+
+    if [ ! -s "$H_CONF" ]; then
         cat <<'EOF' > "$H_CONF"
 global
     maxconn 500000
@@ -204,37 +194,53 @@ frontend dummy_check
 backend dummy_back
     server local 127.0.0.1:9999
 EOF
+    fi
 
-        systemctl daemon-reload >/dev/null 2>&1
-        systemctl enable haproxy >/dev/null 2>&1
-        timeout 5 systemctl restart haproxy >/dev/null 2>&1 || true
-        exit 0
-    ) &
-    draw_progress_bar $! "Deploying HAProxy"
+    cat <<EOF > /etc/systemd/system/haproxy.service
+[Unit]
+Description=HAProxy Load Balancer
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$HAP_BIN -f /etc/haproxy/haproxy.cfg -db
+Restart=always
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl unmask haproxy >/dev/null 2>&1
+    systemctl enable haproxy >/dev/null 2>&1
+    systemctl restart haproxy >/dev/null 2>&1 || true
+    echo -e "\r  ${G}✔${NC} ${W}HAProxy Engine Deployed Successfully!${NC}      "
 }
 
 install_gost_core() {
-    (
-        ensure_gost
-        mkdir -p /etc/gost 2>/dev/null
-        if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
+    echo -ne "  ${C}⟳${NC} ${W}Deploying Gost Tunnel...${NC} "
+    ensure_gost
+    mkdir -p /etc/gost 2>/dev/null
+    if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
 cat <<EOF > /etc/systemd/system/gost.service
 [Unit]
 Description=GO Simple Tunnel (MPorter Core)
 After=network.target
+
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/gost -C /etc/gost/config.json
 Restart=always
 LimitNOFILE=1048576
+
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload >/dev/null 2>&1; systemctl enable gost >/dev/null 2>&1
-        timeout 5 systemctl restart gost >/dev/null 2>&1 || true
-        exit 0
-    ) &
-    draw_progress_bar $! "Deploying Gost Tunnel"
+    systemctl daemon-reload >/dev/null 2>&1
+    systemctl enable gost >/dev/null 2>&1
+    systemctl restart gost >/dev/null 2>&1 || true
+    echo -e "\r  ${G}✔${NC} ${W}Gost Tunnel Deployed Successfully!${NC}         "
 }
 
 fix_and_install() {
@@ -248,29 +254,21 @@ fix_and_install() {
 
     if [[ "$core_opt" =~ ^[1-3]$ ]]; then
         echo ""
-        (
-            local P_DIR=$(get_pkg_dir)
-            sysctl -w fs.file-max=2000000 >/dev/null 2>&1
-            pkill -9 -f "apt|dpkg" >/dev/null 2>&1 || true
-            rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
-            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+        echo -ne "  ${C}⟳${NC} ${W}Preparing OS & Caching...${NC} "
+        sysctl -w fs.file-max=2000000 >/dev/null 2>&1
+        pkill -9 -f "apt|dpkg" >/dev/null 2>&1 || true
+        rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
+        mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+        echo -e "\r  ${G}✔${NC} ${W}OS Ready & Caches Synchronized.${NC}      "
 
-            if [ -f "$P_DIR/haproxy" ] || ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
-                dpkg --configure -a >/dev/null 2>&1 || true
-            else
-                timeout 5 apt-get update -y -q >/dev/null 2>&1 || true
-                timeout 8 apt-get install --download-only -y -q wget curl gzip jq iproute2 cron socat haproxy >/dev/null 2>&1 || true
-                cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null || true
-            fi
-            exit 0
-        ) &
-        draw_progress_bar $! "Preparing OS & Caching"
+        case $core_opt in
+            1) install_haproxy_core ;;
+            2) install_gost_core ;;
+            3) install_haproxy_core; install_gost_core ;;
+        esac
+        echo -e "\n  ${G}● Initialization Completed Successfully.${NC}"
+        sleep 2
     fi
-    case $core_opt in
-        1) install_haproxy_core ;; 2) install_gost_core ;; 3) install_haproxy_core; install_gost_core ;;
-        0) return ;; *) echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return ;;
-    esac
-    echo -e "\n  ${G}● Initialization Completed Successfully.${NC}"; sleep 2
 }
 
 get_iface_for_ip() {
@@ -304,13 +302,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.3.2 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.5.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.3.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.5.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -563,7 +561,7 @@ edit_mapping() {
     [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
     
     local all_ips=$(echo -e "$h_map\n$g_map" | grep -v '^$' | sort -u)
-    if [ -z "$all_ips" ]; then echo -e "  ${R}● No active mappings found to edit!${NC}"; sleep 2; return; fi
+    if [ -z "$all_ips" ]; then echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; fi
 
     local ip_arr=($all_ips)
     echo -e "  ${B}╭────────────────── Select Target IP ──────────────────────╮${NC}"

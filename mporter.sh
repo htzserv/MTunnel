@@ -1,6 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.0 (Strict Auto-Distribute) ---
-# [PATCHED: Flawless Purge, Migration Feature, HAProxy Wipe Fix, Watchdog Safety & Offline Local Bypass]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.3.1 (No-Hang Patch) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -10,10 +9,16 @@ OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
-# همگام‌سازی و یافتن پوشه پکیج‌ها
+# بروزرسانی اجباری باینری اجرایی در سیستم
+if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
+    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
+    chmod +x "$INSTALL_PATH" 2>/dev/null
+fi
+
 get_pkg_dir() {
     if [ -d "$SCRIPT_DIR/packages" ]; then echo "$SCRIPT_DIR/packages"
     elif [ -d "$LOCAL_DIR/packages" ]; then echo "$LOCAL_DIR/packages"
+    elif [ -d "/root/packages" ]; then echo "/root/packages"
     elif [ -d "./packages" ]; then echo "./packages"
     else echo "$LOCAL_DIR/packages"; fi
 }
@@ -88,10 +93,6 @@ if [[ "$1" == "--cleanup-orphans" ]]; then
     exit 0
 fi
 
-if [[ "$1" != "--apply" ]]; then
-    if [[ ! -x "$INSTALL_PATH" ]]; then cp "$0" "$INSTALL_PATH" 2>/dev/null && chmod +x "$INSTALL_PATH" 2>/dev/null; fi
-fi
-
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
@@ -106,7 +107,7 @@ draw_progress_bar() {
         local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
         local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
         printf "\r  %b⟳%b %b%-22s%b %b[%b%b%b%b]%b %b%3d%%%%%b" "$C" "$NC" "$W" "$text" "$NC" "$M" "$bar" "$DIM" "$empty_bar" "$M" "$NC" "$C" "$progress" "$NC"
-        sleep 0.2
+        sleep 0.1
     done
     local bar=$(printf "%${width}s" "" | tr ' ' '#')
     printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
@@ -174,7 +175,7 @@ install_haproxy_core() {
         mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
         touch /var/lib/haproxy/stats 2>/dev/null
 
-        # استقرار باینری یا پکیج محلی بدون قفل شدن apt
+        # 1. کپی مستقیم باینری یا نصب deb
         if [ -s "$P_DIR/haproxy" ]; then
             cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
             cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy 2>/dev/null
@@ -187,14 +188,29 @@ install_haproxy_core() {
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1
         fi
 
-        if [ ! -s "$H_CONF" ]; then
-            echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
-            echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
-        fi
+        # ساخت کانفیگ سالم
+        cat <<'EOF' > "$H_CONF"
+global
+    maxconn 500000
+    daemon
+defaults
+    mode tcp
+    timeout connect 5s
+    timeout client 1h
+    timeout server 1h
 
+frontend dummy_check
+    bind 127.0.0.1:9999
+    default_backend dummy_back
+backend dummy_back
+    server local 127.0.0.1:9999
+EOF
+
+        # اجرای بدون ایجاد تاخیر
         systemctl daemon-reload >/dev/null 2>&1
         systemctl enable haproxy >/dev/null 2>&1
-        systemctl restart haproxy >/dev/null 2>&1
+        timeout 5 systemctl restart haproxy >/dev/null 2>&1 || true
+        exit 0
     ) &
     draw_progress_bar $! "Deploying HAProxy"
 }
@@ -216,7 +232,9 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload >/dev/null 2>&1; systemctl enable gost >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1
+        systemctl daemon-reload >/dev/null 2>&1; systemctl enable gost >/dev/null 2>&1
+        timeout 5 systemctl restart gost >/dev/null 2>&1 || true
+        exit 0
     ) &
     draw_progress_bar $! "Deploying Gost Tunnel"
 }
@@ -235,17 +253,18 @@ fix_and_install() {
         (
             local P_DIR=$(get_pkg_dir)
             sysctl -w fs.file-max=2000000 >/dev/null 2>&1
-            killall -9 dpkg apt apt-get 2>/dev/null || true
+            pkill -9 -f "apt|dpkg" >/dev/null 2>&1 || true
             rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
             mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 
             if [ -f "$P_DIR/haproxy" ] || ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
                 dpkg --configure -a >/dev/null 2>&1 || true
             else
-                timeout 8 apt-get update -y -q >/dev/null 2>&1 || true
-                timeout 15 apt-get install --download-only -y -q wget curl gzip jq iproute2 cron socat haproxy >/dev/null 2>&1 || true
+                timeout 5 apt-get update -y -q >/dev/null 2>&1 || true
+                timeout 8 apt-get install --download-only -y -q wget curl gzip jq iproute2 cron socat haproxy >/dev/null 2>&1 || true
                 cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null || true
             fi
+            exit 0
         ) &
         draw_progress_bar $! "Preparing OS & Caching"
     fi
@@ -462,7 +481,6 @@ smart_map() {
             continue
         fi
         
-        # 🌟 STRICT 1-TO-1 FORWARDING with FLOCK 🌟
         if [ "$fwd_engine" == "1" ]; then
             (
                 flock -x 200
@@ -578,9 +596,7 @@ edit_mapping() {
         if [ "$has_obfs" = true ]; then echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Disable OBFS Stealth for this IP${NC}"
         else echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Enable OBFS Stealth for this IP${NC}"; fi
         
-        # 🌟 NEW MIGRATE OPTION 🌟
         echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Migrate Target IP${NC} ${DIM}(Move ports to a new IP)${NC}"
-        
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
         echo -ne "  ${C}Select Action ❯❯ ${NC}"; read edit_opt
         edit_opt=$(echo "$edit_opt" | tr -d '\r' | tr -d ' ')
@@ -689,7 +705,6 @@ edit_mapping() {
                     build_obfs_runner; echo -e "  ${G}● OBFS Enabled for $target_ip.${NC}"; sleep 1.5
                 fi ;;
             4)
-                # 🌟 MIGRATION LOGIC 🌟
                 echo -ne "\n  ${C}●${NC} ${W}Enter New Destination IP: ${NC}"; read new_ip
                 new_ip=$(echo "$new_ip" | tr -d '\r' | tr -d ' ')
                 if ! [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then

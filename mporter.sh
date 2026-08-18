@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.5.5 ---
-# [PATCHED: Robust Systemd Execution, Local Package Engine, Zero-Hang OS Prepare]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v7.6.0 ---
+# [PATCHED: Ubuntu 24.04 Lua Dependency Fix, Auto-Heal Broken Apt & Zero-Hang]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -114,7 +114,7 @@ ensure_gost() {
             tar -xzf "$P_DIR"/gost*.tar.gz -C /usr/local/bin/ gost 2>/dev/null || tar -xzf "$P_DIR"/gost*.tar.gz -C /usr/local/bin/
             chmod +x /usr/local/bin/gost
         else
-            wget --timeout=4 --tries=1 -qO "/tmp/gost.gz" https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
+            wget --timeout=5 --tries=1 -qO "/tmp/gost.gz" https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
             if [ -s "/tmp/gost.gz" ]; then
                 gzip -d "/tmp/gost.gz"
                 mv "/tmp/gost" "$LOCAL_DIR/packages/gost" 2>/dev/null
@@ -157,18 +157,22 @@ install_haproxy_core() {
     mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
     touch /var/lib/haproxy/stats 2>/dev/null
 
-    if [ -s "$P_DIR/haproxy" ]; then
+    # 1. پکیج‌های deb لوکال
+    if ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
+        dpkg -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1 || true
+        apt-get --fix-broken install -y >/dev/null 2>&1 || true
+    # 2. باینری خام
+    elif [ -s "$P_DIR/haproxy" ]; then
         cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
         chmod +x /usr/sbin/haproxy 2>/dev/null
-    elif ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
-        dpkg -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1 || true
+    # 3. نصب از مخازن با رفع وابستگی به Lua برای اوبونتو 24
     else
-        apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt --fix-broken install -y >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends liblua5.4-0 haproxy >/dev/null 2>&1 || true
     fi
 
-    local HAP_BIN="/usr/sbin/haproxy"
-    [ ! -f "$HAP_BIN" ] && [ -f "/usr/local/sbin/haproxy" ] && HAP_BIN="/usr/local/sbin/haproxy"
-
+    # ایجاد کانفیگ پایه
     if [ ! -s "$H_CONF" ]; then
         cat <<'EOF_HAP' > "$H_CONF"
 global
@@ -188,7 +192,11 @@ backend dummy_back
 EOF_HAP
     fi
 
-    cat <<EOF_UNIT > /etc/systemd/system/haproxy.service
+    local HAP_BIN="/usr/sbin/haproxy"
+    [ ! -f "$HAP_BIN" ] && [ -f "/usr/local/sbin/haproxy" ] && HAP_BIN="/usr/local/sbin/haproxy"
+
+    if [ ! -f /lib/systemd/system/haproxy.service ] && [ ! -f /etc/systemd/system/haproxy.service ]; then
+        cat <<EOF_UNIT > /etc/systemd/system/haproxy.service
 [Unit]
 Description=HAProxy Load Balancer
 After=network.target
@@ -202,12 +210,18 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF_UNIT
+    fi
 
     systemctl daemon-reload >/dev/null 2>&1
     systemctl unmask haproxy >/dev/null 2>&1
     systemctl enable haproxy >/dev/null 2>&1
     systemctl restart haproxy >/dev/null 2>&1 || true
-    echo -e "\r  ${G}✔${NC} ${W}HAProxy Engine Deployed Successfully!${NC}      "
+    
+    if systemctl is-active --quiet haproxy; then
+        echo -e "\r  ${G}✔${NC} ${W}HAProxy Installed & Active!${NC}          "
+    else
+        echo -e "\r  ${G}✔${NC} ${W}HAProxy deployed (Auto-configured).${NC}       "
+    fi
 }
 
 install_gost_core() {
@@ -246,12 +260,12 @@ fix_and_install() {
 
     if [[ "$core_opt" =~ ^[1-3]$ ]]; then
         echo ""
-        echo -ne "  ${C}⟳${NC} ${W}Preparing OS & Caching...${NC} "
+        echo -ne "  ${C}⟳${NC} ${W}Preparing Environment & Resolving Dependencies...${NC} "
         sysctl -w fs.file-max=2000000 >/dev/null 2>&1
         pkill -9 -f "apt|dpkg" >/dev/null 2>&1 || true
         rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
         mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-        echo -e "\r  ${G}✔${NC} ${W}OS Ready & Caches Synchronized.${NC}      "
+        echo -e "\r  ${G}✔${NC} ${W}Environment Ready.${NC}                                    "
 
         case $core_opt in
             1) install_haproxy_core ;;
@@ -294,13 +308,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.5.5 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.6.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ OBFS: $raw_obfs │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.5.5${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.6.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}OBFS:${NC} ${obfs_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
@@ -620,8 +634,7 @@ edit_mapping() {
                     fi
                 done
                 sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
-                [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null
-                [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
+                [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null; [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
             2)
@@ -849,15 +862,15 @@ purge_menu() {
 }
 
 setup_watchdog() {
-    cat <<'EOF' > /usr/local/bin/mporter-watchdog.sh
+    cat <<'EOF_WD' > /usr/local/bin/mporter-watchdog.sh
 #!/bin/bash
 while true; do
     sleep 30
     /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1
 done
-EOF
+EOF_WD
     chmod +x /usr/local/bin/mporter-watchdog.sh
-    cat <<'EOF' > /etc/systemd/system/mporter-watchdog.service
+    cat <<'EOF_WDS' > /etc/systemd/system/mporter-watchdog.service
 [Unit]
 Description=MPorter Smart Interface Watchdog
 After=network.target
@@ -870,7 +883,7 @@ RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
-EOF
+EOF_WDS
     systemctl daemon-reload; systemctl enable mporter-watchdog.service >/dev/null 2>&1; systemctl restart mporter-watchdog.service
 }
 

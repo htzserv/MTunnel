@@ -10,10 +10,11 @@ OBFS_DIR="/etc/mporter/obfs_rules"
 LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
-# همگام‌سازی پوشه پکیج‌ها
+# همگام‌سازی و یافتن پوشه پکیج‌ها
 get_pkg_dir() {
     if [ -d "$SCRIPT_DIR/packages" ]; then echo "$SCRIPT_DIR/packages"
     elif [ -d "$LOCAL_DIR/packages" ]; then echo "$LOCAL_DIR/packages"
+    elif [ -d "./packages" ]; then echo "./packages"
     else echo "$LOCAL_DIR/packages"; fi
 }
 
@@ -99,7 +100,7 @@ get_local_ip() {
 
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=25; local progress=0
-    tput civis
+    tput civis 2>/dev/null || true
     while kill -0 $pid 2>/dev/null; do
         ((progress++)); if (( progress > 95 )); then progress=95; fi
         local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
@@ -109,7 +110,7 @@ draw_progress_bar() {
     done
     local bar=$(printf "%${width}s" "" | tr ' ' '#')
     printf "\r  %b✔%b %b%-22s%b %b[%b]%b %b100%%%%%b \n" "$G" "$NC" "$W" "$text" "$NC" "$G" "$bar" "$NC" "$G" "$NC"
-    tput cnorm
+    tput cnorm 2>/dev/null || true
 }
 
 ensure_gost() {
@@ -117,7 +118,6 @@ ensure_gost() {
         local P_DIR=$(get_pkg_dir)
         mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
         
-        # بررسی باینری و فایل فشرده محلی
         if [ -s "$P_DIR/gost" ]; then
             cp -f "$P_DIR/gost" /usr/local/bin/gost
             chmod +x /usr/local/bin/gost
@@ -171,27 +171,30 @@ EOF
 install_haproxy_core() {
     (
         local P_DIR=$(get_pkg_dir)
-        mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin
+        mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
         touch /var/lib/haproxy/stats 2>/dev/null
 
-        # اولویت با پکیج لوکال / باینری آماده بدون وابستگی به اینترنت
-        if [ -f "$P_DIR/haproxy" ]; then
-            cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null || cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy
+        # استقرار باینری یا پکیج محلی بدون قفل شدن apt
+        if [ -s "$P_DIR/haproxy" ]; then
+            cp -f "$P_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
+            cp -f "$P_DIR/haproxy" /usr/local/sbin/haproxy 2>/dev/null
             chmod +x /usr/sbin/haproxy /usr/local/sbin/haproxy 2>/dev/null
         elif ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
-            dpkg -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1 || apt-get install -f -y >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive dpkg --force-all -i "$P_DIR"/haproxy*.deb >/dev/null 2>&1
         elif ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then
-            dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
-            apt-get install -f -y >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive dpkg --force-all -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1
         else
-            apt-get install -y haproxy >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends haproxy >/dev/null 2>&1
         fi
 
-        if [ ! -f "$H_CONF" ]; then
+        if [ ! -s "$H_CONF" ]; then
             echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
             echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
         fi
-        systemctl enable haproxy >/dev/null 2>&1; systemctl restart haproxy >/dev/null 2>&1
+
+        systemctl daemon-reload >/dev/null 2>&1
+        systemctl enable haproxy >/dev/null 2>&1
+        systemctl restart haproxy >/dev/null 2>&1
     ) &
     draw_progress_bar $! "Deploying HAProxy"
 }
@@ -199,7 +202,7 @@ install_haproxy_core() {
 install_gost_core() {
     (
         ensure_gost
-        mkdir -p /etc/gost
+        mkdir -p /etc/gost 2>/dev/null
         if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
 cat <<EOF > /etc/systemd/system/gost.service
 [Unit]
@@ -213,7 +216,7 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-        systemctl daemon-reload; systemctl enable gost >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1
+        systemctl daemon-reload >/dev/null 2>&1; systemctl enable gost >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1
     ) &
     draw_progress_bar $! "Deploying Gost Tunnel"
 }
@@ -232,14 +235,13 @@ fix_and_install() {
         (
             local P_DIR=$(get_pkg_dir)
             sysctl -w fs.file-max=2000000 >/dev/null 2>&1
+            killall -9 dpkg apt apt-get 2>/dev/null || true
             rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
             mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
 
-            # اگر باینری یا deb لوکال وجود دارد نیازی به اتصال اینترنت apt-get نیست
             if [ -f "$P_DIR/haproxy" ] || ls "$P_DIR"/haproxy*.deb >/dev/null 2>&1; then
-                dpkg --configure -a >/dev/null 2>&1
+                dpkg --configure -a >/dev/null 2>&1 || true
             else
-                # در صورت نیاز به دانلود، با محدودیت زمانی سریع انجام می‌شود تا روی 95 درصد گیر نکند
                 timeout 8 apt-get update -y -q >/dev/null 2>&1 || true
                 timeout 15 apt-get install --download-only -y -q wget curl gzip jq iproute2 cron socat haproxy >/dev/null 2>&1 || true
                 cp -a /var/cache/apt/archives/*.deb "$LOCAL_DIR/packages/" 2>/dev/null || true

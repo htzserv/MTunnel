@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.16 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.3.0 (Full Advanced Edit) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -14,6 +14,17 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+destroy_tunnel_dev() {
+    local t_name="$1"
+    [ -z "$t_name" ] && return
+    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$t_name" -j TCPMSS --set-mss 1396 >/dev/null 2>&1
+    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$t_name" -j TCPMSS --set-mss 1436 >/dev/null 2>&1
+    ip tunnel del "$t_name" >/dev/null 2>&1
+    ip tunnel del "sit_$t_name" >/dev/null 2>&1
+    ip link del "$t_name" >/dev/null 2>&1
+    ip link del "sit_$t_name" >/dev/null 2>&1
+}
+
 apply_tunnel() {
     local conf="$1"
     [ ! -s "$conf" ] && return
@@ -22,9 +33,7 @@ apply_tunnel() {
     local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
     
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 >/dev/null 2>&1
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1436 >/dev/null 2>&1
-    ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+    destroy_tunnel_dev "$T_NAME"
 
     if [[ "$TUN_PROTO" == "6to4" ]]; then
         ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB" 2>/dev/null
@@ -77,7 +86,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.16 "
+    local str1=" MGRE Core 4.3.0 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -195,14 +204,72 @@ edit_tunnel() {
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
-        local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "$sel_conf"
-        echo -e "\n  ${DIM}┌─[ HOT-SWAP PUBLIC IPs ]${NC}"
-        echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_local
-        echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_remote
-        [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
-        [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
-        apply_tunnel "$sel_conf"
-        echo -e "  ${G}● Pipeline re-routed successfully!${NC}"; sleep 1.5
+        local sel_conf="${configs[$t_idx]}"
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "$sel_conf"
+        local old_tname="$T_NAME"
+
+        echo -e "\n  ${DIM}┌─[ EDITING TUNNEL: ${W}${old_tname}${DIM} ] (Press Enter to keep current value)${NC}"
+        
+        echo -ne "  ${C}●${NC} ${W}Server Mode [Current: ${Y}${TYPE}${W}] (1:IR | 2:KH): ${NC}"; read n_type
+        n_type=$(echo "$n_type" | tr -d '\r' | tr -d ' '); [ -n "$n_type" ] && TYPE="$n_type"
+
+        echo -ne "  ${C}●${NC} ${W}Tunnel Protocol [Current: ${Y}${TUN_PROTO}${W}] (1:ipv4 | 2:6to4): ${NC}"; read n_proto_choice
+        n_proto_choice=$(echo "$n_proto_choice" | tr -d '\r' | tr -d ' ')
+        if [ "$n_proto_choice" == "1" ]; then TUN_PROTO="ipv4"; elif [ "$n_proto_choice" == "2" ]; then TUN_PROTO="6to4"; fi
+
+        echo -ne "  ${C}●${NC} ${W}Interface Name [Current: ${Y}${T_NAME}${W}]: ${NC}"; read n_name
+        n_name=$(echo "$n_name" | tr -d '\r' | tr -d ' '); [ -n "$n_name" ] && T_NAME="$n_name"
+
+        echo -ne "  ${C}●${NC} ${W}Local Public IP [Current: ${Y}${LOCAL_PUB}${W}]: ${NC}"; read n_local
+        n_local=$(echo "$n_local" | tr -d '\r' | tr -d ' '); [ -n "$n_local" ] && LOCAL_PUB="$n_local"
+
+        echo -ne "  ${C}●${NC} ${W}Remote Public IP [Current: ${Y}${REMOTE_PUB}${W}]: ${NC}"; read n_remote
+        n_remote=$(echo "$n_remote" | tr -d '\r' | tr -d ' '); [ -n "$n_remote" ] && REMOTE_PUB="$n_remote"
+
+        echo -ne "  ${C}●${NC} ${W}Tunnel Network ID [Current: ${Y}${TUN_ID}${W}] (1-250): ${NC}"; read n_tun_id
+        n_tun_id=$(echo "$n_tun_id" | tr -d '\r' | tr -d ' ')
+        if [ -n "$n_tun_id" ]; then
+            TUN_ID="$n_tun_id"
+            hash_c=$(echo -n "core_${TUN_ID}" | sha256sum)
+            class_selector=$(( TUN_ID % 3 ))
+            if [ "$class_selector" == "1" ]; then c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+            elif [ "$class_selector" == "2" ]; then c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+            else c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
+            CORE_SUBNET="${c1}.${c2}.${c3}"
+        fi
+
+        if [[ "$TUN_PROTO" == "6to4" ]]; then
+            echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key [Current: ${Y}${TUN_SECRET}${M}]: ${NC}"; read n_secret
+            n_secret=$(echo "$n_secret" | tr -d '\r' | tr -d ' ')
+            [ -n "$n_secret" ] && TUN_SECRET="$n_secret"
+            hash_str=$(echo -n "${TUN_SECRET}_MHDesign" | sha256sum)
+            pfx_v6="fd${hash_str:0:2}:${hash_str:2:4}:${hash_str:6:4}:${hash_str:10:4}"
+            if [[ "$TYPE" == "1" ]]; then LOCAL_IP6="${pfx_v6}::1"; REMOTE_IP6="${pfx_v6}::2"; else LOCAL_IP6="${pfx_v6}::2"; REMOTE_IP6="${pfx_v6}::1"; fi
+        else
+            TUN_SECRET=""; LOCAL_IP6=""; REMOTE_IP6=""
+        fi
+
+        destroy_tunnel_dev "$old_tname"
+        [ "$old_tname" != "$T_NAME" ] && rm -f "$sel_conf" "${STATE_DIR}/${old_tname}.state"
+
+        local new_conf_path="$CONF_DIR/${T_NAME}.conf"
+        cat <<EOF > "$new_conf_path"
+TYPE=$TYPE
+LOCAL_PUB=$LOCAL_PUB
+REMOTE_PUB=$REMOTE_PUB
+MAX_IPS=$MAX_IPS
+SYNC_KEY=$SYNC_KEY
+TUN_SECRET=$TUN_SECRET
+T_NAME=$T_NAME
+TUN_ID=$TUN_ID
+CORE_SUBNET=$CORE_SUBNET
+TUN_PROTO=$TUN_PROTO
+LOCAL_IP6=$LOCAL_IP6
+REMOTE_IP6=$REMOTE_IP6
+EOF
+
+        apply_tunnel "$new_conf_path"
+        echo -e "\n  ${G}● Tunnel [${T_NAME}] completely updated and rebuilt!${NC}"; sleep 2
     fi
 }
 
@@ -225,215 +292,83 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Advanced Edit Tunnel (All Parameters)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
            echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}\n  ${DIM}├─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}"
-           
-           while true; do
-               echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice
-               [[ "$proto_choice" == "q" ]] && break
-               [[ "$proto_choice" == "1" || "$proto_choice" == "2" ]] && break
-           done
+           while true; do echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice; [[ "$proto_choice" == "q" || "$proto_choice" == "1" || "$proto_choice" == "2" ]] && break; done
            [[ "$proto_choice" == "q" ]] && continue
-           
            tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
            
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
-               [[ "$s_type" == "q" ]] && break
-               [[ "$s_type" == "1" || "$s_type" == "2" ]] && break
-           done
+           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type; [[ "$s_type" =~ ^[12q]$ ]] && break; done
            [[ "$s_type" == "q" ]] && continue
            
            while true; do
-               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
-               [[ "$suffix" == "q" ]] && break
-               [[ -z "$suffix" ]] && continue
-               
+               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (e.g. fr): ${NC}"; read suffix
+               [[ "$suffix" == "q" ]] && break; [[ -z "$suffix" ]] && continue
                pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
                t_name="${pfx}${suffix}"
-               
-               check_len=${#t_name}
-               [ "$tun_proto" == "6to4" ] && check_len=$((check_len + 4))
-               
-               if [ "$check_len" -gt 15 ]; then
-                   echo -e "  ${R}● Error: Name too long! Kernel limit is 15 chars.${NC}"
-               else
-                   break
-               fi
+               [ "${#t_name}" -le 15 ] && break
+               echo -e "  ${R}● Error: Name too long! Kernel limit is 15 chars.${NC}"
            done
            [[ "$suffix" == "q" ]] && continue
            
-           if [ -f "$CONF_DIR/${t_name}.conf" ]; then
-               echo -e "\n  ${R}● Error: Tunnel interface name [${W}${t_name}${R}] already exists!${NC}"
-               sleep 2; continue
-           fi
+           [ -f "$CONF_DIR/${t_name}.conf" ] && { echo -e "\n  ${R}● Error: Interface already exists!${NC}"; sleep 2; continue; }
            
            local_ip=$(get_local_ip)
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}] (Enter for default | q:Back): ${NC}"; read custom_ip
-               [[ "$custom_ip" == "q" ]] && break
-               [ -n "$custom_ip" ] && local_ip=$custom_ip
-               break
-           done
-           [[ "$custom_ip" == "q" ]] && continue
+           echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip
+           [ -n "$custom_ip" ] && local_ip=$custom_ip
            
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
-               [[ "$r_ip" == "q" ]] && break
-               [[ -n "$r_ip" ]] && break
-           done
+           while true; do echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip; [[ -n "$r_ip" || "$r_ip" == "q" ]] && break; done
            [[ "$r_ip" == "q" ]] && continue
            
            local_ip6=""; remote_ip6=""; tun_secret=""
            if [[ "$tun_proto" == "6to4" ]]; then
-               while true; do
-                   echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret
-                   [[ "$tun_secret" == "q" ]] && break
-                   [[ -n "$tun_secret" ]] && break
-               done
+               while true; do echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret; [[ -n "$tun_secret" || "$tun_secret" == "q" ]] && break; done
                [[ "$tun_secret" == "q" ]] && continue
-               
                hash_str=$(echo -n "${tun_secret}_MHDesign" | sha256sum)
                pfx_v6="fd${hash_str:0:2}:${hash_str:2:4}:${hash_str:6:4}:${hash_str:10:4}"
                if [[ "$s_type" == "1" ]]; then local_ip6="${pfx_v6}::1"; remote_ip6="${pfx_v6}::2"; else local_ip6="${pfx_v6}::2"; remote_ip6="${pfx_v6}::1"; fi
            fi
            
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
-               [[ "$user_tun_id" == "q" ]] && break
-               [[ -z "$user_tun_id" ]] && continue
-               
-               if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
-                   echo -e "  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned!${NC}"
-                   continue
-               fi
-               break
-           done
+           while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id; [[ -n "$user_tun_id" || "$user_tun_id" == "q" ]] && break; done
            [[ "$user_tun_id" == "q" ]] && continue
            
-           tun_id=$user_tun_id
-           hash_c=$(echo -n "core_${tun_id}" | sha256sum)
-           class_selector=$(( tun_id % 3 ))
-           
-           if [ "$class_selector" == "1" ]; then
-               c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-           elif [ "$class_selector" == "2" ]; then
-               c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-           else
-               c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-           fi
+           tun_id=$user_tun_id; hash_c=$(echo -n "core_${tun_id}" | sha256sum); class_selector=$(( tun_id % 3 ))
+           if [ "$class_selector" == "1" ]; then c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+           elif [ "$class_selector" == "2" ]; then c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+           else c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
            
            core_sub="${c1}.${c2}.${c3}"
            conf_path="$CONF_DIR/${t_name}.conf"
-           
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_SECRET=$tun_secret\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
-           
            apply_tunnel "$conf_path"
            
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
-               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
-               
-               remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
-               echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
-               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
-                   echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
-                   echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
-                   ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
-                   if [ $? -eq 0 ]; then
-                       lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
-                   else
-                       echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
-                   fi
-               fi
-               
-               echo -ne "\n  ${C}●${NC} ${W}Open MPorter to setup port forwarding now? (y/n): ${NC}"; read launch_mporter
-               launch_mporter=$(echo "$launch_mporter" | tr -d '\r' | tr -d ' ')
-               if [[ "$launch_mporter" == "y" ]]; then
-                   if [ -x "/usr/bin/mporter" ]; then
-                       /usr/bin/mporter
-                   else
-                       echo -e "  ${R}● MPorter is not installed!${NC}"; sleep 1.5
-                   fi
-               fi
-           else
-               echo -e "\n  ${R}● FATAL ERROR: Kernel rejected tunnel creation!${NC}"
-               rm -f "$conf_path" "${STATE_DIR}/${T_NAME}.state"
-               sleep 3.5
-           fi
-           ;;
+               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully!${NC}"; sleep 1.5
+           fi ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels configured yet!${NC}" && sleep 1.5 && continue
-           echo -e "\n  ${B}╭────────────────── Select Tunnel for vIPs ──────────────────╮${NC}"
-           for i in "${!configs[@]}"; do
-               conf_name=$(basename "${configs[$i]}" .conf)
-               printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
-           done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
-               [[ "$t_idx" == "q" ]] && break 2
-               [[ -n "$t_idx" ]] && break
-           done
-           
-           if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "$sel_conf"
-               
-               echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-               while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" == "q" || "$vip_action" == "1" || "$vip_action" == "2" ]] && break; done
-               [[ "$vip_action" == "q" ]] && continue
-               
-               if [[ "$vip_action" == "1" ]]; then
-                   while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
-                   [[ "$n" == "q" ]] && continue
-                   while true; do echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; [[ "$k" == "q" ]] && break; [[ -n "$k" ]] && break; done
-                   [[ "$k" == "q" ]] && continue
-                   sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
-                   apply_tunnel "$sel_conf"; echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
-               elif [[ "$vip_action" == "2" ]]; then
-                   if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
-                   echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${T_NAME}]? (y/n): ${NC}"; read confirm_vip
-                   if [[ "$confirm_vip" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
-               fi
-           fi ;;
+           [ ${#configs[@]} -eq 0 ] && continue
+           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
+           echo -ne "  ${C}● Select Index: ${NC}"; read t_idx; [[ -z "${configs[$t_idx]}" ]] && continue
+           sel_conf="${configs[$t_idx]}"
+           echo -ne "  ${C}● Virtual IPs Count: ${NC}"; read n
+           echo -ne "  ${C}● Sync Key: ${NC}"; read k
+           sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"
+           apply_tunnel "$sel_conf"; echo -e "  ${G}● Synced!${NC}"; sleep 1 ;;
         3) while true; do draw_mgre_header; show_mgre_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
         4)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No active tunnels to remove!${NC}" && sleep 1.5 && continue
-           echo -e "\n  ${B}╭────────────────── Select Tunnel to Erase ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
-           [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
-           
+           echo -ne "  ${C}● Enter Index or 'all': ${NC}"; read del_idx
            if [[ "$del_idx" == "all" ]]; then
-               echo -ne "  ${R}● DANGER: Delete ALL tunnels? (y/n): ${NC}"; read confirm_all
-               if [[ "$confirm_all" == "y" ]]; then
-                   for conf in "${configs[@]}"; do
-                       TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "$conf"
-                       ip tunnel del "$T_NAME" >/dev/null 2>&1
-                       ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
-                       rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"
-                   done
-                   [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
-                   echo -e "  ${G}● All tunnels safely purged.${NC}"; sleep 1.5
-               fi; continue
-           fi
-           if [[ -n "${configs[$del_idx]}" ]]; then
-               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "${configs[$del_idx]}"
-               ip tunnel del "$T_NAME" >/dev/null 2>&1
-               ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
-               rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
-               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
-               echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
-           fi ;;
+               for conf in "${configs[@]}"; do source "$conf"; destroy_tunnel_dev "$T_NAME"; rm -f "$conf" "${STATE_DIR}/${T_NAME}.state"; done
+           elif [[ -n "${configs[$del_idx]}" ]]; then
+               source "${configs[$del_idx]}"; destroy_tunnel_dev "$T_NAME"; rm -f "${configs[$del_idx]}" "${STATE_DIR}/${T_NAME}.state"
+           fi; echo -e "  ${G}● Destroyed!${NC}"; sleep 1 ;;
         5) edit_tunnel ;; 6) show_tunnel_details ;; 0) break ;;
     esac
 done

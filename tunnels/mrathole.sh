@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.4.2 ---
+# --- MRathole Modular Core (mrathole.sh) | Rathole Reverse Tunnel v1.5.0 (Advanced Edit) ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mrathole/tunnels"
@@ -14,31 +14,13 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-apply_bbr_optimization() {
-    echo -e "  ${DIM}● Applying BBR network acceleration...${NC}"
-    sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
-    sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
-    
-    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null; then
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-    fi
-    if ! grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null; then
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-    fi
-    sysctl -p >/dev/null 2>&1
-}
-
 check_tunnel_connection() {
     local t_name="$1"
     local t_dir="$CONF_DIR/$t_name"
     [ ! -f "$t_dir/meta.conf" ] && { echo "OFFLINE"; return; }
     
     TYPE=""; LINK_PORT=""; REMOTE_IP=""; source "$t_dir/meta.conf"
-    
-    if ! systemctl is-active --quiet mrathole@$t_name; then
-        echo "OFFLINE"
-        return
-    fi
+    if ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
 
     if [ "$TYPE" == "1" ]; then
         if ss -tn sport = ":$LINK_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
@@ -49,18 +31,9 @@ check_tunnel_connection() {
     fi
 }
 
-get_peer_ping() {
-    local target_ip="$1"
-    if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
-    local ping_val=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null | awk -F'/' 'END {print $5}')
-    if [ -n "$ping_val" ]; then echo "${ping_val%.*} ms"; else echo "Timeout"; fi
-}
-
 install_rathole() {
     if [ ! -f "/usr/local/bin/rathole" ]; then
-        echo -e "\n  ${DIM}● Checking for Rathole Engine...${NC}"
         mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-        
         if [ -f "$LOCAL_DIR/packages/rathole" ]; then
             cp "$LOCAL_DIR/packages/rathole" /usr/local/bin/rathole
             chmod +x /usr/local/bin/rathole
@@ -93,39 +66,23 @@ generate_toml() {
         echo "[server]" >> "$toml"
         echo "bind_addr = \"0.0.0.0:${LINK_PORT}\"" >> "$toml"
         echo "default_token = \"${TOKEN}\"" >> "$toml"
-        
         IFS=',' read -ra P_ARR <<< "$PORTS"
         for p in "${P_ARR[@]}"; do
             p=$(echo "$p" | tr -d ' ')
             [ -z "$p" ] && continue
-            echo "" >> "$toml"
-            echo "[server.services.p${p}_tcp]" >> "$toml"
-            echo "type = \"tcp\"" >> "$toml"
-            echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
-            
-            echo "" >> "$toml"
-            echo "[server.services.p${p}_udp]" >> "$toml"
-            echo "type = \"udp\"" >> "$toml"
-            echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
+            echo -e "\n[server.services.p${p}_tcp]\ntype = \"tcp\"\nbind_addr = \"0.0.0.0:${p}\"" >> "$toml"
+            echo -e "\n[server.services.p${p}_udp]\ntype = \"udp\"\nbind_addr = \"0.0.0.0:${p}\"" >> "$toml"
         done
     else
         echo "[client]" >> "$toml"
         echo "remote_addr = \"${REMOTE_IP}:${LINK_PORT}\"" >> "$toml"
         echo "default_token = \"${TOKEN}\"" >> "$toml"
-        
         IFS=',' read -ra P_ARR <<< "$PORTS"
         for p in "${P_ARR[@]}"; do
             p=$(echo "$p" | tr -d ' ')
             [ -z "$p" ] && continue
-            echo "" >> "$toml"
-            echo "[client.services.p${p}_tcp]" >> "$toml"
-            echo "type = \"tcp\"" >> "$toml"
-            echo "local_addr = \"127.0.0.1:${p}\"" >> "$toml"
-            
-            echo "" >> "$toml"
-            echo "[client.services.p${p}_udp]" >> "$toml"
-            echo "type = \"udp\"" >> "$toml"
-            echo "local_addr = \"127.0.0.1:${p}\"" >> "$toml"
+            echo -e "\n[client.services.p${p}_tcp]\ntype = \"tcp\"\nlocal_addr = \"127.0.0.1:${p}\"" >> "$toml"
+            echo -e "\n[client.services.p${p}_udp]\ntype = \"udp\"\nlocal_addr = \"127.0.0.1:${p}\"" >> "$toml"
         done
     fi
 }
@@ -135,14 +92,12 @@ setup_service() {
 [Unit]
 Description=Rathole Reverse Tunnel (%i)
 After=network.target
-
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/rathole /etc/mrathole/tunnels/%i/config.toml
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
-
 [Install]
 WantedBy=multi-user.target
 EOF
@@ -163,96 +118,104 @@ draw_header() {
     local status_badge="${R}○ STOPPED${NC}"
     if [ "$total_tunnels" -gt 0 ]; then
         if [ "$online_tunnels" -eq "$total_tunnels" ]; then status_badge="${G}● CONNECTED (${online_tunnels}/${total_tunnels})${NC}"
-        elif [ "$online_tunnels" -gt 0 ]; then status_badge="${Y}◐ PARTIAL (${online_tunnels}/${total_tunnels})${NC}"
         else status_badge="${Y}◎ WAITING (${online_tunnels}/${total_tunnels})${NC}"; fi
     fi
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.4.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MRathole Reverse Engine v1.5.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}STATUS:${NC} ${status_badge} ${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
-show_monitor() {
-    echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
-    for d in "$CONF_DIR"/*; do
-        [ ! -d "$d" ] && continue
-        local t_name=$(basename "$d")
-        TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$d/meta.conf"
-        
-        local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
-        local peer_text=$([ "$TYPE" == "1" ] && echo "Waiting Client" || echo "${REMOTE_IP}:${LINK_PORT}")
-        
-        local st=$(check_tunnel_connection "$t_name")
-        local st_text="OFFLINE"; local st_color="${R}"
-        if [ "$st" == "ONLINE" ]; then st_text="ONLINE "; st_color="${G}";
-        elif [ "$st" == "WAITING" ]; then st_text="WAITING"; st_color="${Y}"; fi
-        
-        local current_ping=$(get_peer_ping "$REMOTE_IP")
+edit_rathole_tunnel() {
+    local tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
+    [ ${#tunnels[@]} -eq 0 ] && { echo -e "\n  ${R}● No tunnels configured!${NC}"; sleep 1.5; return; }
 
-        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} %b▼ Tunnel: %-30s%b ${DIM}Role:%b %-20s ${DIM}Ping:%b %-10s ${B}│${NC}\n" "${R}" "${t_name}" "${NC}" "${NC}" "${role_text}" "${NC}" "${current_ping}"
-        echo -e "  ${B}├────────────────────────┬───────────────────────┬───────────────────────┬───────────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-22s${NC} ${B}│${NC} ${DIM}%-21s${NC} ${B}│${NC} ${DIM}%-21s${NC} ${B}│${NC} ${DIM}%-17s${NC} ${B}│${NC}\n" "LINK PORT" "PEER ENDPOINT" "FORWARDED PORTS" "STATUS"
-        echo -e "  ${B}├────────────────────────┼───────────────────────┼───────────────────────┼───────────────────┤${NC}"
-        local p_fmt="${PORTS:0:18}"; [ ${#PORTS} -gt 18 ] && p_fmt="${p_fmt}..."
-        printf "  ${B}│${NC} ${C}%-22s${NC} ${B}│${NC} ${W}%-21s${NC} ${B}│${NC} ${Y}%-21s${NC} ${B}│${NC} %b%-17s%b ${B}│${NC}\n" "${LINK_PORT}" "${peer_text}" "${p_fmt:-None}" "${st_color}" "${st_text}" "${NC}"
-        echo -e "  ${B}╰────────────────────────┴───────────────────────┴───────────────────────┴───────────────────╯${NC}\n"
+    echo -e "\n  ${B}╭────────────────── Select Tunnel to Edit ───────────────────╮${NC}"
+    for i in "${!tunnels[@]}"; do
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${tunnels[$i]}")"
     done
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo -ne "  ${C}● Select Index: ${NC}"; read t_idx
+    [[ -z "${tunnels[$t_idx]}" ]] && return
+
+    local t_dir="${tunnels[$t_idx]}"
+    local old_tname=$(basename "$t_dir")
+    TYPE=""; T_NAME=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$t_dir/meta.conf"
+
+    echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${old_tname}${DIM} ] (Press Enter to keep current value)${NC}"
+    
+    echo -ne "  ${C}●${NC} ${W}Server Mode [Current: ${Y}${TYPE}${W}] (1:IR Server | 2:KH Client): ${NC}"; read n_type
+    n_type=$(echo "$n_type" | tr -d '\r' | tr -d ' '); [ -n "$n_type" ] && TYPE="$n_type"
+
+    echo -ne "  ${C}●${NC} ${W}Tunnel Name [Current: ${Y}${T_NAME}${W}]: ${NC}"; read n_name
+    n_name=$(echo "$n_name" | tr -d '\r' | tr -d ' '); [ -n "$n_name" ] && T_NAME="$n_name"
+
+    echo -ne "  ${C}●${NC} ${W}Tunnel Link Port [Current: ${Y}${LINK_PORT}${W}]: ${NC}"; read n_port
+    n_port=$(echo "$n_port" | tr -d '\r' | tr -d ' '); [ -n "$n_port" ] && LINK_PORT="$n_port"
+
+    if [ "$TYPE" == "2" ]; then
+        echo -ne "  ${C}●${NC} ${W}Remote (IRAN) IP [Current: ${Y}${REMOTE_IP}${W}]: ${NC}"; read n_rip
+        n_rip=$(echo "$n_rip" | tr -d '\r' | tr -d ' '); [ -n "$n_rip" ] && REMOTE_IP="$n_rip"
+    else
+        REMOTE_IP="0.0.0.0"
+    fi
+
+    echo -ne "  ${C}●${NC} ${W}Secret Token [Current: ${Y}${TOKEN}${W}]: ${NC}"; read n_tok
+    n_tok=$(echo "$n_tok" | tr -d '\r' | tr -d ' '); [ -n "$n_tok" ] && TOKEN="$n_tok"
+
+    echo -ne "  ${C}●${NC} ${W}Forwarded Ports [Current: ${Y}${PORTS}${W}]: ${NC}"; read n_ports
+    n_ports=$(echo "$n_ports" | tr -d '\r' | tr -d ' '); [ -n "$n_ports" ] && PORTS="$n_ports"
+
+    systemctl stop mrathole@$old_tname 2>/dev/null
+    systemctl disable mrathole@$old_tname 2>/dev/null
+
+    [ "$old_tname" != "$T_NAME" ] && rm -rf "$t_dir"
+
+    mkdir -p "$CONF_DIR/$T_NAME"
+    echo -e "TYPE=$TYPE\nT_NAME=$T_NAME\nLINK_PORT=$LINK_PORT\nREMOTE_IP=$REMOTE_IP\nTOKEN=$TOKEN\nPORTS=$PORTS" > "$CONF_DIR/$T_NAME/meta.conf"
+
+    generate_toml "$T_NAME"
+    systemctl enable mrathole@$T_NAME >/dev/null 2>&1
+    systemctl restart mrathole@$T_NAME
+
+    echo -e "\n  ${G}● Reverse Tunnel [${T_NAME}] completely updated and restarted!${NC}"; sleep 2
 }
 
 while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${R}Setup New Reverse Tunnel (Rathole)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (All Parameters)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Delete Tunnels${NC}"
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${C}MRATHOLE ❯❯ ${NC}"; read opt
-    opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1) 
            install_rathole; setup_service
-           apply_bbr_optimization
-           
-           echo -e "\n  ${DIM}┌─[ REVERSE DEPLOYMENT ]${NC}"
-           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Server) | 2:KHAREJ (Client) | q:Back]: ${NC}"; read s_type; [[ "$s_type" =~ ^[12q]$ ]] && break; done
+           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN | 2:KHAREJ | q:Back]: ${NC}"; read s_type; [[ "$s_type" =~ ^[12q]$ ]] && break; done
            [[ "$s_type" == "q" ]] && continue
-           
-           while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Suffix Name (e.g. rt1): ${NC}"; read suffix; t_name="rat_$suffix"; break; done
-           
+           while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Suffix (e.g. rt1): ${NC}"; read suffix; t_name="rat_$suffix"; break; done
            r_ip="0.0.0.0"
-           if [ "$s_type" == "2" ]; then
-               echo -ne "  ${C}●${NC} ${W}Remote (IRAN) Public IP: ${NC}"; read r_ip
-           fi
-           
-           echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5000): ${NC}"; read t_port
+           [ "$s_type" == "2" ] && { echo -ne "  ${C}●${NC} ${W}Remote (IRAN) IP: ${NC}"; read r_ip; }
+           echo -ne "  ${C}●${NC} ${W}Link Port: ${NC}"; read t_port
            t_token=$(head -c 8 /dev/urandom | xxd -p)
-           echo -ne "  ${C}●${NC} ${W}Target Ports to Forward (e.g. 80,443): ${NC}"; read t_ports
+           echo -ne "  ${C}●${NC} ${W}Forward Ports (e.g. 80,443): ${NC}"; read t_ports
            
            mkdir -p "$CONF_DIR/$t_name"
            echo -e "TYPE=$s_type\nT_NAME=$t_name\nLINK_PORT=$t_port\nREMOTE_IP=$r_ip\nTOKEN=$t_token\nPORTS=$t_ports" > "$CONF_DIR/$t_name/meta.conf"
-           
            generate_toml "$t_name"
-           systemctl enable mrathole@$t_name >/dev/null 2>&1
-           systemctl restart mrathole@$t_name
-           echo -e "  ${G}● Reverse Tunnel Deployed Successfully!${NC}"; sleep 1.5 ;;
-        2) while true; do draw_header; show_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+           systemctl enable mrathole@$t_name >/dev/null 2>&1; systemctl restart mrathole@$t_name
+           echo -e "  ${G}● Deployed!${NC}"; sleep 1.5 ;;
+        2) edit_rathole_tunnel ;;
         3)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
-           [ ${#tunnels[@]} -eq 0 ] && continue
-           for i in "${!tunnels[@]}"; do echo "  $i ❯ $(basename "${tunnels[$i]}")"; done
-           echo -ne "  ${C}Index (or 'all'): ${NC}"; read del_idx
+           for i in "${!tunnels[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${tunnels[$i]}")"; done
+           echo -ne "  ${C}● Enter Index or 'all': ${NC}"; read del_idx
            if [[ "$del_idx" == "all" ]]; then
-               for d in "${tunnels[@]}"; do
-                   t_name=$(basename "$d")
-                   systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
-                   rm -rf "$d"
-               done
+               for d in "${tunnels[@]}"; do t_name=$(basename "$d"); systemctl stop mrathole@$t_name 2>/dev/null; rm -rf "$d"; done
            elif [[ -n "${tunnels[$del_idx]}" ]]; then
-               t_name=$(basename "${tunnels[$del_idx]}")
-               systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
-               rm -rf "${tunnels[$del_idx]}"
-           fi; echo -e "  ${G}Purged!${NC}"; sleep 1 ;;
+               t_name=$(basename "${tunnels[$del_idx]}"); systemctl stop mrathole@$t_name 2>/dev/null; rm -rf "${tunnels[$del_idx]}"
+           fi; echo -e "  ${G}● Purged!${NC}"; sleep 1 ;;
         0) break ;;
     esac
 done

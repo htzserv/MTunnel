@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Tri-Core Matrix v7.8.0 ---
-# [Engines: 1. HAProxy (Layer 7/4) | 2. Gost (Layer 4 TCP/UDP) | 3. iptables (Kernel NAT DNAT)]
+# --- MDesign Modular Core (mporter.sh) | MPorter Tri-Core Matrix v7.9.0 ---
+# [Dual-Stack IPv4/IPv6 Support | Engines: 1. HAProxy | 2. Gost | 3. iptables/ip6tables]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -40,11 +40,20 @@ draw_progress_bar() {
     tput cnorm 2>/dev/null || true
 }
 
-enable_ip_forwarding() {
+enable_forwarding() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-    if ! grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null; then
-        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-    fi
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+    grep -q "^net.ipv4.ip_forward=1" /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    grep -q "^net.ipv6.conf.all.forwarding=1" /etc/sysctl.conf 2>/dev/null || echo "net.ipv6.conf.all.forwarding=1" >> /etc/sysctl.conf
+}
+
+is_ipv6() {
+    [[ "$1" =~ : ]] && return 0 || return 1
+}
+
+format_target() {
+    local ip="$1"; local port="$2"
+    if is_ipv6 "$ip"; then echo "[${ip}]:${port}"; else echo "${ip}:${port}"; fi
 }
 
 ensure_gost() {
@@ -66,9 +75,10 @@ ensure_gost() {
 }
 
 apply_iptables_rules() {
-    # پاک‌سازی رول‌های قدیمی MPORTER_NAT
     iptables -t nat -S PREROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do iptables -t nat $rule 2>/dev/null; done
     iptables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do iptables -t nat $rule 2>/dev/null; done
+    ip6tables -t nat -S PREROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do ip6tables -t nat $rule 2>/dev/null; done
+    ip6tables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do ip6tables -t nat $rule 2>/dev/null; done
     if [ -s "$IPT_CONF" ]; then
         bash "$IPT_CONF" 2>/dev/null
     fi
@@ -78,13 +88,14 @@ purge_ip_core() {
     local target_ip="$1"
     local t_ports=""
     
-    [ -f "$H_CONF" ] && t_ports+=$(grep "$target_ip:" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g' | xargs)
-    [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "$target_ip:" "$IPT_CONF" 2>/dev/null | grep -oP '--dport \K[0-9]+' | xargs)
+    [ -f "$H_CONF" ] && t_ports+=$(grep -E "${target_ip}(:|\])" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip" | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g' | xargs)
+    [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "$target_ip" "$IPT_CONF" 2>/dev/null | grep -oP '--dport \K[0-9]+' | xargs)
     t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
     
     for p in $t_ports; do
         sed -i "/frontend ft_$p$/d" "$H_CONF" 2>/dev/null
+        sed -i "/bind :::${p} /d" "$H_CONF" 2>/dev/null
         sed -i "/bind \*:$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/default_backend bk_$p$/d" "$H_CONF" 2>/dev/null
         sed -i "/backend bk_$p$/d" "$H_CONF" 2>/dev/null
@@ -92,7 +103,7 @@ purge_ip_core() {
         sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
         
         if command -v jq >/dev/null 2>&1 && [ -f "$G_CONF" ]; then 
-            jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+            jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") or startswith("tcp://[::]:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
         fi
         
         sed -i "/--dport $p /d" "$IPT_CONF" 2>/dev/null
@@ -112,18 +123,22 @@ if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
 fi
 
 if [[ "$1" == "--cleanup-orphans" ]]; then
-    h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null | sort -u)
+    h_ips=$(grep -oP 'server srv_[0-9]+ \K\[?[0-9a-fA-F\.:]+\]?' "$H_CONF" 2>/dev/null | tr -d '[]' | sort -u)
     g_ips=""
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)
-    ipt_ips=$(grep -oP -- '--to-destination \K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
-    all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips" | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | sort -u)
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K\[?[0-9a-fA-F\.:]+\]?' | tr -d '[]' | cut -d: -f1 | sort -u)
+    ipt_ips=$(grep -oP -- '--to-destination \K\[?[0-9a-fA-F\.:]+\]?' "$IPT_CONF" 2>/dev/null | tr -d '[]' | sort -u)
+    all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips" | sort -u)
     
     for ip in $all_ips; do
-        subnet=$(echo "$ip" | cut -d'.' -f1-3)
-        found=false
-        grep -qR "CORE_SUBNET=$subnet" /etc/mgre/ 2>/dev/null && found=true
-        if [ "$found" = false ]; then
-            purge_ip_core "$ip"
+        if is_ipv6 "$ip"; then
+            found=false
+            grep -qR "$ip" /etc/mgre/ 2>/dev/null && found=true
+            [ "$found" = false ] && purge_ip_core "$ip"
+        else
+            subnet=$(echo "$ip" | cut -d'.' -f1-3)
+            found=false
+            grep -qR "CORE_SUBNET=$subnet" /etc/mgre/ 2>/dev/null && found=true
+            [ "$found" = false ] && purge_ip_core "$ip"
         fi
     done
     systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null
@@ -165,7 +180,7 @@ defaults
     timeout server 1h
 
 frontend dummy_check
-    bind 127.0.0.1:9999
+    bind :::9999 v4v6
     default_backend dummy_back
 backend dummy_back
     server local 127.0.0.1:9999
@@ -225,22 +240,22 @@ EOF_GST
 
 fix_and_install() {
     echo -e "\n  ${DIM}┌─[ SELECT CORE ENGINE TO INSTALL ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Engine${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Engine${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}iptables Kernel NAT Core${NC} ${DIM}(Auto-Configured)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install All Engines (Tri-Core)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Dual-Stack Engine${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Multi-Protocol Engine${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}iptables/ip6tables Kernel NAT Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install All Engines (Tri-Core Full Deployment)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Install ❯❯ ${NC}"; read core_opt
     core_opt=$(echo "$core_opt" | tr -d '\r' | tr -d ' ')
 
     if [[ "$core_opt" =~ ^[1-4]$ ]]; then
         (
-            enable_ip_forwarding
+            enable_forwarding
             case $core_opt in
                 1) install_haproxy_core ;;
                 2) install_gost_core ;;
-                3) enable_ip_forwarding ;;
-                4) install_haproxy_core; install_gost_core; enable_ip_forwarding ;;
+                3) enable_forwarding ;;
+                4) install_haproxy_core; install_gost_core; enable_forwarding ;;
             esac
         ) &
         local p_pid=$!
@@ -253,9 +268,15 @@ fix_and_install() {
 
 get_iface_for_ip() {
     local target_ip=$1
-    local subnet=$(echo "$target_ip" | cut -d'.' -f1-3)
-    local iface=$(ip -o -4 addr show 2>/dev/null | grep -w "${subnet}\." | awk '{print $2}' | head -n 1)
-    if [ -z "$iface" ]; then echo "Unknown"; else echo "$iface"; fi
+    if is_ipv6 "$target_ip"; then
+        local iface=$(ip -o -6 addr show 2>/dev/null | grep -w "${target_ip%/*}" | awk '{print $2}' | head -n 1)
+        [ -z "$iface" ] && iface=$(ip -6 route get "$target_ip" 2>/dev/null | grep -oP 'dev \K\S+' | head -n 1)
+        echo "${iface:-IPv6_Tunnel}"
+    else
+        local subnet=$(echo "$target_ip" | cut -d'.' -f1-3)
+        local iface=$(ip -o -4 addr show 2>/dev/null | grep -w "${subnet}\." | awk '{print $2}' | head -n 1)
+        echo "${iface:-Unknown}"
+    fi
 }
 
 get_stats() {
@@ -271,9 +292,9 @@ get_stats() {
     total_ports=$((h_ports + g_ports + ipt_ports))
 
     local h_ips=""; local g_ips=""; local ipt_ips=""
-    [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
-    [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP -- '--to-destination \K[0-9\.]+' "$IPT_CONF" 2>/dev/null)
+    [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K\[?[0-9a-fA-F\.:]+\]?' "$H_CONF" 2>/dev/null | tr -d '[]')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K\[?[0-9a-fA-F\.:]+\]?' | tr -d '[]' | cut -d: -f1)
+    [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP -- '--to-destination \K\[?[0-9a-fA-F\.:]+\]?' "$IPT_CONF" 2>/dev/null | tr -d '[]')
     
     local all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips" | grep -v '^$' | sort -u)
     mapped_ips=$(echo "$all_ips" | grep -v '^$' | wc -l)
@@ -284,21 +305,21 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 7.8.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 7.9.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 92 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 7.8.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 7.9.0 (Dual-Stack)${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "TOTAL FORWARDED PORTS"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs (v4/v6)" "TOTAL FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""
-    [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
-    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--to-destination \K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort | uniq -c | awk '{print $2 "|" $1}')
+    [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ \[?[0-9a-fA-F\.:]+\]?' "$H_CONF" 2>/dev/null | awk '{print $3}' | tr -d '[]' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K\[?[0-9a-fA-F\.:]+\]?' | tr -d '[]' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
+    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--to-destination \K\[?[0-9a-fA-F\.:]+\]?' "$IPT_CONF" 2>/dev/null | tr -d '[]' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
     
     local ip_port_counts=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
 
@@ -327,9 +348,9 @@ draw_header() {
 smart_map() {
     draw_header
     echo -e "\n  ${DIM}┌─[ SELECT FORWARDING ENGINE ]${NC}"
-    echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} ${DIM}(Standard Multiplexer)${NC}"
-    echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} ${DIM}(Fast Relay)${NC}"
-    echo -e "  ${DIM}│${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}iptables DNAT${NC} ${DIM}(Ultra-Low Latency Kernel NAT)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Dual-Stack${NC} ${DIM}(Handles both IPv4 & IPv6 seamlessly)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Relay${NC} ${DIM}(Multi-protocol IPv4/IPv6)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}iptables/ip6tables DNAT${NC} ${DIM}(Kernel-space Line-rate NAT)${NC}"
     echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read fwd_engine
     fwd_engine=$(echo "$fwd_engine" | tr -d '\r' | tr -d ' ')
     
@@ -352,47 +373,38 @@ smart_map() {
 
     if [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -e "\n  ${R}● No MDesign Tunnel interfaces found!${NC}"
-        echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read target_ip
+        echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP (IPv4 or IPv6) manually: ${NC}"; read target_ip
         target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
-        
-        if ! [[ "$target_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; return
-        fi
         selected_if="Manual"
     else
         echo -e "\n  ${B}╭────────────────── Available Interfaces ────────────────────╮${NC}"
         for i in "${!gre_ifs[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-52s${NC} ${B}│${NC}\n" "$i" "${gre_ifs[$i]}"; done
         echo -e "  ${B}├──────────────────────────────────────────────────────────────┤${NC}"
-        printf "  ${B}│${NC}  ${Y}m${NC} ${C}❯${NC} ${M}%-52s${NC} ${B}│${NC}\n" "Manual IP Entry (Bypass Interfaces)"
+        printf "  ${B}│${NC}  ${Y}m${NC} ${C}❯${NC} ${M}%-52s${NC} ${B}│${NC}\n" "Manual IP Entry (IPv4 or IPv6)"
         echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
         echo -ne "  ${C}●${NC} ${W}Select Interface (0-$(( ${#gre_ifs[@]} - 1 )) or 'm'): ${NC}"; read if_choice
         if_choice=$(echo "$if_choice" | tr -d '\r' | tr -d ' ')
         
         if [[ "$if_choice" == "m" ]]; then
-            echo -ne "\n  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read target_ip
+            echo -ne "\n  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP (IPv4 or IPv6): ${NC}"; read target_ip
             target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
-            
-            if ! [[ "$target_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; return
-            fi
             selected_if="Manual"
         elif [[ -n "${gre_ifs[$if_choice]}" ]]; then 
             selected_if="${gre_ifs[$if_choice]}"
             local map_ips=($(ip -o -4 addr show "$selected_if" 2>/dev/null | awk '{print $4}' | cut -d/ -f1))
+            local map_ip6s=($(ip -o -6 addr show "$selected_if" 2>/dev/null | grep -v 'fe80:' | awk '{print $4}' | cut -d/ -f1))
+            map_ips+=("${map_ip6s[@]}")
+
             if [ ${#map_ips[@]} -eq 0 ]; then
                 echo -e "  ${R}● No active IPs found on ${selected_if}!${NC}"
                 echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read target_ip
                 target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
-                
-                if ! [[ "$target_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                    echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; return
-                fi
             else
                 echo -e "\n  ${B}╭────────────────── IPs on ${selected_if} ──────────────────╮${NC}"
                 for i in "${!map_ips[@]}"; do printf "  ${B}│${NC}  ${Y}%d${NC} ${C}❯${NC} ${G}%-50s${NC} ${B}│${NC}\n" "$i" "${map_ips[$i]}"; done
                 echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
-                echo -e "  ${DIM}Tip: Enter 'a' to strictly auto-distribute ports across ALL IPs.${NC}"
-                echo -ne "  ${C}●${NC} ${W}Select EXACT Index to process (0-$(( ${#map_ips[@]} - 1 ))) or 'a': ${NC}"; read ip_choice
+                echo -e "  ${DIM}Tip: Enter 'a' to auto-distribute ports across ALL IPs.${NC}"
+                echo -ne "  ${C}●${NC} ${W}Select EXACT Index (0-$(( ${#map_ips[@]} - 1 ))) or 'a': ${NC}"; read ip_choice
                 ip_choice=$(echo "$ip_choice" | tr -d '\r' | tr -d ' ')
                 
                 if [[ "$ip_choice" == "a" ]]; then
@@ -401,34 +413,32 @@ smart_map() {
                     echo -e "  ${G}✔ Auto-Distribute mode enabled for ${#selected_ips[@]} IPs.${NC}"
                 elif [[ -n "${map_ips[$ip_choice]}" ]]; then 
                     local selected_local_ip="${map_ips[$ip_choice]}"
-                    local base_ip=$(echo "$selected_local_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$selected_local_ip" | cut -d'.' -f4)
-                    local calc_target="${base_ip}.$((last_octet + 1))"
-                    [ "$last_octet" == "1" ] && calc_target="${base_ip}.2"
-                    [ "$last_octet" == "2" ] && calc_target="${base_ip}.1"
+                    local calc_target=""
+                    if is_ipv6 "$selected_local_ip"; then
+                        calc_target="${selected_local_ip%:*}:$([ "${selected_local_ip##*:}" == "1" ] && echo "2" || echo "1")"
+                    else
+                        local base_ip=$(echo "$selected_local_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$selected_local_ip" | cut -d'.' -f4)
+                        calc_target="${base_ip}.$([ "$last_octet" == "1" ] && echo "2" || echo "1")"
+                    fi
                     
-                    echo -ne "\n  ${C}●${NC} ${W}Confirm Exact Target IP [${calc_target}]: ${NC}"; read custom_target
+                    echo -ne "\n  ${C}●${NC} ${W}Confirm Target Destination IP [${calc_target}]: ${NC}"; read custom_target
                     custom_target=$(echo "$custom_target" | tr -d '\r' | tr -d ' ')
                     target_ip="${custom_target:-$calc_target}"
-                    
-                    if ! [[ "$target_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                        echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; return
-                    fi
                 else echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
             fi
         else echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
     fi
 
-    if [ "$is_auto_all" != true ] && [ -z "$target_ip" ]; then echo -e "  ${R}● Target IP cannot be empty!${NC}"; sleep 1; return; fi
+    [ "$is_auto_all" != true ] && [ -z "$target_ip" ] && { echo -e "  ${R}● Target IP cannot be empty!${NC}"; sleep 1; return; }
 
     echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443,1080): ${NC}"; read raw_ports
     raw_ports=$(echo "$raw_ports" | tr -d '\r')
     if ! [[ "$raw_ports" =~ ^[0-9,]+$ ]]; then
         echo -e "  ${R}● Invalid port format! Use numbers and commas only.${NC}"; sleep 1.5; return
     fi
-    
     clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
     
-    echo -e "\n  ${Y}● Applying Strict 1-to-1 Mappings...${NC}"
+    echo -e "\n  ${Y}● Applying Strict 1-to-1 Dual-Stack Mappings...${NC}"
     echo -e "  ${B}╭──────────────┬─────────────┬────────────────────────────────────────╮${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-11s${NC} ${B}│${NC} ${W}%-38s${NC} ${B}│${NC}\n" "Local Port" "Engine" "Target IP"
     echo -e "  ${B}├──────────────┼─────────────┼────────────────────────────────────────┤${NC}"
@@ -436,17 +446,19 @@ smart_map() {
     local port_idx=0
     for p in $clean_ports; do
         if [ "$is_auto_all" = true ]; then
-            local selected_local_ip="${selected_ips[$((port_idx % ${#selected_ips[@]}))]}"
-            local base_ip=$(echo "$selected_local_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$selected_local_ip" | cut -d'.' -f4)
-            target_ip="${base_ip}.$((last_octet + 1))"
-            [ "$last_octet" == "1" ] && target_ip="${base_ip}.2"
-            [ "$last_octet" == "2" ] && target_ip="${base_ip}.1"
+            local cur_ip="${selected_ips[$((port_idx % ${#selected_ips[@]}))]}"
+            if is_ipv6 "$cur_ip"; then
+                target_ip="${cur_ip%:*}:$([ "${cur_ip##*:}" == "1" ] && echo "2" || echo "1")"
+            else
+                local base_ip=$(echo "$cur_ip" | cut -d'.' -f1-3); local last_octet=$(echo "$cur_ip" | cut -d'.' -f4)
+                target_ip="${base_ip}.$([ "$last_octet" == "1" ] && echo "2" || echo "1")"
+            fi
         fi
 
         local skip_reason=""
         if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then skip_reason="OS/System"
         elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then skip_reason="HAProxy"
-        elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then skip_reason="Gost"
+        elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -e ".ServeNodes[] | select(. | contains(\":$p/\"))" "$G_CONF" >/dev/null 2>&1; then skip_reason="Gost"
         elif grep -q "dport $p " "$IPT_CONF" 2>/dev/null; then skip_reason="iptables"
         fi
 
@@ -456,22 +468,31 @@ smart_map() {
         fi
         
         if [ "$fwd_engine" == "1" ]; then
+            local srv_target=$(format_target "$target_ip" "$p")
             (
                 flock -x 200
-                echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
+                echo -e "\nfrontend ft_$p\n    bind :::${p} v4v6\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $srv_target check inter 5000" >> "$H_CONF"
             ) 200>/var/lock/mporter_haproxy.lock
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-11s${NC} ${B}│${NC} ${W}%-38s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$target_ip"
         
         elif [ "$fwd_engine" == "2" ]; then
-            jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
+            local node_str="tcp://[::]:$p/$(format_target "$target_ip" "$p")"
+            jq --arg node "$node_str" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${M}%-11s${NC} ${B}│${NC} ${W}%-38s${NC} ${B}│${NC}\n" "$p" "Gost" "$target_ip"
             
         elif [ "$fwd_engine" == "3" ]; then
-            enable_ip_forwarding
-            echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
-            echo "iptables -t nat -A PREROUTING -p udp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
-            echo "iptables -t nat -A POSTROUTING -p tcp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
-            echo "iptables -t nat -A POSTROUTING -p udp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+            enable_forwarding
+            if is_ipv6 "$target_ip"; then
+                echo "ip6tables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination [${target_ip}]:$p" >> "$IPT_CONF"
+                echo "ip6tables -t nat -A PREROUTING -p udp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination [${target_ip}]:$p" >> "$IPT_CONF"
+                echo "ip6tables -t nat -A POSTROUTING -p tcp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                echo "ip6tables -t nat -A POSTROUTING -p udp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+            else
+                echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
+                echo "iptables -t nat -A PREROUTING -p udp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
+                echo "iptables -t nat -A POSTROUTING -p tcp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                echo "iptables -t nat -A POSTROUTING -p udp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+            fi
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${Y}%-11s${NC} ${B}│${NC} ${W}%-38s${NC} ${B}│${NC}\n" "$p" "iptables" "$target_ip"
         fi
         ((port_idx++))
@@ -490,9 +511,9 @@ edit_mapping() {
     draw_header
     echo -e "\n  ${DIM}┌─[ EDIT FORWARDING MAPPINGS ]${NC}"
     local h_map=""; local g_map=""; local ipt_map=""
-    [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
-    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--to-destination \K[0-9\.]+' "$IPT_CONF" 2>/dev/null)
+    [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K\[?[0-9a-fA-F\.:]+\]?' "$H_CONF" 2>/dev/null | tr -d '[]')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K\[?[0-9a-fA-F\.:]+\]?' | tr -d '[]' | cut -d: -f1)
+    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--to-destination \K\[?[0-9a-fA-F\.:]+\]?' "$IPT_CONF" 2>/dev/null | tr -d '[]')
     
     local all_ips=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | sort -u)
     if [ -z "$all_ips" ]; then echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; fi
@@ -510,9 +531,9 @@ edit_mapping() {
     while true; do
         draw_header
         local t_ports=""
-        [ -f "$H_CONF" ] && t_ports+=$(grep "$target_ip:" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
-        [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g' | xargs)
-        [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "$target_ip:" "$IPT_CONF" 2>/dev/null | grep -oP '--dport \K[0-9]+' | xargs)
+        [ -f "$H_CONF" ] && t_ports+=$(grep -E "${target_ip}(:|\])" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
+        [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip" | sed -E 's/tcp:\/\/:([0-9]+)\/.*/\1/g' | xargs)
+        [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "$target_ip" "$IPT_CONF" 2>/dev/null | grep -oP '--dport \K[0-9]+' | xargs)
         t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
 
         echo -e "\n  ${DIM}┌─[ EDITING: ${W}$target_ip${DIM} ]${NC}"
@@ -533,25 +554,34 @@ edit_mapping() {
                     echo -e "  ${R}● Invalid port format! Use numbers and commas only.${NC}"; sleep 1.5; continue
                 fi
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
-                echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} | ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} | ${W}3${NC} ${DIM}❯${NC} ${Y}iptables DNAT${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} | ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} | ${W}3${NC} ${DIM}❯${NC} ${Y}iptables/ip6tables${NC}"
                 echo -ne "  ${C}Select Engine ❯❯ ${NC}"; read e_opt
                 e_opt=$(echo "$e_opt" | tr -d '\r' | tr -d ' ')
                 
                 for p in $clean_ports; do
                     if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then continue; fi
                     if [ "$e_opt" == "1" ]; then
+                        local srv_target=$(format_target "$target_ip" "$p")
                         (
                             flock -x 200
-                            echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
+                            echo -e "\nfrontend ft_$p\n    bind :::${p} v4v6\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $srv_target check inter 5000" >> "$H_CONF"
                         ) 200>/var/lock/mporter_haproxy.lock
                     elif [ "$e_opt" == "2" ]; then
-                        jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
+                        local node_str="tcp://[::]:$p/$(format_target "$target_ip" "$p")"
+                        jq --arg node "$node_str" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
                     elif [ "$e_opt" == "3" ]; then
-                        enable_ip_forwarding
-                        echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
-                        echo "iptables -t nat -A PREROUTING -p udp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
-                        echo "iptables -t nat -A POSTROUTING -p tcp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
-                        echo "iptables -t nat -A POSTROUTING -p udp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                        enable_forwarding
+                        if is_ipv6 "$target_ip"; then
+                            echo "ip6tables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination [${target_ip}]:$p" >> "$IPT_CONF"
+                            echo "ip6tables -t nat -A PREROUTING -p udp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination [${target_ip}]:$p" >> "$IPT_CONF"
+                            echo "ip6tables -t nat -A POSTROUTING -p tcp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                            echo "ip6tables -t nat -A POSTROUTING -p udp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                        else
+                            echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
+                            echo "iptables -t nat -A PREROUTING -p udp --dport $p -m comment --comment \"MPORTER_NAT\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
+                            echo "iptables -t nat -A POSTROUTING -p tcp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                            echo "iptables -t nat -A POSTROUTING -p udp -d $target_ip --dport $p -m comment --comment \"MPORTER_NAT\" -j MASQUERADE" >> "$IPT_CONF"
+                        fi
                     fi
                 done
                 sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
@@ -565,6 +595,7 @@ edit_mapping() {
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
                 for p in $clean_ports; do
                     sed -i "/frontend ft_$p$/d" "$H_CONF" 2>/dev/null
+                    sed -i "/bind :::${p} /d" "$H_CONF" 2>/dev/null
                     sed -i "/bind \*:$p$/d" "$H_CONF" 2>/dev/null
                     sed -i "/default_backend bk_$p$/d" "$H_CONF" 2>/dev/null
                     sed -i "/backend bk_$p$/d" "$H_CONF" 2>/dev/null
@@ -572,7 +603,7 @@ edit_mapping() {
                     sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
                     
                     if command -v jq >/dev/null 2>&1 && [ -f "$G_CONF" ]; then 
-                        jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+                        jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") or startswith("tcp://[::]:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
                     fi
                     sed -i "/--dport $p /d" "$IPT_CONF" 2>/dev/null
                 done
@@ -580,16 +611,14 @@ edit_mapping() {
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; apply_iptables_rules
                 echo -e "  ${G}● Ports removed securely!${NC}"; sleep 1.5 ;;
             3)
-                echo -ne "\n  ${C}●${NC} ${W}Enter New Destination IP: ${NC}"; read new_ip
+                echo -ne "\n  ${C}●${NC} ${W}Enter New Destination IP (IPv4 or IPv6): ${NC}"; read new_ip
                 new_ip=$(echo "$new_ip" | tr -d '\r' | tr -d ' ')
-                if ! [[ "$new_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                    echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; continue
-                fi
+                [ -z "$new_ip" ] && continue
                 echo -e "  ${DIM}● Migrating $target_ip -> $new_ip ...${NC}"
                 
-                [ -f "$H_CONF" ] && sed -i "s/ $target_ip:/ $new_ip:/g" "$H_CONF"
+                [ -f "$H_CONF" ] && sed -i "s/$target_ip/$new_ip/g" "$H_CONF"
                 if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-                    jq --arg old "/$target_ip:" --arg new "/$new_ip:" '.ServeNodes = [.ServeNodes[]? | sub($old; $new)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF"
+                    jq --arg old "$target_ip" --arg new "$new_ip" '.ServeNodes = [.ServeNodes[]? | sub($old; $new)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF"
                 fi
                 [ -f "$IPT_CONF" ] && sed -i "s/$target_ip/$new_ip/g" "$IPT_CONF"
                 
@@ -610,9 +639,9 @@ show_table() {
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""
-    [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {print port " " $3}' | sed 's/:.*//')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1 \2/g')
-    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--dport \K[0-9]+.*--to-destination [0-9\.]+' "$IPT_CONF" 2>/dev/null | awk '{print $1 " " $NF}' | sort -u)
+    [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {print port " " $3}' | tr -d '[]' | sed 's/:.*//')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/(\[[^\]]+\]|[^:]+):([0-9]+)\/(\[[^\]]+\]|[^:]+):.*/\2 \3/g' | tr -d '[]')
+    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--dport \K[0-9]+.*--to-destination \[?[0-9a-fA-F\.:]+\]?' "$IPT_CONF" 2>/dev/null | tr -d '[]' | awk '{print $1 " " $NF}' | sort -u)
     
     local mappings=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$')
     if [ -z "$mappings" ]; then printf "  ${B}│${NC} ${DIM}%-88s${NC} ${B}│${NC}\n" "  No active mappings."
@@ -643,9 +672,9 @@ purge_menu() {
     p_opt=$(echo "$p_opt" | tr -d '\r' | tr -d ' ')
     
     local h_map=""; local g_map=""; local ipt_map=""
-    [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
-    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--to-destination \K[0-9\.]+' "$IPT_CONF" 2>/dev/null)
+    [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K\[?[0-9a-fA-F\.:]+\]?' "$H_CONF" 2>/dev/null | tr -d '[]')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K\[?[0-9a-fA-F\.:]+\]?' | tr -d '[]' | cut -d: -f1)
+    [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- '--to-destination \K\[?[0-9a-fA-F\.:]+\]?' "$IPT_CONF" 2>/dev/null | tr -d '[]')
     local all_ips=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | sort -u)
 
     case $p_opt in
@@ -687,7 +716,7 @@ purge_menu() {
             echo -e "\n  ${B}╭────────────────── Select Target IP to Purge ─────────────────╮${NC}"
             for i in "${!ip_arr[@]}"; do 
                 local ifc=$(get_iface_for_ip "${ip_arr[$i]}")
-                printf "  ${B}│${NC}  ${Y}%-2d${NC} ${C}❯${NC} ${W}%-15s${NC} ${DIM}(%s)${NC}                         ${B}│${NC}\n" "$i" "${ip_arr[$i]}" "$ifc"
+                printf "  ${B}│${NC}  ${Y}%-2d${NC} ${C}❯${NC} ${W}%-25s${NC} ${DIM}(%s)${NC}                 ${B}│${NC}\n" "$i" "${ip_arr[$i]}" "$ifc"
             done
             echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
             echo -ne "  ${C}Select Index ❯❯ ${NC}"; read idx
@@ -704,7 +733,7 @@ purge_menu() {
             confirm=$(echo "$confirm" | tr -d '\r' | tr -d ' ')
             if [[ "$confirm" == "y" ]]; then
                 echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
-                echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
+                echo -e "frontend dummy_check\n    bind :::9999 v4v6\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
                 echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
                 > "$IPT_CONF"
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; apply_iptables_rules
@@ -766,14 +795,14 @@ smart_watchdog_menu() {
 
 manual_restart() {
     draw_header
-    echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Re-apply iptables NAT Rules${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Restart All Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Re-apply iptables/ip6tables Rules${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Restart All Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read r_opt
     r_opt=$(echo "$r_opt" | tr -d '\r' | tr -d ' ')
     echo ""
     case $r_opt in
         1) systemctl restart haproxy 2>/dev/null; echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
         2) systemctl restart gost 2>/dev/null; echo -e "  ${G}● Gost restarted successfully.${NC}" ;;
-        3) apply_iptables_rules; echo -e "  ${G}● iptables NAT rules re-applied successfully.${NC}" ;;
+        3) apply_iptables_rules; echo -e "  ${G}● NAT rules re-applied successfully.${NC}" ;;
         4) systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; apply_iptables_rules; echo -e "  ${G}● All services refreshed.${NC}" ;;
         0) return ;; *) echo -e "  ${R}● Invalid selection!${NC}" ;;
     esac
@@ -782,7 +811,7 @@ manual_restart() {
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Engines (HAP/Gost/IPT)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Strict 1-to-1)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/Migrate)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Delete & Purge Mappings (By Interface/IP/All)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall All Mappings${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Engines (HAP/Gost/IPT)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Dual-Stack IPv4/IPv6)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/Migrate)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Delete & Purge Mappings (By Interface/IP/All)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall All Mappings${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
     echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -t 30 opt
     opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
     case $opt in
@@ -797,6 +826,8 @@ while true; do
                rm -rf /etc/haproxy /var/lib/haproxy /etc/gost /etc/mporter /etc/systemd/system/mporter-watchdog.service
                iptables -t nat -S PREROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do iptables -t nat $rule 2>/dev/null; done
                iptables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do iptables -t nat $rule 2>/dev/null; done
+               ip6tables -t nat -S PREROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do ip6tables -t nat $rule 2>/dev/null; done
+               ip6tables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT" | sed 's/^-A /-D /' | while read -r rule; do ip6tables -t nat $rule 2>/dev/null; done
                apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
                echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
            fi ;;

@@ -6,12 +6,29 @@ MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 LOCAL_DIR="/root/mtunnel"
-BOOTSTRAP_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mbbr.sh" "mweb.sh" "mstats.sh")
-ALL_MODULES=("main.sh" "mgre.sh" "mxlan.sh" "mrathole.sh" "mfrp.sh" "mporter.sh" "minterface.sh" "mdiag.sh" "mshield.sh" "mstats.sh" "mhealer.sh" "mbbr.sh" "mweb.sh")
+
+# Path mapping for all modules
+declare -A MOD_MAP=(
+    ["main"]="main.sh"
+    ["mporter"]="mporter.sh"
+    ["mgre"]="tunnels/mgre.sh"
+    ["mxlan"]="tunnels/mxlan.sh"
+    ["mrathole"]="tunnels/mrathole.sh"
+    ["mfrp"]="tunnels/mfrp.sh"
+    ["mweb"]="tools/mweb.sh"
+    ["mstats"]="tools/mstats.sh"
+    ["mhealer"]="tools/mhealer.sh"
+    ["minterface"]="tools/minterface.sh"
+    ["mbbr"]="tools/mbbr.sh"
+    ["mdiag"]="tools/mdiag.sh"
+    ["mshield"]="tools/mshield.sh"
+)
+
+ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mfrp" "mweb" "mstats" "mhealer" "minterface" "mbbr" "mdiag" "mshield")
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
 
-# --- AUTO-START WEB UI ON FIRST RUN ---
+# --- 🌟 AUTO-START WEB UI ON FIRST RUN 🌟 ---
 if [ ! -f "/etc/systemd/system/mweb.service" ] && [ -x "/usr/bin/mweb" ]; then
     mkdir -p /etc/mweb 2>/dev/null
     if [ ! -f "/etc/mweb/web.conf" ]; then
@@ -31,6 +48,7 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload; systemctl enable mweb.service >/dev/null 2>&1; systemctl start mweb.service >/dev/null 2>&1
 fi
+# ---------------------------------------------
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -60,61 +78,78 @@ same_file() {
 }
 
 download_file_to_cache() {
-    local file="$1" tmp="$LOCAL_DIR/.${file}.$$"
+    local mod="$1"
+    local rel_path="${MOD_MAP[$mod]}"
+    [ -z "$rel_path" ] && rel_path="${mod}.sh"
+    local file_name="$(basename "$rel_path")"
+    local tmp="$LOCAL_DIR/.${file_name}.$$"
+    
     mkdir -p "$LOCAL_DIR" || return 1
     rm -f "$tmp"
-    echo -e "  ${C}→${NC} Downloading ${W}${file}${NC} to local cache..."
+    echo -e "  ${C}→${NC} Downloading ${W}${mod} (${rel_path})${NC}..."
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$REPO_SCRIPTS/$file" || { rm -f "$tmp"; return 1; }
+        curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$REPO_SCRIPTS/$rel_path" || { rm -f "$tmp"; return 1; }
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/$file" || { rm -f "$tmp"; return 1; }
+        wget -q --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/$rel_path" || { rm -f "$tmp"; return 1; }
     else
         return 1
     fi
     [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
     sed -i 's/\r$//' "$tmp" 2>/dev/null || true
     chmod 0755 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$LOCAL_DIR/$file"
+    mv -f "$tmp" "$LOCAL_DIR/$file_name"
 }
 
 deploy_cached_module() {
-    local mod="$1" file="${mod}.sh"
-    [ -s "$LOCAL_DIR/$file" ] || return 1
-    sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null || true
-    if ! same_file "$LOCAL_DIR/$file" "/usr/bin/$mod"; then
-        install -m 0755 "$LOCAL_DIR/$file" "/usr/bin/$mod" || return 1
+    local mod="$1"
+    local rel_path="${MOD_MAP[$mod]}"
+    [ -z "$rel_path" ] && rel_path="${mod}.sh"
+    local file_name="$(basename "$rel_path")"
+
+    [ -s "$LOCAL_DIR/$file_name" ] || return 1
+    sed -i 's/\r$//' "$LOCAL_DIR/$file_name" 2>/dev/null || true
+    if ! same_file "$LOCAL_DIR/$file_name" "/usr/bin/$mod"; then
+        install -m 0755 "$LOCAL_DIR/$file_name" "/usr/bin/$mod" || return 1
     else
         chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
     fi
-    if [ "$mod" = "mtunnel" ]; then
-        if ! same_file "$LOCAL_DIR/$file" "/usr/local/bin/mtunnel"; then
-            install -m 0755 "$LOCAL_DIR/$file" /usr/local/bin/mtunnel 2>/dev/null || true
+    if [ "$mod" = "main" ] || [ "$mod" = "mtunnel" ]; then
+        if ! same_file "$LOCAL_DIR/$file_name" "/usr/local/bin/mtunnel"; then
+            install -m 0755 "$LOCAL_DIR/$file_name" /usr/local/bin/mtunnel 2>/dev/null || true
         fi
     fi
     if [ "$mod" = "mstats" ]; then
-        install -m 0755 "$LOCAL_DIR/$file" /usr/bin/mstats 2>/dev/null || true
+        install -m 0755 "$LOCAL_DIR/$file_name" /usr/bin/mstats 2>/dev/null || true
         ln -sfn /usr/bin/mstats /usr/bin/mstat 2>/dev/null || true
     fi
 }
 
 ensure_module() {
-    local mod="$1" file="${mod}.sh"
+    local mod="$1"
+    local rel_path="${MOD_MAP[$mod]}"
+    [ -z "$rel_path" ] && rel_path="${mod}.sh"
+    local file_name="$(basename "$rel_path")"
     local script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || pwd)"
 
-    if [ -s "$LOCAL_DIR/$file" ]; then
+    if [ -s "$LOCAL_DIR/$file_name" ]; then
         deploy_cached_module "$mod" && return 0
     fi
-    if [ -s "$script_dir/$file" ]; then
-        cp -f "$script_dir/$file" "$LOCAL_DIR/$file" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
+    if [ -s "$script_dir/$rel_path" ]; then
+        cp -f "$script_dir/$rel_path" "$LOCAL_DIR/$file_name" 2>/dev/null || true
+        chmod 0755 "$LOCAL_DIR/$file_name" 2>/dev/null || true
+        deploy_cached_module "$mod" && return 0
+    fi
+    if [ -s "$script_dir/$file_name" ]; then
+        cp -f "$script_dir/$file_name" "$LOCAL_DIR/$file_name" 2>/dev/null || true
+        chmod 0755 "$LOCAL_DIR/$file_name" 2>/dev/null || true
         deploy_cached_module "$mod" && return 0
     fi
     if [ -s "/usr/bin/$mod" ]; then
-        cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file" 2>/dev/null || true
+        cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file_name" 2>/dev/null || true
+        chmod 0755 "$LOCAL_DIR/$file_name" 2>/dev/null || true
         deploy_cached_module "$mod" && return 0
     fi
-    if download_file_to_cache "$file"; then
+    if download_file_to_cache "$mod"; then
         deploy_cached_module "$mod" && return 0
     fi
     echo -e "  ${R}✗ ${W}${mod}${R} is not available locally and GitHub download failed.${NC}"
@@ -157,7 +192,7 @@ draw_main_header() {
     local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
     local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
-    local st_frp="○"; local c_frp="${DIM}"; ([ -f "/etc/frp/frps.toml" ] || [ -f "/etc/frp/frpc.toml" ]) && { st_frp="●"; c_frp="${G}"; }
+    local st_frp="○"; local c_frp="${DIM}"; (systemctl is-active --quiet frps || systemctl is-active --quiet frpc) 2>/dev/null && { st_frp="●"; c_frp="${G}"; }
 
     local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
     local bbr_stat="${DIM}○ OFF${NC}"
@@ -256,7 +291,7 @@ while true; do
                if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
                    cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
                    chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
-                   for bin in gost frps frpc rathole haproxy; do
+                   for bin in frps frpc rathole haproxy; do
                        if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
                            install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
                            echo -e "  ${G}✓${NC} Installed $bin"
@@ -275,15 +310,16 @@ while true; do
 
         11)
            echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
+           
            failed_local=()
-           for file in "${ALL_MODULES[@]}"; do
-               mod_name="${file%.sh}"
-               [ "$mod_name" = "main" ] && mod_name="mtunnel"
-               if [ -s "$LOCAL_DIR/$file" ]; then
-                   if deploy_cached_module "$mod_name"; then
-                       echo -e "  ${G}✓${NC} Module: $mod_name"
+           for mod in "${ALL_MODULES[@]}"; do
+               rel_path="${MOD_MAP[$mod]}"
+               file_name="$(basename "$rel_path")"
+               if [ -s "$LOCAL_DIR/$file_name" ]; then
+                   if deploy_cached_module "$mod"; then
+                       echo -e "  ${G}✓${NC} Module: $mod"
                    else
-                       failed_local+=("$mod_name")
+                       failed_local+=("$mod")
                    fi
                fi
            done
@@ -293,19 +329,22 @@ while true; do
 
            if [ -d "$local_pkg_dir" ]; then
                mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
+               
                if [ -f "$local_pkg_dir/haproxy" ]; then
                    cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy 2>/dev/null || cp -f "$local_pkg_dir/haproxy" /usr/local/sbin/haproxy
                    chmod +x /usr/sbin/haproxy /usr/local/sbin/haproxy 2>/dev/null
                    touch /var/lib/haproxy/stats 2>/dev/null
                    echo -e "  ${G}✓${NC} Binary: haproxy (Local)"
                fi
-               for b in gost frpc frps rathole; do
+
+               for b in frpc frps rathole; do
                    if [ -f "$local_pkg_dir/$b" ]; then
                        cp -f "$local_pkg_dir/$b" /usr/local/bin/$b
                        chmod +x "/usr/local/bin/$b"
                        echo -e "  ${G}✓${NC} Binary: $b (Local)"
                    fi
                done
+
                if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then
                    dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || apt-get install -f -y >/dev/null 2>&1
                    echo -e "  ${G}✓${NC} Installed local .deb packages"
@@ -336,7 +375,8 @@ while true; do
            else
                echo -e "  ${R}✗ Failed to fetch installer from GitHub.${NC}"
                sleep 1.5
-           fi ;;
+           fi
+           ;;
 
         13)
             clear
@@ -350,23 +390,20 @@ while true; do
             del_confirm="${del_confirm//[$' \r\n']/}"
             if [[ "$del_confirm" == "WIPE-MTUNNEL" ]]; then
                 echo -e "\n  ${C}[1/4]${NC} Stopping MTunnel services..."
-                systemctl stop mgre.service mxlan.service mporter.service mporter-obfs.service mporter-watchdog.service mweb.service mhealer.service mshield-obfs.service frps frpc 2>/dev/null || true
-                systemctl disable mgre.service mxlan.service mporter.service mporter-obfs.service mporter-watchdog.service mweb.service mhealer.service mshield-obfs.service frps frpc 2>/dev/null || true
+                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service frps frpc mrathole@* 2>/dev/null || true
+                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service frps frpc mrathole@* 2>/dev/null || true
                 echo -e "  ${C}[2/4]${NC} Removing MTunnel systemd units..."
-                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/gost.service /etc/systemd/system/frp*.service /etc/systemd/system/mrathole@.service
+                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/frp*.service /etc/systemd/system/mrathole@.service
                 systemctl daemon-reload
                 echo -e "  ${C}[3/4]${NC} Removing only known MTunnel interfaces..."
                 ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|br_|vx_)' | while read -r iface; do [ -n "$iface" ]||continue; ip link del "$iface" 2>/dev/null||true; ip tunnel del "$iface" 2>/dev/null||true; done
                 while iptables -D INPUT -j MSHIELD 2>/dev/null; do :; done
                 iptables -F MSHIELD 2>/dev/null||true; iptables -X MSHIELD 2>/dev/null||true
-                for table in nat mangle; do
-                    iptables -t "$table" -S 2>/dev/null | grep -E 'MPORTER_OBFS|OBFS_CNT_(TX|RX)_' | sed 's/^-A /-D /' | while read -r rule; do [ -n "$rule" ]&&iptables -t "$table" $rule 2>/dev/null||true; done
-                done
                 echo -e "  ${C}[4/4]${NC} Removing MTunnel-owned files..."
                 rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/frp /etc/mshield /etc/mstats /etc/mrathole /root/mtunnel
                 rm -f /var/log/mhealer.log /var/log/mporter-watchdog.log
                 rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mfrp /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr
-                rm -f /usr/local/bin/mtunnel /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-watchdog.sh /usr/local/bin/mshield-runner.sh /usr/local/bin/mhealer_daemon.sh
+                rm -f /usr/local/bin/mtunnel /usr/local/bin/mporter-watchdog.sh /usr/local/bin/mhealer_daemon.sh
                 echo -e "\n  ${G}✓ MTunnel wipe completed. Shared configs were preserved.${NC}\n"
                 exit 0
             else echo -e "  ${G}Cancelled. Nothing was removed.${NC}"; fi ;;

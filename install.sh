@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel Core Installer v7.6.0 (Ubuntu 24.04 & Lua Fix Support) ---
+# --- MTunnel Core Modular Installer v7.7.0 ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -7,7 +7,23 @@ B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; 
 LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
-BOOTSTRAP_MODULES=("main.sh" "mgre.sh" "mporter.sh" "mxlan.sh" "mrathole.sh" "mbbr.sh" "mweb.sh" "mstats.sh")
+
+# Mapping for deployment: "mod_name:rel_path"
+BOOTSTRAP_MODULES=(
+    "main:main.sh"
+    "mporter:mporter.sh"
+    "mgre:tunnels/mgre.sh"
+    "mxlan:tunnels/mxlan.sh"
+    "mrathole:tunnels/mrathole.sh"
+    "mfrp:tunnels/mfrp.sh"
+    "mweb:tools/mweb.sh"
+    "mstats:tools/mstats.sh"
+    "mhealer:tools/mhealer.sh"
+    "minterface:tools/minterface.sh"
+    "mbbr:tools/mbbr.sh"
+    "mdiag:tools/mdiag.sh"
+    "mshield:tools/mshield.sh"
+)
 
 IS_FORCE=false
 for arg in "$@"; do
@@ -17,7 +33,7 @@ for arg in "$@"; do
     fi
 done
 
-mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost /usr/sbin /usr/local/bin 2>/dev/null
+mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/bin 2>/dev/null
 
 draw_progress() {
     local n=$1; local total=$2; local text=$3; local width=25
@@ -35,43 +51,33 @@ draw_progress() {
 
 clear
 echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-echo -e "  ${B}│${NC} ${W}MTunnel Core Installer v7.6.0${NC}                              ${B}│${NC}"
+echo -e "  ${B}│${NC} ${W}MTunnel Core Modular Installer v7.7.0${NC}                      ${B}│${NC}"
 echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
 
-# ۱. استقرار فایل‌های باینری و پکیج‌های لوکال در صورت وجود در پوشه packages
+# ۱. استقرار باینری‌ها و پکیج‌های لوکال
 PKG_DIR=""
 [ -d "$SCRIPT_DIR/packages" ] && [ "$(ls -A "$SCRIPT_DIR/packages" 2>/dev/null)" ] && PKG_DIR="$SCRIPT_DIR/packages"
 [ -z "$PKG_DIR" ] && [ -d "$LOCAL_DIR/packages" ] && [ "$(ls -A "$LOCAL_DIR/packages" 2>/dev/null)" ] && PKG_DIR="$LOCAL_DIR/packages"
 [ -z "$PKG_DIR" ] && [ -d "./packages" ] && [ "$(ls -A "./packages" 2>/dev/null)" ] && PKG_DIR="./packages"
 
 if [ -n "$PKG_DIR" ]; then
-    # هپروکسی
     if [ -s "$PKG_DIR/haproxy" ]; then
         cp -f "$PKG_DIR/haproxy" /usr/sbin/haproxy 2>/dev/null
         chmod +x /usr/sbin/haproxy 2>/dev/null
     fi
 
-    # گاست
-    if [ -s "$PKG_DIR/gost" ]; then
-        cp -f "$PKG_DIR/gost" /usr/local/bin/gost 2>/dev/null
-        chmod +x /usr/local/bin/gost 2>/dev/null
-    fi
-
-    # سایر باینری‌ها
-    for bin in rathole backhaul bh frpc frps hysteria; do
+    for bin in rathole frpc frps; do
         if [ -s "$PKG_DIR/$bin" ]; then
             cp -f "$PKG_DIR/$bin" /usr/local/bin/$bin 2>/dev/null
             chmod +x "/usr/local/bin/$bin" 2>/dev/null
         fi
     done
 
-    # فایل‌های deb لوکال
     if ls "$PKG_DIR"/*.deb >/dev/null 2>&1; then
         dpkg -i "$PKG_DIR"/*.deb >/dev/null 2>&1 || true
         apt-get --fix-broken install -y >/dev/null 2>&1 || true
     fi
 
-    # ساخت سرویس systemd برای هپروکسی در صورت وجود باینری
     if [ -f "/usr/sbin/haproxy" ]; then
         if [ ! -s /etc/haproxy/haproxy.cfg ]; then
             cat <<'EOF_HAP' > /etc/haproxy/haproxy.cfg
@@ -113,19 +119,22 @@ EOF_HAP_SRV
     fi
 fi
 
-# ۲. چرخه نصب و بیلد ماژول‌های اسکریپتی
+# ۲. نصب و بیلد ماژول‌های اسکریپتی
 total_mods=${#BOOTSTRAP_MODULES[@]}
 current=0
 
-for file in "${BOOTSTRAP_MODULES[@]}"; do
+for item in "${BOOTSTRAP_MODULES[@]}"; do
     ((current++))
-    mod_name="${file%.sh}"
+    mod_name="${item%%:*}"
+    rel_path="${item##*:}"
+    file_name="$(basename "$rel_path")"
     [ "$mod_name" == "main" ] && target_bin="/usr/bin/mtunnel" || target_bin="/usr/bin/$mod_name"
 
     local_source=""
     if [ "$IS_FORCE" = false ]; then
-        if [ -s "$SCRIPT_DIR/$file" ]; then local_source="$SCRIPT_DIR/$file"
-        elif [ -s "$LOCAL_DIR/$file" ]; then local_source="$LOCAL_DIR/$file"; fi
+        if [ -s "$SCRIPT_DIR/$rel_path" ]; then local_source="$SCRIPT_DIR/$rel_path"
+        elif [ -s "$SCRIPT_DIR/$file_name" ]; then local_source="$SCRIPT_DIR/$file_name"
+        elif [ -s "$LOCAL_DIR/$file_name" ]; then local_source="$LOCAL_DIR/$file_name"; fi
     fi
 
     if [ -n "$local_source" ]; then
@@ -133,7 +142,7 @@ for file in "${BOOTSTRAP_MODULES[@]}"; do
         if [ "$(readlink -f "$local_source" 2>/dev/null)" != "$(readlink -f "$target_bin" 2>/dev/null)" ]; then
             cp -f "$local_source" "$target_bin" 2>/dev/null
         fi
-        [ "$local_source" != "$LOCAL_DIR/$file" ] && cp -f "$local_source" "$LOCAL_DIR/$file" 2>/dev/null
+        [ "$local_source" != "$LOCAL_DIR/$file_name" ] && cp -f "$local_source" "$LOCAL_DIR/$file_name" 2>/dev/null
         chmod +x "$target_bin" 2>/dev/null
         draw_progress "$current" "$total_mods" "$mod_name (local)"
         echo ""
@@ -141,20 +150,20 @@ for file in "${BOOTSTRAP_MODULES[@]}"; do
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/$file" "$REPO_SCRIPTS/$file" 2>/dev/null
+        curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/$file_name" "$REPO_SCRIPTS/$rel_path" 2>/dev/null
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=8 -O "$LOCAL_DIR/$file" "$REPO_SCRIPTS/$file" 2>/dev/null
+        wget -q --timeout=8 -O "$LOCAL_DIR/$file_name" "$REPO_SCRIPTS/$rel_path" 2>/dev/null
     fi
 
-    if [ -s "$LOCAL_DIR/$file" ]; then
-        sed -i 's/\r$//' "$LOCAL_DIR/$file" 2>/dev/null
-        chmod +x "$LOCAL_DIR/$file"
-        cp -f "$LOCAL_DIR/$file" "$target_bin" 2>/dev/null
+    if [ -s "$LOCAL_DIR/$file_name" ]; then
+        sed -i 's/\r$//' "$LOCAL_DIR/$file_name" 2>/dev/null
+        chmod +x "$LOCAL_DIR/$file_name"
+        cp -f "$LOCAL_DIR/$file_name" "$target_bin" 2>/dev/null
         chmod +x "$target_bin" 2>/dev/null
         draw_progress "$current" "$total_mods" "$mod_name"
         echo ""
     else
-        echo -e "\n  ${R}Installation failed: $mod_name${NC}"
+        echo -e "\n  ${R}Installation failed: $mod_name ($rel_path)${NC}"
         exit 1
     fi
 done

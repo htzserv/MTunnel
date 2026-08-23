@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel Core Modular Installer v7.7.0 ---
+# --- MTunnel Core Modular Installer v7.8.0 ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -8,14 +8,13 @@ LOCAL_DIR="/root/mtunnel"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
 
-# Mapping for deployment: "mod_name:rel_path"
 BOOTSTRAP_MODULES=(
     "main:main.sh"
     "mporter:mporter.sh"
     "mgre:tunnels/mgre.sh"
     "mxlan:tunnels/mxlan.sh"
     "mrathole:tunnels/mrathole.sh"
-    "mfrp:tunnels/mfrp.sh"
+    "mbackhaul:tunnels/mbackhaul.sh"
     "mweb:tools/mweb.sh"
     "mstats:tools/mstats.sh"
     "mhealer:tools/mhealer.sh"
@@ -23,6 +22,7 @@ BOOTSTRAP_MODULES=(
     "mbbr:tools/mbbr.sh"
     "mdiag:tools/mdiag.sh"
     "mshield:tools/mshield.sh"
+    "linktest:tools/linktest.sh"
 )
 
 IS_FORCE=false
@@ -43,7 +43,6 @@ draw_progress() {
     local empty=$(( width - filled ))
     local bar=$(printf "%${filled}s" "" | tr ' ' '#')
     local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
-    
     tput civis 2>/dev/null || true
     printf "\r  %b✔%b %b%-20s%b %b[%b%s%b%s%b] %b%3d%%%b" "$G" "$NC" "$W" "$text" "$NC" "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" "$W" "$percent" "$NC"
     tput cnorm 2>/dev/null || true
@@ -51,10 +50,9 @@ draw_progress() {
 
 clear
 echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-echo -e "  ${B}│${NC} ${W}MTunnel Core Modular Installer v7.7.0${NC}                      ${B}│${NC}"
+echo -e "  ${B}│${NC} ${W}MTunnel Core Modular Installer v7.8.0${NC}                      ${B}│${NC}"
 echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
 
-# ۱. استقرار باینری‌ها و پکیج‌های لوکال
 PKG_DIR=""
 [ -d "$SCRIPT_DIR/packages" ] && [ "$(ls -A "$SCRIPT_DIR/packages" 2>/dev/null)" ] && PKG_DIR="$SCRIPT_DIR/packages"
 [ -z "$PKG_DIR" ] && [ -d "$LOCAL_DIR/packages" ] && [ "$(ls -A "$LOCAL_DIR/packages" 2>/dev/null)" ] && PKG_DIR="$LOCAL_DIR/packages"
@@ -66,7 +64,7 @@ if [ -n "$PKG_DIR" ]; then
         chmod +x /usr/sbin/haproxy 2>/dev/null
     fi
 
-    for bin in rathole frpc frps; do
+    for bin in rathole bh; do
         if [ -s "$PKG_DIR/$bin" ]; then
             cp -f "$PKG_DIR/$bin" /usr/local/bin/$bin 2>/dev/null
             chmod +x "/usr/local/bin/$bin" 2>/dev/null
@@ -91,13 +89,12 @@ defaults
     timeout server 1h
 
 frontend dummy_check
-    bind 127.0.0.1:9999
+    bind :::9999 v4v6
     default_backend dummy_back
 backend dummy_back
     server local 127.0.0.1:9999
 EOF_HAP
         fi
-
         cat <<'EOF_HAP_SRV' > /etc/systemd/system/haproxy.service
 [Unit]
 Description=HAProxy Load Balancer
@@ -119,7 +116,6 @@ EOF_HAP_SRV
     fi
 fi
 
-# ۲. نصب و بیلد ماژول‌های اسکریپتی
 total_mods=${#BOOTSTRAP_MODULES[@]}
 current=0
 

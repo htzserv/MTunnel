@@ -56,18 +56,20 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1 text=$2 width=36 progress=0 filled empty bar rest
+    local pid=$1 text=$2 width=30 progress=0 filled empty bar rest
     tput civis 2>/dev/null || true
     while kill -0 "$pid" 2>/dev/null; do
-        ((progress++)); ((progress > 95)) && progress=95
-        filled=$((progress*width/100)); empty=$((width-filled))
-        bar="$(printf '%*s' "$filled" '' | tr ' ' '-')"
+        progress=$(( (progress + 3) % 96 ))
+        [ "$progress" -lt 5 ] && progress=5
+        filled=$(( progress * width / 100 ))
+        empty=$(( width - filled ))
+        bar="$(printf '%*s' "$filled" '' | tr ' ' '#')"
         rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
-        printf '\r  %b→%b %-26s %b%s%b%s %3d%%' "$C" "$NC" "$text" "$G" "$bar" "$NC" "$rest" "$progress"
+        printf "\r  %b→%b %-26s %b[%s%b%s%b] %3d%%" "$C" "$NC" "$text" "$W" "$bar" "$DIM" "$rest" "$NC" "$progress"
         sleep 0.15
     done
-    bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
-    printf '\r  %b✓%b %-26s %b%s%b %3d%%\n' "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
+    bar="$(printf '%*s' "$width" '' | tr ' ' '#')"
+    printf "\r  %b✔%b %-26s %b[%b%s%b] %3d%%\n" "$G" "$NC" "$text" "$W" "$G" "$bar" "$W" 100
     tput cnorm 2>/dev/null || true
 }
 
@@ -157,14 +159,25 @@ run_iperf3() {
     clear
     if ! command -v iperf3 >/dev/null 2>&1; then
         echo -e "\n  ${DIM}┌─[ IPERF3 PACKAGE INSTALLER ]${NC}"
+        
+        killall -9 apt-get apt dpkg 2>/dev/null || true
+        rm -f /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock 2>/dev/null || true
+        dpkg --configure -a >/dev/null 2>&1 || true
+
         (
-            DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -q iperf3 >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::ForceIPv4=true -y -q iperf3 >/dev/null 2>&1
         ) &
         local pid=$!
         draw_progress_bar "$pid" "Installing iPerf3 Benchmark"
-        wait "$pid"
-        echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}"
+        wait "$pid" 2>/dev/null
+        
+        if command -v iperf3 >/dev/null 2>&1; then
+            echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}"
+        else
+            echo -e "\n  ${R}✘ apt-get background timed out, attempting direct install...${NC}"
+            apt-get install -y iperf3 >/dev/null 2>&1
+        fi
         sleep 1
     fi
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.7.0 ---
+# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.8.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 TMP_DIR="$(mktemp -d /tmp/linktest.XXXXXX)"
@@ -28,7 +28,7 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.7.0 "
+    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.8.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
@@ -66,7 +66,7 @@ try:
     elapsed = time.time() - start
     speed_mbps = (total_bytes * 8) / (elapsed * 1000 * 1000)
     print(f'{speed_mbps:.1f}')
-except:
+except Exception:
     print('ERR')
 finally:
     s.close()
@@ -187,7 +187,7 @@ PY
         local res_gre=$(verify_tunnel_ping "10.254.254.1")
         if [[ "$res_gre" =~ ^OK ]]; then
             printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "PASSED" "${res_gre#OK|}" "Protocol 47 (GRE) Clean"
-            passed_protocols+=("Standard GRE (L3):10.254.254.1:$SPEED_PORT")
+            passed_protocols+=("Standard GRE (L3)|10.254.254.1|$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "GRE Drop / ISP Filter"
         fi
@@ -202,7 +202,7 @@ PY
         if echo "$ping_sit" | grep -q ", 0% packet loss" || echo "$ping_sit" | grep -q ", 0.0% packet loss"; then
             local lat6=$(echo "$ping_sit" | grep -oP 'time=\K[0-9.]+' | head -1)
             printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "PASSED" "${lat6:-1}ms" "Protocol 41 (SIT) Clean"
-            passed_protocols+=("6to4 IP6GRE:fdfe:test::1:$SPEED_PORT")
+            passed_protocols+=("6to4 IP6GRE|fdfe:test::1|$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "Protocol 41 Filtered"
         fi
@@ -220,7 +220,7 @@ PY
         local res_vx=$(verify_tunnel_ping "10.253.253.1")
         if [[ "$res_vx" =~ ^OK ]]; then
             printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "${res_vx#OK|}" "UDP 4789 Open & Fast"
-            passed_protocols+=("VXLAN L2 Fabric:10.253.253.1:$SPEED_PORT")
+            passed_protocols+=("VXLAN L2 Fabric|10.253.253.1|$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "UDP Port 4789 Dropped"
         fi
@@ -229,7 +229,7 @@ PY
         # 4. Rathole Reverse TCP
         if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/8443" 2>/dev/null; then
             printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "PASSED" "Direct" "TCP Port 8443 Reachable"
-            passed_protocols+=("Rathole TCP:$remote_ip:8443")
+            passed_protocols+=("Rathole TCP|$remote_ip|8443")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "BLOCKED" "---" "Port 8443 Filtered"
         fi
@@ -239,7 +239,7 @@ PY
             local mode_name=$1; local port_num=$2; local label_color=$3
             if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/$port_num" 2>/dev/null; then
                 printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "PASSED" "Direct" "Port $port_num Open"
-                passed_protocols+=("$mode_name:$remote_ip:$port_num")
+                passed_protocols+=("$mode_name|$remote_ip|$port_num")
             else
                 printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "BLOCKED" "---" "Port $port_num Filtered"
             fi
@@ -253,11 +253,11 @@ PY
         echo -e "  ${B}╰─────────────────────────────┴────────────┴──────────────┴──────────────────────────────╯${NC}"
 
         # =========================================================================
-        # 🚀 OPTIONAL LIVE SPEEDTEST ON PASSED PROTOCOLS
+        # 🚀 LIVE SPEEDTEST ON PASSED PROTOCOLS
         # =========================================================================
         if [ ${#passed_protocols[@]} -gt 0 ]; then
             echo ""
-            echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}${B}${B}${W}PASSED${NC} channels? [y/N]: "; read do_speed
+            echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}PASSED${W} channels? [y/N]: ${NC}"; read do_speed
             if [[ "${do_speed,,}" == "y" ]]; then
                 echo -e "\n  ${Y}● Measuring Real-time Throughput (3s per channel)...${NC}\n"
                 echo -e "  ${B}╭─────────────────────────────┬──────────────────────────┬──────────────────────────────╮${NC}"
@@ -265,15 +265,13 @@ PY
                 echo -e "  ${B}├─────────────────────────────┼──────────────────────────┼──────────────────────────────┤${NC}"
 
                 for item in "${passed_protocols[@]}"; do
-                    local p_name=$(echo "$item" | cut -d: -f1)
-                    local p_host=$(echo "$item" | cut -d: -f2)
-                    local p_port=$(echo "$item" | cut -d: -f3)
+                    IFS='|' read -r p_name p_host p_port <<< "$item"
 
                     local sp_val=$(measure_tcp_speed "$p_host" "$p_port")
                     if [ "$sp_val" != "ERR" ] && [ -n "$sp_val" ]; then
                         printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$p_name" "▲ ${sp_val} Mbps" "Clean Channel Bandwidth"
                     else
-                        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-24s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$p_name" "N/A" "Direct Port Echo Only"
+                        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-24s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$p_name" "N/A" "Connection Timeout"
                     fi
                 done
                 echo -e "  ${B}╰─────────────────────────────┴──────────────────────────┴──────────────────────────────╯${NC}"

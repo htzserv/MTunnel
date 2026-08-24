@@ -36,7 +36,6 @@ draw_header() {
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
-# تست پینگ تانل لایه ۳ / لایه ۲ واقعی (حذف خطای کاذب)
 verify_tunnel_ping() {
     local target_ip=$1
     local out=$(ping -c 2 -W 2 "$target_ip" 2>&1)
@@ -48,35 +47,34 @@ verify_tunnel_ping() {
     fi
 }
 
-# --- 🌟 بنچمارک دقیق ۲‌طرفه 🌟 ---
 run_protocol_matrix_test() {
     draw_header
     echo -e "\n  ${DIM}┌─[ STRICT 2-WAY PROTOCOL BENCHMARK ]${NC}"
-    echo -e "  ${DIM}│${NC} ${Y}نکته مهم:${NC} برای اینکه تست لایه‌های شبکه واقعی باشد، باید این منو را"
-    echo -e "  ${DIM}│${NC} روی ${W}هر دو سرور (ایران و خارج)${NC} همزمان باز کنید."
+    echo -e "  ${DIM}│${NC} ${Y}Notice:${NC} For accurate network verification, open this benchmark menu"
+    echo -e "  ${DIM}│${NC} on ${W}BOTH servers (Iran & Kharej)${NC} simultaneously."
     echo -e "  ${DIM}├────────────────────────────────────────────────────────────────────────────${NC}"
 
     while true; do
-        echo -ne "  ${C}●${NC} ${W}نقش این سرور [1: ایران | 2: خارج | q: بازگشت]: ${NC}"; read s_role
+        echo -ne "  ${C}●${NC} ${W}Current Server Role [1: IRAN | 2: KHAREJ | q: Back]: ${NC}"; read s_role
         [[ "$s_role" =~ ^[12q]$ ]] && break
     done
     [[ "$s_role" == "q" ]] && return
 
     local local_ip=$(get_local_ip)
-    echo -ne "  ${C}●${NC} ${W}آی‌پی پابلیک این سرور [${Y}${local_ip}${W}]: ${NC}"; read custom_l
+    echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_l
     local_ip=${custom_l:-$local_ip}
 
-    echo -ne "  ${C}●${NC} ${W}آی‌پی پابلیک سرور مقابل: ${NC}"; read remote_ip
+    echo -ne "  ${C}●${NC} ${W}Remote Peer Public IP: ${NC}"; read remote_ip
     remote_ip=$(echo "$remote_ip" | tr -d '\r' | tr -d ' ')
-    if [ -z "$remote_ip" ]; then echo -e "  ${R}● آی‌پی سرور مقابل الزامی است!${NC}"; sleep 1.5; return; fi
+    if [ -z "$remote_ip" ]; then echo -e "  ${R}● Remote Peer IP is required!${NC}"; sleep 1.5; return; fi
 
     echo ""
-    echo -e "  ${Y}آماده‌باش:${NC} مطمئن شوید روی سرور مقابل نیز همین بخش باز شده است."
-    echo -ne "  ${G}هر دو سرور آماده‌اند؟ (Enter بزنید تا تست شروع شود): ${NC}"; read ready_go
+    echo -e "  ${Y}Standby:${NC} Ensure the benchmark menu is active on the peer server."
+    echo -ne "  ${G}Ready on both sides? (Press Enter to start benchmark): ${NC}"; read ready_go
 
-    echo -e "\n  ${C}● در حال اجرای تست پروتکل‌ها...${NC}\n"
+    echo -e "\n  ${C}● Testing protocols in sequence...${NC}\n"
     echo -e "  ${B}╭─────────────────────────────┬────────────┬──────────────┬──────────────────────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "پروتکل / متد انتقال" "وضعیت" "پینگ/تاخیر" "توضیحات و عیب‌یابی"
+    printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "PROTOCOL / TRANSPORT" "STATUS" "LATENCY" "DIAGNOSTICS & DETAILS"
     echo -e "  ${B}├─────────────────────────────┼────────────┼──────────────┼──────────────────────────────┤${NC}"
 
     # 1. Standard GRE IPv4
@@ -93,7 +91,7 @@ run_protocol_matrix_test() {
         local lat="${res_gre#OK|}"
         printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "PASSED" "$lat" "Protocol 47 (GRE) OK"
     else
-        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "پکت رد نشد / فیلتر GRE"
+        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "Packet Dropped / GRE Block"
     fi
     ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
 
@@ -110,7 +108,7 @@ run_protocol_matrix_test() {
         local lat6=$(echo "$ping_sit" | grep -oP 'time=\K[0-9.]+' | head -1)
         printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "PASSED" "${lat6:-1}ms" "Protocol 41 (SIT/v6) OK"
     else
-        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "پروتکل 41 فیلتر است"
+        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "Protocol 41 Filtered"
     fi
     ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
 
@@ -129,30 +127,29 @@ run_protocol_matrix_test() {
     local res_vx=$(verify_tunnel_ping "$vx_rem")
     if [[ "$res_vx" =~ ^OK ]]; then
         local latvx="${res_vx#OK|}"
-        printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "$latvx" "UDP 4789 باز و بدون لاس"
+        printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "$latvx" "UDP Port 4789 Clear"
     else
-        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "پورت UDP 4789 مسدود است"
+        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "UDP Port 4789 Dropped"
     fi
     ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
 
     # 4. Rathole Reverse TCP
     local test_port=8443
     if [ "$s_role" == "1" ]; then
-        # در ایران لیسنر باز می‌کنیم
         python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', $test_port)); s.listen(1); s.settimeout(6); c,a=s.accept(); c.sendall(b'OK'); c.close(); s.close()" &
     fi
     sleep 1
     if [ "$s_role" == "2" ]; then
         if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/$test_port" 2>/dev/null; then
-            printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "PASSED" "Direct" "TCP Port $test_port OK"
+            printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "PASSED" "Direct" "TCP Port $test_port Reachable"
         else
-            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "BLOCKED" "---" "پورت $test_port بسته/فیلتر"
+            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "BLOCKED" "---" "Port $test_port Filtered"
         fi
     else
-        printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${C}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "LISTENING" "---" "منتظر پروب از خارج..."
+        printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${C}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "LISTENING" "---" "Awaiting Probe from Peer..."
     fi
 
-    # 5. تست حالت‌های Backhaul
+    # 5. Backhaul Granular Mode Tests
     test_bh_mode() {
         local mode_name=$1; local port_num=$2; local label_color=$3
         if [ "$s_role" == "1" ]; then
@@ -161,12 +158,12 @@ run_protocol_matrix_test() {
         sleep 0.8
         if [ "$s_role" == "2" ]; then
             if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/$port_num" 2>/dev/null; then
-                printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "PASSED" "Direct" "Port $port_num باز و متصل"
+                printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "PASSED" "Direct" "Port $port_num Reachable"
             else
-                printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "BLOCKED" "---" "پورت $port_num مسدود است"
+                printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "BLOCKED" "---" "Port $port_num Filtered"
             fi
         else
-            printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${C}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "LISTENING" "---" "پورت $port_num لیسن شد"
+            printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${C}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "LISTENING" "---" "Listening on Port $port_num"
         fi
     }
 
@@ -176,45 +173,46 @@ run_protocol_matrix_test() {
     test_bh_mode "Backhaul: WSSMUX (TLS)" "9743" "${M}"
 
     echo -e "  ${B}╰─────────────────────────────┴────────────┴──────────────┴──────────────────────────────╯${NC}"
-    echo -e "\n  ${DIM}تمام اینترفیس‌ها و پروسه‌های آزمایشی بلافاصله پاک‌سازی شدند.${NC}"
-    echo -ne "\n  ${DIM}Enter بزنید تا به منو بازگردید...${NC}"; read dummy
+    echo -e "\n  ${DIM}All temporary test interfaces and listeners have been cleanly purged.${NC}"
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ آزمایشگاه و بنچمارک شبکه ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}تست خودکار و همزمان تمام تانل‌ها (Strict 2-Way Benchmark)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}اجرا به عنوان Listener (باز کردن موقت پورت‌ها برای تست)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}اجرا به عنوان Tester (اسکن فیلترینگ پورت‌های سرور مقابل)${NC}"
-    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}بازگشت به داشبورد اصلی${NC}\n"
+    echo -e "\n  ${DIM}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Full Automated Tunnel Protocol Benchmark Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Listener (Open Temporary Test Ports)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Run as Tester (Check Peer Ports & Filtering)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View Active Listening Ports (OS Socket State)${NC}"
+    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read opt
     case $opt in
         1) run_protocol_matrix_test ;;
         2) 
            draw_header
-           echo -ne "\n  ${C}●${NC} ${W}پورت‌های مدنظر برای لیسن (مثلاً 80,443,8443): ${NC}"; read p_in
+           echo -ne "\n  ${C}●${NC} ${W}Target ports to open [e.g. 80,443,8443]: ${NC}"; read p_in
            p_in=${p_in:-"80,443,2053,2083,8080,8443,9743"}
            for p in $(echo "$p_in" | tr ',' ' '); do
                python3 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', $p)); s.listen(1024); [s.accept()[0].close() for _ in iter(int, 1)]" &
                LISTENER_PIDS+=($!)
-               echo -e "  ${G}OK${NC} پورت $p لیسن شد."
+               echo -e "  ${G}OK${NC} Port $p is now listening."
            done
-           echo -ne "\n  ${Y}برای توقف لیسنرها Enter بزنید...${NC}"; read dummy
+           echo -ne "\n  ${Y}Press Enter to stop listeners...${NC}"; read dummy
            cleanup ;;
         3) 
            draw_header
-           echo -ne "\n  ${C}●${NC} ${W}آی‌پی سرور مقابل: ${NC}"; read r_p
-           echo -ne "  ${C}●${NC} ${W}پورت‌های تست (مثلاً 80,443,8443): ${NC}"; read p_in
+           echo -ne "\n  ${C}●${NC} ${W}Target Peer IP: ${NC}"; read r_p
+           echo -ne "  ${C}●${NC} ${W}Test Ports [e.g. 80,443,8443]: ${NC}"; read p_in
            p_in=${p_in:-"80,443,2053,2083,8080,8443,9743"}
            echo ""
            for p in $(echo "$p_in" | tr ',' ' '); do
                if timeout 2 bash -c "exec 3<>/dev/tcp/$r_p/$p" 2>/dev/null; then
-                   echo -e "  ${G}✔ OPEN${NC}    پورت $p روی $r_p باز و قابل اتصال است."
+                   echo -e "  ${G}✔ OPEN${NC}    Port $p on $r_p is reachable."
                else
-                   echo -e "  ${R}✘ BLOCKED${NC} پورت $p روی $r_p مسدود/بسته است."
+                   echo -e "  ${R}✘ BLOCKED${NC} Port $p on $r_p is filtered/closed."
                fi
            done
-           echo -ne "\n  ${DIM}Enter بزنید...${NC}"; read dummy ;;
+           echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
         0) break ;;
     esac
 done

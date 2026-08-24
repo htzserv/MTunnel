@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.9.0 ---
+# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.9.5 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 TMP_DIR="$(mktemp -d /tmp/linktest.XXXXXX)"
@@ -28,7 +28,7 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.9.0 "
+    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.9.5 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
@@ -52,24 +52,35 @@ verify_tunnel_ping() {
 measure_tcp_speed() {
     local target_ip=$1; local target_port=$2; local duration=3
     local res=$(python3 -c "
-import socket, time
-s = socket.socket()
-s.settimeout(3)
+import socket, time, sys
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(3.0)
 try:
-    s.connect(('$target_ip', $target_port))
-    start = time.time()
+    s.connect(('$target_ip', int($target_port)))
+    s.settimeout(5.0)
+    buf = b'M' * 65536
     total_bytes = 0
-    buf = b'X' * 65536
+    start = time.time()
     while time.time() - start < $duration:
-        s.sendall(buf)
-        total_bytes += len(buf)
+        sent = s.send(buf)
+        if sent > 0:
+            total_bytes += sent
+        else:
+            time.sleep(0.001)
     elapsed = time.time() - start
-    speed_mbps = (total_bytes * 8) / (elapsed * 1000 * 1000)
-    print(f'{speed_mbps:.1f}')
-except Exception:
+    if elapsed > 0 and total_bytes > 0:
+        speed_mbps = (total_bytes * 8.0) / (elapsed * 1000000.0)
+        print(f'{speed_mbps:.1f}')
+    else:
+        print('0.0')
+except Exception as e:
     print('ERR')
 finally:
-    s.close()
+    try:
+        s.close()
+    except:
+        pass
 " 2>/dev/null)
     echo "${res:-ERR}"
 }
@@ -97,6 +108,7 @@ run_protocol_matrix_test() {
     if [ "$s_role" == "1" ]; then
         echo -e "\n  ${G}● IRAN Responder Active.${NC} Awaiting Sync Trigger from Kharej..."
         
+        # ۱. راه‌اندازی تمام اینترفیس‌های آزمایشی در سمت ایران
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
         ip link set mtest_gre up 2>/dev/null; ip addr add "10.254.254.1/30" dev mtest_gre 2>/dev/null
@@ -123,7 +135,9 @@ def handle_client(c):
             data = c.recv(65536)
             if not data: break
     except: pass
-    finally: c.close()
+    finally:
+        try: c.close()
+        except: pass
 
 def listen_port(p):
     try:
@@ -133,8 +147,9 @@ def listen_port(p):
         s.listen(128)
         while True:
             c, a = s.accept()
-            threading.Thread(target=handle_client, args=(c,), daemon=True).start()
-    except: pass
+            t = threading.Thread(target=handle_client, args=(c,), daemon=True)
+            t.start()
+    except Exception as e: pass
 
 for p in ports:
     threading.Thread(target=listen_port, args=(p,), daemon=True).start()
@@ -170,7 +185,7 @@ PY
 
         local passed_protocols=()
 
-        # 1. Standard GRE
+        # 1. Test Standard GRE
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
         ip link set mtest_gre up 2>/dev/null; ip addr add "10.254.254.2/30" dev mtest_gre 2>/dev/null
@@ -181,10 +196,10 @@ PY
             passed_protocols+=("Standard GRE (L3)|10.254.254.1|$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "GRE Drop / ISP Filter"
+            ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         fi
-        ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
 
-        # 2. 6to4 IP6GRE
+        # 2. Test 6to4 IP6GRE
         ip tunnel del mtest_sit 2>/dev/null || true
         ip tunnel add mtest_sit mode sit remote "$remote_ip" local "$local_ip" 2>/dev/null
         ip link set mtest_sit up 2>/dev/null; ip -6 addr add "fdfe:test::2/64" dev mtest_sit 2>/dev/null
@@ -196,10 +211,10 @@ PY
             passed_protocols+=("6to4 IP6GRE|fdfe:test::1|$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "Protocol 41 Filtered"
+            ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
         fi
-        ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
 
-        # 3. VXLAN L2 Mesh
+        # 3. Test VXLAN L2 Mesh (زنده نگه داشتن اینترفیس برای اسپیدتست)
         ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
         local eth_iface=$(ip route get "$remote_ip" 2>/dev/null | awk '{print $5}' | head -n 1)
         [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5}' | head -n 1)
@@ -214,8 +229,8 @@ PY
             passed_protocols+=("VXLAN L2 Fabric|10.253.253.1|$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "UDP Port 4789 Dropped"
+            ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
         fi
-        ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
 
         # 4. Rathole Reverse TCP
         if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/8443" 2>/dev/null; then
@@ -277,6 +292,7 @@ PY
             fi
         fi
 
+        cleanup
         echo -e "\n  ${DIM}Benchmark finished. All local test interfaces cleaned up.${NC}"
         echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
     fi

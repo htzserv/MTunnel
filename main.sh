@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.8.0 ---
+# --- MDesign Master Core | Central Dashboard v7.8.5 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -64,7 +64,7 @@ draw_progress_bar() {
         bar="$(printf '%*s' "$filled" '' | tr ' ' '-')"
         rest="$(printf '%*s' "$empty" '' | tr ' ' '-')"
         printf '\r  %b→%b %-26s %b%s%b%s %3d%%' "$C" "$NC" "$text" "$G" "$bar" "$NC" "$rest" "$progress"
-        sleep 0.2
+        sleep 0.15
     done
     bar="$(printf '%*s' "$width" '' | tr ' ' '-')"
     printf '\r  %b✓%b %-26s %b%s%b %3d%%\n' "$G" "$NC" "$text" "$G" "$bar" "$NC" 100
@@ -154,25 +154,56 @@ ensure_module() {
 run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
 
 run_iperf3() {
-    clear; echo -e "\n  ${DIM}┌─[ iPerf3 Network Speedtest ]${NC}"
+    clear
     if ! command -v iperf3 >/dev/null 2>&1; then
-        echo -e "  ${Y}● Installing iPerf3...${NC}"
-        apt-get update -y -q >/dev/null 2>&1
-        apt-get install -y -q iperf3 >/dev/null 2>&1
+        echo -e "\n  ${DIM}┌─[ IPERF3 PACKAGE INSTALLER ]${NC}"
+        (
+            DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q iperf3 >/dev/null 2>&1
+        ) &
+        local pid=$!
+        draw_progress_bar "$pid" "Installing iPerf3 Benchmark"
+        wait "$pid"
+        echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}"
+        sleep 1
     fi
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run as Server (Listener)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Client (Sender)${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-    echo -ne "  ${C}Select ❯❯ ${NC}"; read i_opt
-    i_opt=$(echo "$i_opt" | tr -d '\r')
-    case $i_opt in
-        1) echo -e "  ${G}● iPerf3 Server listening on port 5201...${NC}"; iperf3 -s ;;
-        2) echo -ne "  ${C}● Target Server IP: ${NC}"; read t_ip
-           t_ip=$(echo "$t_ip" | tr -d '\r')
-           iperf3 -c "$t_ip" ;;
-        *) return ;;
-    esac
-    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+
+    while true; do
+        clear; echo ""
+        local s_ip=$(get_local_ip)
+        local str1=" iPerf3 Network Bandwidth Benchmark "
+        local raw_len=$(( ${#str1} ))
+        local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
+        local padding=$(printf '%*s' "$pad_len" "")
+
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Port:${NC} ${C}5201 TCP/UDP${NC} ${padding}${B}│${NC}"
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
+
+        echo -e "\n  ${DIM}┌─[ BENCHMARK MODE ]${NC}\n  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run as Server (Listener Mode)${NC} ${DIM}(Wait for peer connections)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Client (Sender Mode)${NC}   ${DIM}(Push bandwidth stream to server)${NC}"
+        echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+        echo -ne "  ${C}iPerf3 ❯❯ ${NC}"; read i_opt
+        i_opt=$(echo "$i_opt" | tr -d '\r' | tr -d ' ')
+
+        case $i_opt in
+            1) 
+                echo -e "\n  ${G}● iPerf3 Server listening on port 5201 (Press Ctrl+C to stop)...${NC}\n"
+                iperf3 -s -p 5201
+                echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+            2) 
+                echo -ne "\n  ${C}●${NC} ${W}Enter Target Server IP / Tunnel IP: ${NC}"; read t_ip
+                t_ip=$(echo "$t_ip" | tr -d '\r' | tr -d ' ')
+                [ -z "$t_ip" ] && continue
+                echo -ne "  ${C}●${NC} ${W}Test Duration in Seconds [Default 10]: ${NC}"; read t_sec
+                t_sec=${t_sec:-10}
+                echo -e "\n  ${Y}● Running Benchmark against $t_ip (10s)...${NC}\n"
+                iperf3 -c "$t_ip" -p 5201 -t "$t_sec"
+                echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+            0) break ;;
+        esac
+    done
 }
 
 draw_main_header() {
@@ -196,7 +227,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v7.8.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    local raw_top=" MDesign Master Core v7.8.5 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -206,7 +237,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.8.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.8.5${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -305,7 +336,8 @@ while true; do
            echo -e "\n  ${R}● Force Download & Install Core${NC}"
            mkdir -p "$LOCAL_DIR" 2>/dev/null
            if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null
-           elif command -v wget >/dev/null 2>&1; then wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null; fi
+           elif command -v wget >/dev/null 2>&1; then wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null
+           fi
            if [ -s "$LOCAL_DIR/install.sh" ]; then chmod +x "$LOCAL_DIR/install.sh"; bash "$LOCAL_DIR/install.sh" --force
            else echo -e "  ${R}✗ Failed to fetch installer from GitHub.${NC}"; sleep 1.5; fi ;;
         14)

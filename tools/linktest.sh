@@ -1,10 +1,11 @@
 #!/bin/bash
-# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark v3.6.0 ---
+# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.7.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 TMP_DIR="$(mktemp -d /tmp/linktest.XXXXXX)"
 LISTENER_PIDS=()
 SYNC_PORT=49999
+SPEED_PORT=49998
 
 cleanup() {
     for pid in "${LISTENER_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
@@ -27,13 +28,13 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" Strict Auto-Synced Tunnel Benchmark 3.6.0 "
+    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.7.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Mode:${NC} ${C}Auto-Sync Lab${NC} ${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Mode:${NC} ${C}Matrix & Speedlab${NC} ${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -46,6 +47,31 @@ verify_tunnel_ping() {
     else
         echo "FAIL|---"
     fi
+}
+
+measure_tcp_speed() {
+    local target_ip=$1; local target_port=$2; local duration=3
+    local res=$(python3 -c "
+import socket, time
+s = socket.socket()
+s.settimeout(3)
+try:
+    s.connect(('$target_ip', $target_port))
+    start = time.time()
+    total_bytes = 0
+    buf = b'X' * 65536
+    while time.time() - start < $duration:
+        s.sendall(buf)
+        total_bytes += len(buf)
+    elapsed = time.time() - start
+    speed_mbps = (total_bytes * 8) / (elapsed * 1000 * 1000)
+    print(f'{speed_mbps:.1f}')
+except:
+    print('ERR')
+finally:
+    s.close()
+" 2>/dev/null)
+    echo "${res:-ERR}"
 }
 
 # --- 🌟 FULL AUTOMATIC SYNC MATRIX BENCHMARK 🌟 ---
@@ -71,7 +97,7 @@ run_protocol_matrix_test() {
 
     if [ "$s_role" == "1" ]; then
         # =========================================================================
-        # IRAN SERVER (RESPONDER / LISTENER MODE)
+        # IRAN SERVER (RESPONDER MODE)
         # =========================================================================
         echo -e "\n  ${G}● IRAN Responder Active.${NC} Awaiting Sync Trigger from Kharej..."
         
@@ -92,21 +118,33 @@ run_protocol_matrix_test() {
         ip link set mtest_vx master mtest_br 2>/dev/null; ip link set mtest_vx up 2>/dev/null
         ip addr add "10.253.253.1/24" dev mtest_br 2>/dev/null
 
-        # Open Test Ports for Rathole & Backhaul modes (8443, 9443, 9643, 9743)
+        # Open Test Ports for Sockets & Speedtests
         cat > "$TMP_DIR/responder.py" <<PY
-import socket, sys, time
-ports = [8443, 9443, 9643, 9743, $SYNC_PORT]
-socks = []
-for p in ports:
+import socket, sys, time, threading
+ports = [8443, 9443, 9643, 9743, $SYNC_PORT, $SPEED_PORT]
+
+def handle_client(c):
+    try:
+        while True:
+            data = c.recv(65536)
+            if not data: break
+    except: pass
+    finally: c.close()
+
+def listen_port(p):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(('0.0.0.0', p))
         s.listen(128)
-        socks.append(s)
+        while True:
+            c, a = s.accept()
+            threading.Thread(target=handle_client, args=(c,), daemon=True).start()
     except: pass
 
-print("READY", flush=True)
+for p in ports:
+    threading.Thread(target=listen_port, args=(p,), daemon=True).start()
+
 while True:
     time.sleep(1)
 PY
@@ -114,9 +152,9 @@ PY
         local resp_pid=$!
         LISTENER_PIDS+=("$resp_pid")
 
-        echo -e "  ${C}✓ All Test Interfaces & Port Listeners bound.${NC}"
+        echo -e "  ${C}✓ All Test Interfaces, Ports & Speedtest Listeners bound.${NC}"
         echo -e "  ${Y}● Go to KHAREJ server now and start Option 1.${NC}"
-        echo -ne "\n  ${DIM}Press Enter when Kharej test is finished to tear down...${NC}"; read dummy
+        echo -ne "\n  ${DIM}Press Enter when Kharej tests are finished to tear down...${NC}"; read dummy
         cleanup
         echo -e "  ${G}● Teardown complete. All test interfaces purged.${NC}"; sleep 1.5
         return
@@ -127,7 +165,6 @@ PY
         # =========================================================================
         echo -e "\n  ${Y}● Synchronizing with IRAN server ($remote_ip)...${NC}"
         
-        # Check if Iran is listening on Sync Port
         if ! timeout 3 bash -c "exec 3<>/dev/tcp/$remote_ip/$SYNC_PORT" 2>/dev/null; then
             echo -e "\n  ${R}✖ IRAN Server is NOT ready!${NC}"
             echo -e "  ${Y}Step 1:${NC} Open this menu on IRAN server and select ${W}1 (IRAN Responder)${NC}."
@@ -140,6 +177,8 @@ PY
         printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "PROTOCOL / TRANSPORT" "STATUS" "LATENCY" "DIAGNOSTICS & DETAILS"
         echo -e "  ${B}├─────────────────────────────┼────────────┼──────────────┼──────────────────────────────┤${NC}"
 
+        local passed_protocols=()
+
         # 1. Test Standard GRE
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
@@ -148,6 +187,7 @@ PY
         local res_gre=$(verify_tunnel_ping "10.254.254.1")
         if [[ "$res_gre" =~ ^OK ]]; then
             printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "PASSED" "${res_gre#OK|}" "Protocol 47 (GRE) Clean"
+            passed_protocols+=("Standard GRE (L3):10.254.254.1:$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "GRE Drop / ISP Filter"
         fi
@@ -162,6 +202,7 @@ PY
         if echo "$ping_sit" | grep -q ", 0% packet loss" || echo "$ping_sit" | grep -q ", 0.0% packet loss"; then
             local lat6=$(echo "$ping_sit" | grep -oP 'time=\K[0-9.]+' | head -1)
             printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "PASSED" "${lat6:-1}ms" "Protocol 41 (SIT) Clean"
+            passed_protocols+=("6to4 IP6GRE:fdfe:test::1:$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "Protocol 41 Filtered"
         fi
@@ -179,6 +220,7 @@ PY
         local res_vx=$(verify_tunnel_ping "10.253.253.1")
         if [[ "$res_vx" =~ ^OK ]]; then
             printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "${res_vx#OK|}" "UDP 4789 Open & Fast"
+            passed_protocols+=("VXLAN L2 Fabric:10.253.253.1:$SPEED_PORT")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "UDP Port 4789 Dropped"
         fi
@@ -187,6 +229,7 @@ PY
         # 4. Rathole Reverse TCP
         if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/8443" 2>/dev/null; then
             printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "PASSED" "Direct" "TCP Port 8443 Reachable"
+            passed_protocols+=("Rathole TCP:$remote_ip:8443")
         else
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "BLOCKED" "---" "Port 8443 Filtered"
         fi
@@ -196,6 +239,7 @@ PY
             local mode_name=$1; local port_num=$2; local label_color=$3
             if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/$port_num" 2>/dev/null; then
                 printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "PASSED" "Direct" "Port $port_num Open"
+                passed_protocols+=("$mode_name:$remote_ip:$port_num")
             else
                 printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "BLOCKED" "---" "Port $port_num Filtered"
             fi
@@ -207,6 +251,35 @@ PY
         test_bh_mode "Backhaul: WSSMUX (TLS)" "9743" "${M}"
 
         echo -e "  ${B}╰─────────────────────────────┴────────────┴──────────────┴──────────────────────────────╯${NC}"
+
+        # =========================================================================
+        # 🚀 OPTIONAL LIVE SPEEDTEST ON PASSED PROTOCOLS
+        # =========================================================================
+        if [ ${#passed_protocols[@]} -gt 0 ]; then
+            echo ""
+            echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}${B}${B}${W}PASSED${NC} channels? [y/N]: "; read do_speed
+            if [[ "${do_speed,,}" == "y" ]]; then
+                echo -e "\n  ${Y}● Measuring Real-time Throughput (3s per channel)...${NC}\n"
+                echo -e "  ${B}╭─────────────────────────────┬──────────────────────────┬──────────────────────────────╮${NC}"
+                printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "PASSED CHANNEL" "BANDWIDTH THROUGHPUT" "DIAGNOSTIC STATUS"
+                echo -e "  ${B}├─────────────────────────────┼──────────────────────────┼──────────────────────────────┤${NC}"
+
+                for item in "${passed_protocols[@]}"; do
+                    local p_name=$(echo "$item" | cut -d: -f1)
+                    local p_host=$(echo "$item" | cut -d: -f2)
+                    local p_port=$(echo "$item" | cut -d: -f3)
+
+                    local sp_val=$(measure_tcp_speed "$p_host" "$p_port")
+                    if [ "$sp_val" != "ERR" ] && [ -n "$sp_val" ]; then
+                        printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$p_name" "▲ ${sp_val} Mbps" "Clean Channel Bandwidth"
+                    else
+                        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-24s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$p_name" "N/A" "Direct Port Echo Only"
+                    fi
+                done
+                echo -e "  ${B}╰─────────────────────────────┴──────────────────────────┴──────────────────────────────╯${NC}"
+            fi
+        fi
+
         echo -e "\n  ${DIM}Benchmark finished. All local test interfaces cleaned up.${NC}"
         echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
     fi
@@ -215,7 +288,7 @@ PY
 while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Strict Auto-Synced Protocol Benchmark${NC} ${DIM}(Iran & Kharej Sync)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Strict Auto-Synced Protocol Benchmark & Speedtest${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Listener (Open Temporary Test Ports)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Run as Tester (Check Peer Ports & Filtering)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View Active Listening Ports (OS Socket State)${NC}"

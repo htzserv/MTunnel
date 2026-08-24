@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v7.8.5 ---
+# --- MDesign Master Core | Central Dashboard v8.0.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -14,6 +14,7 @@ declare -A MOD_MAP=(
     ["mxlan"]="tunnels/mxlan.sh"
     ["mrathole"]="tunnels/mrathole.sh"
     ["mbackhaul"]="tunnels/mbackhaul.sh"
+    ["mpaqet"]="tunnels/mpaqet.sh"
     ["mweb"]="tools/mweb.sh"
     ["mstats"]="tools/mstats.sh"
     ["mhealer"]="tools/mhealer.sh"
@@ -24,11 +25,10 @@ declare -A MOD_MAP=(
     ["linktest"]="tools/linktest.sh"
 )
 
-ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mweb" "mstats" "mhealer" "minterface" "mbbr" "mdiag" "mshield" "linktest")
+ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mweb" "mstats" "mhealer" "minterface" "mbbr" "mdiag" "mshield" "linktest")
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
 
-# --- 🌟 AUTO-START WEB UI ON FIRST RUN 🌟 ---
 if [ ! -f "/etc/systemd/system/mweb.service" ] && [ -x "/usr/bin/mweb" ]; then
     mkdir -p /etc/mweb 2>/dev/null
     if [ ! -f "/etc/mweb/web.conf" ]; then
@@ -212,6 +212,7 @@ draw_main_header() {
     local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
     local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
     local st_bh="○"; local c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.meta 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
+    local st_pq="○"; local c_pq="${DIM}"; [ -n "$(ls -A /etc/paqet/*.yaml 2>/dev/null)" ] && { st_pq="●"; c_pq="${G}"; }
 
     local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
     local bbr_stat="${DIM}○ OFF${NC}"
@@ -227,19 +228,19 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v7.8.5 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    local raw_top=" MDesign Master Core v8.0.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
-    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  Backhaul:${st_bh} "
+    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  Backhaul:${st_bh}  Paqet:${st_pq} "
     local pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
     local padding_bot=$(printf '%*s' "$pad_bot" "")
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v7.8.5${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${padding_bot}${B}│${NC}"
+    echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}  Paqet:${NC}${c_pq}${st_pq}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -250,11 +251,12 @@ show_tunnel_hub() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Free Multiplexer (MBackhaul)${NC}\n  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Free Multiplexer (MBackhaul)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel (MPaqet)${NC}\n  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
         echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
         case $t_opt in
-            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mrathole" ;; 4) run_mod "mbackhaul" ;; 0) break ;;
+            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mrathole" ;; 4) run_mod "mbackhaul" ;; 5) run_mod "mpaqet" ;; 0) break ;;
         esac
     done
 }
@@ -262,11 +264,11 @@ show_tunnel_hub() {
 while true; do
     draw_main_header; echo ""
     echo -e "  ${DIM}┌─[ CORE NETWORK & ROUTING ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub (GRE / VXLAN / Rat / BH / Paqet)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SECURITY, DIAGNOSTICS & BENCHMARK ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Stealth Anti-Probing Shield${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Stealth Anti-Probing & Anti-RST Shield${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${B}Bandwidth Radar & Web UI${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Network Diagnostics & Tests${NC}"
@@ -304,7 +306,7 @@ while true; do
                if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
                    cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
                    chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
-                   for bin in bh rathole haproxy; do
+                   for bin in bh rathole paqet haproxy; do
                        if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
                            install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
                            echo -e "  ${G}✓${NC} Installed $bin"
@@ -326,7 +328,7 @@ while true; do
            if [ -d "$local_pkg_dir" ]; then
                mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
                [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
-               for b in bh rathole; do
+               for b in bh rathole paqet; do
                    if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; echo -e "  ${G}✓${NC} Binary: $b"; fi
                done
                if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
@@ -348,13 +350,13 @@ while true; do
             echo -ne "  ${R}Type WIPE-MTUNNEL to continue: ${NC}"; read del_confirm
             del_confirm="${del_confirm//[$' \r\n']/}"
             if [[ "$del_confirm" == "WIPE-MTUNNEL" ]]; then
-                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* 2>/dev/null || true
-                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* 2>/dev/null || true
-                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/mbackhaul@.service /etc/systemd/system/mrathole@.service
+                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* 2>/dev/null || true
+                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* 2>/dev/null || true
+                rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/mporter*.service /etc/systemd/system/mweb.service /etc/systemd/system/mhealer.service /etc/systemd/system/mshield*.service /etc/systemd/system/mbackhaul@.service /etc/systemd/system/mrathole@.service /etc/systemd/system/mpaqet@.service
                 systemctl daemon-reload
                 ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -E '^(gre|br_|vx_)' | while read -r iface; do [ -n "$iface" ]||continue; ip link del "$iface" 2>/dev/null||true; ip tunnel del "$iface" 2>/dev/null||true; done
-                rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /root/mtunnel
-                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
+                rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel
+                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
                 echo -e "\n  ${G}✓ MTunnel wipe completed.${NC}\n"; exit 0
             fi ;;
         0) clear; exit 0 ;;

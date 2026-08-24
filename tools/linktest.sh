@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.8.0 ---
+# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.9.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 TMP_DIR="$(mktemp -d /tmp/linktest.XXXXXX)"
@@ -28,7 +28,7 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.8.0 "
+    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.9.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
@@ -74,7 +74,6 @@ finally:
     echo "${res:-ERR}"
 }
 
-# --- 🌟 FULL AUTOMATIC SYNC MATRIX BENCHMARK 🌟 ---
 run_protocol_matrix_test() {
     draw_header
     echo -e "\n  ${DIM}┌─[ AUTO-SYNCED PROTOCOL BENCHMARK ]${NC}"
@@ -96,12 +95,8 @@ run_protocol_matrix_test() {
     if [ -z "$remote_ip" ]; then echo -e "  ${R}● Remote Peer IP is required!${NC}"; sleep 1.5; return; fi
 
     if [ "$s_role" == "1" ]; then
-        # =========================================================================
-        # IRAN SERVER (RESPONDER MODE)
-        # =========================================================================
         echo -e "\n  ${G}● IRAN Responder Active.${NC} Awaiting Sync Trigger from Kharej..."
         
-        # 1. Setup All Local Test Interfaces
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
         ip link set mtest_gre up 2>/dev/null; ip addr add "10.254.254.1/30" dev mtest_gre 2>/dev/null
@@ -118,10 +113,9 @@ run_protocol_matrix_test() {
         ip link set mtest_vx master mtest_br 2>/dev/null; ip link set mtest_vx up 2>/dev/null
         ip addr add "10.253.253.1/24" dev mtest_br 2>/dev/null
 
-        # Open Test Ports for Sockets & Speedtests
         cat > "$TMP_DIR/responder.py" <<PY
 import socket, sys, time, threading
-ports = [8443, 9443, 9643, 9743, $SYNC_PORT, $SPEED_PORT]
+ports = [8443, 8888, 9443, 9643, 9743, $SYNC_PORT, $SPEED_PORT]
 
 def handle_client(c):
     try:
@@ -160,9 +154,6 @@ PY
         return
 
     else
-        # =========================================================================
-        # KHAREJ SERVER (INITIATOR MODE)
-        # =========================================================================
         echo -e "\n  ${Y}● Synchronizing with IRAN server ($remote_ip)...${NC}"
         
         if ! timeout 3 bash -c "exec 3<>/dev/tcp/$remote_ip/$SYNC_PORT" 2>/dev/null; then
@@ -179,7 +170,7 @@ PY
 
         local passed_protocols=()
 
-        # 1. Test Standard GRE
+        # 1. Standard GRE
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
         ip link set mtest_gre up 2>/dev/null; ip addr add "10.254.254.2/30" dev mtest_gre 2>/dev/null
@@ -193,7 +184,7 @@ PY
         fi
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
 
-        # 2. Test 6to4 IP6GRE
+        # 2. 6to4 IP6GRE
         ip tunnel del mtest_sit 2>/dev/null || true
         ip tunnel add mtest_sit mode sit remote "$remote_ip" local "$local_ip" 2>/dev/null
         ip link set mtest_sit up 2>/dev/null; ip -6 addr add "fdfe:test::2/64" dev mtest_sit 2>/dev/null
@@ -208,7 +199,7 @@ PY
         fi
         ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
 
-        # 3. Test VXLAN L2 Mesh
+        # 3. VXLAN L2 Mesh
         ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
         local eth_iface=$(ip route get "$remote_ip" 2>/dev/null | awk '{print $5}' | head -n 1)
         [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5}' | head -n 1)
@@ -234,7 +225,15 @@ PY
             printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Rathole Reverse TCP" "BLOCKED" "---" "Port 8443 Filtered"
         fi
 
-        # 5. Backhaul Modes
+        # 5. Paqet Raw Packet (Port 8888)
+        if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/8888" 2>/dev/null; then
+            printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Paqet Raw Packet KCP" "PASSED" "Direct" "Raw Port 8888 Reachable"
+            passed_protocols+=("Paqet Raw Packet|$remote_ip|8888")
+        else
+            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Paqet Raw Packet KCP" "BLOCKED" "---" "Port 8888 Filtered"
+        fi
+
+        # 6. Backhaul Modes
         test_bh_mode() {
             local mode_name=$1; local port_num=$2; local label_color=$3
             if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/$port_num" 2>/dev/null; then
@@ -283,18 +282,55 @@ PY
     fi
 }
 
+run_mtu_discovery() {
+    draw_header
+    echo -e "\n  ${DIM}┌─[ ACCURATE MTU & PACKET-LOSS DISCOVERY ]${NC}"
+    echo -ne "  ${C}●${NC} ${W}Target Peer IP Address: ${NC}"; read target_ip
+    target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
+    [ -z "$target_ip" ] && return
+
+    echo -e "\n  ${B}╭──────────┬──────────────┬─────────────┬──────────────┬─────────────────╮${NC}"
+    printf "  ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-11s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-15s${NC} ${B}│${NC}\n" "MTU SIZE" "PAYLOAD" "PACKET LOSS" "PING (MS)" "STATUS"
+    echo -e "  ${B}├──────────┼──────────────┼─────────────┼──────────────┼─────────────────┤${NC}"
+
+    local test_sizes=("1472:1500" "1400:1428" "1350:1378" "1300:1328" "1280:1308" "1200:1228" "1100:1128" "1000:1028")
+    for test in "${test_sizes[@]}"; do
+        local payload="${test%%:*}"
+        local mtu="${test##*:}"
+        local ping_out=$(ping -c 4 -W 1 -M do -s "$payload" "$target_ip" 2>&1)
+        local loss="100%"
+        local avg_ping="---"
+        local st_badge="${R}FAILED${NC}"
+
+        if echo "$ping_out" | grep -q "0% packet loss"; then
+            loss="0%"
+            avg_ping=$(echo "$ping_out" | grep -oP 'time=\K[0-9.]+' | head -1)
+            st_badge="${G}PERFECT${NC}"
+        elif echo "$ping_out" | grep -q "packet loss"; then
+            loss=$(echo "$ping_out" | grep -oP '[0-9]+% packet loss')
+            st_badge="${Y}FRAGMENTED${NC}"
+        fi
+
+        printf "  ${B}│${NC} ${Y}%-8s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${W}%-11s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} %b%-15s%b ${B}│${NC}\n" "$mtu" "$payload" "$loss" "$avg_ping" "$st_badge" "$NC"
+    done
+    echo -e "  ${B}╰──────────┴──────────────┴─────────────┴──────────────┴─────────────────╯${NC}"
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+}
+
 while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Strict Auto-Synced Protocol Benchmark & Speedtest${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Listener (Open Temporary Test Ports)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Run as Tester (Check Peer Ports & Filtering)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View Active Listening Ports (OS Socket State)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run Dynamic MTU & Loss Discovery Test${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Run as Listener (Open Temporary Test Ports)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Run as Tester (Check Peer Ports & Filtering)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}View Active Listening Ports (OS Socket State)${NC}"
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read opt
     case $opt in
         1) run_protocol_matrix_test ;;
-        2) 
+        2) run_mtu_discovery ;;
+        3) 
            draw_header
            echo -ne "\n  ${C}●${NC} ${W}Target ports to open [e.g. 80,443,8443]: ${NC}"; read p_in
            p_in=${p_in:-"80,443,2053,2083,8080,8443,9743"}
@@ -305,7 +341,7 @@ while true; do
            done
            echo -ne "\n  ${Y}Press Enter to stop listeners...${NC}"; read dummy
            cleanup ;;
-        3) 
+        4) 
            draw_header
            echo -ne "\n  ${C}●${NC} ${W}Target Peer IP: ${NC}"; read r_p
            echo -ne "  ${C}●${NC} ${W}Test Ports [e.g. 80,443,8443]: ${NC}"; read p_in
@@ -318,6 +354,11 @@ while true; do
                    echo -e "  ${R}✘ BLOCKED${NC} Port $p on $r_p is filtered/closed."
                fi
            done
+           echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+        5)
+           draw_header
+           echo -e "\n  ${DIM}┌─[ SYSTEM LISTENING PORTS ]${NC}"
+           ss -lntp 2>/dev/null | awk 'NR>1 {split($5, a, ":"); port = a[length(a)]; proc = $0; gsub(/.*users:\(\("/, "", proc); gsub(/".*/, "", proc); if (port != "") printf "  %-7s %-47s\n", port, proc;}' || true
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
         0) break ;;
     esac

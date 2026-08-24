@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.6.0 ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.8.0 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_FILE="/etc/mweb/web.conf"
@@ -8,6 +8,7 @@ source "$CONF_FILE" 2>/dev/null
 WEB_PORT=${WEB_PORT:-1000}
 CONF_BH="/etc/mbackhaul/tunnels"
 CONF_RH="/etc/mrathole/tunnels"
+CONF_PQ="/etc/paqet"
 
 export CACHE_IPT_IN=""
 export CACHE_IPT_OUT=""
@@ -23,7 +24,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 3.6.0 "
+    local str1=" MStats Omni-Radar Core 3.8.0 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
@@ -83,6 +84,16 @@ get_rat_tx() {
     echo "${bytes:-0}"
 }
 
+get_pq_rx() {
+    local bytes=$(echo "$CACHE_IPT_IN" | grep "MPAQET_RX_$1" | awk '{sum+=$2} END {print sum}')
+    echo "${bytes:-0}"
+}
+
+get_pq_tx() {
+    local bytes=$(echo "$CACHE_IPT_OUT" | grep "MPAQET_TX_$1" | awk '{sum+=$2} END {print sum}')
+    echo "${bytes:-0}"
+}
+
 show_live_radar() {
     tput civis; clear; declare -A rx_old tx_old
     while true; do
@@ -107,11 +118,15 @@ show_live_radar() {
         local rh_nodes=""
         for conf in "$CONF_RH"/*; do [ -d "$conf" ] && rh_nodes="$rh_nodes $(basename "$conf")"; done
 
-        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $bh_nodes $rh_nodes"
+        local pq_nodes=""
+        for conf in "$CONF_PQ"/*.yaml; do [ -f "$conf" ] && pq_nodes="$pq_nodes $(basename "$conf" .yaml)"; done
+
+        local all_ifs="$phys_ifs $gre_ifs $vx_ifs $bh_nodes $rh_nodes $pq_nodes"
         for iface in $all_ifs; do
             if [ -z "${rx_old[$iface]}" ]; then
                 if [[ " $bh_nodes " =~ " $iface " ]]; then rx_old[$iface]=$(get_bh_rx "$iface"); tx_old[$iface]=$(get_bh_tx "$iface");
                 elif [[ " $rh_nodes " =~ " $iface " ]]; then rx_old[$iface]=$(get_rat_rx "$iface"); tx_old[$iface]=$(get_rat_tx "$iface");
+                elif [[ " $pq_nodes " =~ " $iface " ]]; then rx_old[$iface]=$(get_pq_rx "$iface"); tx_old[$iface]=$(get_pq_tx "$iface");
                 else rx_old[$iface]=$(get_iface_rx "$iface"); tx_old[$iface]=$(get_iface_tx "$iface"); fi
             fi
         done
@@ -125,6 +140,7 @@ show_live_radar() {
                 
                 if [ "$is_phantom" == "bh" ]; then r_new=$(get_bh_rx "$iface"); t_new=$(get_bh_tx "$iface");
                 elif [ "$is_phantom" == "rh" ]; then r_new=$(get_rat_rx "$iface"); t_new=$(get_rat_tx "$iface");
+                elif [ "$is_phantom" == "pq" ]; then r_new=$(get_pq_rx "$iface"); t_new=$(get_pq_tx "$iface");
                 else
                     [ ! -d "/sys/class/net/$iface" ] && continue
                     r_new=$(get_iface_rx "$iface"); t_new=$(get_iface_tx "$iface")
@@ -137,7 +153,7 @@ show_live_radar() {
                 local c_rx="${DIM}"; [ "$rx_sec" -gt 0 ] && c_rx="${G}"
                 local c_tx="${DIM}"; [ "$tx_sec" -gt 0 ] && c_tx="${Y}"
                 
-                printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$iface" "$cat_color" "$cat_name" "$NC" "$c_rx" "$(format_speed $rx_sec)" "$NC" "$c_tx" "$(format_speed $tx_s)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
+                printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$iface" "$cat_color" "$cat_name" "$NC" "$c_rx" "$(format_speed $rx_sec)" "$NC" "$c_tx" "$(format_speed $tx_sec)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
                 rx_old[$iface]=$r_new; tx_old[$iface]=$t_new
             done
         }
@@ -147,6 +163,7 @@ show_live_radar() {
         [ -n "$vx_ifs" ] && render_category "VXLAN / L2" "${M}" "$vx_ifs" "net"
         [ -n "$bh_nodes" ] && render_category "BACKHAUL" "${Y}" "$bh_nodes" "bh"
         [ -n "$rh_nodes" ] && render_category "RATHOLE" "${R}" "$rh_nodes" "rh"
+        [ -n "$pq_nodes" ] && render_category "PAQET RAW" "${M}" "$pq_nodes" "pq"
 
         if [ "$active_count" -eq 0 ]; then
             printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" "  Standby... No active tunnels or physical traffic detected."
@@ -163,7 +180,6 @@ while true; do
     echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Live Omni-Radar${NC} ${DIM}(CLI Real-Time Monitor)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}TCP/UDP Connection Tracker${NC} ${DIM}(Active Clients)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Fabric QoS & Speed Limiter${NC} ${DIM}(Traffic Shaping)${NC}"
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MSTATS ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
@@ -173,8 +189,6 @@ while true; do
            echo -e "\n  ${DIM}┌─[ TOP ACTIVE CLIENTS ]${NC}"
            ss -tun state established 2>/dev/null | awk 'NR>1 {print $5}' | rev | cut -d: -f2- | rev | tr -d '[]' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 10
            echo -ne "\n  ${DIM}Press Enter...${NC}"; read dummy ;;
-        3) 
-           echo -e "\n  ${DIM}● QoS Limiter not configured on phantom interfaces.${NC}"; sleep 1 ;;
         0) break ;;
     esac
 done

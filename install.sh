@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel Core Modular Installer v7.8.0 ---
+# --- MTunnel Core Modular Installer v8.0.0 ---
 # [Developed for MDesign Ecosystem]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -15,6 +15,7 @@ BOOTSTRAP_MODULES=(
     "mxlan:tunnels/mxlan.sh"
     "mrathole:tunnels/mrathole.sh"
     "mbackhaul:tunnels/mbackhaul.sh"
+    "mpaqet:tunnels/mpaqet.sh"
     "mweb:tools/mweb.sh"
     "mstats:tools/mstats.sh"
     "mhealer:tools/mhealer.sh"
@@ -50,7 +51,7 @@ draw_progress() {
 
 clear
 echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-echo -e "  ${B}│${NC} ${W}MTunnel Core Modular Installer v7.8.0${NC}                      ${B}│${NC}"
+echo -e "  ${B}│${NC} ${W}MTunnel Core Modular Installer v8.0.0${NC}                      ${B}│${NC}"
 echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
 
 PKG_DIR=""
@@ -64,7 +65,7 @@ if [ -n "$PKG_DIR" ]; then
         chmod +x /usr/sbin/haproxy 2>/dev/null
     fi
 
-    for bin in rathole bh; do
+    for bin in rathole bh paqet; do
         if [ -s "$PKG_DIR/$bin" ]; then
             cp -f "$PKG_DIR/$bin" /usr/local/bin/$bin 2>/dev/null
             chmod +x "/usr/local/bin/$bin" 2>/dev/null

@@ -1,15 +1,16 @@
 #!/bin/bash
-# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark & Speedtest v3.9.5 ---
+# --- MDesign Modular Core (linktest.sh) | Strict Auto-Synced Benchmark v3.9.9 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-TMP_DIR="$(mktemp -d /tmp/linktest.XXXXXX)"
+RESP_FILE="/tmp/mdesign_responder.py"
 LISTENER_PIDS=()
 SYNC_PORT=49999
 SPEED_PORT=49998
 
 cleanup() {
-    for pid in "${LISTENER_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
-    rm -rf "$TMP_DIR" 2>/dev/null || true
+    for pid in "${LISTENER_PIDS[@]}"; do kill -9 "$pid" 2>/dev/null || true; done
+    pkill -9 -f "mdesign_responder.py" 2>/dev/null || true
+    rm -f "$RESP_FILE" 2>/dev/null || true
     ip link del mtest_gre 2>/dev/null || true
     ip tunnel del mtest_gre 2>/dev/null || true
     ip link del mtest_sit 2>/dev/null || true
@@ -28,13 +29,13 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     clear; echo ""
-    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.9.5 "
+    local str1=" Strict Auto-Synced Benchmark & Speedtest 3.9.9 "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Mode:${NC} ${C}Matrix & Speedlab${NC} ${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Mode:${NC} ${C}Non-Freezing Speedlab${NC} ${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -50,43 +51,97 @@ verify_tunnel_ping() {
 }
 
 measure_tcp_speed() {
-    local target_ip=$1; local target_port=$2; local duration=3
-    local res=$(python3 -c "
-import socket, time, sys
+    local target_ip=$1
+    local target_port=$2
+    local duration=${3:-3}
+    local parallel=${4:-1}
+    local res
 
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(3.0)
-try:
-    s.connect(('$target_ip', int($target_port)))
-    s.settimeout(5.0)
-    buf = b'M' * 65536
-    total_bytes = 0
-    start = time.time()
-    while time.time() - start < $duration:
-        sent = s.send(buf)
-        if sent > 0:
-            total_bytes += sent
-        else:
-            time.sleep(0.001)
-    elapsed = time.time() - start
-    if elapsed > 0 and total_bytes > 0:
-        speed_mbps = (total_bytes * 8.0) / (elapsed * 1000000.0)
-        print(f'{speed_mbps:.1f}')
-    else:
-        print('0.0')
-except Exception as e:
-    print('ERR')
-finally:
+    # Each connection is measured independently and the aggregate throughput is returned.
+    # The responder must implement the matching speed-test protocol.
+    res=$(timeout $((duration + 5)) python3 - "$target_ip" "$target_port" "$duration" "$parallel" <<'PY'
+import socket
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+target_ip = sys.argv[1]
+target_port = int(sys.argv[2])
+duration = float(sys.argv[3])
+parallel = max(1, int(sys.argv[4]))
+
+def worker():
+    total = 0
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+    s.settimeout(2.5)
+
     try:
-        s.close()
-    except:
-        pass
-" 2>/dev/null)
+        s.connect((target_ip, target_port))
+        # Tell the temporary responder this is a throughput stream.
+        s.sendall(b"MDESIGN-SPEED/1\n")
+        s.settimeout(1.0)
+
+        buf = b"X" * (1024 * 1024)
+        start = time.monotonic()
+        end = start + duration
+
+        while time.monotonic() < end:
+            try:
+                sent = s.send(buf)
+                if sent:
+                    total += sent
+                else:
+                    break
+            except (socket.timeout, BlockingIOError):
+                continue
+
+        elapsed = max(time.monotonic() - start, 0.001)
+        return total, elapsed
+    except Exception:
+        return 0, 0.0
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+totals = 0
+with ThreadPoolExecutor(max_workers=parallel) as pool:
+    futures = [pool.submit(worker) for _ in range(parallel)]
+    for f in as_completed(futures):
+        b, _ = f.result()
+        totals += b
+
+if totals > 0:
+    # Aggregate upload throughput in decimal Mbps.
+    # The duration is fixed by the client; use it rather than connect/teardown time.
+    mbps = (totals * 8.0) / (duration * 1_000_000.0)
+    print(f"{mbps:.1f}")
+else:
+    print("ERR")
+PY
+    )
+
     echo "${res:-ERR}"
 }
 
 run_protocol_matrix_test() {
     draw_header
+
+    # Required tools for the benchmark. Fail early instead of producing misleading results.
+    local missing=()
+    command -v ip >/dev/null 2>&1 || missing+=("iproute2/ip")
+    command -v ping >/dev/null 2>&1 || missing+=("ping")
+    command -v python3 >/dev/null 2>&1 || missing+=("python3")
+    command -v timeout >/dev/null 2>&1 || missing+=("timeout")
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "\n  ${R}✖ Missing required command(s): ${missing[*]}${NC}"
+        echo -e "  ${Y}Install the missing packages and run the benchmark again.${NC}"
+        echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+        return
+    fi
     echo -e "\n  ${DIM}┌─[ AUTO-SYNCED PROTOCOL BENCHMARK ]${NC}"
     echo -e "  ${DIM}│${NC} ${W}Info:${NC} Automated Step-by-Step handshake across both endpoints."
     echo -e "  ${DIM}├────────────────────────────────────────────────────────────────────────────${NC}"
@@ -108,7 +163,6 @@ run_protocol_matrix_test() {
     if [ "$s_role" == "1" ]; then
         echo -e "\n  ${G}● IRAN Responder Active.${NC} Awaiting Sync Trigger from Kharej..."
         
-        # ۱. راه‌اندازی تمام اینترفیس‌های آزمایشی در سمت ایران
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
         ip link set mtest_gre up 2>/dev/null; ip addr add "10.254.254.1/30" dev mtest_gre 2>/dev/null
@@ -125,39 +179,90 @@ run_protocol_matrix_test() {
         ip link set mtest_vx master mtest_br 2>/dev/null; ip link set mtest_vx up 2>/dev/null
         ip addr add "10.253.253.1/24" dev mtest_br 2>/dev/null
 
-        cat > "$TMP_DIR/responder.py" <<PY
-import socket, sys, time, threading
-ports = [8443, 8888, 9443, 9643, 9743, $SYNC_PORT, $SPEED_PORT]
+        cat << 'PYEOF' > "$RESP_FILE"
+import socket
+import threading
+import time
 
-def handle_client(c):
+# Every channel gets its own temporary endpoint.
+# The benchmark therefore never redirects all protocols to one shared SPEED_PORT.
+ports = {
+    8443: "Rathole Reverse TCP / Backhaul Plain TCP",
+    8888: "Paqet Raw Packet KCP",
+    9443: "Backhaul TCPMUX",
+    9643: "Backhaul WSMUX (WS)",
+    9743: "Backhaul WSSMUX (TLS)",
+    49998: "Tunnel Speed Endpoint",
+    49999: "Sync Endpoint",
+}
+
+def handle_client(c, addr, port):
     try:
-        while True:
-            data = c.recv(65536)
-            if not data: break
-    except: pass
+        c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        c.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+        c.settimeout(5.0)
+
+        # Read the small benchmark preamble. If a normal TCP probe connects,
+        # just keep the socket open briefly and then close it.
+        header = c.recv(64)
+        if header.startswith(b"MDESIGN-SPEED/1"):
+            c.settimeout(2.0)
+            total = 0
+            start = time.monotonic()
+
+            while True:
+                try:
+                    data = c.recv(1024 * 1024)
+                    if not data:
+                        break
+                    total += len(data)
+                except socket.timeout:
+                    break
+                except (ConnectionResetError, BrokenPipeError):
+                    break
+
+            elapsed = max(time.monotonic() - start, 0.001)
+            mbps = (total * 8.0) / (elapsed * 1_000_000.0)
+            # The client does not need this value; it is useful in logs/debugging.
+            print(f"[speed] {addr[0]}:{addr[1]} -> {port} "
+                  f"{total} bytes / {elapsed:.2f}s = {mbps:.1f} Mbps",
+                  flush=True)
+        else:
+            # Keep compatibility with simple port reachability checks.
+            time.sleep(0.25)
+    except Exception:
+        pass
     finally:
-        try: c.close()
-        except: pass
+        try:
+            c.close()
+        except Exception:
+            pass
 
 def listen_port(p):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(('0.0.0.0', p))
-        s.listen(128)
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        s.bind(("0.0.0.0", p))
+        s.listen(256)
+
         while True:
-            c, a = s.accept()
-            t = threading.Thread(target=handle_client, args=(c,), daemon=True)
-            t.start()
-    except Exception as e: pass
+            c, addr = s.accept()
+            threading.Thread(
+                target=handle_client,
+                args=(c, addr, p),
+                daemon=True
+            ).start()
+    except Exception as e:
+        print(f"[listener] port {p}: {e}", flush=True)
 
 for p in ports:
     threading.Thread(target=listen_port, args=(p,), daemon=True).start()
 
 while True:
     time.sleep(1)
-PY
-        python3 "$TMP_DIR/responder.py" &
+PYEOF
+        python3 "$RESP_FILE" &
         local resp_pid=$!
         LISTENER_PIDS+=("$resp_pid")
 
@@ -185,11 +290,11 @@ PY
 
         local passed_protocols=()
 
-        # 1. Test Standard GRE
+        # 1. Standard GRE
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip tunnel add mtest_gre mode gre remote "$remote_ip" local "$local_ip" ttl 255 key 999 2>/dev/null
         ip link set mtest_gre up 2>/dev/null; ip addr add "10.254.254.2/30" dev mtest_gre 2>/dev/null
-        sleep 1.5
+        sleep 1.2
         local res_gre=$(verify_tunnel_ping "10.254.254.1")
         if [[ "$res_gre" =~ ^OK ]]; then
             printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "PASSED" "${res_gre#OK|}" "Protocol 47 (GRE) Clean"
@@ -199,11 +304,11 @@ PY
             ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         fi
 
-        # 2. Test 6to4 IP6GRE
+        # 2. 6to4 IP6GRE
         ip tunnel del mtest_sit 2>/dev/null || true
         ip tunnel add mtest_sit mode sit remote "$remote_ip" local "$local_ip" 2>/dev/null
         ip link set mtest_sit up 2>/dev/null; ip -6 addr add "fdfe:test::2/64" dev mtest_sit 2>/dev/null
-        sleep 1.5
+        sleep 1.2
         local ping_sit=$(ping6 -c 3 -W 2 "fdfe:test::1" 2>&1)
         if echo "$ping_sit" | grep -q ", 0% packet loss" || echo "$ping_sit" | grep -q ", 0.0% packet loss"; then
             local lat6=$(echo "$ping_sit" | grep -oP 'time=\K[0-9.]+' | head -1)
@@ -214,7 +319,7 @@ PY
             ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
         fi
 
-        # 3. Test VXLAN L2 Mesh (زنده نگه داشتن اینترفیس برای اسپیدتست)
+        # 3. VXLAN L2 Mesh
         ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
         local eth_iface=$(ip route get "$remote_ip" 2>/dev/null | awk '{print $5}' | head -n 1)
         [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5}' | head -n 1)
@@ -222,7 +327,7 @@ PY
         ip link add mtest_vx type vxlan id 9999 dev "$eth_iface" remote "$remote_ip" dstport 4789 2>/dev/null
         ip link set mtest_vx master mtest_br 2>/dev/null; ip link set mtest_vx up 2>/dev/null
         ip addr add "10.253.253.2/24" dev mtest_br 2>/dev/null
-        sleep 1.5
+        sleep 1.2
         local res_vx=$(verify_tunnel_ping "10.253.253.1")
         if [[ "$res_vx" =~ ^OK ]]; then
             printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "${res_vx#OK|}" "UDP 4789 Open & Fast"
@@ -273,7 +378,8 @@ PY
             echo ""
             echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}PASSED${W} channels? [y/N]: ${NC}"; read do_speed
             if [[ "${do_speed,,}" == "y" ]]; then
-                echo -e "\n  ${Y}● Measuring Real-time Throughput (3s per channel)...${NC}\n"
+                echo -e "\n  ${Y}● Measuring Real-time Throughput (3s × 4 streams per channel)...${NC}\n"
+                echo -e "  ${DIM}Upload benchmark: each PASSED channel is tested against its own endpoint/port.${NC}"
                 echo -e "  ${B}╭─────────────────────────────┬──────────────────────────┬──────────────────────────────╮${NC}"
                 printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "PASSED CHANNEL" "BANDWIDTH THROUGHPUT" "DIAGNOSTIC STATUS"
                 echo -e "  ${B}├─────────────────────────────┼──────────────────────────┼──────────────────────────────┤${NC}"
@@ -281,9 +387,10 @@ PY
                 for item in "${passed_protocols[@]}"; do
                     IFS='|' read -r p_name p_host p_port <<< "$item"
 
-                    local sp_val=$(measure_tcp_speed "$p_host" "$p_port")
+                    local sp_val
+                    sp_val=$(measure_tcp_speed "$p_host" "$p_port" 3 4)
                     if [ "$sp_val" != "ERR" ] && [ -n "$sp_val" ]; then
-                        printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$p_name" "▲ ${sp_val} Mbps" "Clean Channel Bandwidth"
+                        printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$p_name" "▲ ${sp_val} Mbps" "Measured Channel Throughput"
                     else
                         printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-24s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$p_name" "N/A" "Connection Timeout"
                     fi

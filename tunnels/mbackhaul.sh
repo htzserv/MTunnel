@@ -20,8 +20,8 @@ format_speed() {
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B/s"; return; fi
     if [ "$bytes" -lt 1024 ]; then echo "${bytes} B/s"
     elif [ "$bytes" -lt 1048576 ]; then echo "$((bytes / 1024)) KB/s"
-    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf "%.1f MB/s", $bytes/1048576}"
-    else awk "BEGIN {printf "%.2f GB/s", $bytes/1073741824}"; fi
+    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB/s\", $bytes/1048576}"
+    else awk "BEGIN {printf \"%.2f GB/s\", $bytes/1073741824}"; fi
 }
 
 format_total() {
@@ -29,9 +29,9 @@ format_total() {
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B"; return; fi
     if [ "$bytes" -lt 1024 ]; then echo "${bytes} B"
     elif [ "$bytes" -lt 1048576 ]; then echo "$((bytes / 1024)) KB"
-    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf "%.1f MB", $bytes/1048576}"
-    elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf "%.2f GB", $bytes/1073741824}"
-    else awk "BEGIN {printf "%.2f TB", $bytes/1099511627776}"; fi
+    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB\", $bytes/1048576}"
+    elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf \"%.2f GB\", $bytes/1073741824}"
+    else awk "BEGIN {printf \"%.2f TB\", $bytes/1099511627776}"; fi
 }
 
 apply_bbr_optimization() {
@@ -129,7 +129,7 @@ write_bh_config() {
     local toml="$CONF_DIR/${name}.toml"
     local meta="$CONF_DIR/${name}.meta"
 
-    echo "ROLE=$role\nTRANSPORT=$transport\nTUN_PORT=$port\nREMOTE_IP=$r_ip\nTOKEN=$token\nPORTS='$ports_str'" > "$meta"
+    echo -e "ROLE=$role\nTRANSPORT=$transport\nTUN_PORT=$port\nREMOTE_IP=$r_ip\nTOKEN=$token\nPORTS='$ports_str'" > "$meta"
 
     if [ "$role" == "1" ]; then
         {
@@ -158,7 +158,7 @@ write_bh_config() {
             echo "web_port = 0"
             echo "log_level = \"info\""
             echo "ports = ["
-            local IFS=',' read -ra P_ARR <<< "$ports_str"
+            IFS=',' read -ra P_ARR <<< "$ports_str"
             local total=${#P_ARR[@]}
             for ((i=0; i<total; i++)); do
                 local p=$(echo "${P_ARR[$i]}" | tr -d ' ')
@@ -333,6 +333,16 @@ show_tunnel_registry() {
         local pad2=$(( 89 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2} ${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
 
+        local l_tok="Auth Token   : ${TOKEN}"
+        local pad_tok=$(( 90 - ${#l_tok} )); [ "$pad_tok" -lt 0 ] && pad_tok=0; local sp_tok=$(printf '%*s' "$pad_tok" "")
+        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp_tok} ${B}│${NC}"
+
+        if [ "$ROLE" == "1" ] && [ -n "$PORTS" ]; then
+            local l_fwd="Ports Forward: ${PORTS}"
+            local pad_fwd=$(( 90 - ${#l_fwd} )); [ "$pad_fwd" -lt 0 ] && pad_fwd=0; local sp_fwd=$(printf '%*s' "$pad_fwd" "")
+            echo -e "  ${B}│${NC} ${G}Ports Forward:${NC} ${W}${PORTS}${NC}${sp_fwd} ${B}│${NC}"
+        fi
+
         local l3="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
         echo -e "  ${B}│${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp3} ${B}│${NC}"
@@ -405,6 +415,59 @@ edit_tunnel() {
     echo -e "\n  ${G}● Backhaul Tunnel [${n_name}] updated and restarted!${NC}"; sleep 2
 }
 
+setup_new_tunnel() {
+    install_backhaul
+    setup_systemd_service
+    apply_bbr_optimization
+
+    local s_type=""
+    while true; do 
+        echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Server) | 2:KHAREJ (Client) | q:Back]: ${NC}"
+        read s_type
+        [[ "$s_type" =~ ^[12q]$ ]] && break
+    done
+    [[ "$s_type" == "q" ]] && return
+
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
+    echo -ne "  ${C}● Transport Protocol [1-4]: ${NC}"; read tr_choice
+    local tr_val="tcp"
+    case $tr_choice in 1) tr_val="tcp" ;; 2) tr_val="tcpmux" ;; 3) tr_val="wsmux" ;; 4) tr_val="wssmux" ;; esac
+
+    echo -ne "  ${C}● Tunnel Suffix Name (e.g. bh1): ${NC}"; read suffix
+    suffix=$(echo "$suffix" | tr -d '\r' | tr -d ' ')
+    [ -z "$suffix" ] && suffix="default"
+    local t_name="bh_${suffix}"
+
+    local def_p=8443
+    [ "$tr_val" == "tcpmux" ] && def_p=9443
+    [ "$tr_val" == "wssmux" ] && def_p=9743
+    echo -ne "  ${C}● Tunnel Listen/Connect Port [Default ${def_p}]: ${NC}"; read t_port
+    t_port=${t_port:-$def_p}
+    t_port=$(echo "$t_port" | tr -d '\r' | tr -d ' ')
+
+    local r_ip="0.0.0.0"
+    if [ "$s_type" == "2" ]; then
+        echo -ne "  ${C}● Iran Server Public IP: ${NC}"; read r_ip
+        r_ip=$(echo "$r_ip" | tr -d '\r' | tr -d ' ')
+    fi
+
+    local gen_tok=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    echo -ne "  ${C}● Auth Token [Default ${gen_tok}]: ${NC}"; read u_tok
+    u_tok=$(echo "$u_tok" | tr -d '\r' | tr -d ' ')
+    local tok=${u_tok:-$gen_tok}
+
+    local fwd_ports=""
+    if [ "$s_type" == "1" ]; then
+        echo -ne "  ${C}● Forward Ports (e.g. 443,8080=127.0.0.1:8080): ${NC}"; read fwd_ports
+        fwd_ports=$(echo "$fwd_ports" | tr -d '\r')
+    fi
+
+    write_bh_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports"
+    systemctl enable "mbackhaul@${t_name}" >/dev/null 2>&1
+    systemctl restart "mbackhaul@${t_name}"
+    echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"; sleep 2
+}
+
 while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}"
@@ -417,41 +480,7 @@ while true; do
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}BACKHAUL ❯❯ ${NC}"; read opt
     case $opt in
-        1) 
-           install_backhaul; setup_systemd_service; apply_bbr_optimization
-           while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IRAN (Server) | 2:KHAREJ (Client) | q:Back]: ${NC}"; read s_type; [[ "$s_type" =~ ^[12q]$ ]] && break; done
-           [[ "$s_type" == "q" ]] && continue
-           
-           echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
-           echo -ne "  ${C}● Transport Protocol [1-4]: ${NC}"; read tr_choice
-           local tr_val="tcp"
-           case $tr_choice in 1) tr_val="tcp" ;; 2) tr_val="tcpmux" ;; 3) tr_val="wsmux" ;; 4) tr_val="wssmux" ;; esac
-           
-           echo -ne "  ${C}● Tunnel Suffix Name (e.g. bh1): ${NC}"; read suffix; suffix=$(echo "$suffix" | tr -d '\r')
-           local t_name="bh_${suffix}"
-           
-           local def_p=8443; [ "$tr_val" == "tcpmux" ] && def_p=9443; [ "$tr_val" == "wssmux" ] && def_p=9743
-           echo -ne "  ${C}● Tunnel Listen/Connect Port [Default ${def_p}]: ${NC}"; read t_port
-           t_port=${t_port:-$def_p}
-           
-           local r_ip="0.0.0.0"
-           if [ "$s_type" == "2" ]; then
-               echo -ne "  ${C}● Iran Server Public IP: ${NC}"; read r_ip; r_ip=$(echo "$r_ip" | tr -d '\r')
-           fi
-           
-           local gen_tok=$(head -c 8 /dev/urandom | xxd -p)
-           echo -ne "  ${C}● Auth Token [Default ${gen_tok}]: ${NC}"; read u_tok
-           local tok=${u_tok:-$gen_tok}
-           
-           local fwd_ports=""
-           if [ "$s_type" == "1" ]; then
-               echo -ne "  ${C}● Forward Ports (e.g. 443,8080=127.0.0.1:8080): ${NC}"; read fwd_ports
-           fi
-           
-           write_bh_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports"
-           systemctl enable "mbackhaul@${t_name}" >/dev/null 2>&1
-           systemctl restart "mbackhaul@${t_name}"
-           echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"; sleep 2 ;;
+        1) setup_new_tunnel ;;
         2) edit_tunnel ;;
         3) show_live_radar ;;
         4) show_tunnel_registry ;;

@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.0 ---
-# [Features: Server IP in Header | Core Status | Bulletproof TOML | Auto-Radar]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.1 ---
+# [Features: Visible Secret/Token in Registry | Full Status Scaffolding]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -332,7 +332,6 @@ draw_header() {
         fi
     done
 
-    # --- Core Status Logic ---
     local core_color="${R}"; local core_raw="Not Installed"
     if command -v bh >/dev/null 2>&1 || [ -f "/usr/local/bin/bh" ]; then
         core_color="${G}"; core_raw="Installed"
@@ -358,7 +357,6 @@ draw_header() {
         fi
     fi
 
-    # --- Robust Ping Logic ---
     local peer_ip=""
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
@@ -396,7 +394,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.0 "
+    local title=" MBackhaul Engine v1.7.1 "
     local ip_lbl=" IP: "
     local core_lbl=" Core: "
     local ping_lbl=" Peer Ping: "
@@ -448,29 +446,33 @@ show_tunnel_registry() {
         local rx=$(get_bh_rx "$t_name"); local tx=$(get_bh_tx "$t_name")
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text [${TRANSPORT^^}]"
-        local pad=$(( 123 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
-        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
+        local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
+        local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
+        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
         echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
         
         local l1="Link Port    : ${TUN_PORT}"; local r1="Latency: ${ping_val}"
-        local pad1=$(( 123 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1} ${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
+        local pad1=$(( 122 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
+        echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
         
         local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_text}"
-        local pad2=$(( 123 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2} ${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+        local pad2=$(( 122 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+        echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
 
-        local l3="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"
-        local pad3=$(( 124 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp3} ${B}│${NC}"
+        local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: ${TRANSPORT^^}"
+        local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
+        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}${TRANSPORT^^}${NC} ${B}│${NC}"
+
+        local l4="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"
+        local pad4=$(( 122 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
+        echo -e "  ${B}│${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp4} ${B}│${NC}"
         
         if [ "$ROLE" == "1" ]; then
-            local p_str="${PORTS:0:104}"
-            [ ${#PORTS} -gt 104 ] && p_str="${p_str}..."
-            local l4="Port Mappings: ${p_str}"
-            local pad4=$(( 124 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
-            echo -e "  ${B}│${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp4} ${B}│${NC}"
+            local p_str="${PORTS:0:100}"
+            [ ${#PORTS} -gt 100 ] && p_str="${p_str}..."
+            local l5="Port Mappings: ${p_str}"
+            local pad5=$(( 122 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; local sp5=$(printf '%*s' "$pad5" "")
+            echo -e "  ${B}│${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${B}│${NC}"
         fi
         
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n"
@@ -580,21 +582,6 @@ select_tunnel() {
     
     SELECTED_TUN="${configs[$t_idx]}"
     return 0
-}
-
-install_backhaul_silent() {
-    if ! command -v bh >/dev/null 2>&1 && [ ! -f "/usr/local/bin/bh" ]; then
-        local arch=$(uname -m)
-        local target="backhaul_linux_amd64.tar.gz"
-        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        wget -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
-        if [ -s /tmp/bh.tar.gz ]; then
-            tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
-            mv /tmp/backhaul /usr/local/bin/bh
-            chmod +x /usr/local/bin/bh
-        fi
-    fi
-    [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
 }
 
 install_backhaul_silent

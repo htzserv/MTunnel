@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.4.0 ---
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.4.1 ---
 # [Supports: TCP | TCPMUX | WSMUX | WSSMUX | Real-Time Radar | Full Advanced Edit]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
@@ -42,6 +42,20 @@ apply_bbr_optimization() {
     sysctl -p >/dev/null 2>&1
 }
 
+open_firewall_port() {
+    local port="$1"
+    [ -z "$port" ] && return
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi "Status: active"; then
+        ufw allow "${port}/tcp" >/dev/null 2>&1
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
+        firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+        firewall-cmd --reload >/dev/null 2>&1
+    fi
+    iptables -C INPUT -p tcp --dport "$port" -j ACCEPT >/dev/null 2>&1 || \
+        iptables -I INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null
+}
+
 generate_ssl_cert() {
     if [[ ! -f "$CERT_DIR/wssmux.crt" ]] || [[ ! -f "$CERT_DIR/wssmux.key" ]]; then
         openssl req -x509 -newkey rsa:2048 -keyout "$CERT_DIR/wssmux.key" \
@@ -51,24 +65,32 @@ generate_ssl_cert() {
 }
 
 install_backhaul() {
-    if ! command -v bh >/dev/null 2>&1 && [ ! -f "/usr/local/bin/bh" ]; then
-        if [ -s "$LOCAL_DIR/packages/bh" ]; then
-            cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh
+    mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+    local pkg_bin="$LOCAL_DIR/packages/bh"
+    local src_url="https://github.com/htzserv/MTunnel/raw/refs/heads/main/packages/backhaul"
+
+    # 1) Always check the local packages cache first — skip download if already present.
+    if [ -s "$pkg_bin" ]; then
+        cp "$pkg_bin" /usr/local/bin/bh
+        chmod +x /usr/local/bin/bh
+    # 2) If already installed system-wide, nothing to do.
+    elif command -v bh >/dev/null 2>&1 || [ -f "/usr/local/bin/bh" ]; then
+        :
+    # 3) Otherwise download the single raw binary (no longer a tar.gz) from the MTunnel repo.
+    else
+        wget -qO "$pkg_bin" "$src_url" >/dev/null 2>&1
+        if [ -s "$pkg_bin" ]; then
+            chmod +x "$pkg_bin"
+            cp "$pkg_bin" /usr/local/bin/bh
             chmod +x /usr/local/bin/bh
         else
-            local arch=$(uname -m)
-            local target="backhaul_linux_amd64.tar.gz"
-            [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-            wget -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
-            if [ -s /tmp/bh.tar.gz ]; then
-                tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
-                mv /tmp/backhaul /usr/local/bin/bh
-                chmod +x /usr/local/bin/bh
-                cp /usr/local/bin/bh "$LOCAL_DIR/packages/bh" 2>/dev/null
-                rm -rf /tmp/bh.tar.gz /tmp/backhaul
-            fi
+            rm -f "$pkg_bin"
+            echo -e "  ${R}● Failed to download the Backhaul binary from GitHub!${NC}"
+            echo -e "  ${DIM}  Check the server's internet/GitHub access, or place a working binary at ${pkg_bin} manually.${NC}"
+            sleep 2
         fi
     fi
+
     [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
 }
 
@@ -132,6 +154,7 @@ write_bh_config() {
     echo -e "ROLE=$role\nTRANSPORT=$transport\nTUN_PORT=$port\nREMOTE_IP=$r_ip\nTOKEN=$token\nPORTS='$ports_str'" > "$meta"
 
     if [ "$role" == "1" ]; then
+        open_firewall_port "$port"
         {
             echo "[server]"
             echo "bind_addr = \"0.0.0.0:${port}\""
@@ -465,7 +488,13 @@ setup_new_tunnel() {
     write_bh_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports"
     systemctl enable "mbackhaul@${t_name}" >/dev/null 2>&1
     systemctl restart "mbackhaul@${t_name}"
-    echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"; sleep 2
+    echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"
+    echo -e "  ${DIM}┌─[ IMPORTANT: enter these EXACT same values on the peer server ]${NC}"
+    echo -e "  ${DIM}│${NC} ${W}Transport${NC} : ${Y}${tr_val}${NC}   ${DIM}(must match on both sides)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}Port${NC}      : ${Y}${t_port}${NC}   ${DIM}(must match on both sides)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}Token${NC}     : ${Y}${tok}${NC}   ${DIM}(must match on both sides)${NC}"
+    echo -e "  ${DIM}└─${NC} ${DIM}A mismatch in any of these will prevent the tunnel from ever connecting.${NC}"
+    sleep 3
 }
 
 while true; do

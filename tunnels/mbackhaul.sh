@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.1 ---
-# [Features: Visible Secret/Token in Registry | Full Status Scaffolding]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.2 ---
+# [Fixes: Native App-Level RTT Log Parsing | IPv4-Mapped Socket Extraction]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -175,11 +175,26 @@ check_bh_connection() {
     fi
 }
 
-get_peer_ping() {
-    local target_ip="$1"
-    if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
-    local ping_val=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
-    if [ -n "$ping_val" ]; then echo "${ping_val}ms"; else echo "Timeout"; fi
+get_tunnel_rtt() {
+    local t_name="$1"
+    local target_ip="$2"
+    
+    # 1. Native App-Level RTT Parsing
+    local app_rtt=$(journalctl -u "mbackhaul@${t_name}" -n 200 --no-pager 2>/dev/null | sed -n 's/.*Round Trip Time (RTT): \([0-9]\+\) ms.*/\1/p' | tail -n 1)
+    if [ -n "$app_rtt" ]; then
+        echo "$app_rtt"
+        return
+    fi
+    
+    # 2. ICMP Fallback
+    if [ -n "$target_ip" ] && [ "$target_ip" != "0.0.0.0" ]; then
+        local ping_val=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}' | cut -d. -f1)
+        if [ -n "$ping_val" ]; then
+            echo "$ping_val"
+            return
+        fi
+    fi
+    echo "N/A"
 }
 
 write_bh_config() {
@@ -320,6 +335,8 @@ EOF
 
 draw_header() {
     local s_ip=$(get_local_ip); local total_t=0; local active_t=0; local online_t=0
+    local active_tname=""
+    
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
             ((total_t++))
@@ -327,7 +344,10 @@ draw_header() {
             if systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then
                 ((active_t++))
                 local st=$(check_bh_connection "$t_name")
-                [ "$st" == "ONLINE" ] && ((online_t++))
+                if [ "$st" == "ONLINE" ]; then 
+                    ((online_t++))
+                    [ -z "$active_tname" ] && active_tname="$t_name"
+                fi
             fi
         fi
     done
@@ -358,43 +378,35 @@ draw_header() {
     fi
 
     local peer_ip=""
-    for conf in "$CONF_DIR"/*.meta; do
-        if [ -f "$conf" ]; then
-            local tmp_role=$(grep "^ROLE=" "$conf" | cut -d'=' -f2)
-            local tmp_remote=$(grep "^REMOTE_IP=" "$conf" | cut -d'=' -f2)
-            local tmp_port=$(grep "^TUN_PORT=" "$conf" | cut -d'=' -f2)
-            
-            if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
-                peer_ip="$tmp_remote"
-                break
-            elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -nt state established 2>/dev/null | awk -v p=":$tmp_port" '$4 ~ p"$" {print $5}' | head -n 1)
-                if [ -n "$conn" ]; then
-                    peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                    break
-                fi
+    if [ -n "$active_tname" ]; then
+        local tmp_role=$(grep "^ROLE=" "$CONF_DIR/${active_tname}.meta" | cut -d'=' -f2)
+        local tmp_remote=$(grep "^REMOTE_IP=" "$CONF_DIR/${active_tname}.meta" | cut -d'=' -f2)
+        local tmp_port=$(grep "^TUN_PORT=" "$CONF_DIR/${active_tname}.meta" | cut -d'=' -f2)
+        
+        if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
+            peer_ip="$tmp_remote"
+        elif [ "$tmp_role" == "1" ]; then
+            local conn=$(ss -nt state established 2>/dev/null | awk -v p=":$tmp_port" '$4 ~ p"$" {print $5}' | head -n 1)
+            if [ -n "$conn" ]; then
+                peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]' | sed 's/::ffff://')
             fi
         fi
-    done
-
-    local g_color="${DIM}"; local g_text="N/A"
-    if [ -n "$peer_ip" ]; then
-        local gp=$(ping -c 1 -W 1 "$peer_ip" 2>/dev/null | awk -F'/' 'END {print $5}')
-        if [ -n "$gp" ]; then
-            local p_int=${gp%.*}
-            if [ "$p_int" -lt 90 ]; then g_color="${G}"
-            elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
-            else g_color="${R}"
-            fi
-            g_text="${gp} ms"
-        else
-            g_color="${R}"; g_text="Timeout"
-        fi
-    else
-        g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.1 "
+    local g_color="${DIM}"; local g_text="Waiting"
+    if [ -n "$active_tname" ]; then
+        local rtt_val=$(get_tunnel_rtt "$active_tname" "$peer_ip")
+        if [ "$rtt_val" != "N/A" ] && [[ "$rtt_val" =~ ^[0-9]+$ ]]; then
+            if [ "$rtt_val" -lt 90 ]; then g_color="${G}"
+            elif [ "$rtt_val" -lt 160 ]; then g_color="${Y}"
+            else g_color="${R}"; fi
+            g_text="${rtt_val} ms"
+        elif [ -n "$peer_ip" ]; then
+            g_color="${R}"; g_text="Timeout"
+        fi
+    fi
+
+    local title=" MBackhaul Engine v1.7.2 "
     local ip_lbl=" IP: "
     local core_lbl=" Core: "
     local ping_lbl=" Peer Ping: "
@@ -424,17 +436,22 @@ show_tunnel_registry() {
         local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
         local peer_text=$([ "$ROLE" == "1" ] && echo "Listening on :${TUN_PORT}" || echo "${REMOTE_IP}:${TUN_PORT}")
         
-        local ping_val="N/A"
-        if [ "$ROLE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
-            ping_val=$(get_peer_ping "$REMOTE_IP")
-        elif [ "$ROLE" == "1" ]; then
+        local peer_ip="$REMOTE_IP"
+        if [ "$ROLE" == "1" ]; then
             local conn=$(ss -nt state established 2>/dev/null | awk -v p=":$TUN_PORT" '$4 ~ p"$" {print $5}' | head -n 1)
             if [ -n "$conn" ]; then
-                local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                ping_val=$(get_peer_ping "$p_ip")
+                peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]' | sed 's/::ffff://')
             else
-                ping_val="Waiting"
+                peer_ip=""
             fi
+        fi
+
+        local ping_val="Waiting"
+        local rtt_raw=$(get_tunnel_rtt "$t_name" "$peer_ip")
+        if [ "$rtt_raw" != "N/A" ] && [[ "$rtt_raw" =~ ^[0-9]+$ ]]; then
+            ping_val="${rtt_raw} ms"
+        elif [ -n "$peer_ip" ] && [ "$peer_ip" != "0.0.0.0" ]; then
+            ping_val="Timeout"
         fi
 
         local st=$(check_bh_connection "$t_name")
@@ -582,6 +599,21 @@ select_tunnel() {
     
     SELECTED_TUN="${configs[$t_idx]}"
     return 0
+}
+
+install_backhaul_silent() {
+    if ! command -v bh >/dev/null 2>&1 && [ ! -f "/usr/local/bin/bh" ]; then
+        local arch=$(uname -m)
+        local target="backhaul_linux_amd64.tar.gz"
+        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
+        wget -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
+        if [ -s /tmp/bh.tar.gz ]; then
+            tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
+            mv /tmp/backhaul /usr/local/bin/bh
+            chmod +x /usr/local/bin/bh
+        fi
+    fi
+    [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
 }
 
 install_backhaul_silent

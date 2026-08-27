@@ -1,5 +1,6 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.0.0 ---
+# --- MDesign Master Core | Central Dashboard v8.1.0 ---
+# [Features: Custom ZIP Deployment for Restricted Networks]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -241,7 +242,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v8.0.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    local raw_top=" MDesign Master Core v8.1.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -251,7 +252,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}  Paqet:${NC}${c_pq}${st_pq}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -289,10 +290,11 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}iPerf3 Bandwidth Benchmark${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${Y}Download Binary Packages${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${Y}Download Binary Packages from GitHub${NC}"
     echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Offline Local Deploy (Packages & Modules)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Force Download & Install Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}\n  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Force Download & Install Core (From GitHub)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${Y}Install from Custom ZIP Link (Bypass Filter)${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
     echo -ne "  ${C}CORE ❯❯ ${NC}"; read opt
 
@@ -301,7 +303,7 @@ while true; do
         5) run_mod "mstats" ;; 6) run_mod "mhealer" ;; 7) run_mod "mdiag" ;; 8) run_mod "linktest" ;; 9) run_iperf3 ;;
         10) run_mod "mbbr" ;;
         11)
-           echo -e "\n  ${DIM}┌─[ BINARY ASSETS DOWNLOADER ]${NC}"
+           echo -e "\n  ${DIM}┌─[ GITHUB ASSETS DOWNLOADER ]${NC}"
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
            tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
            rm -f "$tmp_zip"
@@ -372,6 +374,73 @@ while true; do
                 rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
                 echo -e "\n  ${G}✓ MTunnel wipe completed.${NC}\n"; exit 0
             fi ;;
+        15)
+           echo -e "\n  ${DIM}┌─[ CUSTOM ZIP DEPLOYMENT ]${NC}"
+           echo -ne "  ${C}●${NC} ${W}Enter Direct ZIP Link: ${NC}"; read zip_url
+           zip_url=$(echo "$zip_url" | tr -d '\r' | tr -d ' ')
+           if [ -z "$zip_url" ]; then echo -e "  ${R}✖ Invalid URL!${NC}"; sleep 1.5; continue; fi
+
+           apt-get install -y -q unzip wget curl >/dev/null 2>&1 || true
+
+           tmp_zip="$(mktemp /tmp/custom-repo.XXXXXX.zip 2>/dev/null || echo /tmp/custom-repo.zip)"
+           rm -f "$tmp_zip"
+           
+           if command -v curl >/dev/null 2>&1; then
+               curl -fsSL --retry 2 --connect-timeout 10 --max-time 180 -o "$tmp_zip" "$zip_url" &
+               pid=$!; draw_progress_bar "$pid" "Downloading Custom ZIP"; wait "$pid"; rc=$?
+           elif command -v wget >/dev/null 2>&1; then
+               wget -q --timeout=10 --tries=2 -O "$tmp_zip" "$zip_url" &
+               pid=$!; draw_progress_bar "$pid" "Downloading Custom ZIP"; wait "$pid"; rc=$?
+           else rc=1; fi
+
+           if [ "${rc:-1}" -eq 0 ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
+               tmp_dir="$(mktemp -d /tmp/custom-repo.XXXXXX)"
+               unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
+               
+               repo_root="$(find "$tmp_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
+               
+               if [ -n "$repo_root" ] && [ -d "$repo_root" ]; then
+                   mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+                   cp -rf "$repo_root"/* "$LOCAL_DIR/" 2>/dev/null
+                   chmod -R +x "$LOCAL_DIR"/*.sh "$LOCAL_DIR"/tunnels/*.sh "$LOCAL_DIR"/tools/*.sh 2>/dev/null || true
+                   
+                   echo -e "  ${G}● Extraction successful! Deploying modules...${NC}"
+                   for mod in "${ALL_MODULES[@]}"; do
+                       rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
+                       if [ -s "$LOCAL_DIR/$rel_path" ] && [ "$rel_path" != "$file_name" ]; then
+                           cp -f "$LOCAL_DIR/$rel_path" "$LOCAL_DIR/$file_name" 2>/dev/null
+                       fi
+                       if [ -s "$LOCAL_DIR/$file_name" ]; then 
+                           deploy_cached_module "$mod"
+                           echo -e "  ${G}✓${NC} Module: $mod"
+                       fi
+                   done
+                   
+                   local_pkg_dir="$LOCAL_DIR/packages"
+                   if [ -d "$local_pkg_dir" ]; then
+                       mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
+                       [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
+                       for b in bh rathole paqet; do
+                           if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; echo -e "  ${G}✓${NC} Binary: $b"; fi
+                       done
+                       if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
+                   fi
+                   
+                   if [ -f "$LOCAL_DIR/main.sh" ]; then
+                       cp -f "$LOCAL_DIR/main.sh" "$MTUNNEL_PATH" 2>/dev/null
+                       chmod +x "$MTUNNEL_PATH" 2>/dev/null
+                   fi
+
+                   echo -e "  ${G}● Full Custom Deployment Completed!${NC}"; sleep 2
+               else
+                   echo -e "  ${R}✖ Invalid structure! Couldn't find 'main.sh' in the ZIP.${NC}"; sleep 2
+               fi
+               rm -rf "$tmp_dir"
+           else
+               echo -e "  ${R}✖ Download failed or ZIP is corrupted!${NC}"; sleep 2
+           fi
+           rm -f "$tmp_zip"
+           ;;
         0) clear; exit 0 ;;
     esac
 done

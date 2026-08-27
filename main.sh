@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.1.0 ---
-# [Features: Custom ZIP Deployment for Restricted Networks]
+# --- MDesign Master Core | Central Dashboard v8.2.0 ---
+# [Features: Silent Progress Deployment | Universal Package Installer]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -242,7 +242,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v8.1.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    local raw_top=" MDesign Master Core v8.2.0 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -252,7 +252,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}  Paqet:${NC}${c_pq}${st_pq}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -314,40 +314,48 @@ while true; do
                wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP" &
                pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
            else rc=1; fi
+           
            if [ "${rc:-1}" -eq 0 ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
-               tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
-               unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
-               pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
-               if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
-                   cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
-                   chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
-                   for bin in bh rathole paqet haproxy; do
-                       if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
-                           install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
-                           echo -e "  ${G}✓${NC} Installed $bin"
-                       fi
-                   done
-                   echo -e "  ${G}● Binary package cache updated.${NC}"
-               fi
-               rm -rf "$tmp_dir"
+               (
+                   tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
+                   unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
+                   pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
+                   if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
+                       cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
+                       chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
+                       [ -f "$LOCAL_DIR/packages/haproxy" ] && install -m 0755 "$LOCAL_DIR/packages/haproxy" /usr/sbin/haproxy 2>/dev/null || true
+                       for bin in bh backhaul rathole paqet gost frpc frps; do
+                           if [ -f "$LOCAL_DIR/packages/$bin" ] && [ ! -f "/usr/local/bin/$bin" ]; then
+                               install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
+                           fi
+                       done
+                       if ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1 || true; fi
+                   fi
+                   rm -rf "$tmp_dir"
+               ) &
+               pid=$!; draw_progress_bar "$pid" "Deploying Packages"; wait "$pid"
+               echo -e "  ${G}● Binary package cache updated.${NC}"
            else echo -e "  ${R}● Error reading GitHub package archive.${NC}"; fi
            rm -f "$tmp_zip"; sleep 1.5 ;;
         12)
            echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
-           for mod in "${ALL_MODULES[@]}"; do
-               rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
-               if [ -s "$LOCAL_DIR/$file_name" ]; then deploy_cached_module "$mod"; echo -e "  ${G}✓${NC} Module: $mod"; fi
-           done
-           local_pkg_dir="$LOCAL_DIR/packages"
-           [ ! -d "$local_pkg_dir" ] && [ -d "./packages" ] && local_pkg_dir="./packages"
-           if [ -d "$local_pkg_dir" ]; then
-               mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
-               [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
-               for b in bh rathole paqet; do
-                   if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; echo -e "  ${G}✓${NC} Binary: $b"; fi
+           (
+               for mod in "${ALL_MODULES[@]}"; do
+                   rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
+                   if [ -s "$LOCAL_DIR/$file_name" ]; then deploy_cached_module "$mod" >/dev/null 2>&1; fi
                done
-               if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
-           fi
+               local_pkg_dir="$LOCAL_DIR/packages"
+               [ ! -d "$local_pkg_dir" ] && [ -d "./packages" ] && local_pkg_dir="./packages"
+               if [ -d "$local_pkg_dir" ]; then
+                   mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
+                   [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
+                   for b in bh backhaul rathole paqet gost frpc frps; do
+                       if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; fi
+                   done
+                   if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
+               fi
+           ) &
+           pid=$!; draw_progress_bar "$pid" "Deploying Modules & Packages"; wait "$pid"
            echo -e "  ${G}● Local deployment and binary sync completed successfully.${NC}"; sleep 2 ;;
         13)
            echo -e "\n  ${R}● Force Download & Install Core${NC}"
@@ -400,36 +408,37 @@ while true; do
                repo_root="$(find "$tmp_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
                
                if [ -n "$repo_root" ] && [ -d "$repo_root" ]; then
-                   mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-                   cp -rf "$repo_root"/* "$LOCAL_DIR/" 2>/dev/null
-                   chmod -R +x "$LOCAL_DIR"/*.sh "$LOCAL_DIR"/tunnels/*.sh "$LOCAL_DIR"/tools/*.sh 2>/dev/null || true
-                   
-                   echo -e "  ${G}● Extraction successful! Deploying modules...${NC}"
-                   for mod in "${ALL_MODULES[@]}"; do
-                       rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
-                       if [ -s "$LOCAL_DIR/$rel_path" ] && [ "$rel_path" != "$file_name" ]; then
-                           cp -f "$LOCAL_DIR/$rel_path" "$LOCAL_DIR/$file_name" 2>/dev/null
-                       fi
-                       if [ -s "$LOCAL_DIR/$file_name" ]; then 
-                           deploy_cached_module "$mod"
-                           echo -e "  ${G}✓${NC} Module: $mod"
-                       fi
-                   done
-                   
-                   local_pkg_dir="$LOCAL_DIR/packages"
-                   if [ -d "$local_pkg_dir" ]; then
-                       mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
-                       [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
-                       for b in bh rathole paqet; do
-                           if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; echo -e "  ${G}✓${NC} Binary: $b"; fi
+                   (
+                       mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
+                       cp -rf "$repo_root"/* "$LOCAL_DIR/" 2>/dev/null
+                       chmod -R +x "$LOCAL_DIR"/*.sh "$LOCAL_DIR"/tunnels/*.sh "$LOCAL_DIR"/tools/*.sh 2>/dev/null || true
+                       
+                       for mod in "${ALL_MODULES[@]}"; do
+                           rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
+                           if [ -s "$LOCAL_DIR/$rel_path" ] && [ "$rel_path" != "$file_name" ]; then
+                               cp -f "$LOCAL_DIR/$rel_path" "$LOCAL_DIR/$file_name" 2>/dev/null
+                           fi
+                           if [ -s "$LOCAL_DIR/$file_name" ]; then 
+                               deploy_cached_module "$mod" >/dev/null 2>&1
+                           fi
                        done
-                       if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
-                   fi
-                   
-                   if [ -f "$LOCAL_DIR/main.sh" ]; then
-                       cp -f "$LOCAL_DIR/main.sh" "$MTUNNEL_PATH" 2>/dev/null
-                       chmod +x "$MTUNNEL_PATH" 2>/dev/null
-                   fi
+                       
+                       local_pkg_dir="$LOCAL_DIR/packages"
+                       if [ -d "$local_pkg_dir" ]; then
+                           mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
+                           [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
+                           for b in bh backhaul rathole paqet gost frpc frps; do
+                               if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; fi
+                           done
+                           if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
+                       fi
+                       
+                       if [ -f "$LOCAL_DIR/main.sh" ]; then
+                           cp -f "$LOCAL_DIR/main.sh" "$MTUNNEL_PATH" 2>/dev/null
+                           chmod +x "$MTUNNEL_PATH" 2>/dev/null
+                       fi
+                   ) &
+                   pid=$!; draw_progress_bar "$pid" "Deploying Core & Packages"; wait "$pid"
 
                    echo -e "  ${G}● Full Custom Deployment Completed!${NC}"; sleep 2
                else

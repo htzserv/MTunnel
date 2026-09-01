@@ -1,6 +1,5 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.3 ---
-# [Fixes: Zero-Freeze IP Resolver | Safe Silent Installer | Resilient Header]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.4 ---
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -10,14 +9,9 @@ LOCAL_DIR="/root/mtunnel"
 mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" 2>/dev/null
 
 get_local_ip() {
-    local ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -vE '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | head -n 1)
-    if [ -z "$ip" ]; then
-        ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
-    fi
-    if [ -z "$ip" ]; then
-        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
-    fi
-    echo "${ip:-127.0.0.1}"
+    local ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -z "$ip" ] && ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n 1)
+    echo "${ip:-Unknown}"
 }
 
 format_speed() {
@@ -37,14 +31,6 @@ format_total() {
     elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB\", $bytes/1048576}"
     elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf \"%.2f GB\", $bytes/1073741824}"
     else awk "BEGIN {printf \"%.2f TB\", $bytes/1099511627776}"; fi
-}
-
-apply_bbr_optimization() {
-    sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
-    sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
-    grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-    grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-    sysctl -p >/dev/null 2>&1
 }
 
 generate_ssl_cert() {
@@ -119,27 +105,6 @@ menu_install_core() {
     [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
     systemctl start mbackhaul@* 2>/dev/null
     sleep 2
-}
-
-install_backhaul_silent() {
-    if ! command -v bh >/dev/null 2>&1 && [ ! -f "/usr/local/bin/bh" ]; then
-        if [ -s "$LOCAL_DIR/packages/bh" ]; then
-            cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh 2>/dev/null
-            chmod +x /usr/local/bin/bh 2>/dev/null
-        else
-            local arch=$(uname -m)
-            local target="backhaul_linux_amd64.tar.gz"
-            [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-            wget -T 4 -t 1 -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
-            if [ -s /tmp/bh.tar.gz ]; then
-                tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
-                mv /tmp/backhaul /usr/local/bin/bh 2>/dev/null
-                chmod +x /usr/local/bin/bh 2>/dev/null
-                rm -f /tmp/bh.tar.gz
-            fi
-        fi
-    fi
-    [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
 }
 
 setup_bh_counters() {
@@ -317,7 +282,8 @@ write_bh_config() {
 }
 
 setup_systemd_service() {
-    cat <<'EOF' > /etc/systemd/system/mbackhaul@.service
+    if [ ! -f "/etc/systemd/system/mbackhaul@.service" ]; then
+        cat <<'EOF' > /etc/systemd/system/mbackhaul@.service
 [Unit]
 Description=MBackhaul Multi-Multiplexer (%i)
 After=network-online.target
@@ -333,7 +299,8 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
+        systemctl daemon-reload >/dev/null 2>&1
+    fi
 }
 
 draw_header() {
@@ -409,7 +376,7 @@ draw_header() {
         fi
     fi
 
-    local title=" MBackhaul Engine v1.7.3 "
+    local title=" MBackhaul Engine v1.7.4 "
     local ip_lbl=" IP: "
     local core_lbl=" Core: "
     local ping_lbl=" Peer Ping: "
@@ -604,10 +571,13 @@ select_tunnel() {
     return 0
 }
 
-# Silent Init (Protected against freeze)
-install_backhaul_silent
+# Auto-link local binary if present
+if [ ! -f "/usr/local/bin/bh" ] && [ -s "$LOCAL_DIR/packages/bh" ]; then
+    cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh 2>/dev/null
+    chmod +x /usr/local/bin/bh 2>/dev/null
+    ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
+fi
 setup_systemd_service
-apply_bbr_optimization
 
 while true; do
     draw_header

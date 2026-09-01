@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.2 ---
-# [Fixes: Native App-Level RTT Log Parsing | IPv4-Mapped Socket Extraction]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.3 ---
+# [Fixes: Zero-Freeze IP Resolver | Safe Silent Installer | Resilient Header]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mbackhaul/tunnels"
@@ -10,9 +10,14 @@ LOCAL_DIR="/root/mtunnel"
 mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" 2>/dev/null
 
 get_local_ip() {
-    local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
-    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
-    echo "${ip:-Unknown}"
+    local ip=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -vE '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | head -n 1)
+    if [ -z "$ip" ]; then
+        ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    fi
+    if [ -z "$ip" ]; then
+        ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+    echo "${ip:-127.0.0.1}"
 }
 
 format_speed() {
@@ -71,7 +76,7 @@ menu_install_core() {
         local arch=$(uname -m)
         local target="backhaul_linux_amd64.tar.gz"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        wget -qO /tmp/bh_dl "https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
+        wget -T 10 -t 2 -qO /tmp/bh_dl "https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
         if [ -s /tmp/bh_dl ]; then
             tar -xzf /tmp/bh_dl -C /tmp/ >/dev/null 2>&1
             mv /tmp/backhaul /usr/local/bin/bh 2>/dev/null
@@ -86,7 +91,7 @@ menu_install_core() {
         custom_url=$(echo "$custom_url" | tr -d '\r')
         if [ -n "$custom_url" ]; then
             echo -e "  ${DIM}● Downloading from Custom Link...${NC}"
-            wget -qO /tmp/bh_dl "$custom_url"
+            wget -T 10 -t 2 -qO /tmp/bh_dl "$custom_url"
             if [ -s /tmp/bh_dl ]; then
                 if gzip -t /tmp/bh_dl 2>/dev/null; then
                     tar -xzf /tmp/bh_dl -C /tmp/ >/dev/null 2>&1
@@ -118,14 +123,20 @@ menu_install_core() {
 
 install_backhaul_silent() {
     if ! command -v bh >/dev/null 2>&1 && [ ! -f "/usr/local/bin/bh" ]; then
-        local arch=$(uname -m)
-        local target="backhaul_linux_amd64.tar.gz"
-        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        wget -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
-        if [ -s /tmp/bh.tar.gz ]; then
-            tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
-            mv /tmp/backhaul /usr/local/bin/bh
-            chmod +x /usr/local/bin/bh
+        if [ -s "$LOCAL_DIR/packages/bh" ]; then
+            cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh 2>/dev/null
+            chmod +x /usr/local/bin/bh 2>/dev/null
+        else
+            local arch=$(uname -m)
+            local target="backhaul_linux_amd64.tar.gz"
+            [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
+            wget -T 4 -t 1 -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
+            if [ -s /tmp/bh.tar.gz ]; then
+                tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
+                mv /tmp/backhaul /usr/local/bin/bh 2>/dev/null
+                chmod +x /usr/local/bin/bh 2>/dev/null
+                rm -f /tmp/bh.tar.gz
+            fi
         fi
     fi
     [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
@@ -179,14 +190,12 @@ get_tunnel_rtt() {
     local t_name="$1"
     local target_ip="$2"
     
-    # 1. Native App-Level RTT Parsing
-    local app_rtt=$(journalctl -u "mbackhaul@${t_name}" -n 200 --no-pager 2>/dev/null | sed -n 's/.*Round Trip Time (RTT): \([0-9]\+\) ms.*/\1/p' | tail -n 1)
+    local app_rtt=$(journalctl -u "mbackhaul@${t_name}" -n 100 --no-pager 2>/dev/null | sed -n 's/.*Round Trip Time (RTT): \([0-9]\+\) ms.*/\1/p' | tail -n 1)
     if [ -n "$app_rtt" ]; then
         echo "$app_rtt"
         return
     fi
     
-    # 2. ICMP Fallback
     if [ -n "$target_ip" ] && [ "$target_ip" != "0.0.0.0" ]; then
         local ping_val=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}' | cut -d. -f1)
         if [ -n "$ping_val" ]; then
@@ -209,12 +218,7 @@ write_bh_config() {
     local toml="$CONF_DIR/${name}.toml"
     local meta="$CONF_DIR/${name}.meta"
 
-    echo "ROLE=$role" > "$meta"
-    echo "TRANSPORT=$transport" >> "$meta"
-    echo "TUN_PORT=$port" >> "$meta"
-    echo "REMOTE_IP=$r_ip" >> "$meta"
-    echo "TOKEN=$token" >> "$meta"
-    echo "PORTS=$ports_str" >> "$meta"
+    echo -e "ROLE=$role\nTRANSPORT=$transport\nTUN_PORT=$port\nREMOTE_IP=$r_ip\nTOKEN=$token\nPORTS=$ports_str" > "$meta"
 
     [ -z "$role" ] && role="1"
     [ -z "$transport" ] && transport="tcp"
@@ -274,7 +278,6 @@ write_bh_config() {
             done
         fi
         [ -z "$port_lines" ] && port_lines="\"65535=127.0.0.1:65535\""
-        
         echo "ports = [ ${port_lines} ]" >> "$toml"
 
     else
@@ -379,9 +382,9 @@ draw_header() {
 
     local peer_ip=""
     if [ -n "$active_tname" ]; then
-        local tmp_role=$(grep "^ROLE=" "$CONF_DIR/${active_tname}.meta" | cut -d'=' -f2)
-        local tmp_remote=$(grep "^REMOTE_IP=" "$CONF_DIR/${active_tname}.meta" | cut -d'=' -f2)
-        local tmp_port=$(grep "^TUN_PORT=" "$CONF_DIR/${active_tname}.meta" | cut -d'=' -f2)
+        local tmp_role=$(grep "^ROLE=" "$CONF_DIR/${active_tname}.meta" 2>/dev/null | cut -d'=' -f2)
+        local tmp_remote=$(grep "^REMOTE_IP=" "$CONF_DIR/${active_tname}.meta" 2>/dev/null | cut -d'=' -f2)
+        local tmp_port=$(grep "^TUN_PORT=" "$CONF_DIR/${active_tname}.meta" 2>/dev/null | cut -d'=' -f2)
         
         if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
             peer_ip="$tmp_remote"
@@ -406,7 +409,7 @@ draw_header() {
         fi
     fi
 
-    local title=" MBackhaul Engine v1.7.2 "
+    local title=" MBackhaul Engine v1.7.3 "
     local ip_lbl=" IP: "
     local core_lbl=" Core: "
     local ping_lbl=" Peer Ping: "
@@ -601,21 +604,7 @@ select_tunnel() {
     return 0
 }
 
-install_backhaul_silent() {
-    if ! command -v bh >/dev/null 2>&1 && [ ! -f "/usr/local/bin/bh" ]; then
-        local arch=$(uname -m)
-        local target="backhaul_linux_amd64.tar.gz"
-        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        wget -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
-        if [ -s /tmp/bh.tar.gz ]; then
-            tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
-            mv /tmp/backhaul /usr/local/bin/bh
-            chmod +x /usr/local/bin/bh
-        fi
-    fi
-    [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
-}
-
+# Silent Init (Protected against freeze)
 install_backhaul_silent
 setup_systemd_service
 apply_bbr_optimization
@@ -670,7 +659,7 @@ while true; do
                r_ip=$(echo "$r_ip" | tr -d '\r')
            fi
            
-           gen_tok=$(head -c 8 /dev/urandom | xxd -p)
+           gen_tok=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
            echo -ne "  ${C}● Auth Token [Default ${gen_tok}]: ${NC}"; read u_tok
            u_tok=$(echo "$u_tok" | tr -d '\r')
            tok=${u_tok:-$gen_tok}
@@ -735,7 +724,7 @@ while true; do
                journalctl -u mbackhaul@$t_name -n 50 -f; continue
                
            elif [[ "$opt" == "9" ]]; then
-               true # Proceed to write and restart
+               true
            fi
            
            write_bh_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS"

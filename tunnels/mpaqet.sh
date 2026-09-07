@@ -62,9 +62,10 @@ menu_install_core() {
         local dl_url=$(curl -s https://api.github.com/repos/hanselime/paqet/releases/latest | grep "browser_download_url.*linux-${target}" | cut -d '"' -f 4 | head -1)
         
         if [ -n "$dl_url" ]; then
-            wget -qO /tmp/paqet.tar.gz "$dl_url" || { echo -e "  ${R}✖ Download failed!${NC}"; return; }
-            if gzip -t /tmp/paqet.tar.gz 2>/dev/null; then
-                tar -xzf /tmp/paqet.tar.gz -C /tmp/ >/dev/null 2>&1 || { echo -e "  ${R}✖ Extraction failed!${NC}"; return; }
+            TMP_DL=$(mktemp -u /tmp/paqet.XXXXXX.tar.gz)
+            wget -qO "$TMP_DL" "$dl_url" || { echo -e "  ${R}✖ Download failed!${NC}"; return; }
+            if gzip -t "$TMP_DL" 2>/dev/null; then
+                tar -xzf "$TMP_DL" -C /tmp/ >/dev/null 2>&1 || { echo -e "  ${R}✖ Extraction failed!${NC}"; return; }
                 local bin_found=$(find /tmp -type f -name "*paqet*" -executable | head -1)
                 
                 if [ -n "$bin_found" ]; then
@@ -74,7 +75,7 @@ menu_install_core() {
                 else
                     echo -e "  ${R}✖ Binary not found in archive!${NC}"
                 fi
-                rm -rf /tmp/paqet*
+                rm -rf /tmp/paqet* "$TMP_DL"
             else
                 echo -e "  ${R}✖ Downloaded file is corrupted or not a valid archive!${NC}"
             fi
@@ -87,18 +88,19 @@ menu_install_core() {
         custom_url=$(echo "$custom_url" | tr -d '\r')
         if [ -n "$custom_url" ]; then
             echo -e "  ${DIM}● Downloading from Custom Link...${NC}"
-            wget -qO /tmp/paqet_dl "$custom_url" || { echo -e "  ${R}✖ Download failed! Check the link.${NC}"; return; }
+            TMP_DL=$(mktemp -u /tmp/paqet_dl.XXXXXX)
+            wget -qO "$TMP_DL" "$custom_url" || { echo -e "  ${R}✖ Download failed! Check the link.${NC}"; return; }
             
-            if gzip -t /tmp/paqet_dl 2>/dev/null; then
-                tar -xzf /tmp/paqet_dl -C /tmp/ >/dev/null 2>&1
+            if gzip -t "$TMP_DL" 2>/dev/null; then
+                tar -xzf "$TMP_DL" -C /tmp/ >/dev/null 2>&1
                 local bin_found=$(find /tmp -type f -name "*paqet*" -executable | head -1)
                 if [ -n "$bin_found" ]; then 
                     mv "$bin_found" /usr/local/bin/paqet
                 else 
-                    mv /tmp/paqet_dl /usr/local/bin/paqet
+                    mv "$TMP_DL" /usr/local/bin/paqet
                 fi
             else
-                mv /tmp/paqet_dl /usr/local/bin/paqet
+                mv "$TMP_DL" /usr/local/bin/paqet
             fi
             chmod +x /usr/local/bin/paqet
             echo -e "  ${G}✔ MPaqet Core installed from custom link.${NC}"
@@ -135,15 +137,16 @@ install_paqet_silent() {
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
         local dl_url=$(curl -s https://api.github.com/repos/hanselime/paqet/releases/latest | grep "browser_download_url.*linux-${target}" | cut -d '"' -f 4 | head -1)
         if [ -n "$dl_url" ]; then
-            wget -qO /tmp/paqet.tar.gz "$dl_url" >/dev/null 2>&1
-            if gzip -t /tmp/paqet.tar.gz 2>/dev/null; then
-                tar -xzf /tmp/paqet.tar.gz -C /tmp/ >/dev/null 2>&1
+            TMP_DL=$(mktemp -u /tmp/paqet.XXXXXX.tar.gz)
+            wget -qO "$TMP_DL" "$dl_url" >/dev/null 2>&1
+            if gzip -t "$TMP_DL" 2>/dev/null; then
+                tar -xzf "$TMP_DL" -C /tmp/ >/dev/null 2>&1
                 local bin_found=$(find /tmp -type f -name "*paqet*" -executable | head -1)
                 if [ -n "$bin_found" ]; then
                     mv "$bin_found" /usr/local/bin/paqet
                     chmod +x /usr/local/bin/paqet
                 fi
-                rm -rf /tmp/paqet*
+                rm -rf /tmp/paqet* "$TMP_DL"
             fi
         fi
     fi
@@ -259,6 +262,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
+ExecStartPre=/bin/bash -c "source /etc/paqet/%i.meta 2>/dev/null; iptables -t raw -C PREROUTING -p tcp --dport \$TUN_PORT -m comment --comment MPAQET_RAW_%i 2>/dev/null || iptables -t raw -A PREROUTING -p tcp --dport \$TUN_PORT -j NOTRACK -m comment --comment MPAQET_RAW_%i; iptables -t mangle -C OUTPUT -p tcp --sport \$TUN_PORT --tcp-flags RST RST -m comment --comment MPAQET_RST_%i 2>/dev/null || iptables -t mangle -A OUTPUT -p tcp --sport \$TUN_PORT --tcp-flags RST RST -j DROP -m comment --comment MPAQET_RST_%i"
 ExecStart=/usr/local/bin/paqet run -c /etc/paqet/%i.yaml
 Restart=always
 RestartSec=3
@@ -429,6 +433,7 @@ while true; do
            
            l_ip=$(get_local_ip)
            
+           ping -c 1 -W 1 $(ip -4 route ls | grep default | grep -Po "(?<=via )(\S+)" | head -1) >/dev/null 2>&1
            gw_mac=$(ip neigh show dev "$iface" 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | head -1)
            [ -z "$gw_mac" ] && gw_mac=$(ip neigh show 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | head -1)
            [ -z "$gw_mac" ] && gw_mac="00:00:00:00:00:00"
@@ -442,7 +447,7 @@ while true; do
                echo -ne "  ${C}● Tunnel Listen Port [8888]: ${NC}"; read t_port
                t_port=$(echo "$t_port" | tr -dc '0-9')
                t_port=${t_port:-8888}
-               if [ -n "$t_port" ] && [ "$t_port" -le 65535 ]; then break; else echo -e "  ${R}✖ Invalid port!${NC}"; fi
+               if [ -n "$t_port" ] && [ "$t_port" -gt 0 ] && [ "$t_port" -le 65535 ]; then break; else echo -e "  ${R}✖ Invalid port!${NC}"; fi
            done
            
            s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null)
@@ -483,6 +488,7 @@ EOF
            rm -f "$CONF_DIR/${t_name}.yaml.tmp"
            
            echo -e "ROLE=1\nTUN_PORT=$t_port\nREMOTE_IP=0.0.0.0" > "$CONF_DIR/${t_name}.meta"
+           chmod 600 "$CONF_DIR/${t_name}.meta" "$CONF_DIR/${t_name}.yaml"
            
            setup_paqet_counters "$t_name" "$t_port"
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
@@ -515,6 +521,7 @@ EOF
            
            l_ip=$(get_local_ip)
            
+           ping -c 1 -W 1 $(ip -4 route ls | grep default | grep -Po "(?<=via )(\S+)" | head -1) >/dev/null 2>&1
            gw_mac=$(ip neigh show dev "$iface" 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | head -1)
            [ -z "$gw_mac" ] && gw_mac=$(ip neigh show 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' | head -1)
            [ -z "$gw_mac" ] && gw_mac="00:00:00:00:00:00"
@@ -527,14 +534,14 @@ EOF
            while true; do
                echo -ne "  ${C}● Remote Kharej Server IP: ${NC}"; read r_ip
                r_ip=$(echo "$r_ip" | tr -dc '0-9.')
-               if [[ "$r_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then break; else echo -e "  ${R}✖ Invalid IPv4 format!${NC}"; fi
+               if [[ "$r_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && IFS="." read -r i1 i2 i3 i4 <<< "$r_ip" && [ $i1 -le 255 ] && [ $i2 -le 255 ] && [ $i3 -le 255 ] && [ $i4 -le 255 ]; then break; else echo -e "  ${R}✖ Invalid IPv4 format!${NC}"; fi
            done
            
            while true; do
                echo -ne "  ${C}● Remote Listen Port [8888]: ${NC}"; read r_port
                r_port=$(echo "$r_port" | tr -dc '0-9')
                r_port=${r_port:-8888}
-               if [ -n "$r_port" ] && [ "$r_port" -le 65535 ]; then break; else echo -e "  ${R}✖ Invalid port!${NC}"; fi
+               if [ -n "$r_port" ] && [ "$r_port" -gt 0 ] && [ "$r_port" -le 65535 ]; then break; else echo -e "  ${R}✖ Invalid port!${NC}"; fi
            done
            
            echo -ne "  ${C}● Secret Key (from Server): ${NC}"; read key
@@ -603,6 +610,7 @@ EOF
            rm -f "$CONF_DIR/${t_name}.yaml.tmp"
 
            echo -e "ROLE=2\nTUN_PORT=$r_port\nREMOTE_IP=$r_ip" > "$CONF_DIR/${t_name}.meta"
+           chmod 600 "$CONF_DIR/${t_name}.meta" "$CONF_DIR/${t_name}.yaml"
 
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
            systemctl restart "mpaqet@${t_name}"

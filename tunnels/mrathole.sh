@@ -11,16 +11,22 @@ install_rathole() {
     if ! command -v rathole &> /dev/null; then
         echo -e "\n  ${DIM}● Downloading and installing Rathole Core...${NC}"
         apt-get update -y -q >/dev/null 2>&1
-        apt-get install -y -q unzip >/dev/null 2>&1
+        apt-get install -y -q unzip xxd curl >/dev/null 2>&1
         local arch=$(uname -m)
         local target="x86_64-unknown-linux-gnu"
         [ "$arch" == "aarch64" ] && target="aarch64-unknown-linux-gnu"
-        wget -qO /tmp/rathole.zip "https://github.com/rapiz1/rathole/releases/download/v0.5.0/rathole-${target}.zip" >/dev/null 2>&1
-        unzip -q -o /tmp/rathole.zip -d /tmp/ >/dev/null 2>&1
-        mv /tmp/rathole /usr/local/bin/rathole
-        chmod +x /usr/local/bin/rathole
-        rm -f /tmp/rathole.zip
-        echo -e "  ${G}✔ Rathole Core installed successfully.${NC}"
+        local dl_url=$(curl -s https://api.github.com/repos/rapiz1/rathole/releases/latest | grep "browser_download_url.*${target}.zip" | cut -d '"' -f 4 | head -1)
+        if [ -n "$dl_url" ]; then
+            local tmp_zip=$(mktemp -u /tmp/rathole.XXXXXX.zip)
+            wget -qO "$tmp_zip" "$dl_url" >/dev/null 2>&1
+            unzip -q -o "$tmp_zip" -d /tmp/ >/dev/null 2>&1
+            mv /tmp/rathole /usr/local/bin/rathole
+            chmod +x /usr/local/bin/rathole
+            rm -f "$tmp_zip"
+            echo -e "  ${G}✔ Rathole Core installed successfully.${NC}"
+        else
+            echo -e "  ${R}✖ Failed to fetch latest Rathole version!${NC}"
+        fi
     fi
 }
 
@@ -50,6 +56,8 @@ generate_toml() {
     TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; source "$meta"
     
     > "$toml"
+    chmod 600 "$toml" 2>/dev/null
+
     if [ "$TYPE" == "1" ]; then
         echo "[server]" >> "$toml"
         echo "bind_addr = \"0.0.0.0:${LINK_PORT}\"" >> "$toml"
@@ -176,6 +184,12 @@ draw_header() {
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
                 fi
+            else
+                local conn=$(ss -n -t state established dport = ":$tmp_port" 2>/dev/null | awk 'NR>1 {print $5}' | head -n 1)
+                if [ -n "$conn" ]; then
+                    peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+                    break
+                fi
             fi
         fi
     done
@@ -237,6 +251,11 @@ show_monitor() {
             peer_ip="$REMOTE_IP"
         elif [ "$TYPE" == "1" ]; then
             local conn=$(ss -n -t state established sport = ":$LINK_PORT" 2>/dev/null | awk 'NR>1 {print $5}' | head -n 1)
+            if [ -n "$conn" ]; then
+                peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+            fi
+        else
+            local conn=$(ss -n -t state established dport = ":$LINK_PORT" 2>/dev/null | awk 'NR>1 {print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
             fi
@@ -343,7 +362,7 @@ while true; do
            while true; do echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read s_type; [[ "$s_type" =~ ^[12q]$ ]] && break; done
            [[ "$s_type" == "q" ]] && continue
            
-           while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Name (e.g. rt1): ${NC}"; read t_name; [[ -n "$t_name" ]] && break; done
+           while true; do echo -ne "  ${C}●${NC} ${W}Tunnel Name (e.g. rt1): ${NC}"; read t_name; t_name=$(echo "$t_name" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$t_name" ]] && break; done
            
            r_ip="0.0.0.0"
            if [ "$s_type" == "2" ]; then
@@ -353,13 +372,14 @@ while true; do
            echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5050): ${NC}"; read t_port
            
            echo -ne "  ${C}●${NC} ${W}Custom Token (Leave blank to generate auto): ${NC}"; read t_token
-           [ -z "$t_token" ] && t_token=$(head -c 8 /dev/urandom | xxd -p)
+           [ -z "$t_token" ] && t_token=$(head -c 8 /dev/urandom | xxd -p 2>/dev/null || echo $RANDOM$RANDOM)
            
            echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Leave blank if none]: ${NC}"; read tcp_p
            echo -ne "  ${C}●${NC} ${W}UDP Ports to Forward (e.g. 53) [Leave blank if none]: ${NC}"; read udp_p
            
            mkdir -p "$CONF_DIR/$t_name"
            echo -e "TYPE=$s_type\nLINK_PORT=$t_port\nREMOTE_IP=$r_ip\nTOKEN=$t_token\nTCP_PORTS=$tcp_p\nUDP_PORTS=$udp_p" > "$CONF_DIR/$t_name/meta.conf"
+           chmod 600 "$CONF_DIR/$t_name/meta.conf"
            
            generate_toml "$t_name"
            systemctl enable mrathole@$t_name >/dev/null 2>&1
@@ -380,14 +400,14 @@ while true; do
            elif [[ "$opt" == "4" ]]; then
                echo -ne "  ${C}●${NC} ${W}Enter TCP Ports to ADD (Current: ${TCP_PORTS:-None}): ${NC}"; read add_tcp
                [ -n "$add_tcp" ] && {
-                   local new_tcp=$(echo "${TCP_PORTS},${add_tcp}" | sed 's/^,*//;s/,,*/,/g;s/,$//')
+                   new_tcp=$(echo "${TCP_PORTS},${add_tcp}" | sed 's/^,*//;s/,,*/,/g;s/,$//')
                    sed -i "s/^TCP_PORTS=.*/TCP_PORTS=$new_tcp/" "$SELECTED_TUN/meta.conf"
                }
                
            elif [[ "$opt" == "5" ]]; then
                echo -ne "  ${C}●${NC} ${W}Enter UDP Ports to ADD (Current: ${UDP_PORTS:-None}): ${NC}"; read add_udp
                [ -n "$add_udp" ] && {
-                   local new_udp=$(echo "${UDP_PORTS},${add_udp}" | sed 's/^,*//;s/,,*/,/g;s/,$//')
+                   new_udp=$(echo "${UDP_PORTS},${add_udp}" | sed 's/^,*//;s/,,*/,/g;s/,$//')
                    sed -i "s/^UDP_PORTS=.*/UDP_PORTS=$new_udp/" "$SELECTED_TUN/meta.conf"
                }
                

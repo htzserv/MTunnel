@@ -22,8 +22,7 @@ apply_tunnel() {
     local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
     
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 >/dev/null 2>&1
-    iptables -t mangle -D FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1436 >/dev/null 2>&1
+    iptables -t mangle -S FORWARD 2>/dev/null | grep "MGRE_MSS_$T_NAME" | sed 's/^-A /-D /' | while read r; do iptables -t mangle $r 2>/dev/null; done
     ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
 
     if [[ "$TUN_PROTO" == "6to4" ]]; then
@@ -33,13 +32,13 @@ apply_tunnel() {
         ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6" key "$TUN_ID" 2>/dev/null
         ip link set dev "$T_NAME" mtu 1436 2>/dev/null; ip link set "$T_NAME" up 2>/dev/null
         ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 2>/dev/null
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
     else
         local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
         ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255 key "$TUN_ID" 2>/dev/null
         ip link set "$T_NAME" up 2>/dev/null; ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
         ip link set dev "$T_NAME" mtu "$mtu_val" 2>/dev/null
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40)) 2>/dev/null
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40)) -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
     fi
 
     if [[ "$MAX_IPS" -gt 0 ]]; then
@@ -59,7 +58,7 @@ apply_tunnel() {
             o3=$(( (0x${hash:4:2} % 254) + 1 ))
             last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
-            ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null
+            if ! ip route show | grep -q "$nip"; then ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null; fi
             echo $((idx + 1)) > "$s_file"
         done
     fi
@@ -248,7 +247,7 @@ while true; do
            [[ "$s_type" == "q" ]] && continue
            
            while true; do
-               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
+               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix; suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
                [[ "$suffix" == "q" ]] && break
                [[ -z "$suffix" ]] && continue
                
@@ -330,6 +329,7 @@ while true; do
            conf_path="$CONF_DIR/${t_name}.conf"
            
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_SECRET=$tun_secret\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6" > "$conf_path"
+           chmod 600 "$conf_path"
            
            apply_tunnel "$conf_path"
            

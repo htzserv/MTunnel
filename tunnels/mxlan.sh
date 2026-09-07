@@ -1,5 +1,6 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.2.1 ---
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.3.0 ---
+# [Features: Advanced Fabric Editor | Path Traversal Protection | MTU Optimized]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/vxlan"
@@ -73,7 +74,7 @@ draw_mxlan_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MXLAN Layer-2 Fabric 1.2.1 "
+    local str1=" MXLAN Layer-2 Fabric 1.3.0 "
     local raw_len=$(( ${#str1} + 1 + 6 + ${#s_ip} + 1 + 17 + ${#active_fabrics} + 1 + 14 + ${#total_vips} ))
     local pad_len=$(( 92 - raw_len )); [ "$pad_len" -lt 0 ] && pad_len=0; local padding=$(printf '%*s' "$pad_len" "")
     echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -175,13 +176,45 @@ edit_fabric() {
     
     if [[ -n "${configs[$t_idx]}" ]]; then
         local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "$sel_conf"
-        echo -e "\n  ${DIM}┌─[ HOT-SWAP PUBLIC IPs ]${NC}"
-        echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_local
-        echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_remote
-        [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
-        [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
+        
+        echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${VX_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit VNI Network ID (Current: ${VNI_ID})${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Core Subnet (Current: ${CORE_SUBNET}.x)${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
+
+        case $e_opt in
+            1)
+                echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Enter to Skip): ${NC}"; read new_local
+                echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Enter to Skip): ${NC}"; read new_remote
+                [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
+                [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
+                ;;
+            2)
+                echo -ne "  ${C}●${NC} ${W}New VNI ID (1-16777215) [Enter to Skip]: ${NC}"; read new_vni
+                new_vni=$(echo "$new_vni" | tr -dc '0-9')
+                if [ -n "$new_vni" ]; then
+                    if grep -q "VNI_ID=$new_vni$" "$CONF_DIR"/*.conf 2>/dev/null; then
+                        echo -e "  ${R}✖ VNI [${new_vni}] is already in use!${NC}"; sleep 1.5; return
+                    fi
+                    sed -i "s/^VNI_ID=.*/VNI_ID=$new_vni/" "$sel_conf"
+                fi
+                ;;
+            3)
+                echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.88.5) [Enter to Skip]: ${NC}"; read new_sub
+                new_sub=$(echo "$new_sub" | tr -dc '0-9.')
+                if [ -n "$new_sub" ]; then
+                    sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$sel_conf"
+                fi
+                ;;
+            *) return ;;
+        esac
+
+        ip link del "$VX_NAME" >/dev/null 2>&1
+        ip link del "$BR_NAME" >/dev/null 2>&1
         apply_fabric "$sel_conf"
-        echo -e "  ${G}● Fabric re-routed successfully!${NC}"; sleep 1.5
+        echo -e "  ${G}● Fabric [${VX_NAME}] updated and applied successfully!${NC}"; sleep 1.5
     fi
 }
 
@@ -204,7 +237,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_fabrics; exit 0; fi
 
 while true; do
     draw_mxlan_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (VNI Mesh)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Edit Fabric Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Fabric Configurations & MAC Tables${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (VNI Mesh)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Advanced Edit Fabric (IPs / VNI / Subnet)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Fabric Configurations & MAC Tables${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     echo -ne "  ${M}MXLAN ❯❯ ${NC}"; read opt
     case $opt in
         1) 

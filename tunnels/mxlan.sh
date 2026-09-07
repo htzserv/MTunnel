@@ -29,6 +29,7 @@ apply_fabric() {
     ip link del "$BR_NAME" >/dev/null 2>&1
     
     ip link add "$BR_NAME" type bridge 2>/dev/null
+    ip link set dev "$BR_NAME" mtu 1450 2>/dev/null
     ip link set "$BR_NAME" up 2>/dev/null
     
     if ip addr show 2>/dev/null | grep -q "$LOCAL_PUB"; then
@@ -54,7 +55,9 @@ apply_fabric() {
             o3=$(( (0x${hash:4:2} % 254) + 1 ))
             last_octet=$([ "$TYPE" == "1" ] && echo "1" || echo "2")
             nip="$o1.$o2.$o3.$last_octet"
-            ip addr add "$nip/30" dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null
+            if ! ip route show 2>/dev/null | grep -q "$nip"; then
+                ip addr add "$nip/30" dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null
+            fi
             echo $((idx + 1)) > "$s_file"
         done
     fi
@@ -215,6 +218,7 @@ while true; do
            
            while true; do
                echo -ne "  ${C}●${NC} ${W}Fabric Suffix Name (e.g. ir, kh): ${NC}"; read suffix
+               suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
                [[ "$suffix" == "q" ]] && break
                [[ -z "$suffix" ]] && continue
                
@@ -257,6 +261,7 @@ while true; do
            conf_path="$CONF_DIR/${vx_name}.conf"
            
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nVX_NAME=$vx_name\nBR_NAME=$br_name\nVNI_ID=$vni_id\nCORE_SUBNET=$core_sub" > "$conf_path"
+           chmod 600 "$conf_path"
            
            apply_fabric "$conf_path"
            if ip link show "$vx_name" >/dev/null 2>&1; then

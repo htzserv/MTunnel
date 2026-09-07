@@ -1,5 +1,6 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.2.16 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v4.3.0 ---
+# [Features: Advanced Tunnel Editor | Path Traversal Protection | Strict MSS Rules]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -76,7 +77,7 @@ draw_mgre_header() {
         total_vips=$((total_vips + MAX_IPS))
     done
     clear; echo ""
-    local str1=" MGRE Core 4.2.16 "
+    local str1=" MGRE Core 4.3.0 "
     local str2=" IP: $s_ip "
     local str3=" ACTIVE TUNNELS: $active_tunnels "
     local str4=" TOTAL V-IPS: $total_vips "
@@ -195,13 +196,48 @@ edit_tunnel() {
     
     if [[ -n "${configs[$t_idx]}" ]]; then
         local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "$sel_conf"
-        echo -e "\n  ${DIM}┌─[ HOT-SWAP PUBLIC IPs ]${NC}"
-        echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_local
-        echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Or Enter to Skip): ${NC}"; read new_remote
-        [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
-        [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
+        
+        echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${T_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit Tunnel Network ID (Current: ${TUN_ID})${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Core Subnet (Current: ${CORE_SUBNET}.x)${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
+
+        case $e_opt in
+            1)
+                echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Enter to Skip): ${NC}"; read new_local
+                echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Enter to Skip): ${NC}"; read new_remote
+                [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
+                [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
+                ;;
+            2)
+                echo -ne "  ${C}●${NC} ${W}New Tunnel Network ID (1-250) [Enter to Skip]: ${NC}"; read new_tun_id
+                new_tun_id=$(echo "$new_tun_id" | tr -dc '0-9')
+                if [ -n "$new_tun_id" ]; then
+                    if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
+                        echo -e "  ${R}✖ Network ID [${new_tun_id}] is already in use!${NC}"; sleep 1.5; return
+                    fi
+                    sed -i "s/^TUN_ID=.*/TUN_ID=$new_tun_id/" "$sel_conf"
+                fi
+                ;;
+            3)
+                echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.76.5) [Enter to Skip]: ${NC}"; read new_sub
+                new_sub=$(echo "$new_sub" | tr -dc '0-9.')
+                if [ -n "$new_sub" ]; then
+                    sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$sel_conf"
+                fi
+                ;;
+            *) return ;;
+        esac
+
+        # Cleanup old tunnel from iptables and network interfaces before applying new changes
+        iptables -t mangle -S FORWARD 2>/dev/null | grep "MGRE_MSS_$T_NAME" | sed 's/^-A /-D /' | while read r; do iptables -t mangle $r 2>/dev/null; done
+        ip tunnel del "$T_NAME" >/dev/null 2>&1
+        ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+        
         apply_tunnel "$sel_conf"
-        echo -e "  ${G}● Pipeline re-routed successfully!${NC}"; sleep 1.5
+        echo -e "  ${G}● Tunnel [${T_NAME}] updated and applied successfully!${NC}"; sleep 1.5
     fi
 }
 
@@ -224,7 +260,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Tunnel Public IPs (Hot-Swap)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (IPs / NetID / Subnet)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}View Tunnel Configurations & Sync Keys${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
@@ -247,7 +283,8 @@ while true; do
            [[ "$s_type" == "q" ]] && continue
            
            while true; do
-               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix; suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
+               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
+               suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
                [[ "$suffix" == "q" ]] && break
                [[ -z "$suffix" ]] && continue
                

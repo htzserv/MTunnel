@@ -1,11 +1,12 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.2.1 ---
-# [Features: Smooth Progress Deployment | Universal Package Installer]
+# --- MDesign Master Core | Central Dashboard v8.2.3 ---
+# [Features: Strict Directory Hierarchy | Anti-Cache Buster | Proxy Fallback]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_ZIP="https://github.com/htzserv/MTunnel/archive/refs/heads/main.zip"
 REPO_SCRIPTS="https://raw.githubusercontent.com/htzserv/MTunnel/main"
+GH_PROXY="https://ghproxy.net"
 LOCAL_DIR="/root/mtunnel"
 
 declare -A MOD_MAP=(
@@ -27,6 +28,8 @@ declare -A MOD_MAP=(
 )
 
 ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mweb" "mstats" "mhealer" "minterface" "mbbr" "mdiag" "mshield" "linktest")
+
+mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$LOCAL_DIR/tools" 2>/dev/null
 
 if [[ ! -x "$MTUNNEL_PATH" ]]; then cp "$0" "$MTUNNEL_PATH" 2>/dev/null && chmod +x "$MTUNNEL_PATH" 2>/dev/null; fi
 
@@ -83,45 +86,50 @@ download_file_to_cache() {
     local mod="$1"
     local rel_path="${MOD_MAP[$mod]}"
     [ -z "$rel_path" ] && rel_path="${mod}.sh"
-    local file_name="$(basename "$rel_path")"
-    local tmp="$LOCAL_DIR/.${file_name}.$$"
+    local target_file="$LOCAL_DIR/$rel_path"
+    local tmp="${target_file}.$$"
     
-    mkdir -p "$LOCAL_DIR" || return 1
+    mkdir -p "$(dirname "$target_file")" 2>/dev/null
     rm -f "$tmp"
     echo -e "  ${C}→${NC} Downloading ${W}${mod} (${rel_path})${NC}..."
+    
+    local CB="?t=$(date +%s)"
+    local DL_SUCCESS=false
+
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$REPO_SCRIPTS/$rel_path" || { rm -f "$tmp"; return 1; }
+        curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$REPO_SCRIPTS/$rel_path$CB" 2>/dev/null && DL_SUCCESS=true
+        [ "$DL_SUCCESS" = false ] && curl -fsSL --retry 2 --connect-timeout 8 --max-time 120 -o "$tmp" "$GH_PROXY/$REPO_SCRIPTS/$rel_path$CB" 2>/dev/null && DL_SUCCESS=true
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/$rel_path" || { rm -f "$tmp"; return 1; }
-    else
-        return 1
+        wget -q --timeout=8 --tries=2 -O "$tmp" "$REPO_SCRIPTS/$rel_path$CB" 2>/dev/null && DL_SUCCESS=true
+        [ "$DL_SUCCESS" = false ] && wget -q --timeout=8 --tries=2 -O "$tmp" "$GH_PROXY/$REPO_SCRIPTS/$rel_path$CB" 2>/dev/null && DL_SUCCESS=true
     fi
-    [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
+
+    [ "$DL_SUCCESS" = true ] && [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
     sed -i 's/\r$//' "$tmp" 2>/dev/null || true
     chmod 0755 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$LOCAL_DIR/$file_name"
+    mv -f "$tmp" "$target_file"
 }
 
 deploy_cached_module() {
     local mod="$1"
     local rel_path="${MOD_MAP[$mod]}"
     [ -z "$rel_path" ] && rel_path="${mod}.sh"
-    local file_name="$(basename "$rel_path")"
+    local target_file="$LOCAL_DIR/$rel_path"
 
-    [ -s "$LOCAL_DIR/$file_name" ] || return 1
-    sed -i 's/\r$//' "$LOCAL_DIR/$file_name" 2>/dev/null || true
-    if ! same_file "$LOCAL_DIR/$file_name" "/usr/bin/$mod"; then
-        install -m 0755 "$LOCAL_DIR/$file_name" "/usr/bin/$mod" || return 1
+    [ -s "$target_file" ] || return 1
+    sed -i 's/\r$//' "$target_file" 2>/dev/null || true
+    if ! same_file "$target_file" "/usr/bin/$mod"; then
+        install -m 0755 "$target_file" "/usr/bin/$mod" || return 1
     else
         chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
     fi
     if [ "$mod" = "main" ] || [ "$mod" = "mtunnel" ]; then
-        if ! same_file "$LOCAL_DIR/$file_name" "/usr/local/bin/mtunnel"; then
-            install -m 0755 "$LOCAL_DIR/$file_name" /usr/local/bin/mtunnel 2>/dev/null || true
+        if ! same_file "$target_file" "/usr/local/bin/mtunnel"; then
+            install -m 0755 "$target_file" /usr/local/bin/mtunnel 2>/dev/null || true
         fi
     fi
     if [ "$mod" = "mstats" ]; then
-        install -m 0755 "$LOCAL_DIR/$file_name" /usr/bin/mstats 2>/dev/null || true
+        install -m 0755 "$target_file" /usr/bin/mstats 2>/dev/null || true
         ln -sfn /usr/bin/mstats /usr/bin/mstat 2>/dev/null || true
     fi
 }
@@ -130,23 +138,20 @@ ensure_module() {
     local mod="$1"
     local rel_path="${MOD_MAP[$mod]}"
     [ -z "$rel_path" ] && rel_path="${mod}.sh"
-    local file_name="$(basename "$rel_path")"
+    local target_file="$LOCAL_DIR/$rel_path"
     local script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || pwd)"
 
-    if [ -s "$LOCAL_DIR/$file_name" ]; then deploy_cached_module "$mod" && return 0; fi
+    mkdir -p "$(dirname "$target_file")" 2>/dev/null
+
+    if [ -s "$target_file" ]; then deploy_cached_module "$mod" && return 0; fi
     if [ -s "$script_dir/$rel_path" ]; then
-        cp -f "$script_dir/$rel_path" "$LOCAL_DIR/$file_name" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file_name" 2>/dev/null || true
-        deploy_cached_module "$mod" && return 0
-    fi
-    if [ -s "$script_dir/$file_name" ]; then
-        cp -f "$script_dir/$file_name" "$LOCAL_DIR/$file_name" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file_name" 2>/dev/null || true
+        cp -f "$script_dir/$rel_path" "$target_file" 2>/dev/null || true
+        chmod 0755 "$target_file" 2>/dev/null || true
         deploy_cached_module "$mod" && return 0
     fi
     if [ -s "/usr/bin/$mod" ]; then
-        cp -f "/usr/bin/$mod" "$LOCAL_DIR/$file_name" 2>/dev/null || true
-        chmod 0755 "$LOCAL_DIR/$file_name" 2>/dev/null || true
+        cp -f "/usr/bin/$mod" "$target_file" 2>/dev/null || true
+        chmod 0755 "$target_file" 2>/dev/null || true
         deploy_cached_module "$mod" && return 0
     fi
     if download_file_to_cache "$mod"; then deploy_cached_module "$mod" && return 0; fi
@@ -242,7 +247,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v8.2.1 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    local raw_top=" MDesign Master Core v8.2.3 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -252,7 +257,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.2.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.2.3${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}  Paqet:${NC}${c_pq}${st_pq}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -307,15 +312,24 @@ while true; do
            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
            tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
            rm -f "$tmp_zip"
-           if command -v curl >/dev/null 2>&1; then
-               curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP" &
-               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
-           elif command -v wget >/dev/null 2>&1; then
-               wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP" &
-               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"; rc=$?
-           else rc=1; fi
+           CB="?t=$(date +%s)"
+           DL_SUCCESS=false
            
-           if [ "${rc:-1}" -eq 0 ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
+           if command -v curl >/dev/null 2>&1; then
+               curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
+               if [ "$DL_SUCCESS" = false ]; then
+                   curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$GH_PROXY/$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
+               fi
+               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"
+           elif command -v wget >/dev/null 2>&1; then
+               wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
+               if [ "$DL_SUCCESS" = false ]; then
+                   wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$GH_PROXY/$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
+               fi
+               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"
+           fi
+           
+           if [ "$DL_SUCCESS" = true ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
                (
                    tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
                    unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
@@ -341,8 +355,8 @@ while true; do
            echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
            (
                for mod in "${ALL_MODULES[@]}"; do
-                   rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
-                   if [ -s "$LOCAL_DIR/$file_name" ]; then deploy_cached_module "$mod" >/dev/null 2>&1; fi
+                   rel_path="${MOD_MAP[$mod]}"
+                   if [ -s "$LOCAL_DIR/$rel_path" ]; then deploy_cached_module "$mod" >/dev/null 2>&1; fi
                done
                local_pkg_dir="$LOCAL_DIR/packages"
                [ ! -d "$local_pkg_dir" ] && [ -d "./packages" ] && local_pkg_dir="./packages"
@@ -360,11 +374,24 @@ while true; do
         13)
            echo -e "\n  ${R}● Force Download & Install Core${NC}"
            mkdir -p "$LOCAL_DIR" 2>/dev/null
-           if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null
-           elif command -v wget >/dev/null 2>&1; then wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh" 2>/dev/null
+           CB="?t=$(date +%s)"
+           DL_SUCCESS=false
+           
+           if command -v curl >/dev/null 2>&1; then
+               curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
+               [ "$DL_SUCCESS" = false ] && curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$GH_PROXY/$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
+           elif command -v wget >/dev/null 2>&1; then
+               wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
+               [ "$DL_SUCCESS" = false ] && wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$GH_PROXY/$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
            fi
-           if [ -s "$LOCAL_DIR/install.sh" ]; then chmod +x "$LOCAL_DIR/install.sh"; bash "$LOCAL_DIR/install.sh" --force
-           else echo -e "  ${R}✗ Failed to fetch installer from GitHub.${NC}"; sleep 1.5; fi ;;
+           
+           if [ "$DL_SUCCESS" = true ] && [ -s "$LOCAL_DIR/install.sh" ]; then
+               chmod +x "$LOCAL_DIR/install.sh"
+               bash "$LOCAL_DIR/install.sh" --force
+           else
+               echo -e "  ${R}✗ Failed to fetch installer from GitHub.${NC}"
+               sleep 1.5
+           fi ;;
         14)
             clear
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
@@ -414,11 +441,8 @@ while true; do
                        chmod -R +x "$LOCAL_DIR"/*.sh "$LOCAL_DIR"/tunnels/*.sh "$LOCAL_DIR"/tools/*.sh 2>/dev/null || true
                        
                        for mod in "${ALL_MODULES[@]}"; do
-                           rel_path="${MOD_MAP[$mod]}"; file_name="$(basename "$rel_path")"
-                           if [ -s "$LOCAL_DIR/$rel_path" ] && [ "$rel_path" != "$file_name" ]; then
-                               cp -f "$LOCAL_DIR/$rel_path" "$LOCAL_DIR/$file_name" 2>/dev/null
-                           fi
-                           if [ -s "$LOCAL_DIR/$file_name" ]; then 
+                           rel_path="${MOD_MAP[$mod]}"
+                           if [ -s "$LOCAL_DIR/$rel_path" ]; then 
                                deploy_cached_module "$mod" >/dev/null 2>&1
                            fi
                        done

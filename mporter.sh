@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.0.0 ---
-# [Features: Tri-Core Engine (HAProxy/Gost/Kernel NAT) | Progress UI | Bulletproof Security]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.1.0 ---
+# [Features: Tri-Core Engine | Engine Selection | Cross-Tunnel Sync | Systemd Loop Fixed]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -121,23 +121,24 @@ fi
 build_iptables_runner() {
     cat <<'EOF_IPT' > /usr/local/bin/mporter-iptables.sh
 #!/bin/bash
-# Flush old MPORTER_NAT rules
-iptables -t nat -S PREROUTING 2>/dev/null | grep "MPORTER_NAT_" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
-iptables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT_" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
+# Flush old MPORTER_NAT rules safely
+iptables -t nat -S PREROUTING 2>/dev/null | grep "MPORTER_NAT_" | sed 's/-A /-D /' | while read -r rule; do eval iptables -t nat $rule 2>/dev/null; done
+iptables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT_" | sed 's/-A /-D /' | while read -r rule; do eval iptables -t nat $rule 2>/dev/null; done
 
 # Apply Kernel NAT config
 [ -f /etc/mporter/iptables_core/rules.sh ] && source /etc/mporter/iptables_core/rules.sh 2>/dev/null
-wait
 EOF_IPT
     chmod +x /usr/local/bin/mporter-iptables.sh
+    
+    # FIXED: Type changed to oneshot to prevent infinite systemd loop CPU spike
     cat <<'EOF_SRV_IPT' > /etc/systemd/system/mporter-iptables.service
 [Unit]
 Description=MPorter Kernel NAT Engine
 After=network.target
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/local/bin/mporter-iptables.sh
-Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF_SRV_IPT
@@ -152,7 +153,8 @@ iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /
 iptables -t mangle -S INPUT 2>/dev/null | grep "OBFS_CNT_RX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done
 [ -f /etc/mporter/obfs_rules/nat.sh ] && source /etc/mporter/obfs_rules/nat.sh 2>/dev/null
 [ -f /etc/mporter/obfs_rules/gost.sh ] && source /etc/mporter/obfs_rules/gost.sh 2>/dev/null
-wait
+
+if [ -n "$(jobs -p)" ]; then wait; else sleep infinity; fi
 EOF_OBFS
     chmod +x /usr/local/bin/mporter-obfs.sh
     cat <<'EOF_SRV' > /etc/systemd/system/mporter-obfs.service
@@ -171,7 +173,18 @@ EOF_SRV
 }
 
 install_core_engines() {
-    echo -e "\n  ${DIM}┌─[ INITIALIZING TRI-CORE SYSTEM ]${NC}"
+    clear; echo ""
+    echo -e "  ${DIM}┌─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Engine Only${NC} ${DIM}(Load Balancer / Stable)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Engine Only${NC} ${DIM}(TLS/WS Obfuscator)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Iptables NAT Engine Only${NC} ${DIM}(Raw Speed)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install ALL Engines (Tri-Core)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    
+    echo -ne "  ${C}Select Option ❯❯ ${NC}"; read eng_opt
+    if [[ ! "$eng_opt" =~ ^[1-4]$ ]]; then return; fi
+    
+    echo -e "\n  ${DIM}┌─[ INITIALIZING INSTALLATION ]${NC}"
     
     # 1. Environment & Dependencies
     (
@@ -187,12 +200,13 @@ install_core_engines() {
     draw_progress_bar $! "Resolving Dependencies"
 
     # 2. HAProxy Core
-    (
-        mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
-        touch /var/lib/haproxy/stats 2>/dev/null
-        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends liblua5.4-0 haproxy >/dev/null 2>&1 || true
-        if [ ! -s "$H_CONF" ]; then
-            cat <<'EOF_HAP' > "$H_CONF"
+    if [[ "$eng_opt" == "4" || "$eng_opt" == "1" ]]; then
+        (
+            mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
+            touch /var/lib/haproxy/stats 2>/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends liblua5.4-0 haproxy >/dev/null 2>&1 || true
+            if [ ! -s "$H_CONF" ]; then
+                cat <<'EOF_HAP' > "$H_CONF"
 global
     maxconn 500000
     daemon
@@ -208,27 +222,29 @@ frontend dummy_check
 backend dummy_back
     server local 127.0.0.1:9999
 EOF_HAP
-        fi
-        systemctl daemon-reload >/dev/null 2>&1
-        systemctl unmask haproxy >/dev/null 2>&1
-        systemctl enable haproxy >/dev/null 2>&1
-        systemctl restart haproxy >/dev/null 2>&1 || true
-    ) &
-    draw_progress_bar $! "Deploying HAProxy Engine"
+            fi
+            systemctl daemon-reload >/dev/null 2>&1
+            systemctl unmask haproxy >/dev/null 2>&1
+            systemctl enable haproxy >/dev/null 2>&1
+            systemctl restart haproxy >/dev/null 2>&1 || true
+        ) &
+        draw_progress_bar $! "Deploying HAProxy Engine"
+    fi
 
     # 3. Gost Core
-    (
-        if [ ! -f /usr/local/bin/gost ]; then
-            wget --timeout=5 --tries=1 -qO "/tmp/gost.gz" https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
-            if [ -s "/tmp/gost.gz" ]; then
-                gzip -d "/tmp/gost.gz"
-                mv "/tmp/gost" /usr/local/bin/gost 2>/dev/null
-                chmod +x /usr/local/bin/gost
+    if [[ "$eng_opt" == "4" || "$eng_opt" == "2" ]]; then
+        (
+            if [ ! -f /usr/local/bin/gost ]; then
+                wget --timeout=5 --tries=1 -qO "/tmp/gost.gz" https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz >/dev/null 2>&1
+                if [ -s "/tmp/gost.gz" ]; then
+                    gzip -d "/tmp/gost.gz"
+                    mv "/tmp/gost" /usr/local/bin/gost 2>/dev/null
+                    chmod +x /usr/local/bin/gost
+                fi
             fi
-        fi
-        mkdir -p /etc/gost 2>/dev/null
-        if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
-        cat <<EOF_GST > /etc/systemd/system/gost.service
+            mkdir -p /etc/gost 2>/dev/null
+            if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
+            cat <<EOF_GST > /etc/systemd/system/gost.service
 [Unit]
 Description=GO Simple Tunnel (MPorter Core)
 After=network.target
@@ -242,19 +258,22 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF_GST
-        systemctl daemon-reload >/dev/null 2>&1
-        systemctl enable gost >/dev/null 2>&1
-        systemctl restart gost >/dev/null 2>&1 || true
-    ) &
-    draw_progress_bar $! "Deploying Gost Engine"
+            systemctl daemon-reload >/dev/null 2>&1
+            systemctl enable gost >/dev/null 2>&1
+            systemctl restart gost >/dev/null 2>&1 || true
+        ) &
+        draw_progress_bar $! "Deploying Gost Engine"
+    fi
 
     # 4. Kernel NAT Core (Iptables)
-    (
-        mkdir -p "$IPT_DIR" 2>/dev/null
-        touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
-        build_iptables_runner
-    ) &
-    draw_progress_bar $! "Deploying Kernel NAT Engine"
+    if [[ "$eng_opt" == "4" || "$eng_opt" == "3" ]]; then
+        (
+            mkdir -p "$IPT_DIR" 2>/dev/null
+            touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
+            build_iptables_runner
+        ) &
+        draw_progress_bar $! "Deploying Kernel NAT Engine"
+    fi
 
     echo -e "  ${DIM}└──────────────────────────────────────────────────────────┘${NC}\n"
     sleep 1
@@ -273,19 +292,38 @@ get_stats() {
     if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"; else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
     if systemctl is-active --quiet mporter-iptables; then ipt_stat="${Y}●${NC}"; raw_ipt="●"; else ipt_stat="${DIM}○${NC}"; raw_ipt="○"; fi
     
-    local h_ports=0; local g_ports=0; local ipt_ports=0
+    local h_ports=0; local g_ports=0; local ipt_ports=0; local ext_ports_count=0
     if [ -f "$H_CONF" ]; then h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null); ((h_ports--)); [ "$h_ports" -lt 0 ] && h_ports=0; fi
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0; fi
     if [ -f "$IPT_CONF" ]; then ipt_ports=$(grep -c "PREROUTING" "$IPT_CONF" 2>/dev/null); fi
     
-    total_ports=$((h_ports + g_ports + ipt_ports))
-
-    local h_ips=""; local g_ips=""; local ipt_ips=""
+    local h_ips=""; local g_ips=""; local ipt_ips=""; local ext_ips=""
     [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
     [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
     [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
 
-    local all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips" | grep -v '^$' | sort -u)
+    # Sync with external tunnels (MGRE / MXLAN)
+    shopt -s nullglob
+    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
+        [ -f "$conf" ] || continue
+        local TYPE="" FWD_TCP="" FWD_UDP="" CORE_SUBNET="" TUN_ID="" VNI_ID=""
+        source "$conf" 2>/dev/null
+        [ "$TYPE" != "1" ] && continue
+        
+        local t_ip=""
+        if [ -n "$TUN_ID" ]; then t_ip="${CORE_SUBNET:-10.76.${TUN_ID}}.2"
+        elif [ -n "$VNI_ID" ]; then t_ip="${CORE_SUBNET:-10.88.${VNI_ID}}.2"; fi
+        
+        local count=$(echo "$FWD_TCP,$FWD_UDP" | tr ',' '\n' | grep -v '^$' | sort -u | wc -l)
+        if [ "$count" -gt 0 ]; then
+            ext_ports_count=$((ext_ports_count + count))
+            ext_ips+="$t_ip\n"
+        fi
+    done
+    shopt -u nullglob
+
+    total_ports=$((h_ports + g_ports + ipt_ports + ext_ports_count))
+    local all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips\n$ext_ips" | grep -v '^$' | sort -u)
     mapped_ips=$(echo "$all_ips" | grep -v '^$' | wc -l)
     
     if [ "$mapped_ips" -gt 0 ]; then ip_status="${G}${mapped_ips} ACTIVE${NC}"; raw_ip="${mapped_ips} ACTIVE"
@@ -294,23 +332,38 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 8.0.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 8.1.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 8.0.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 8.1.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬────────────────────────────────────────────┬────────────────────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET NETWORK IPs" "FORWARDING DISTRIBUTION"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────────────────┤${NC}"
     
-    local h_map=""; local g_map=""; local ipt_map=""
+    local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
     [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
     [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
     [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP 'MPORTER_NAT_\K[0-9\.]+' | sort | uniq -c | awk '{print $2 "|" $1}')
 
-    local ip_port_counts=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
+    shopt -s nullglob
+    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
+        [ -f "$conf" ] || continue
+        local TYPE="" FWD_TCP="" FWD_UDP="" CORE_SUBNET="" TUN_ID="" VNI_ID=""
+        source "$conf" 2>/dev/null
+        [ "$TYPE" != "1" ] && continue
+        local t_ip=""
+        if [ -n "$TUN_ID" ]; then t_ip="${CORE_SUBNET:-10.76.${TUN_ID}}.2"
+        elif [ -n "$VNI_ID" ]; then t_ip="${CORE_SUBNET:-10.88.${VNI_ID}}.2"; fi
+        
+        local count=$(echo "$FWD_TCP,$FWD_UDP" | tr ',' '\n' | grep -v '^$' | sort -u | wc -l)
+        if [ "$count" -gt 0 ]; then ext_map_raw+="${t_ip}|${count}\n"; fi
+    done
+    shopt -u nullglob
+
+    local ip_port_counts=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
 
     if [ -z "$ip_port_counts" ] || [ "$ip_port_counts" == "|" ]; then
         printf "  ${B}│${NC} ${DIM}%-100s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
@@ -740,12 +793,27 @@ show_table() {
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC} ${W}%-30s${NC} ${B}│${NC}\n" "INTERFACE" "TARGET IP" "FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼────────────────────────────────────────────┼────────────────────────────────┤${NC}"
     
-    local h_map=""; local g_map=""; local ipt_map=""
+    local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
     [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {print port " " $3}' | sed 's/:.*//')
     [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1 \2/g')
     [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP '--dport \K[0-9]+.*MPORTER_NAT_[0-9\.]+' | awk '{print $1 " " $NF}' | sed 's/MPORTER_NAT_//g')
     
-    local mappings=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$')
+    shopt -s nullglob
+    for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
+        [ -f "$conf" ] || continue
+        local TYPE="" FWD_TCP="" FWD_UDP="" CORE_SUBNET="" TUN_ID="" VNI_ID=""
+        source "$conf" 2>/dev/null
+        [ "$TYPE" != "1" ] && continue
+        local t_ip=""
+        if [ -n "$TUN_ID" ]; then t_ip="${CORE_SUBNET:-10.76.${TUN_ID}}.2"
+        elif [ -n "$VNI_ID" ]; then t_ip="${CORE_SUBNET:-10.88.${VNI_ID}}.2"; fi
+        for p in $(echo "$FWD_TCP,$FWD_UDP" | tr ',' ' ' | xargs -n1 2>/dev/null | sort -u); do
+            if [ -n "$p" ]; then ext_map_raw+="$p $t_ip\n"; fi
+        done
+    done
+    shopt -u nullglob
+    
+    local mappings=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$')
     if [ -z "$mappings" ]; then printf "  ${B}│${NC} ${DIM}%-88s${NC} ${B}│${NC}\n" "  No active mappings."
     else
         declare -A ip_ports_arr

@@ -62,8 +62,7 @@ menu_install_core() {
         local arch=$(uname -m)
         local target="backhaul_linux_amd64.tar.gz"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        TMP_DL=$(mktemp -u /tmp/bh_dl.XXXXXX); wget -T 10 -t 2 -qO "$TMP_DL" "https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
-        mv "$TMP_DL" /tmp/bh_dl 2>/dev/null
+        wget -T 10 -t 2 -qO /tmp/bh_dl "https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
         if [ -s /tmp/bh_dl ]; then
             tar -xzf /tmp/bh_dl -C /tmp/ >/dev/null 2>&1
             mv /tmp/backhaul /usr/local/bin/bh 2>/dev/null
@@ -185,12 +184,11 @@ write_bh_config() {
     local meta="$CONF_DIR/${name}.meta"
 
     echo -e "ROLE=$role\nTRANSPORT=$transport\nTUN_PORT=$port\nREMOTE_IP=$r_ip\nTOKEN=$token\nPORTS=$ports_str" > "$meta"
-    chmod 600 "$meta" "$toml" 2>/dev/null
 
     [ -z "$role" ] && role="1"
     [ -z "$transport" ] && transport="tcp"
     [ -z "$port" ] && port="8443"
-    [ -z "$token" ] && token=$(head -c 8 /dev/urandom | xxd -p 2>/dev/null || echo $RANDOM$RANDOM)
+    [ -z "$token" ] && token="mdesign_token"
 
     > "$toml"
 
@@ -293,7 +291,6 @@ After=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStartPre=/bin/bash -c "source /etc/mbackhaul/tunnels/%i.meta 2>/dev/null; iptables -t mangle -C INPUT -p tcp --dport \$TUN_PORT -m comment --comment MBH_RX_%i 2>/dev/null || iptables -t mangle -A INPUT -p tcp --dport \$TUN_PORT -m comment --comment MBH_RX_%i; iptables -t mangle -C OUTPUT -p tcp --sport \$TUN_PORT -m comment --comment MBH_TX_%i 2>/dev/null || iptables -t mangle -A OUTPUT -p tcp --sport \$TUN_PORT -m comment --comment MBH_TX_%i"
 ExecStart=/usr/local/bin/bh -c /etc/mbackhaul/tunnels/%i.toml
 Restart=always
 RestartSec=3
@@ -480,6 +477,7 @@ show_live_radar() {
         [ ! -f "$conf" ] && continue
         local t_name=$(basename "$conf" .meta)
         source "$conf" 2>/dev/null
+        setup_bh_counters "$t_name" "$TUN_PORT" "$REMOTE_IP" "$ROLE"
         rx_old[$t_name]=$(get_bh_rx "$t_name")
         tx_old[$t_name]=$(get_bh_tx "$t_name")
     done
@@ -631,7 +629,7 @@ while true; do
                r_ip=$(echo "$r_ip" | tr -d '\r')
            fi
            
-           gen_tok=$(head -c 8 /dev/urandom | xxd -p 2>/dev/null || echo $RANDOM$RANDOM)
+           gen_tok=$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')
            echo -ne "  ${C}● Auth Token [Default ${gen_tok}]: ${NC}"; read u_tok
            u_tok=$(echo "$u_tok" | tr -d '\r')
            tok=${u_tok:-$gen_tok}

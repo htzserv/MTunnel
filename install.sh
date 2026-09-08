@@ -26,13 +26,8 @@ BOOTSTRAP_MODULES=(
     "linktest:tools/linktest.sh"
 )
 
-IS_FORCE=false
-for arg in "$@"; do
-    if [[ "$arg" == "--force" ]]; then
-        IS_FORCE=true
-        break
-    fi
-done
+# تغییر این بخش: همیشه True است تا فایل‌های لوکال نادیده گرفته شوند
+IS_FORCE=true
 
 # ساخت ساختار کامل پوشه‌ها
 mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$LOCAL_DIR/tools" /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/bin 2>/dev/null
@@ -113,7 +108,7 @@ for item in "${BOOTSTRAP_MODULES[@]}"; do
         continue
     fi
 
-    # در صورت عدم وجود لوکال، دانلود با حفظ ساختار دایرکتوری
+    # در صورت عدم وجود لوکال (یا فورس شدن دانلود)، دانلود با حفظ ساختار دایرکتوری
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL --connect-timeout 8 -o "$target_dest" "$REPO_SCRIPTS/$rel_path" 2>/dev/null
     elif command -v wget >/dev/null 2>&1; then

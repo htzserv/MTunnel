@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.2.3 ---
-# [Features: Strict Directory Hierarchy | Anti-Cache Buster | Proxy Fallback]
+# --- MDesign Master Core | Central Dashboard v8.2.4 ---
+# [Features: Strict Directory Hierarchy | Anti-Cache Buster | Proxy Fallback Fixed]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -149,6 +149,11 @@ ensure_module() {
         chmod 0755 "$target_file" 2>/dev/null || true
         deploy_cached_module "$mod" && return 0
     fi
+    if [ -s "$script_dir/$(basename "$rel_path")" ]; then
+        cp -f "$script_dir/$(basename "$rel_path")" "$target_file" 2>/dev/null || true
+        chmod 0755 "$target_file" 2>/dev/null || true
+        deploy_cached_module "$mod" && return 0
+    fi
     if [ -s "/usr/bin/$mod" ]; then
         cp -f "/usr/bin/$mod" "$target_file" 2>/dev/null || true
         chmod 0755 "$target_file" 2>/dev/null || true
@@ -247,7 +252,7 @@ draw_main_header() {
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v8.2.3 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    local raw_top=" MDesign Master Core v8.2.4 │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
     local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
     local padding_top=$(printf '%*s' "$pad_top" "")
 
@@ -257,7 +262,7 @@ draw_main_header() {
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.2.3${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v8.2.4${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${s_ip}${NC} ${B}│${NC} ${DIM}Web:${NC} ${web_stat} ${B}│${NC} ${DIM}BBR:${NC} ${bbr_stat}${padding_top}${B}│${NC}"
     echo -e "  ${B}├──────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
     echo -e "  ${B}│${NC}${DIM} Hub: GRE:${NC}${c_gre}${st_gre}${NC}${DIM}  VXLAN:${NC}${c_vx}${st_vx}${NC}${DIM}  RatHole:${NC}${c_rh}${st_rh}${NC}${DIM}  Backhaul:${NC}${c_bh}${st_bh}${NC}${DIM}  Paqet:${NC}${c_pq}${st_pq}${NC}${padding_bot}${B}│${NC}"
     echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -313,23 +318,17 @@ while true; do
            tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
            rm -f "$tmp_zip"
            CB="?t=$(date +%s)"
-           DL_SUCCESS=false
            
-           if command -v curl >/dev/null 2>&1; then
-               curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
-               if [ "$DL_SUCCESS" = false ]; then
-                   curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$GH_PROXY/$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
+           (
+               if command -v curl >/dev/null 2>&1; then
+                   curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null || curl -fsSL --retry 2 --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$GH_PROXY/$REPO_ZIP$CB" 2>/dev/null
+               elif command -v wget >/dev/null 2>&1; then
+                   wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null || wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$GH_PROXY/$REPO_ZIP$CB" 2>/dev/null
                fi
-               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"
-           elif command -v wget >/dev/null 2>&1; then
-               wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
-               if [ "$DL_SUCCESS" = false ]; then
-                   wget -q --timeout=8 --tries=2 -O "$tmp_zip" "$GH_PROXY/$REPO_ZIP$CB" 2>/dev/null && DL_SUCCESS=true
-               fi
-               pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"
-           fi
+           ) &
+           pid=$!; draw_progress_bar "$pid" "Fetching package archive"; wait "$pid"
            
-           if [ "$DL_SUCCESS" = true ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
+           if [ -s "$tmp_zip" ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
                (
                    tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
                    unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
@@ -375,17 +374,17 @@ while true; do
            echo -e "\n  ${R}● Force Download & Install Core${NC}"
            mkdir -p "$LOCAL_DIR" 2>/dev/null
            CB="?t=$(date +%s)"
-           DL_SUCCESS=false
            
-           if command -v curl >/dev/null 2>&1; then
-               curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
-               [ "$DL_SUCCESS" = false ] && curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$GH_PROXY/$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
-           elif command -v wget >/dev/null 2>&1; then
-               wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
-               [ "$DL_SUCCESS" = false ] && wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$GH_PROXY/$REPO_SCRIPTS/install.sh$CB" 2>/dev/null && DL_SUCCESS=true
-           fi
+           (
+               if command -v curl >/dev/null 2>&1; then
+                   curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh$CB" 2>/dev/null || curl -fsSL --connect-timeout 8 -o "$LOCAL_DIR/install.sh" "$GH_PROXY/$REPO_SCRIPTS/install.sh$CB" 2>/dev/null
+               elif command -v wget >/dev/null 2>&1; then
+                   wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$REPO_SCRIPTS/install.sh$CB" 2>/dev/null || wget -q --timeout=8 -O "$LOCAL_DIR/install.sh" "$GH_PROXY/$REPO_SCRIPTS/install.sh$CB" 2>/dev/null
+               fi
+           ) &
+           pid=$!; draw_progress_bar "$pid" "Downloading Core Installer"; wait "$pid"
            
-           if [ "$DL_SUCCESS" = true ] && [ -s "$LOCAL_DIR/install.sh" ]; then
+           if [ -s "$LOCAL_DIR/install.sh" ]; then
                chmod +x "$LOCAL_DIR/install.sh"
                bash "$LOCAL_DIR/install.sh" --force
            else
@@ -420,22 +419,23 @@ while true; do
            tmp_zip="$(mktemp /tmp/custom-repo.XXXXXX.zip 2>/dev/null || echo /tmp/custom-repo.zip)"
            rm -f "$tmp_zip"
            
-           if command -v curl >/dev/null 2>&1; then
-               curl -fsSL --retry 2 --connect-timeout 10 --max-time 180 -o "$tmp_zip" "$zip_url" &
-               pid=$!; draw_progress_bar "$pid" "Downloading Custom ZIP"; wait "$pid"; rc=$?
-           elif command -v wget >/dev/null 2>&1; then
-               wget -q --timeout=10 --tries=2 -O "$tmp_zip" "$zip_url" &
-               pid=$!; draw_progress_bar "$pid" "Downloading Custom ZIP"; wait "$pid"; rc=$?
-           else rc=1; fi
+           (
+               if command -v curl >/dev/null 2>&1; then
+                   curl -fsSL --retry 2 --connect-timeout 10 --max-time 180 -o "$tmp_zip" "$zip_url" 2>/dev/null || curl -fsSL --retry 2 --connect-timeout 10 --max-time 180 -o "$tmp_zip" "$GH_PROXY/$zip_url" 2>/dev/null
+               elif command -v wget >/dev/null 2>&1; then
+                   wget -q --timeout=10 --tries=2 -O "$tmp_zip" "$zip_url" 2>/dev/null || wget -q --timeout=10 --tries=2 -O "$tmp_zip" "$GH_PROXY/$zip_url" 2>/dev/null
+               fi
+           ) &
+           pid=$!; draw_progress_bar "$pid" "Downloading Custom ZIP"; wait "$pid"
 
-           if [ "${rc:-1}" -eq 0 ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
-               tmp_dir="$(mktemp -d /tmp/custom-repo.XXXXXX)"
-               unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
-               
-               repo_root="$(find "$tmp_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
-               
-               if [ -n "$repo_root" ] && [ -d "$repo_root" ]; then
-                   (
+           if [ -s "$tmp_zip" ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
+               (
+                   tmp_dir="$(mktemp -d /tmp/custom-repo.XXXXXX)"
+                   unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
+                   
+                   repo_root="$(find "$tmp_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
+                   
+                   if [ -n "$repo_root" ] && [ -d "$repo_root" ]; then
                        mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
                        cp -rf "$repo_root"/* "$LOCAL_DIR/" 2>/dev/null
                        chmod -R +x "$LOCAL_DIR"/*.sh "$LOCAL_DIR"/tunnels/*.sh "$LOCAL_DIR"/tools/*.sh 2>/dev/null || true
@@ -461,14 +461,12 @@ while true; do
                            cp -f "$LOCAL_DIR/main.sh" "$MTUNNEL_PATH" 2>/dev/null
                            chmod +x "$MTUNNEL_PATH" 2>/dev/null
                        fi
-                   ) &
-                   pid=$!; draw_progress_bar "$pid" "Deploying Core & Packages"; wait "$pid"
+                   fi
+                   rm -rf "$tmp_dir"
+               ) &
+               pid=$!; draw_progress_bar "$pid" "Deploying Core & Packages"; wait "$pid"
 
-                   echo -e "  ${G}● Full Custom Deployment Completed!${NC}"; sleep 2
-               else
-                   echo -e "  ${R}✖ Invalid structure! Couldn't find 'main.sh' in the ZIP.${NC}"; sleep 2
-               fi
-               rm -rf "$tmp_dir"
+               echo -e "  ${G}● Full Custom Deployment Completed!${NC}"; sleep 2
            else
                echo -e "  ${R}✖ Download failed or ZIP is corrupted!${NC}"; sleep 2
            fi

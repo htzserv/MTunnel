@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.3 ---
-# [Features: Per-IP Port Table | Bulletproof Ping Tracker | L4 Load Balancing]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.2 ---
+# [Features: Bulletproof Ping Tracker | Dual-Line UI Layout | L4 Load Balancing]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -147,7 +147,7 @@ draw_mgre_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MDesign Core 5.4.3 "
+    local str1=" MDesign Core 5.4.2 "
     local str2=" IP: $s_ip "
     local str3=" TUNNELS: $active_tunnels "
     local str4=" V-IPS: $total_vips "
@@ -190,21 +190,14 @@ show_mgre_monitor() {
             echo -e "  ${B}│${NC}${eval_l2}${sp2}${B}│${NC}"
         fi
 
-        echo -e "  ${B}├───────────────┬───────────────┬───────────────┬─────────────────┬──────────┬───────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-15s${NC} ${B}│${NC} ${DIM}%-15s${NC} ${B}│${NC} ${DIM}%-15s${NC} ${B}│${NC} ${DIM}%-17s${NC} ${B}│${NC} ${DIM}%-10s${NC} ${B}│${NC} ${DIM}%-15s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "NAT PORTS" "LATENCY" "STATUS"
-        echo -e "  ${B}├───────────────┼───────────────┼───────────────┼─────────────────┼──────────┼───────────────┤${NC}"
+        echo -e "  ${B}├────────────────────┬────────────────────┬────────────────────┬──────────────┬──────────────┤${NC}"
+        printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
+        echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
 
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
         local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         
-        local core_ports="---"
-        if [ "$TYPE" == "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
-            local tcp_str="${FWD_TCP:-0}"; local udp_str="${FWD_UDP:-0}"
-            core_ports="T:${tcp_str} U:${udp_str}"
-            [ ${#core_ports} -gt 17 ] && core_ports="${core_ports:0:14}..."
-        fi
-
         local ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         local lat lat_raw lat_color stat_icon stat_text stat_color
         if echo "$ping_res" | grep -q "time="; then
@@ -213,14 +206,9 @@ show_mgre_monitor() {
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         local m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
-        printf "  ${B}│${NC} ${W}%s %-12s${NC} ${B}│${NC} ${W}%-15s${NC} ${B}│${NC} ${W}%-15s${NC} ${B}│${NC} ${C}%-17s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%s %-13s%b ${B}│${NC}\n" "${m_icon}" "Core IP" "$main_lip" "$main_tip" "$core_ports" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
+        printf "  ${B}│${NC} ${W}%s %-15s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${m_icon}" "Core IP" "$main_lip" "$main_tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         
         local total_v=${#v_ips[@]}
-        local vip_ports="---"
-        if [ "$TYPE" == "1" ] && [ "$LB_MODE" == "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
-            vip_ports="$core_ports"
-        fi
-
         for ((idx=0; idx<total_v; idx++)); do
             local lip="${v_ips[$idx]}"; local base_ip=$(echo "$lip" | cut -d'.' -f1-3); local last=$(echo "$lip" | cut -d'.' -f4); local tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
             ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
@@ -229,9 +217,9 @@ show_mgre_monitor() {
                 lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             local v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
-            printf "  ${B}│${NC} ${DIM}%s %-9s${NC} ${B}│${NC} ${DIM}%-15s${NC} ${B}│${NC} ${DIM}%-15s${NC} ${B}│${NC} ${DIM}%-17s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%s %-13s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$vip_ports" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
+            printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         done
-        echo -e "  ${B}╰───────────────┴───────────────┴───────────────┴─────────────────┴──────────┴───────────────╯${NC}\n"
+        echo -e "  ${B}╰────────────────────┴────────────────────┴────────────────────┴──────────────┴──────────────╯${NC}\n"
     done
 }
 

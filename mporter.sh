@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.2.0 ---
-# [Features: Smart Tunnel Type Detection | 4-Column UI Matrix | Tri-Core Engine]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.0 ---
+# [Features: Per-IP Engine Tracker | Port Matrix Breakdown | Smart UI Matrix]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -285,37 +285,38 @@ get_iface_info() {
     local t_type="System"
     local t_name="$iface"
 
-    if [[ "$iface" == greir* ]]; then
-        t_type="GRE"; t_name="${iface#greir}"
-    elif [[ "$iface" == grekh* ]]; then
-        t_type="GRE"; t_name="${iface#grekh}"
-    elif [[ "$iface" == gre6ir* ]]; then
-        t_type="IP6GRE"; t_name="${iface#gre6ir}"
-    elif [[ "$iface" == gre6kh* ]]; then
-        t_type="IP6GRE"; t_name="${iface#gre6kh}"
-    elif [[ "$iface" == vx_* ]]; then
-        t_type="VXLAN"; t_name="${iface#vx_}"
-    elif [[ "$iface" == br_* ]]; then
-        t_type="VXLAN"; t_name="${iface#br_}"
-    elif [[ "$iface" == bh_* ]]; then
-        t_type="BACKHAUL"; t_name="${iface#bh_}"
-    elif [[ "$iface" == rh_* ]]; then
-        t_type="RATHOLE"; t_name="${iface#rh_}"
-    elif [[ "$iface" == rt_* ]]; then
-        t_type="RATHOLE"; t_name="${iface#rt_}"
-    elif [[ "$iface" == pq_* ]]; then
-        t_type="PAQET"; t_name="${iface#pq_}"
-    elif [[ "$iface" == l2tp_* ]]; then
-        t_type="L2TP"; t_name="${iface#l2tp_}"
-    elif [[ "$iface" == hys_* ]]; then
-        t_type="HYSTERIA"; t_name="${iface#hys_}"
-    elif [ "$target_ip" == "127.0.0.1" ]; then
-        t_type="Local"; t_name="Loopback"
-    else
-        [ -z "$t_name" ] && t_name="Unknown"
-    fi
+    if [[ "$iface" == greir* ]]; then t_type="GRE"; t_name="${iface#greir}"
+    elif [[ "$iface" == grekh* ]]; then t_type="GRE"; t_name="${iface#grekh}"
+    elif [[ "$iface" == gre6ir* ]]; then t_type="IP6GRE"; t_name="${iface#gre6ir}"
+    elif [[ "$iface" == gre6kh* ]]; then t_type="IP6GRE"; t_name="${iface#gre6kh}"
+    elif [[ "$iface" == vx_* ]]; then t_type="VXLAN"; t_name="${iface#vx_}"
+    elif [[ "$iface" == br_* ]]; then t_type="VXLAN"; t_name="${iface#br_}"
+    elif [[ "$iface" == bh_* ]]; then t_type="BACKHAUL"; t_name="${iface#bh_}"
+    elif [[ "$iface" == rh_* ]]; then t_type="RATHOLE"; t_name="${iface#rh_}"
+    elif [[ "$iface" == rt_* ]]; then t_type="RATHOLE"; t_name="${iface#rt_}"
+    elif [[ "$iface" == pq_* ]]; then t_type="PAQET"; t_name="${iface#pq_}"
+    elif [[ "$iface" == l2tp_* ]]; then t_type="L2TP"; t_name="${iface#l2tp_}"
+    elif [[ "$iface" == hys_* ]]; then t_type="HYSTERIA"; t_name="${iface#hys_}"
+    elif [ "$target_ip" == "127.0.0.1" ]; then t_type="Local"; t_name="Loopback"
+    else [ -z "$t_name" ] && t_name="Unknown"; fi
 
     echo "${t_type}|${t_name}"
+}
+
+format_engine() {
+    local raw="$1"
+    local e_list=()
+    [[ "$raw" == *"HAP"* ]] && e_list+=("${C}HAProxy${NC}")
+    [[ "$raw" == *"GST"* ]] && e_list+=("${M}Gost${NC}")
+    [[ "$raw" == *"IPT"* ]] && e_list+=("${Y}KernelNAT${NC}")
+    [[ "$raw" == *"TUN"* ]] && e_list+=("${G}CoreNAT${NC}")
+    
+    local res=""
+    for ((i=0; i<${#e_list[@]}; i++)); do
+        res+="${e_list[$i]}"
+        [ $i -lt $(( ${#e_list[@]} - 1 )) ] && res+=" ${DIM}/${NC} "
+    done
+    echo "$res"
 }
 
 get_stats() {
@@ -363,21 +364,21 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 8.2.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 8.3.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 8.2.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
-    echo -e "  ${B}├──────────────┬──────────┬─────────────────────────────────────┬────────────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-35s${NC} ${B}│${NC} ${W}%-38s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "FORWARDING DISTRIBUTION"
-    echo -e "  ${B}├──────────────┼──────────┼─────────────────────────────────────┼────────────────────────────────────────┤${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 8.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬────────────────┬────────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
+    echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼────────────────┼────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
-    [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1}')
-    [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' | sort | uniq -c | awk '{print $2 "|" $1}')
+    [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|HAP"}')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|GST"}')
+    [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' | sort | uniq -c | awk '{print $2 "|" $1 "|IPT"}')
 
     shopt -s nullglob
     for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
@@ -390,28 +391,37 @@ draw_header() {
         elif [ -n "$VNI_ID" ]; then t_ip="${CORE_SUBNET:-10.88.${VNI_ID}}.2"; fi
         
         local count=$(echo "$FWD_TCP,$FWD_UDP" | tr ',' '\n' | grep -v '^$' | sort -u | wc -l)
-        if [ "$count" -gt 0 ]; then ext_map_raw+="${t_ip}|${count}\n"; fi
+        if [ "$count" -gt 0 ]; then ext_map_raw+="${t_ip}|${count}|TUN\n"; fi
     done
     shopt -u nullglob
 
-    local ip_port_counts=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$' | awk -F'|' '{a[$1]+=$2} END {for (i in a) print i"|"a[i]}')
+    local ip_port_counts=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$' | awk -F'|' '{
+        a[$1]+=$2; 
+        if(eng[$1] == "") eng[$1]=$3; else if(index(eng[$1], $3) == 0) eng[$1]=eng[$1] "/" $3
+    } END {for (i in a) print i"|"a[i]"|"eng[i]}')
 
     if [ -z "$ip_port_counts" ] || [ "$ip_port_counts" == "|" ]; then
         printf "  ${B}│${NC} ${DIM}%-100s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
     else
-        declare -A iface_ips_arr; declare -A iface_ports_arr
-        while IFS='|' read -r ip count; do
+        declare -A iface_ips_arr; declare -A iface_ports_arr; declare -A iface_eng_arr
+        while IFS='|' read -r ip count engs; do
             if [ -n "$ip" ]; then
                 local iface_info=$(get_iface_info "$ip")
                 iface_ips_arr["$iface_info"]+="$ip "
                 iface_ports_arr["$iface_info"]=$(( iface_ports_arr["$iface_info"] + count ))
+                
+                IFS='/' read -ra eng_list <<< "$engs"
+                for e in "${eng_list[@]}"; do
+                    if [[ ! "${iface_eng_arr["$iface_info"]}" == *"$e"* ]]; then
+                        iface_eng_arr["$iface_info"]+="$e/"
+                    fi
+                done
             fi
         done <<< "$ip_port_counts"
         
-        for iface_info in $(for i in "${!iface_ips_arr[@]}"; do echo $i; done | sort); do
+        for iface_info in $(for i in "${!iface_ips_arr[@]}"; do echo "$i"; done | sort); do
             local t_type="${iface_info%%|*}"
             local t_name="${iface_info##*|}"
-            
             local clean_name="${t_name}"
             [ ${#clean_name} -gt 12 ] && clean_name="${clean_name:0:9}..."
             
@@ -422,16 +432,22 @@ draw_header() {
             elif [ ${#ips[@]} -eq 2 ]; then display_ips="${ips[0]}, ${ips[1]}"
             else display_ips="${ips[0]}"; fi
             
+            local raw_eng="${iface_eng_arr["$iface_info"]}"
+            local disp_eng=$(format_engine "$raw_eng")
+            local clean_eng=$(echo -e "$disp_eng" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+            local pad_eng=$(printf '%*s' "$(( 14 - ${#clean_eng} ))" "")
+            
             local obfs_indicator=""
             if grep -q "\-d ${ips[0]} " "$OBFS_DIR/nat.sh" 2>/dev/null; then obfs_indicator="${M}[OBFS]${NC}"; fi
             
             local fwd_dist="${Y}${total_p} Ports${NC} ${obfs_indicator}"
             local clean_fwd=$(echo -e "$fwd_dist" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-            local pad=$(printf '%*s' "$(( 38 - ${#clean_fwd} ))" "")
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-35s${NC} ${B}│${NC} %b%s${B}│${NC}\n" "$clean_name" "$t_type" "$display_ips" "$fwd_dist" "$pad"
+            local pad=$(printf '%*s' "$(( 26 - ${#clean_fwd} ))" "")
+            
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-26s${NC} ${B}│${NC} %b%s${B}│${NC} %b%s${B}│${NC}\n" "$clean_name" "$t_type" "$display_ips" "$disp_eng" "$pad_eng" "$fwd_dist" "$pad"
         done
     fi
-    echo -e "  ${B}╰──────────────┴──────────┴─────────────────────────────────────┴────────────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴──────────┴────────────────────────────┴────────────────┴────────────────────────────╯${NC}"
 }
 
 smart_map() {
@@ -839,15 +855,15 @@ edit_mapping() {
 show_table() {
     draw_header
     echo -e "\n  ${Y}● Detailed IP -> Port Matrix:${NC}"
-    echo -e "  ${B}├──────────────┬──────────┬─────────────────────────────────────┬────────────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-35s${NC} ${B}│${NC} ${W}%-38s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARDED PORTS"
-    echo -e "  ${B}├──────────────┼──────────┼─────────────────────────────────────┼────────────────────────────────────────┤${NC}"
+    echo -e "  ${B}├──────────────┬──────────┬───────────────┬──────────────────┬─────────────────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-15s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-35s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARD ENGINE" "FORWARDED PORTS"
+    echo -e "  ${B}├──────────────┼──────────┼───────────────┼──────────────────┼─────────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
-    [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {print port " " $3}' | sed 's/:.*//')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1 \2/g')
     
-    [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- '--dport \K[0-9]+.*MPORTER_NAT_[0-9\.]+' | awk '{print $1 " " $NF}' | sed 's/MPORTER_NAT_//g')
+    [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {ip=$3; sub(/:.*/, "", ip); print port "|" ip "|HAP"}')
+    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1|\2|GST/g')
+    [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- '--dport \K[0-9]+.*MPORTER_NAT_[0-9\.]+' | awk '{print $1 "|" $NF "|IPT"}' | sed 's/MPORTER_NAT_//g')
     
     shopt -s nullglob
     for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
@@ -859,18 +875,27 @@ show_table() {
         if [ -n "$TUN_ID" ]; then t_ip="${CORE_SUBNET:-10.76.${TUN_ID}}.2"
         elif [ -n "$VNI_ID" ]; then t_ip="${CORE_SUBNET:-10.88.${VNI_ID}}.2"; fi
         for p in $(echo "$FWD_TCP,$FWD_UDP" | tr ',' ' ' | xargs -n1 2>/dev/null | sort -u); do
-            if [ -n "$p" ]; then ext_map_raw+="$p $t_ip\n"; fi
+            if [ -n "$p" ]; then ext_map_raw+="$p|$t_ip|TUN\n"; fi
         done
     done
     shopt -u nullglob
     
     local mappings=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$')
-    if [ -z "$mappings" ]; then printf "  ${B}│${NC} ${DIM}%-100s${NC} ${B}│${NC}\n" "  No active mappings."
+    
+    if [ -z "$mappings" ]; then 
+        printf "  ${B}│${NC} ${DIM}%-100s${NC} ${B}│${NC}\n" "  No active mappings."
     else
-        declare -A ip_ports_arr
-        while read -r p_num d_ip; do if [ -n "$d_ip" ]; then ip_ports_arr["$d_ip"]+="$p_num, "; fi; done <<< "$mappings"
-        for d_ip in $(for i in "${!ip_ports_arr[@]}"; do echo $i; done | sort); do
-            
+        declare -A ip_ports_arr; declare -A ip_eng_arr
+        while IFS='|' read -r p_num d_ip eng; do 
+            if [ -n "$d_ip" ]; then 
+                ip_ports_arr["$d_ip"]+="$p_num, "
+                if [[ ! "${ip_eng_arr["$d_ip"]}" == *"$eng"* ]]; then
+                    ip_eng_arr["$d_ip"]+="$eng/"
+                fi
+            fi
+        done <<< "$mappings"
+
+        for d_ip in $(for i in "${!ip_ports_arr[@]}"; do echo "$i"; done | sort); do
             local iface_info=$(get_iface_info "$d_ip")
             local t_type="${iface_info%%|*}"
             local t_name="${iface_info##*|}"
@@ -878,7 +903,12 @@ show_table() {
             local clean_name="${t_name}"
             [ ${#clean_name} -gt 12 ] && clean_name="${clean_name:0:9}..."
 
-            raw_ports="${ip_ports_arr[$d_ip]}"; raw_ports="${raw_ports%, }"
+            local raw_eng="${ip_eng_arr[$d_ip]}"
+            local disp_eng=$(format_engine "$raw_eng")
+            local clean_eng=$(echo -e "$disp_eng" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+            local pad_eng=$(printf '%*s' "$(( 16 - ${#clean_eng} ))" "")
+
+            local raw_ports="${ip_ports_arr[$d_ip]}"; raw_ports="${raw_ports%, }"
             local display_ports=""
             for p in $(echo "$raw_ports" | tr ',' ' ' | sort -u -n); do
                 if grep -q "dport $p " "$OBFS_DIR/nat.sh" 2>/dev/null; then display_ports+="${M}${p}*(OBFS)${Y}, "
@@ -887,13 +917,13 @@ show_table() {
             display_ports="${display_ports%, }"
             
             local clean_str=$(echo -e "$display_ports" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-            if [ ${#clean_str} -gt 38 ]; then display_ports="${clean_str:0:35}..."; clean_str="$display_ports"; fi
-            local pad=$(printf '%*s' "$((38 - ${#clean_str}))" "")
+            if [ ${#clean_str} -gt 35 ]; then display_ports="${clean_str:0:32}..."; clean_str="$display_ports"; fi
+            local pad=$(printf '%*s' "$((35 - ${#clean_str}))" "")
             
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-35s${NC} ${B}│${NC} ${Y}%s%s${NC} ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$display_ports" "$pad"
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-15s${NC} ${B}│${NC} %b%s${B}│${NC} ${Y}%s%s${NC} ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
         done
     fi
-    echo -e "  ${B}╰──────────────┴──────────┴─────────────────────────────────────┴────────────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴──────────┴───────────────┴──────────────────┴─────────────────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
@@ -910,7 +940,6 @@ purge_menu() {
     local h_map=""; local g_map=""; local ipt_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
     [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
-    
     [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
     
     local all_ips=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | sort -u)

@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.1 ---
-# [Features: Perfect UI Alignment | Per-IP Engine Tracker | Tri-Core Engine]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.2 ---
+# [Features: OTA Self-Updater | UI Formatting Fixed | Tri-Core Engine]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -19,6 +19,46 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
+
+self_update_module() {
+    local s_name="mporter"
+    local rel_path="mporter.sh"
+    local repo_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path"
+    local gh_proxy="https://ghproxy.net"
+    local tmp_file="/tmp/.${s_name}_update.$$"
+    local cb="?t=$(date +%s)"
+
+    clear; echo -e "\n  ${C}⟳${NC} ${W}Checking for ${Y}MPorter${W} updates...${NC}"
+
+    local dl_success=false
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 8 -o "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
+        [ "$dl_success" = false ] && curl -fsSL --connect-timeout 8 -o "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=8 -O "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
+        [ "$dl_success" = false ] && wget -q --timeout=8 -O "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+    fi
+
+    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
+        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+        chmod +x "$tmp_file"
+        
+        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+        
+        mkdir -p "$LOCAL_DIR" 2>/dev/null
+        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+        
+        rm -f "$tmp_file"
+        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
+        sleep 1.5
+        exec "$INSTALL_PATH" "$@"
+    else
+        echo -e "  ${R}✖ Update failed. Network or GitHub timeout.${NC}"
+        rm -f "$tmp_file"
+        sleep 2
+    fi
+}
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -364,13 +404,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 8.3.1 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 8.3.2 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 8.3.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 8.3.2${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"
@@ -446,7 +486,7 @@ draw_header() {
             local clean_fwd=$(echo -e "$fwd_dist" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
             local pad=$(printf '%*s' "$(( 26 - ${#clean_fwd} ))" "")
             
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-26s${NC} ${B}│${NC} %s%s ${B}│${NC} %s%s ${B}│${NC}\n" "$clean_name" "$t_type" "$display_ips" "$disp_eng" "$pad_eng" "$fwd_dist" "$pad"
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-26s${NC} ${B}│${NC} %b%s ${B}│${NC} %b%s ${B}│${NC}\n" "$clean_name" "$t_type" "$display_ips" "$disp_eng" "$pad_eng" "$fwd_dist" "$pad"
         done
     fi
     echo -e "  ${B}╰──────────────┴──────────┴────────────────────────────┴──────────────────────┴────────────────────────────╯${NC}"
@@ -922,10 +962,10 @@ show_table() {
             if [ ${#clean_str} -gt 34 ]; then display_ports="${clean_str:0:31}..."; clean_str="$display_ports"; fi
             local pad=$(printf '%*s' "$((34 - ${#clean_str}))" "")
             
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-14s${NC} ${B}│${NC} %s%s ${B}│${NC} ${Y}%s%s ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-14s${NC} ${B}│${NC} %b%s ${B}│${NC} ${Y}%b%s ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
         done
     fi
-    echo -e "  ${B}╰──────────────┴──────────┴────────────────┴──────────────────────────┴────────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴──────────┴───────────────┴──────────────────┴─────────────────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
@@ -967,7 +1007,7 @@ purge_menu() {
                 local raw_str=$(printf "  %02d ❯ %-22s (Contains %-2d IPs)" "$i" "$disp_name" "${#ip_arr[@]}")
                 local pad=$(( 58 - ${#raw_str} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
                 
-                echo -e "  ${B}│${NC}  ${Y}%-2d${NC} ${C}❯${NC} ${W}%-22s${NC} ${DIM}(Contains %-2d IPs)${NC}${sp}${B}│${NC}" "$i" "$disp_name" "${#ip_arr[@]}"
+                printf "  ${B}│${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-22s${NC} ${DIM}(Contains %-2d IPs)${NC}%s${B}│${NC}\n" "$i" "$disp_name" "${#ip_arr[@]}" "$sp"
                 ((i++))
             done
             echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
@@ -999,7 +1039,7 @@ purge_menu() {
                 local raw_str=$(printf "  %02d ❯ %-15s (%s)" "$i" "${ip_arr[$i]}" "$disp_name")
                 local pad=$(( 58 - ${#raw_str} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
                 
-                echo -e "  ${B}│${NC}  ${Y}%-2d${NC} ${C}❯${NC} ${W}%-15s${NC} ${DIM}(%s)${NC}${sp}${B}│${NC}" "$i" "${ip_arr[$i]}" "$disp_name"
+                printf "  ${B}│${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-15s${NC} ${DIM}(%s)${NC}%s${B}│${NC}\n" "$i" "${ip_arr[$i]}" "$disp_name" "$sp"
             done
             echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
             echo -ne "  ${C}Select Index ❯❯ ${NC}"; read idx
@@ -1097,9 +1137,9 @@ manual_restart() {
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Tri-Core System${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Strict 1-to-1)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Delete & Purge Mappings (By Interface/IP/All)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Engines & Purge (Nuclear Wipe)${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Tri-Core System${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Strict 1-to-1)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Delete & Purge Mappings (By Interface/IP/All)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Engines & Purge (Nuclear Wipe)${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Force Sync Module)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
     echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -t 30 opt
-    opt=$(echo "$opt" | tr -dc '0-8')
+    opt=$(echo "$opt" | tr -dc '0-9')
     case $opt in
         1) install_core_engines ;; 2) smart_map ;; 3) edit_mapping ;; 4) show_table ;;
         5) purge_menu ;;
@@ -1120,6 +1160,8 @@ while true; do
                iptables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT_" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
                echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
            fi ;;
-        7) smart_watchdog_menu ;; 8) manual_restart ;; 0) clear; exit 0 ;;
+        7) smart_watchdog_menu ;; 8) manual_restart ;; 
+        9) self_update_module ;;
+        0) clear; exit 0 ;;
     esac
 done

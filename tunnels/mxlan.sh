@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.1 ---
-# [Features: Live PUB IPs | Dynamic Subnet | L4 Load Balancing | Hardened Sanitization]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.2 ---
+# [Features: Bulletproof Ping Tracker | Dual-Line UI Layout | L4 Load Balancing]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/vxlan"
@@ -54,7 +54,6 @@ apply_fabric() {
 
     local all_targets=("$remote_br_ip")
 
-    # Generate and Apply vIPs
     if [[ "$MAX_IPS" -gt 0 ]]; then
         for ((i=0; i<MAX_IPS; i++)); do
             local hash=$(echo "${SYNC_KEY}_${i}" | sha256sum)
@@ -78,12 +77,10 @@ apply_fabric() {
         done
     fi
 
-    # Native NAT Port Forwarding (Iran Server Only) with Layer 4 Load Balancing
     if [[ "$TYPE" == "1" ]]; then
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         local t_count=${#all_targets[@]}
 
-        # Apply TCP NAT
         if [ -n "$FWD_TCP" ]; then
             IFS=',' read -ra TCP_ARR <<< "$FWD_TCP"
             for p in "${TCP_ARR[@]}"; do
@@ -109,7 +106,6 @@ apply_fabric() {
             done
         fi
         
-        # Apply UDP NAT
         if [ -n "$FWD_UDP" ]; then
             IFS=',' read -ra UDP_ARR <<< "$FWD_UDP"
             for p in "${UDP_ARR[@]}"; do
@@ -152,7 +148,7 @@ draw_mxlan_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MXLAN Layer-2 Edge 1.5.1 "
+    local str1=" MXLAN Layer-2 Edge 1.5.2 "
     local str2=" IP: $s_ip "
     local str3=" FABRICS: $active_fabrics "
     local str4=" V-IPS: $total_vips "
@@ -172,15 +168,25 @@ show_mxlan_monitor() {
         [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
         mapfile -t v_ips < <(ip -4 addr show dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
 
-        local pub_lbl=" ${DIM}| PUB: ${W}${LOCAL_PUB} ${DIM}→${W} ${REMOTE_PUB}${NC}"
-        local fwd_lbl=""
-        if [ "$TYPE" == "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
-            local lb_stat=$([ "$LB_MODE" == "1" ] && echo "${G}ON${NC}" || echo "${DIM}OFF${NC}")
-            fwd_lbl=" ${DIM}| NAT: ${Y}T:[${FWD_TCP:-0}] ${C}U:[${FWD_UDP:-0}] ${DIM}LB: [${lb_stat}${DIM}]${NC}"
-        fi
+        local title_txt="${VX_NAME}/${BR_NAME}"
+        local raw_l1=" ▼ ${title_txt} | PUB: ${LOCAL_PUB} -> ${REMOTE_PUB}"
+        local pad1=$(( 92 - ${#raw_l1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
+        local eval_l1=$(printf " %b▼ %s%b ${DIM}| PUB: ${W}%s ${DIM}→${W} %s${NC}" "${M}" "${title_txt}" "${NC}" "${LOCAL_PUB}" "${REMOTE_PUB}")
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} %b▼ %-22s%b%b%b\n" "${M}" "${VX_NAME}/${BR_NAME}" "${NC}" "${pub_lbl}" "${fwd_lbl}"
+        echo -e "  ${B}│${NC}${eval_l1}${sp1}${B}│${NC}"
+        
+        if [ "$TYPE" == "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
+            local disp_tcp="${FWD_TCP:-0}"; [ ${#disp_tcp} -gt 30 ] && disp_tcp="${disp_tcp:0:27}..."
+            local disp_udp="${FWD_UDP:-0}"; [ ${#disp_udp} -gt 30 ] && disp_udp="${disp_udp:0:27}..."
+            local lb_txt="OFF"; [ "$LB_MODE" == "1" ] && lb_txt="ON"
+            local raw_l2="   ↳ NAT: T:[${disp_tcp}] U:[${disp_udp}] LB:[${lb_txt}]"
+            local pad2=$(( 92 - ${#raw_l2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+            local lb_stat=$([ "$LB_MODE" == "1" ] && echo "${G}ON${NC}" || echo "${DIM}OFF${NC}")
+            local eval_l2="   ${DIM}↳ NAT:${NC} ${Y}T:[${disp_tcp}]${NC} ${C}U:[${disp_udp}]${NC} ${DIM}LB:[${lb_stat}${DIM}]${NC}"
+            echo -e "  ${B}│${NC}${eval_l2}${sp2}${B}│${NC}"
+        fi
+        
         echo -e "  ${B}├────────────────────┬────────────────────┬────────────────────┬──────────────┬──────────────┤${NC}"
         printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
         echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
@@ -191,8 +197,9 @@ show_mxlan_monitor() {
         
         local ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         local lat lat_raw lat_color stat_icon stat_text stat_color
-        if [ $? -eq 0 ]; then
-            lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        if echo "$ping_res" | grep -q "time="; then
+            lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
+            lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         local m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
@@ -202,8 +209,9 @@ show_mxlan_monitor() {
         for ((idx=0; idx<total_v; idx++)); do
             local lip="${v_ips[$idx]}"; local base_ip=$(echo "$lip" | cut -d'.' -f1-3); local last=$(echo "$lip" | cut -d'.' -f4); local tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
             ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
-            if [ $? -eq 0 ]; then
-                lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+            if echo "$ping_res" | grep -q "time="; then
+                lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
+                lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             local v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
             printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
@@ -248,8 +256,9 @@ show_fabric_details() {
         
         local ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
         local lat lat_raw lat_color stat_icon stat_text stat_color
-        if [ $? -eq 0 ]; then
-            lat=$(echo "$ping_res" | grep -oP 'time=\K\S+'); lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+        if echo "$ping_res" | grep -q "time="; then
+            lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
+            lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         local l4="Bridge IPs   : ${lip} -> ${tip}"; local r4_raw="Link: * ${stat_text} (${lat_raw})"
@@ -432,7 +441,6 @@ while true; do
            core_sub="${c1}.${c2}.${c3}"
            conf_path="$CONF_DIR/${vx_name}.conf"
            
-           # Generate base configuration
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nVX_NAME=$vx_name\nBR_NAME=$br_name\nVNI_ID=$vni_id\nCORE_SUBNET=$core_sub\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0" > "$conf_path"
            chmod 600 "$conf_path"
            
@@ -443,14 +451,13 @@ while true; do
                
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
                
-               # 1. PING TEST
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
                run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
                if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
                    echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
                    echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
-                   if [ $? -eq 0 ]; then
+                   if echo "$ping_res" | grep -q "time="; then
                        lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
                        echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
                    else
@@ -458,7 +465,6 @@ while true; do
                    fi
                fi
                
-               # 2. VIRTUAL IP SETUP
                echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
                setup_vip=$(echo "$setup_vip" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
                if [[ "$setup_vip" == "y" || "$setup_vip" == "yes" ]]; then
@@ -479,7 +485,6 @@ while true; do
                    fi
                fi
 
-               # 3. PORT FORWARDING & LOAD BALANCING SETUP
                if [ "$s_type" == "1" ]; then
                    echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Port Forwarding? (y/n): ${NC}"; read setup_pf
                    setup_pf=$(echo "$setup_pf" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
@@ -489,7 +494,7 @@ while true; do
                        fwd_tcp=$(echo "$fwd_tcp" | tr -dc '0-9,')
                        fwd_udp=$(echo "$fwd_udp" | tr -dc '0-9,')
                        
-                       run_lb="0" # Fixed scope error
+                       local run_lb="0"
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
                            ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')

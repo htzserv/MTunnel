@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.2 ---
-# [Features: Bulletproof Ping Tracker | Dual-Line UI Layout | L4 Load Balancing]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.3 ---
+# [Features: Rename Interface | Bulletproof Ping Tracker | Dual-Line UI Layout]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 CONF_DIR="/etc/mgre/tunnels"
@@ -147,7 +147,7 @@ draw_mgre_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MDesign Core 5.4.2 "
+    local str1=" MDesign Core 5.4.3 "
     local str2=" IP: $s_ip "
     local str3=" TUNNELS: $active_tunnels "
     local str4=" V-IPS: $total_vips "
@@ -305,6 +305,7 @@ edit_tunnel() {
         if [ "$TYPE" == "1" ]; then
             echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Port Forwarding & Load Balancer${NC}"
         fi
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Rename Tunnel Interface (Current: ${T_NAME})${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
 
@@ -324,13 +325,13 @@ edit_tunnel() {
                     if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
                         echo -e "  ${R}✖ Network ID [${new_tun_id}] is already in use!${NC}"; sleep 1.5; return
                     fi
-                    hash_c=$(echo -n "core_${new_tun_id}" | sha256sum)
-                    class_selector=$(( new_tun_id % 3 ))
-                    c1=""; c2=""; c3=""
+                    local hash_c=$(echo -n "core_${new_tun_id}" | sha256sum)
+                    local class_selector=$(( new_tun_id % 3 ))
+                    local c1=""; local c2=""; local c3=""
                     if [ "$class_selector" == "1" ]; then c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
                     elif [ "$class_selector" == "2" ]; then c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
                     else c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
-                    new_core_sub="${c1}.${c2}.${c3}"
+                    local new_core_sub="${c1}.${c2}.${c3}"
                     sed -i "s/^TUN_ID=.*/TUN_ID=$new_tun_id/" "$sel_conf"
                     sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$sel_conf"
                     echo -e "  ${G}● Network ID updated. Subnet automatically changed to ${new_core_sub}.x${NC}"
@@ -349,7 +350,7 @@ edit_tunnel() {
                 echo -ne "  ${C}●${NC} ${W}New UDP Ports (e.g. 53,7000) [Current: ${C}${FWD_UDP:-None}${W}]: ${NC}"; read new_udp
                 new_tcp=$(echo "$new_tcp" | tr -dc '0-9,')
                 new_udp=$(echo "$new_udp" | tr -dc '0-9,')
-                new_lb="0"
+                local new_lb="0"
                 if [ -n "$new_tcp" ] || [ -n "$new_udp" ]; then
                     echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
                     ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
@@ -360,6 +361,29 @@ edit_tunnel() {
                 echo "FWD_UDP=$new_udp" >> "${sel_conf}.tmp"
                 echo "LB_MODE=$new_lb" >> "${sel_conf}.tmp"
                 mv "${sel_conf}.tmp" "$sel_conf"
+                ;;
+            5)
+                echo -ne "  ${C}●${NC} ${W}New Interface Suffix (Current: ${Y}${T_NAME#gre*}${W}, Max 4-5 chars): ${NC}"; read new_suffix
+                new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
+                if [ -n "$new_suffix" ]; then
+                    local pfx=$([ "$TUN_PROTO" == "6to4" ] && echo "$([ "$TYPE" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$TYPE" == "1" ] && echo "greir" || echo "grekh")")
+                    local new_t_name="${pfx}${new_suffix}"
+                    local check_len=${#new_t_name}; [ "$TUN_PROTO" == "6to4" ] && check_len=$((check_len + 4))
+                    if [ "$check_len" -gt 15 ]; then echo -e "  ${R}● Error: Name too long! Kernel limit is 15 chars.${NC}"; sleep 1.5; return; fi
+                    if [ -f "$CONF_DIR/${new_t_name}.conf" ]; then echo -e "  ${R}● Error: Tunnel interface [${new_t_name}] already exists!${NC}"; sleep 1.5; return; fi
+                    
+                    # Cleanup Old Interface
+                    iptables -t mangle -S FORWARD 2>/dev/null | grep "MGRE_MSS_${T_NAME}\"" | sed 's/^-A /-D /' | while read r; do iptables -t mangle $r 2>/dev/null; done
+                    clean_fwd_rules "$T_NAME"
+                    ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
+                    
+                    # Apply Name Change
+                    sed -i "s/^T_NAME=.*/T_NAME=$new_t_name/" "$sel_conf"
+                    mv "$sel_conf" "$CONF_DIR/${new_t_name}.conf"
+                    sel_conf="$CONF_DIR/${new_t_name}.conf"
+                    T_NAME="$new_t_name"
+                    echo -e "  ${G}● Tunnel successfully renamed to: ${new_t_name}${NC}"
+                fi
                 ;;
             *) return ;;
         esac
@@ -510,7 +534,7 @@ while true; do
                        fwd_tcp=$(echo "$fwd_tcp" | tr -dc '0-9,')
                        fwd_udp=$(echo "$fwd_udp" | tr -dc '0-9,')
                        
-                       run_lb="0"
+                       local run_lb="0"
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
                            ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')

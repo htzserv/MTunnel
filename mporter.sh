@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.3 ---
-# [Features: Anti-Hang Installer | IPv4 Force | Proxy Fallback | OTA Updater]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.4 ---
+# [Features: Anti-Hang Kill-Switch | Timeout Wrapped APT & Curl | OTA Updater]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -32,11 +32,11 @@ self_update_module() {
 
     local dl_success=false
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 8 -o "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
-        [ "$dl_success" = false ] && curl -fsSL --connect-timeout 8 -o "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+        curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
+        [ "$dl_success" = false ] && curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
     elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=8 -O "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
-        [ "$dl_success" = false ] && wget -q --timeout=8 -O "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+        wget -q --timeout=10 -O "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
+        [ "$dl_success" = false ] && wget -q --timeout=10 -O "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
     fi
 
     if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
@@ -66,15 +66,26 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+# --- BULLETPROOF PROGRESS BAR ---
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=28; local progress=0
+    local ticks=0; local max_ticks=480 # 480 * 0.25s = 120 seconds Max Timeout
     tput civis 2>/dev/null || true
+    
     while kill -0 "$pid" 2>/dev/null; do
         ((progress++)); [ "$progress" -gt 95 ] && progress=95
         local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
         local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
         printf "\r  ${C}⟳${NC} ${W}%-26s${NC} ${B}[${G}%s${DIM}%s${B}]${NC} ${C}%3d%%${NC}" "$text" "$bar" "$empty_bar" "$progress"
         sleep 0.25
+        ((ticks++))
+        
+        if [ "$ticks" -gt "$max_ticks" ]; then
+            kill -9 "$pid" 2>/dev/null || true
+            printf "\r  ${R}✖${NC} ${W}%-26s${NC} ${R}[ TIMEOUT KILLED ]${NC}           \n" "$text"
+            tput cnorm 2>/dev/null || true
+            return 1
+        fi
     done
     wait "$pid" 2>/dev/null || true
     local bar=$(printf "%${width}s" "" | tr ' ' '#')
@@ -222,6 +233,7 @@ install_core_engines() {
     
     echo -e "\n  ${DIM}┌─[ INITIALIZING INSTALLATION ]${NC}"
     
+    # [FIXED: Added timeout wrappers to prevent infinite APT hangs]
     (
         sysctl -w fs.file-max=2000000 >/dev/null 2>&1
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
@@ -229,9 +241,9 @@ install_core_engines() {
         sysctl -p >/dev/null 2>&1
         killall -9 apt-get apt dpkg 2>/dev/null || true
         rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
-        dpkg --configure -a >/dev/null 2>&1 || true
-        DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
-        DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::ForceIPv4=true -y -q jq curl wget >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
+        timeout 45 apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
+        timeout 60 apt-get install -o Acquire::ForceIPv4=true -y -q jq curl wget >/dev/null 2>&1 || true
     ) &
     draw_progress_bar $! "Resolving Dependencies"
 
@@ -239,7 +251,7 @@ install_core_engines() {
         (
             mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
             touch /var/lib/haproxy/stats 2>/dev/null
-            DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::ForceIPv4=true -y --no-install-recommends liblua5.4-0 haproxy >/dev/null 2>&1 || true
+            timeout 60 apt-get install -o Acquire::ForceIPv4=true -y --no-install-recommends liblua5.4-0 haproxy >/dev/null 2>&1 || true
             if [ ! -s "$H_CONF" ]; then
                 cat <<'EOF_HAP' > "$H_CONF"
 global
@@ -272,12 +284,13 @@ EOF_HAP
                 local G_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
                 local G_PROXY="https://ghproxy.net/"
                 local dl_ok=false
+                # [FIXED: Added --max-time to prevent silent curl data freezes]
                 if command -v curl >/dev/null 2>&1; then
-                    curl -fsSL --connect-timeout 8 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && curl -fsSL --connect-timeout 8 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
+                    curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
+                    [ "$dl_ok" = false ] && curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
                 elif command -v wget >/dev/null 2>&1; then
-                    wget -q --timeout=8 --tries=1 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && wget -q --timeout=8 --tries=1 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
+                    wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
+                    [ "$dl_ok" = false ] && wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
                 fi
                 
                 if [ -s "/tmp/gost.gz" ]; then
@@ -415,13 +428,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 8.3.3 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 8.3.4 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 8.3.3${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 8.3.4${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"

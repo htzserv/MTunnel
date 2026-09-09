@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.0 ---
-# [Features: Per-IP Engine Tracker | Port Matrix Breakdown | Smart UI Matrix]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.1 ---
+# [Features: Perfect UI Alignment | Per-IP Engine Tracker | Tri-Core Engine]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -364,16 +364,16 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 8.3.0 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter 8.3.1 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 8.3.0${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
-    echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬────────────────┬────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
-    echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼────────────────┼────────────────────────────┤${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter 8.3.1${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
+    echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
     [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|HAP"}')
@@ -401,7 +401,7 @@ draw_header() {
     } END {for (i in a) print i"|"a[i]"|"eng[i]}')
 
     if [ -z "$ip_port_counts" ] || [ "$ip_port_counts" == "|" ]; then
-        printf "  ${B}│${NC} ${DIM}%-100s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
+        printf "  ${B}│${NC} ${DIM}%-104s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
     else
         declare -A iface_ips_arr; declare -A iface_ports_arr; declare -A iface_eng_arr
         while IFS='|' read -r ip count engs; do
@@ -432,10 +432,12 @@ draw_header() {
             elif [ ${#ips[@]} -eq 2 ]; then display_ips="${ips[0]}, ${ips[1]}"
             else display_ips="${ips[0]}"; fi
             
+            if [ ${#display_ips} -gt 26 ]; then display_ips="${display_ips:0:23}..."; fi
+            
             local raw_eng="${iface_eng_arr["$iface_info"]}"
             local disp_eng=$(format_engine "$raw_eng")
             local clean_eng=$(echo -e "$disp_eng" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-            local pad_eng=$(printf '%*s' "$(( 14 - ${#clean_eng} ))" "")
+            local pad_eng=$(printf '%*s' "$(( 20 - ${#clean_eng} ))" "")
             
             local obfs_indicator=""
             if grep -q "\-d ${ips[0]} " "$OBFS_DIR/nat.sh" 2>/dev/null; then obfs_indicator="${M}[OBFS]${NC}"; fi
@@ -444,10 +446,10 @@ draw_header() {
             local clean_fwd=$(echo -e "$fwd_dist" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
             local pad=$(printf '%*s' "$(( 26 - ${#clean_fwd} ))" "")
             
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-26s${NC} ${B}│${NC} %b%s${B}│${NC} %b%s${B}│${NC}\n" "$clean_name" "$t_type" "$display_ips" "$disp_eng" "$pad_eng" "$fwd_dist" "$pad"
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-26s${NC} ${B}│${NC} %s%s ${B}│${NC} %s%s ${B}│${NC}\n" "$clean_name" "$t_type" "$display_ips" "$disp_eng" "$pad_eng" "$fwd_dist" "$pad"
         done
     fi
-    echo -e "  ${B}╰──────────────┴──────────┴────────────────────────────┴────────────────┴────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴──────────┴────────────────────────────┴──────────────────────┴────────────────────────────╯${NC}"
 }
 
 smart_map() {
@@ -855,9 +857,9 @@ edit_mapping() {
 show_table() {
     draw_header
     echo -e "\n  ${Y}● Detailed IP -> Port Matrix:${NC}"
-    echo -e "  ${B}├──────────────┬──────────┬───────────────┬──────────────────┬─────────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-15s${NC} ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-35s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARD ENGINE" "FORWARDED PORTS"
-    echo -e "  ${B}├──────────────┼──────────┼───────────────┼──────────────────┼─────────────────────────────────────┤${NC}"
+    echo -e "  ${B}├──────────────┬──────────┬────────────────┬──────────────────────────┬────────────────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-34s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARD ENGINE" "FORWARDED PORTS"
+    echo -e "  ${B}├──────────────┼──────────┼────────────────┼──────────────────────────┼────────────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
     
@@ -883,7 +885,7 @@ show_table() {
     local mappings=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$')
     
     if [ -z "$mappings" ]; then 
-        printf "  ${B}│${NC} ${DIM}%-100s${NC} ${B}│${NC}\n" "  No active mappings."
+        printf "  ${B}│${NC} ${DIM}%-104s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
     else
         declare -A ip_ports_arr; declare -A ip_eng_arr
         while IFS='|' read -r p_num d_ip eng; do 
@@ -906,7 +908,7 @@ show_table() {
             local raw_eng="${ip_eng_arr[$d_ip]}"
             local disp_eng=$(format_engine "$raw_eng")
             local clean_eng=$(echo -e "$disp_eng" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-            local pad_eng=$(printf '%*s' "$(( 16 - ${#clean_eng} ))" "")
+            local pad_eng=$(printf '%*s' "$(( 24 - ${#clean_eng} ))" "")
 
             local raw_ports="${ip_ports_arr[$d_ip]}"; raw_ports="${raw_ports%, }"
             local display_ports=""
@@ -917,13 +919,13 @@ show_table() {
             display_ports="${display_ports%, }"
             
             local clean_str=$(echo -e "$display_ports" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-            if [ ${#clean_str} -gt 35 ]; then display_ports="${clean_str:0:32}..."; clean_str="$display_ports"; fi
-            local pad=$(printf '%*s' "$((35 - ${#clean_str}))" "")
+            if [ ${#clean_str} -gt 34 ]; then display_ports="${clean_str:0:31}..."; clean_str="$display_ports"; fi
+            local pad=$(printf '%*s' "$((34 - ${#clean_str}))" "")
             
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-15s${NC} ${B}│${NC} %b%s${B}│${NC} ${Y}%s%s${NC} ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-14s${NC} ${B}│${NC} %s%s ${B}│${NC} ${Y}%s%s ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
         done
     fi
-    echo -e "  ${B}╰──────────────┴──────────┴───────────────┴──────────────────┴─────────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴──────────┴────────────────┴──────────────────────────┴────────────────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 

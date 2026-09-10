@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.11 ---
-# [Features: Synced 1.7.8 OTA Engine | Target URL Reveal | Version Preview]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.12 ---
+# [Features: Restored 8.3.4 Pure OTA Logic | Version Preview | Offline Editor]
 
-MODULE_VERSION="8.3.11"
+MODULE_VERSION="8.3.12"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -27,7 +27,7 @@ self_update_module() {
     local cb="?t=$(date +%s)"
     
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (Script Only) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC} ${DIM}(Auto-Proxy Fallback)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
@@ -49,24 +49,35 @@ self_update_module() {
         fi
         dl_success=true
     elif [[ "$src_opt" =~ ^[123]$ ]]; then
-        local dl_url=""
-        case $src_opt in
-            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
-            3) 
-               echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
-               dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
-               [ -z "$dl_url" ] && return
-               ;;
-        esac
-
         echo -e "\n  ${C}⟳${NC} ${W}Downloading MPorter Update...${NC}"
-        echo -e "  ${DIM}Target URL: ${dl_url}${NC}"
         
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+        if [[ "$src_opt" == "1" ]]; then
+            local repo_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path"
+            local gh_proxy="https://ghproxy.net"
+            
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
+                [ "$dl_success" = false ] && curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q --timeout=10 -O "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
+                [ "$dl_success" = false ] && wget -q --timeout=10 -O "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+            fi
+        elif [[ "$src_opt" == "2" ]]; then
+            local dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb"
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            else
+                wget -q --timeout=10 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            fi
+        elif [[ "$src_opt" == "3" ]]; then
+            echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
+            local dl_url=$(echo "$custom_url" | tr -d '\r ' )
+            [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            else
+                wget -q --timeout=10 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            fi
         fi
     else
         return
@@ -99,7 +110,7 @@ self_update_module() {
             rm -f "$tmp_file"; sleep 1.5
         fi
     else
-        echo -e "  ${R}✖ Update failed. File not found or network timeout.${NC}"
+        echo -e "  ${R}✖ Update failed. File not found or invalid format.${NC}"
         rm -f "$tmp_file"
         sleep 3
     fi
@@ -328,11 +339,11 @@ EOF_HAP
                 local G_PROXY="https://ghproxy.net/"
                 local dl_ok=false
                 if command -v curl >/dev/null 2>&1; then
-                    curl -fkSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && curl -fkSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
+                    curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
+                    [ "$dl_ok" = false ] && curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
                 elif command -v wget >/dev/null 2>&1; then
-                    wget -q --no-check-certificate --timeout=15 --tries=2 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && wget -q --no-check-certificate --timeout=15 --tries=2 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
+                    wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
+                    [ "$dl_ok" = false ] && wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
                 fi
                 
                 if [ -s "/tmp/gost.gz" ]; then

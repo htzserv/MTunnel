@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.5 ---
-# [Features: Path Conflict Fixed | Protocol Hot-Swap Fix | Domain Support]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.6 ---
+# [Features: Path Lock | Status Parser Fix | Smart OTA]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -9,7 +9,6 @@ CERT_DIR="/etc/mbackhaul/certs"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-# 1. Block Path Conflicts Automatically
 [ -f "/usr/local/bin/mbackhaul" ] && rm -f "/usr/local/bin/mbackhaul" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
@@ -116,7 +115,8 @@ generate_ssl_cert() {
     if [[ ! -f "$CERT_DIR/wssmux.crt" ]] || [[ ! -f "$CERT_DIR/wssmux.key" ]]; then
         openssl req -x509 -newkey rsa:2048 -keyout "$CERT_DIR/wssmux.key" \
             -out "$CERT_DIR/wssmux.crt" -days 3650 -nodes \
-            -subj "/CN=mdesign-backhaul" >/dev/null 2>&1
+            -subj "/CN=mdesign-backhaul" \
+            -addext "subjectAltName=DNS:mdesign-backhaul,IP:127.0.0.1" >/dev/null 2>&1
     fi
 }
 
@@ -278,9 +278,9 @@ check_bh_connection() {
     if ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$ROLE" == "1" ]; then
-        if ss -nt state established src ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
+        if ss -tn src ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
     else
-        if ss -nt state established dst ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
+        if ss -tn dst ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
     fi
 }
 
@@ -495,7 +495,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -nt state established src ":$tmp_port" 2>/dev/null | awk '{print $5}' | head -n 1)
+                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -521,7 +521,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.5 "
+    local title=" MBackhaul Engine v1.7.6 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -549,7 +549,7 @@ show_tunnel_registry() {
         if [ "$ROLE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
             ping_val=$(get_peer_ping "$REMOTE_IP")
         elif [ "$ROLE" == "1" ]; then
-            local conn=$(ss -nt state established src ":$TUN_PORT" 2>/dev/null | awk '{print $5}' | head -n 1)
+            local conn=$(ss -tn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 ping_val=$(get_peer_ping "$p_ip")

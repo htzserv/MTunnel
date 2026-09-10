@@ -1,13 +1,83 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.1 ---
-# [Features: Visible Secret/Token in Registry | Full Status Scaffolding]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.5 ---
+# [Features: Path Conflict Fixed | Protocol Hot-Swap Fix | Domain Support]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+INSTALL_PATH="/usr/bin/mbackhaul"
 CONF_DIR="/etc/mbackhaul/tunnels"
 CERT_DIR="/etc/mbackhaul/certs"
 LOCAL_DIR="/root/mtunnel"
+SECURE_TMP="$LOCAL_DIR/tmp"
 
-mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" 2>/dev/null
+# 1. Block Path Conflicts Automatically
+[ -f "/usr/local/bin/mbackhaul" ] && rm -f "/usr/local/bin/mbackhaul" 2>/dev/null
+
+mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$SECURE_TMP" 2>/dev/null
+
+if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
+    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
+    chmod +x "$INSTALL_PATH" 2>/dev/null
+fi
+
+is_valid_host() {
+    local host=$1
+    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]]; then return 0; fi
+    return 1
+}
+
+self_update_module() {
+    local rel_path="tunnels/mbackhaul.sh"
+    local cb="?t=$(date +%s)"
+    
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MBackhaul) ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
+    
+    local dl_url=""
+    case $src_opt in
+        1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        3) 
+           echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mbackhaul.sh: ${NC}"; read custom_url
+           dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
+           [ -z "$dl_url" ] && return
+           ;;
+        0|*) return ;;
+    esac
+
+    local tmp_file="$SECURE_TMP/.mbackhaul_update.$$"
+    echo -e "\n  ${C}⟳${NC} ${W}Downloading MBackhaul Update...${NC}"
+
+    local dl_success=false
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    fi
+
+    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
+        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+        chmod +x "$tmp_file"
+        
+        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+        
+        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+        
+        rm -f "$tmp_file"
+        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
+        sleep 1.5
+        exec "$INSTALL_PATH" "$@"
+    else
+        echo -e "  ${R}✖ Update failed. Invalid link or network timeout.${NC}"
+        rm -f "$tmp_file"
+        sleep 2
+    fi
+}
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -53,8 +123,9 @@ generate_ssl_cert() {
 menu_install_core() {
     echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE BACKHAUL CORE ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/bh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/bh)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
@@ -64,44 +135,56 @@ menu_install_core() {
     echo -e "  ${R}● Purging old Backhaul binaries and processes...${NC}"
     systemctl stop mbackhaul@* 2>/dev/null
     killall -9 bh 2>/dev/null
-    rm -f /usr/local/bin/bh /usr/bin/bh /tmp/bh_dl /tmp/backhaul
+    rm -f /usr/local/bin/bh /usr/bin/bh "$SECURE_TMP/bh_dl" "$SECURE_TMP/backhaul" "$SECURE_TMP/bh"
 
-    if [[ "$src_choice" == "1" ]]; then
-        echo -e "  ${DIM}● Downloading latest from GitHub...${NC}"
+    if [[ "$src_choice" == "1" || "$src_choice" == "2" ]]; then
+        echo -e "  ${DIM}● Downloading latest binary...${NC}"
         local arch=$(uname -m)
         local target="backhaul_linux_amd64.tar.gz"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        wget -qO /tmp/bh_dl "https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
-        if [ -s /tmp/bh_dl ]; then
-            tar -xzf /tmp/bh_dl -C /tmp/ >/dev/null 2>&1
-            mv /tmp/backhaul /usr/local/bin/bh 2>/dev/null
-            chmod +x /usr/local/bin/bh
+        
+        local dl_url="https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
+        [ "$src_choice" == "2" ] && dl_url="https://ghproxy.net/${dl_url}"
+
+        local dl_ok=false
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$SECURE_TMP/bh_dl" "$dl_url" 2>/dev/null && dl_ok=true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$SECURE_TMP/bh_dl" "$dl_url" 2>/dev/null && dl_ok=true
+        fi
+
+        if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/bh_dl" ]; then
+            tar -xzf "$SECURE_TMP/bh_dl" -C "$SECURE_TMP/" >/dev/null 2>&1
+            [ -f "$SECURE_TMP/backhaul" ] && mv "$SECURE_TMP/backhaul" /usr/local/bin/bh 2>/dev/null
+            [ -f "$SECURE_TMP/bh" ] && mv "$SECURE_TMP/bh" /usr/local/bin/bh 2>/dev/null
+            chmod +x /usr/local/bin/bh 2>/dev/null || true
             echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
         else
             echo -e "  ${R}✖ Download failed!${NC}"
         fi
 
-    elif [[ "$src_choice" == "2" ]]; then
+    elif [[ "$src_choice" == "3" ]]; then
         echo -ne "  ${C}● Enter Direct Link: ${NC}"; read custom_url
         custom_url=$(echo "$custom_url" | tr -d '\r')
         if [ -n "$custom_url" ]; then
             echo -e "  ${DIM}● Downloading from Custom Link...${NC}"
-            wget -qO /tmp/bh_dl "$custom_url"
-            if [ -s /tmp/bh_dl ]; then
-                if gzip -t /tmp/bh_dl 2>/dev/null; then
-                    tar -xzf /tmp/bh_dl -C /tmp/ >/dev/null 2>&1
-                    mv /tmp/backhaul /usr/local/bin/bh 2>/dev/null || mv /tmp/bh /usr/local/bin/bh 2>/dev/null
+            wget -q --timeout=15 -O "$SECURE_TMP/bh_dl" "$custom_url" 2>/dev/null
+            if [ -s "$SECURE_TMP/bh_dl" ]; then
+                if gzip -t "$SECURE_TMP/bh_dl" 2>/dev/null; then
+                    tar -xzf "$SECURE_TMP/bh_dl" -C "$SECURE_TMP/" >/dev/null 2>&1
+                    [ -f "$SECURE_TMP/backhaul" ] && mv "$SECURE_TMP/backhaul" /usr/local/bin/bh 2>/dev/null
+                    [ -f "$SECURE_TMP/bh" ] && mv "$SECURE_TMP/bh" /usr/local/bin/bh 2>/dev/null
                 else
-                    mv /tmp/bh_dl /usr/local/bin/bh
+                    mv "$SECURE_TMP/bh_dl" /usr/local/bin/bh
                 fi
-                chmod +x /usr/local/bin/bh
+                chmod +x /usr/local/bin/bh 2>/dev/null || true
                 echo -e "  ${G}✔ Backhaul Core installed from custom link.${NC}"
             else
                 echo -e "  ${R}✖ Download failed! Check the link.${NC}"
             fi
         fi
 
-    elif [[ "$src_choice" == "3" ]]; then
+    elif [[ "$src_choice" == "4" ]]; then
         if [ -s "$LOCAL_DIR/packages/bh" ]; then
             cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh
             chmod +x /usr/local/bin/bh
@@ -112,6 +195,7 @@ menu_install_core() {
     fi
 
     [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
+    rm -f "$SECURE_TMP/bh_dl" "$SECURE_TMP/backhaul" "$SECURE_TMP/bh" 2>/dev/null
     systemctl start mbackhaul@* 2>/dev/null
     sleep 2
 }
@@ -121,11 +205,20 @@ install_backhaul_silent() {
         local arch=$(uname -m)
         local target="backhaul_linux_amd64.tar.gz"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="backhaul_linux_arm64.tar.gz"
-        wget -qO /tmp/bh.tar.gz "https://github.com/Musixal/Backhaul/releases/latest/download/${target}" >/dev/null 2>&1
-        if [ -s /tmp/bh.tar.gz ]; then
-            tar -xzf /tmp/bh.tar.gz -C /tmp/ >/dev/null 2>&1
-            mv /tmp/backhaul /usr/local/bin/bh
-            chmod +x /usr/local/bin/bh
+        local dl_url="https://github.com/Musixal/Backhaul/releases/latest/download/${target}"
+        
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/bh.tar.gz" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/bh.tar.gz" "https://ghproxy.net/$dl_url" 2>/dev/null
+        else
+            wget -q --timeout=12 -O "$SECURE_TMP/bh.tar.gz" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/bh.tar.gz" "https://ghproxy.net/$dl_url" 2>/dev/null
+        fi
+
+        if [ -s "$SECURE_TMP/bh.tar.gz" ]; then
+            tar -xzf "$SECURE_TMP/bh.tar.gz" -C "$SECURE_TMP/" >/dev/null 2>&1
+            [ -f "$SECURE_TMP/backhaul" ] && mv "$SECURE_TMP/backhaul" /usr/local/bin/bh 2>/dev/null
+            [ -f "$SECURE_TMP/bh" ] && mv "$SECURE_TMP/bh" /usr/local/bin/bh 2>/dev/null
+            chmod +x /usr/local/bin/bh 2>/dev/null
+            rm -f "$SECURE_TMP/bh.tar.gz"
         fi
     fi
     [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
@@ -150,6 +243,22 @@ clean_bh_counters() {
     iptables -t mangle -S OUTPUT 2>/dev/null | grep "MBH_TX_${name}" | sed 's/^-A /-D /' | while read -r r; do iptables -t mangle $r 2>/dev/null; done
 }
 
+zero_bh_counters() {
+    local name="$1"
+    iptables -Z -t mangle 2>/dev/null || true
+}
+
+# --- RESTORE COUNTERS ON BOOT ---
+if [[ "$1" == "--apply" ]]; then
+    for conf in "$CONF_DIR"/*.meta; do
+        [ -f "$conf" ] || continue
+        t_name=$(basename "$conf" .meta)
+        ROLE=""; TUN_PORT=""; REMOTE_IP=""; source "$conf" 2>/dev/null
+        setup_bh_counters "$t_name" "$TUN_PORT" "$REMOTE_IP" "$ROLE"
+    done
+    exit 0
+fi
+
 get_bh_rx() {
     local rx=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep "MBH_RX_$1" | awk '{sum+=$2} END {print sum}')
     echo "${rx:-0}"
@@ -169,17 +278,22 @@ check_bh_connection() {
     if ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$ROLE" == "1" ]; then
-        if ss -nt state established 2>/dev/null | grep -qE ":$TUN_PORT\b"; then echo "ONLINE"; else echo "WAITING"; fi
+        if ss -nt state established src ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
     else
-        if ss -nt state established 2>/dev/null | grep -qE ":$TUN_PORT\b"; then echo "ONLINE"; else echo "CONNECTING"; fi
+        if ss -nt state established dst ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
     fi
 }
 
 get_peer_ping() {
     local target_ip="$1"
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
-    local ping_val=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
-    if [ -n "$ping_val" ]; then echo "${ping_val}ms"; else echo "Timeout"; fi
+    local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
+    if echo "$ping_res" | grep -q "time="; then
+        local ping_val=$(echo "$ping_res" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+        echo "${ping_val}ms"
+    else
+        echo "Timeout"
+    fi
 }
 
 write_bh_config() {
@@ -315,7 +429,21 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
+    cat <<'EOF' > /etc/systemd/system/mbackhaul-apply.service
+[Unit]
+Description=MBackhaul Boot Restorer
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/mbackhaul --apply
+Type=oneshot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
     systemctl daemon-reload
+    systemctl enable mbackhaul-apply.service >/dev/null 2>&1
 }
 
 draw_header() {
@@ -345,15 +473,14 @@ draw_header() {
         else act_color="${R}"; fi
     fi
 
-    local stat_color="${R}"; local stat_icon="○"; local stat_text="STOPPED  "
-    local stat_raw="STOPPED"
+    local stat_color="${R}"; local stat_icon="○"; local stat_text="STOPPED"
     if [ "$active_t" -gt 0 ]; then
         if [ "$online_t" -eq "$active_t" ]; then 
-            stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"; stat_raw="CONNECTED"
+            stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"
         elif [ "$online_t" -gt 0 ]; then 
-            stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL  "; stat_raw="PARTIAL"
+            stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL"
         else 
-            stat_color="${Y}"; stat_icon="◎"; stat_text="WAITING  "; stat_raw="WAITING"
+            stat_color="${Y}"; stat_icon="◎"; stat_text="WAITING"
         fi
     fi
 
@@ -368,7 +495,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -nt state established 2>/dev/null | awk -v p=":$tmp_port" '$4 ~ p"$" {print $5}' | head -n 1)
+                local conn=$(ss -nt state established src ":$tmp_port" 2>/dev/null | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -379,7 +506,7 @@ draw_header() {
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local gp=$(ping -c 1 -W 1 "$peer_ip" 2>/dev/null | awk -F'/' 'END {print $5}')
+        local gp=$(ping -c 1 -W 1 "$peer_ip" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
         if [ -n "$gp" ]; then
             local p_int=${gp%.*}
             if [ "$p_int" -lt 90 ]; then g_color="${G}"
@@ -394,20 +521,14 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.1 "
-    local ip_lbl=" IP: "
-    local core_lbl=" Core: "
-    local ping_lbl=" Peer Ping: "
-    local act_lbl=" ACTIVE: "
-    local stat_lbl=" STATUS: "
-    
-    local raw_len=$(( ${#title} + 1 + ${#ip_lbl} + ${#s_ip} + 1 + 1 + ${#core_lbl} + ${#core_raw} + 1 + 1 + ${#ping_lbl} + ${#g_text} + 1 + 1 + ${#act_lbl} + ${#act_text} + 1 + 1 + ${#stat_lbl} + 2 + ${#stat_raw} ))
-    local pad_len=$(( 126 - raw_len ))
+    local title=" MBackhaul Engine v1.7.5 "
+    local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
+    local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
 
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${title}${NC}${B}│${NC}${DIM}${ip_lbl}${NC}${W}${s_ip} ${NC}${B}│${NC}${DIM}${core_lbl}${NC}${core_color}${core_raw} ${NC}${B}│${NC}${DIM}${ping_lbl}${NC}${g_color}${g_text} ${NC}${B}│${NC}${DIM}${act_lbl}${NC}${act_color}${act_text} ${NC}${B}│${NC}${DIM}${stat_lbl}${NC}${stat_color}${stat_icon} ${stat_text}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC}${W}${title}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${B}│${NC}${DIM} Core:${NC} ${core_color}${core_raw}${NC} ${B}│${NC}${DIM} Peer Ping:${NC} ${g_color}${g_text}${NC} ${B}│${NC}${DIM} ACTIVE:${NC} ${act_color}${act_text}${NC} ${B}│${NC}${DIM} STATUS:${NC} ${stat_color}${stat_icon} ${stat_text}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -428,7 +549,7 @@ show_tunnel_registry() {
         if [ "$ROLE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
             ping_val=$(get_peer_ping "$REMOTE_IP")
         elif [ "$ROLE" == "1" ]; then
-            local conn=$(ss -nt state established 2>/dev/null | awk -v p=":$TUN_PORT" '$4 ~ p"$" {print $5}' | head -n 1)
+            local conn=$(ss -nt state established src ":$TUN_PORT" 2>/dev/null | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 ping_val=$(get_peer_ping "$p_ip")
@@ -444,6 +565,8 @@ show_tunnel_registry() {
         elif [ "$st" == "CONNECTING" ]; then stat_icon="◎"; stat_text="CONNECTING..."; stat_color="${Y}"; fi
 
         local rx=$(get_bh_rx "$t_name"); local tx=$(get_bh_tx "$t_name")
+        local masked_token="${TOKEN:0:4}********${TOKEN: -4}"
+        [ ${#TOKEN} -le 6 ] && masked_token="********"
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
@@ -455,13 +578,14 @@ show_tunnel_registry() {
         local pad1=$(( 122 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
         echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
         
-        local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_text}"
-        local pad2=$(( 122 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+        local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_icon} ${stat_text}"
+        local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+        local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
 
-        local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: ${TRANSPORT^^}"
+        local l3="Auth Token   : ${masked_token}"; local r3="Protocol: ${TRANSPORT^^}"
         local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}${TRANSPORT^^}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${masked_token}${NC}${sp3}${DIM}Protocol:${NC} ${C}${TRANSPORT^^}${NC} ${B}│${NC}"
 
         local l4="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"
         local pad4=$(( 122 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
@@ -507,9 +631,9 @@ show_live_radar() {
             [ ! -f "$conf" ] && continue
             local t_name=$(basename "$conf" .meta)
             local st=$(check_bh_connection "$t_name")
-            local st_color="${R}"; local st_text="OFFLINE  "
-            if [ "$st" == "ONLINE" ]; then st_color="${G}"; st_text="ONLINE   ";
-            elif [ "$st" == "WAITING" ]; then st_color="${Y}"; st_text="WAITING  ";
+            local st_color="${R}"; local st_text="OFFLINE"
+            if [ "$st" == "ONLINE" ]; then st_color="${G}"; st_text="ONLINE";
+            elif [ "$st" == "WAITING" ]; then st_color="${Y}"; st_text="WAITING";
             elif [ "$st" == "CONNECTING" ]; then st_color="${Y}"; st_text="CONNECTING"; fi
 
             local r_new=$(get_bh_rx "$t_name"); local t_new=$(get_bh_tx "$t_name")
@@ -555,13 +679,15 @@ manage_cron() {
         echo "systemctl restart mbackhaul@${t_name}" >> "$cron_script"
         chmod +x "$cron_script"
         
-        crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > /tmp/crontab.tmp
-        echo "0 */${interval} * * * $cron_script #mbackhaul@${t_name}" >> /tmp/crontab.tmp
-        crontab /tmp/crontab.tmp; rm -f /tmp/crontab.tmp
+        local cron_tmp="$SECURE_TMP/crontab.$$"
+        crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
+        echo "0 */${interval} * * * $cron_script #mbackhaul@${t_name}" >> "$cron_tmp"
+        crontab "$cron_tmp"; rm -f "$cron_tmp"
         echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
     elif [[ "$cr_opt" == "2" ]]; then
-        crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > /tmp/crontab.tmp
-        crontab /tmp/crontab.tmp; rm -f /tmp/crontab.tmp
+        local cron_tmp="$SECURE_TMP/crontab.$$"
+        crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
+        crontab "$cron_tmp"; rm -f "$cron_tmp"
         rm -f "$cron_script"
         echo -e "  ${G}✔ Cronjob removed.${NC}"; sleep 1.5
     fi
@@ -590,19 +716,29 @@ apply_bbr_optimization
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC}  ${DIM}❯${NC} ${G}Deploy New Backhaul Tunnel${NC} ${DIM}(TCP / MUX / WSS)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC}  ${DIM}❯${NC} ${C}Live Traffic & Bandwidth Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC}  ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC}  ${DIM}❯${NC} ${C}Edit Remote IP Address${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC}  ${DIM}❯${NC} ${G}Edit Port Mappings (Iran Server)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC}  ${DIM}❯${NC} ${M}Change Transport Protocol (Hot-Swap)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC}  ${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC}  ${DIM}❯${NC} ${W}View Live Service Logs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC}  ${DIM}❯${NC} ${G}Restart Service${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC} ${DIM}❯${NC} ${M}Install / Update Backhaul Core${NC}"
-    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC}  ${DIM}❯${NC} ${DIM}Exit${NC}\n"
+    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Deploy New Backhaul Tunnel${NC} ${DIM}(TCP / MUX / WSS)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC} ${DIM}(Specific / ALL)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Edit Remote Host / IP Address${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit Port Mappings${NC} ${DIM}(Iran Server)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Change Transport Protocol${NC} ${DIM}(Hot-Swap)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Live Traffic & Bandwidth Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    
     echo -ne "  ${C}MBACKHAUL ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r')
     
@@ -616,31 +752,38 @@ while true; do
            done
            [[ "$s_type" == "q" ]] && continue
            
-           echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
-           echo -ne "  ${C}● Transport Protocol [1-4]: ${NC}"; read tr_choice
-           tr_choice=$(echo "$tr_choice" | tr -d '\r')
+           while true; do
+               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
+               echo -ne "  ${C}● Transport Protocol [1-4]: ${NC}"; read tr_choice
+               tr_choice=$(echo "$tr_choice" | tr -d '\r')
+               [[ "$tr_choice" =~ ^[1-4]$ ]] && break
+           done
            
            tr_val="tcp"
            case $tr_choice in 1) tr_val="tcp" ;; 2) tr_val="tcpmux" ;; 3) tr_val="wsmux" ;; 4) tr_val="wssmux" ;; esac
            
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. bh1): ${NC}"; read suffix
-           suffix=$(echo "$suffix" | tr -d '\r')
+           suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            t_name="bh_${suffix}"
            
            def_p=8443; [ "$tr_val" == "tcpmux" ] && def_p=9443; [ "$tr_val" == "wssmux" ] && def_p=9743
            echo -ne "  ${C}● Tunnel Link Port [Default ${def_p}]: ${NC}"; read t_port
-           t_port=$(echo "$t_port" | tr -d '\r')
+           t_port=$(echo "$t_port" | tr -dc '0-9')
            t_port=${t_port:-$def_p}
            
            r_ip="0.0.0.0"
            if [ "$s_type" == "2" ]; then
-               echo -ne "  ${C}● Iran Server Public IP: ${NC}"; read r_ip
-               r_ip=$(echo "$r_ip" | tr -d '\r')
+               while true; do
+                   echo -ne "  ${C}● Iran Server Host/IP: ${NC}"; read r_ip
+                   r_ip=$(echo "$r_ip" | tr -d '\r')
+                   is_valid_host "$r_ip" && break
+                   echo -e "  ${R}Error: Invalid Host or IP format!${NC}"
+               done
            fi
            
            gen_tok=$(head -c 8 /dev/urandom | xxd -p)
            echo -ne "  ${C}● Auth Token [Default ${gen_tok}]: ${NC}"; read u_tok
-           u_tok=$(echo "$u_tok" | tr -d '\r')
+           u_tok=$(echo "$u_tok" | tr -dc 'a-zA-Z0-9_-')
            tok=${u_tok:-$gen_tok}
            
            fwd_ports=""
@@ -661,57 +804,7 @@ while true; do
            systemctl restart "mbackhaul@${t_name}"
            echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"; sleep 2 ;;
            
-        2) show_live_radar ;;
-        3) show_tunnel_registry ;;
-        
-        4|5|6|7|8|9)
-           select_tunnel || continue
-           t_name=$(basename "$SELECTED_TUN" .meta)
-           ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$SELECTED_TUN" 2>/dev/null
-           
-           if [[ "$opt" == "4" ]]; then
-               echo -ne "  ${C}●${NC} ${W}New Remote IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip
-               n_ip=$(echo "$n_ip" | tr -d '\r')
-               [ -n "$n_ip" ] && {
-                   clean_bh_counters "$t_name"
-                   REMOTE_IP="$n_ip"
-               }
-               
-           elif [[ "$opt" == "5" ]]; then
-               if [ "$ROLE" == "1" ]; then
-                   echo -ne "  ${C}●${NC} ${W}New Port Mappings (e.g. 443=127.0.0.1:443) [Current: ${PORTS:-None}]: ${NC}"; read n_ports
-                   n_ports=$(echo "$n_ports" | tr -d '\r')
-                   [ -n "$n_ports" ] && PORTS="$n_ports"
-               else
-                   echo -e "  ${Y}● Client role doesn't use port mappings.${NC}"; sleep 1.5; continue
-               fi
-               
-           elif [[ "$opt" == "6" ]]; then
-               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
-               echo -ne "  ${C}● Select New Transport [1-4]: ${NC}"; read tr_choice
-               tr_choice=$(echo "$tr_choice" | tr -d '\r')
-               case $tr_choice in 
-                   1) TRANSPORT="tcp" ;; 2) TRANSPORT="tcpmux" ;; 3) TRANSPORT="wsmux" ;; 4) TRANSPORT="wssmux" ;; 
-                   *) continue ;; 
-               esac
-               clean_bh_counters "$t_name"
-               
-           elif [[ "$opt" == "7" ]]; then
-               manage_cron "$t_name"; continue
-               
-           elif [[ "$opt" == "8" ]]; then
-               journalctl -u mbackhaul@$t_name -n 50 -f; continue
-               
-           elif [[ "$opt" == "9" ]]; then
-               true # Proceed to write and restart
-           fi
-           
-           write_bh_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS"
-           systemctl restart mbackhaul@$t_name
-           echo -e "  ${G}✔ Tunnel updated and applied.${NC}"; sleep 1.5
-           ;;
-           
-        10)
+        2)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && continue
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ─────────────────╮${NC}"
@@ -724,7 +817,9 @@ while true; do
                    t_name=$(basename "$conf" .meta)
                    systemctl stop mbackhaul@$t_name 2>/dev/null; systemctl disable mbackhaul@$t_name 2>/dev/null
                    clean_bh_counters "$t_name"
-                   crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" | crontab -
+                   local cron_tmp="$SECURE_TMP/crontab.$$"
+                   crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
+                   crontab "$cron_tmp"; rm -f "$cron_tmp"
                    rm -f "$conf" "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${t_name}_restart.sh"
                done
                echo -e "  ${G}All Tunnels Purged!${NC}"; sleep 1.5
@@ -732,12 +827,112 @@ while true; do
                t_name=$(basename "${configs[$del_idx]}" .meta)
                systemctl stop mbackhaul@$t_name 2>/dev/null; systemctl disable mbackhaul@$t_name 2>/dev/null
                clean_bh_counters "$t_name"
-               crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" | crontab -
+               local cron_tmp="$SECURE_TMP/crontab.$$"
+               crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
+               crontab "$cron_tmp"; rm -f "$cron_tmp"
                rm -f "${configs[$del_idx]}" "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${t_name}_restart.sh"
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
            
-        11) menu_install_core ;;
+        3|4|5|6|10|11)
+           select_tunnel || continue
+           t_name=$(basename "$SELECTED_TUN" .meta)
+           ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; source "$SELECTED_TUN" 2>/dev/null
+           
+           if [[ "$opt" == "3" ]]; then
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip
+                   n_ip=$(echo "$n_ip" | tr -d '\r')
+                   [ -z "$n_ip" ] && break
+                   is_valid_host "$n_ip" && {
+                       clean_bh_counters "$t_name"
+                       REMOTE_IP="$n_ip"
+                       break
+                   }
+                   echo -e "  ${R}Error: Invalid Host or IP format!${NC}"
+               done
+               
+           elif [[ "$opt" == "4" ]]; then
+               if [ "$ROLE" == "1" ]; then
+                   echo -ne "  ${C}●${NC} ${W}New Port Mappings (e.g. 443=127.0.0.1:443) [Current: ${PORTS:-None}]: ${NC}"; read n_ports
+                   n_ports=$(echo "$n_ports" | tr -d '\r')
+                   [ -n "$n_ports" ] && PORTS="$n_ports"
+               else
+                   echo -e "  ${Y}● Client role doesn't use port mappings.${NC}"; sleep 1.5; continue
+               fi
+               
+           elif [[ "$opt" == "5" ]]; then
+               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
+               while true; do
+                   echo -ne "  ${C}● Select New Transport [1-4]: ${NC}"; read tr_choice
+                   tr_choice=$(echo "$tr_choice" | tr -d '\r')
+                   [[ "$tr_choice" =~ ^[1-4]$ ]] && break
+                   echo -e "  ${R}Invalid option. Please choose 1 to 4.${NC}"
+               done
+               
+               if [ "$tr_choice" == "1" ]; then TRANSPORT="tcp"
+               elif [ "$tr_choice" == "2" ]; then TRANSPORT="tcpmux"
+               elif [ "$tr_choice" == "3" ]; then TRANSPORT="wsmux"
+               elif [ "$tr_choice" == "4" ]; then TRANSPORT="wssmux"; fi
+               
+               echo -e "  ${Y}⚠ Target protocol changed to ${TRANSPORT^^}. Make sure to update the peer!${NC}"
+               clean_bh_counters "$t_name"
+               
+           elif [[ "$opt" == "6" ]]; then
+               echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix Name (Current: ${Y}${t_name#bh_}${W}): ${NC}"; read new_suffix
+               new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
+               if [ -n "$new_suffix" ]; then
+                   local new_t_name="bh_${new_suffix}"
+                   if [ -f "$CONF_DIR/${new_t_name}.meta" ]; then
+                       echo -e "  ${R}● Error: Tunnel name [${new_t_name}] already exists!${NC}"; sleep 1.5; continue
+                   fi
+                   
+                   systemctl stop mbackhaul@$t_name 2>/dev/null; systemctl disable mbackhaul@$t_name 2>/dev/null
+                   clean_bh_counters "$t_name"
+                   
+                   if crontab -l 2>/dev/null | grep -q "mbackhaul@${t_name}"; then
+                       local cron_tmp="$SECURE_TMP/crontab.$$"
+                       crontab -l | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
+                       crontab "$cron_tmp"; rm -f "$cron_tmp"
+                       rm -f "$CONF_DIR/${t_name}_restart.sh"
+                   fi
+
+                   mv "$CONF_DIR/${t_name}.meta" "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
+                   mv "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${new_t_name}.toml" 2>/dev/null
+                   
+                   t_name="$new_t_name"
+                   systemctl enable mbackhaul@$t_name >/dev/null 2>&1
+                   echo -e "  ${G}● Tunnel successfully renamed to: ${new_t_name}${NC}"
+               else
+                   continue
+               fi
+               
+           elif [[ "$opt" == "10" ]]; then
+               manage_cron "$t_name"; continue
+               
+           elif [[ "$opt" == "11" ]]; then
+               zero_bh_counters "$t_name" # Reset traffic memory on restart
+           fi
+           
+           write_bh_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS"
+           systemctl restart mbackhaul@$t_name
+           if systemctl is-active --quiet mbackhaul@$t_name; then
+               echo -e "  ${G}✔ Tunnel updated and service restarted successfully.${NC}"; sleep 1.5
+           else
+               echo -e "  ${R}✖ Tunnel failed to start. Please check logs!${NC}"; sleep 2
+           fi
+           ;;
+           
+        7) show_live_radar ;;
+        8) show_tunnel_registry ;;
+        9) 
+           select_tunnel || continue
+           t_name=$(basename "$SELECTED_TUN" .meta)
+           journalctl -u mbackhaul@$t_name -n 50 -f; continue
+           ;;
+           
+        12) menu_install_core ;;
+        13) self_update_module ;;
         0) break ;;
     esac
 done

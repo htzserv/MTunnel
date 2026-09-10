@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.8 ---
-# [Features: Dual-Path Scanner | Fixed Menu Order | 60s Proxy Timeout]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.9 ---
+# [Features: Pure Raw URLs (No Query Params) | Header Cache Busting | Scaffolded UI]
 
-MODULE_VERSION="8.3.8"
+MODULE_VERSION="8.3.9"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -23,8 +23,6 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
 fi
 
 self_update_module() {
-    local cb="?t=$(date +%s)"
-
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (Script Only) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC} ${DIM}(Multi-Mirror Fallback)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
@@ -47,62 +45,53 @@ self_update_module() {
         fi
     elif [[ "$src_opt" =~ ^[123]$ ]]; then
         local dl_success=false
-        echo -e "\n  ${C}⟳${NC} ${W}Scanning Paths & Downloading Update...${NC}"
+        echo -e "\n  ${C}⟳${NC} ${W}Connecting & Downloading Update...${NC}"
         
         if [[ "$src_opt" == "1" ]]; then
+            local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh"
             local mirrors=(
-                "https://raw.githubusercontent.com/htzserv/MTunnel/main"
-                "https://mirror.ghproxy.com/https://raw.githubusercontent.com/htzserv/MTunnel/main"
-                "https://ghp.ci/https://raw.githubusercontent.com/htzserv/MTunnel/main"
-                "https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main"
+                "$raw_url"
+                "https://mirror.ghproxy.com/$raw_url"
+                "https://ghp.ci/$raw_url"
+                "https://ghproxy.net/$raw_url"
             )
-            local paths=("/mporter.sh" "/tunnels/mporter.sh")
             
-            for p in "${paths[@]}"; do
-                for m in "${mirrors[@]}"; do
-                    local test_url="${m}${p}${cb}"
-                    echo -e "  ${DIM}● Testing:${NC} ${test_url:0:45}..."
-                    if command -v curl >/dev/null 2>&1; then
-                        curl -kSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$test_url" 2>/dev/null
-                    else
-                        wget -q --no-check-certificate --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
-                    fi
-                    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; break 2; fi
-                done
+            for test_url in "${mirrors[@]}"; do
+                echo -e "  ${DIM}● Testing:${NC} ${test_url:0:55}..."
+                if command -v curl >/dev/null 2>&1; then
+                    curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 -o "$tmp_file" "$test_url" 2>/dev/null
+                else
+                    wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
+                fi
+                if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; break; fi
             done
 
         elif [[ "$src_opt" == "2" ]]; then
-            local mirrors=("https://c107328.parspack.net/c107328/MTunnel")
-            local paths=("/mporter.sh" "/tunnels/mporter.sh")
-            
-            for p in "${paths[@]}"; do
-                for m in "${mirrors[@]}"; do
-                    local test_url="${m}${p}${cb}"
-                    echo -e "  ${DIM}● Testing:${NC} ${test_url:0:45}..."
-                    if command -v curl >/dev/null 2>&1; then
-                        curl -kSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$test_url" 2>/dev/null
-                    else
-                        wget -q --no-check-certificate --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
-                    fi
-                    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; break 2; fi
-                done
-            done
+            local test_url="https://c107328.parspack.net/c107328/MTunnel/mporter.sh"
+            echo -e "  ${DIM}● Testing:${NC} $test_url..."
+            if command -v curl >/dev/null 2>&1; then
+                curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 -o "$tmp_file" "$test_url" 2>/dev/null
+            else
+                wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
+            fi
+            if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; fi
 
         elif [[ "$src_opt" == "3" ]]; then
             echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
-            local dl_url=$(echo "$custom_url" | tr -d '\r ')
-            [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+            local test_url=$(echo "$custom_url" | tr -d '\r ')
+            [ -z "$test_url" ] && rm -f "$tmp_file" && return
             
             echo -e "  ${DIM}● Fetching custom link...${NC}"
             if command -v curl >/dev/null 2>&1; then
-                curl -kSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+                curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 -o "$tmp_file" "$test_url" 2>/dev/null
             else
-                wget -q --no-check-certificate --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+                wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
             fi
+            if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; fi
         fi
 
         if [ "$dl_success" != true ]; then
-            echo -e "  ${R}✖ Update failed. File not found in root/tunnels or mirrors are unreachable.${NC}"
+            echo -e "  ${R}✖ Update failed. Mirrors unreachable or proxy blocked the file.${NC}"
             rm -f "$tmp_file"; sleep 2; return
         fi
     else
@@ -152,7 +141,7 @@ get_local_ip() {
 
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=28; local progress=0
-    local ticks=0; local max_ticks=480 # 120 seconds Max Timeout
+    local ticks=0; local max_ticks=480
     tput civis 2>/dev/null || true
     
     while kill -0 "$pid" 2>/dev/null; do

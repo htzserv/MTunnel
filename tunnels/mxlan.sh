@@ -1,6 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.4 ---
-# [Features: ParsPack Mirror OTA | Stable UI Updates]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.5 ---
+# [Features: Version Preview | Offline Editor | Scaffolded UI]
+
+MODULE_VERSION="1.5.5"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -34,46 +36,69 @@ self_update_module() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
     
-    local dl_url=""
-    case $src_opt in
-        1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-        2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
-        3) 
-           echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mxlan.sh: ${NC}"; read custom_url
-           dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
-           [ -z "$dl_url" ] && return
-           ;;
-        0|*) return ;;
-    esac
-
     local tmp_file="$SECURE_TMP/.mxlan_update.$$"
-    echo -e "\n  ${C}⟳${NC} ${W}Downloading MXLAN Update...${NC}"
+    > "$tmp_file"
 
-    local dl_success=false
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    if [[ "$src_opt" == "4" ]]; then
+        if command -v nano >/dev/null 2>&1; then
+            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
+            sleep 2; nano "$tmp_file"
+        elif command -v vi >/dev/null 2>&1; then
+            vi "$tmp_file"
+        else
+            echo -e "  ${R}✖ No text editor (nano/vi) found on this system!${NC}"; rm -f "$tmp_file"; sleep 2; return
+        fi
+    elif [[ "$src_opt" =~ ^[123]$ ]]; then
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url; dl_url=$(echo "$custom_url" | tr -d '\r ') ;;
+        esac
+        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
+        fi
+    else
+        rm -f "$tmp_file"
+        return
     fi
 
-    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
-        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
-        chmod +x "$tmp_file"
+    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
+        local new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
+        [ -z "$new_ver" ] && new_ver="Unknown"
         
-        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
-        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
         
-        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
-        
-        rm -f "$tmp_file"
-        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
-        sleep 1.5
-        exec "$INSTALL_PATH" "$@"
+        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
+            sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+            chmod +x "$tmp_file"
+            
+            cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+            [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            
+            rm -f "$tmp_file"
+            echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+            sleep 1.5
+            exec "$INSTALL_PATH" "$@"
+        else
+            echo -e "  ${Y}● Update cancelled by user.${NC}"
+            rm -f "$tmp_file"; sleep 1.5
+        fi
     else
-        echo -e "  ${R}✖ Update failed. Invalid link or network timeout.${NC}"
+        echo -e "  ${R}✖ Update failed. Invalid format or network timeout.${NC}"
         rm -f "$tmp_file"
         sleep 2
     fi
@@ -219,7 +244,7 @@ draw_mxlan_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MXLAN Layer-2 Edge 1.5.4 "
+    local str1=" MXLAN Layer-2 Edge v${MODULE_VERSION} "
     local str2=" IP: $s_ip "
     local str3=" FABRICS: $active_fabrics "
     local str4=" V-IPS: $total_vips "

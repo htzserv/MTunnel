@@ -1,12 +1,77 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.3 ---
-# [Features: Rename Interface | Bulletproof Ping Tracker | Dual-Line UI Layout]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.4 ---
+# [Features: Secure Path Lock | Smart OTA Updater | Dynamic Padding Fix]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+INSTALL_PATH="/usr/bin/mgre"
 CONF_DIR="/etc/mgre/tunnels"
 SERVICE_FILE="/etc/systemd/system/mgre.service"
+LOCAL_DIR="/root/mtunnel"
+SECURE_TMP="$LOCAL_DIR/tmp"
 
-mkdir -p "$CONF_DIR"
+# 1. Block Path Conflicts Automatically
+[ -f "/usr/local/bin/mgre" ] && rm -f "/usr/local/bin/mgre" 2>/dev/null
+
+mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$SECURE_TMP" 2>/dev/null
+
+if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
+    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
+    chmod +x "$INSTALL_PATH" 2>/dev/null
+fi
+
+self_update_module() {
+    local rel_path="tunnels/mgre.sh"
+    local cb="?t=$(date +%s)"
+    
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MGRE Engine) ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
+    
+    local dl_url=""
+    case $src_opt in
+        1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        3) 
+           echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mgre.sh: ${NC}"; read custom_url
+           dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
+           [ -z "$dl_url" ] && return
+           ;;
+        0|*) return ;;
+    esac
+
+    local tmp_file="$SECURE_TMP/.mgre_update.$$"
+    echo -e "\n  ${C}⟳${NC} ${W}Downloading MGRE Update...${NC}"
+
+    local dl_success=false
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    fi
+
+    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
+        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+        chmod +x "$tmp_file"
+        
+        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+        
+        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+        
+        rm -f "$tmp_file"
+        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
+        sleep 1.5
+        exec "$INSTALL_PATH" "$@"
+    else
+        echo -e "  ${R}✖ Update failed. Invalid link or network timeout.${NC}"
+        rm -f "$tmp_file"
+        sleep 2
+    fi
+}
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -137,7 +202,7 @@ apply_all_tunnels() {
 draw_mgre_header() {
     local s_ip=$(get_local_ip); local active_tunnels=0; local total_vips=0
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
+        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
         if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" != "down" ]; then ((active_tunnels++)); fi
         total_vips=$((total_vips + MAX_IPS))
     done
@@ -147,7 +212,7 @@ draw_mgre_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MDesign Core 5.4.3 "
+    local str1=" MDesign Core 5.4.4 "
     local str2=" IP: $s_ip "
     local str3=" TUNNELS: $active_tunnels "
     local str4=" V-IPS: $total_vips "
@@ -166,7 +231,7 @@ draw_mgre_header() {
 show_mgre_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
+        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
         mapfile -t v_ips < <(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
         local title_color="${C}"; local proto_lbl="IPv4"
         [[ "$TUN_PROTO" == "6to4" ]] && { title_color="${M}"; proto_lbl="IP6GRE"; }
@@ -229,7 +294,7 @@ show_tunnel_details() {
 
     echo -e "\n  ${Y}● Deployed Tunnels Registry:${NC}"
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
         local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
@@ -296,7 +361,7 @@ edit_tunnel() {
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
-        local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf"
+        local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
         
         echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${T_NAME}${DIM} ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
@@ -411,7 +476,7 @@ if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
     draw_mgre_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (IPs / NetID / Subnet / NAT)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Tunnel Configurations & Details${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (IPs / NetID / Subnet / NAT)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Tunnel Configurations & Details${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
@@ -564,7 +629,7 @@ while true; do
            while true; do echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx; [[ "$t_idx" == "q" ]] && break 2; [[ -n "$t_idx" ]] && break; done
            
            if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf"
+               sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
                echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
                while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
                [[ "$vip_action" == "q" ]] && continue
@@ -574,6 +639,7 @@ while true; do
                    while true; do 
                        echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; [[ "$k" == "q" ]] && break; 
                        k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break; 
+                       echo -e "  ${R}Error: Only alphanumeric characters allowed!${NC}"
                    done
                    [[ "$k" == "q" ]] && continue
                    sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
@@ -596,7 +662,7 @@ while true; do
                echo -ne "  ${R}● DANGER: Delete ALL tunnels? (y/n): ${NC}"; read confirm_all
                if [[ "$confirm_all" == "y" ]]; then
                    for conf in "${configs[@]}"; do
-                       TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
+                       TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
                        clean_fwd_rules "$T_NAME"; ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1; rm -f "$conf"
                    done
                    [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
@@ -604,11 +670,11 @@ while true; do
                fi; continue
            fi
            if [[ -n "${configs[$del_idx]}" ]]; then
-               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "${configs[$del_idx]}"
+               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "${configs[$del_idx]}" 2>/dev/null
                clean_fwd_rules "$T_NAME"; ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1; rm -f "${configs[$del_idx]}"
                [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
                echo -e "  ${G}● Tunnel [${T_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
-        5) edit_tunnel ;; 6) show_tunnel_details ;; 0) break ;;
+        5) edit_tunnel ;; 6) show_tunnel_details ;; 7) self_update_module ;; 0) break ;;
     esac
 done

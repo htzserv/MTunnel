@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.10 ---
-# [Features: Full ParsPack Mirror (Scripts & Cores) | Active Peer Display]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.11 ---
+# [Features: 3-Layer Ping System | Cleartext Token | ParsPack Mirror OTA]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -548,7 +548,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.10 "
+    local title=" MBackhaul Engine v1.7.11 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0

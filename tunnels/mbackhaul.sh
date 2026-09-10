@@ -1,6 +1,8 @@
 #!/bin/bash
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.15 ---
-# [Features: 1.7.8 Native ss Parsing Restored | TCP Ping Fallback | ParsPack OTA]
+# [Features: Version Preview (OTA/Offline) | 1.7.8 RTT Kernel Extraction]
+
+MODULE_VERSION="1.7.15"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -33,46 +35,70 @@ self_update_module() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
     
-    local dl_url=""
-    case $src_opt in
-        1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-        2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
-        3) 
-           echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mbackhaul.sh: ${NC}"; read custom_url
-           dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
-           [ -z "$dl_url" ] && return
-           ;;
-        0|*) return ;;
-    esac
-
     local tmp_file="$SECURE_TMP/.mbackhaul_update.$$"
-    echo -e "\n  ${C}⟳${NC} ${W}Downloading MBackhaul Update...${NC}"
+    > "$tmp_file"
 
-    local dl_success=false
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    if [[ "$src_opt" == "4" ]]; then
+        if command -v nano >/dev/null 2>&1; then
+            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
+            sleep 2; nano "$tmp_file"
+        elif command -v vi >/dev/null 2>&1; then
+            vi "$tmp_file"
+        else
+            echo -e "  ${R}✖ No text editor (nano/vi) found on this system!${NC}"; rm -f "$tmp_file"; sleep 2; return
+        fi
+    elif [[ "$src_opt" =~ ^[123]$ ]]; then
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read dl_url; dl_url=$(echo "$dl_url" | tr -d '\r ' ) ;;
+        esac
+        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+        
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+        else
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
+        fi
+    else
+        rm -f "$tmp_file"
+        return
     fi
 
-    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
-        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
-        chmod +x "$tmp_file"
+    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
+        # Extract Version from the new file
+        local new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
+        [ -z "$new_ver" ] && new_ver="Unknown"
         
-        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
-        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
         
-        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
-        
-        rm -f "$tmp_file"
-        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
-        sleep 1.5
-        exec "$INSTALL_PATH" "$@"
+        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
+            sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+            chmod +x "$tmp_file"
+            
+            cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+            [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            
+            rm -f "$tmp_file"
+            echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+            sleep 1.5
+            exec "$INSTALL_PATH" "$@"
+        else
+            echo -e "  ${Y}● Update cancelled by user.${NC}"
+            rm -f "$tmp_file"; sleep 1.5
+        fi
     else
-        echo -e "  ${R}✖ Update failed. Invalid link or network timeout.${NC}"
+        echo -e "  ${R}✖ Update failed. Invalid format or network timeout.${NC}"
         rm -f "$tmp_file"
         sleep 2
     fi
@@ -278,9 +304,9 @@ check_bh_connection() {
     if ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$ROLE" == "1" ]; then
-        if ss -tn src ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
+        if ss -nt state established src ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
     else
-        if ss -tn dst ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
+        if ss -nt state established dst ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
     fi
 }
 
@@ -289,6 +315,7 @@ get_peer_ping() {
     local port=$(echo "$2" | tr -d ' \n\r')
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
     
+    # 1. Native ICMP Ping
     local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
         local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
@@ -296,8 +323,9 @@ get_peer_ping() {
         return
     fi
     
+    # 2. Kernel Socket Extraction (ss) fallback
     if command -v ss >/dev/null 2>&1; then
-        local tcp_rtt=$(ss -nti 2>/dev/null | grep -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
+        local tcp_rtt=$(ss -nti | grep -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
         if [ -n "$tcp_rtt" ]; then
             local rounded_rtt=$(echo "$tcp_rtt" | awk '{print int($1+0.5)}')
             echo "${rounded_rtt}ms*"
@@ -305,6 +333,7 @@ get_peer_ping() {
         fi
     fi
 
+    # 3. Bash TCP Ping (Ultimate Fallback)
     if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
         local start_ts=$(date +%s%3N 2>/dev/null)
         if timeout 1 bash -c "</dev/tcp/$target_ip/$port" 2>/dev/null; then
@@ -521,7 +550,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+                local conn=$(ss -nt state established src ":$tmp_port" 2>/dev/null | grep "ESTAB" | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -548,7 +577,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.15 "
+    local title=" MBackhaul Engine v${MODULE_VERSION} "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -577,7 +606,7 @@ show_tunnel_registry() {
             ping_val=$(get_peer_ping "$REMOTE_IP" "$TUN_PORT")
             connected_peer="$REMOTE_IP"
         elif [ "$ROLE" == "1" ]; then
-            local conn=$(ss -tn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+            local conn=$(ss -nt state established src ":$TUN_PORT" 2>/dev/null | grep "ESTAB" | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 ping_val=$(get_peer_ping "$p_ip" "$TUN_PORT")

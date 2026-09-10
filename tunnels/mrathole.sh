@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.5 ---
-# [Features: Full ParsPack Mirror (Scripts & Cores) | Active Peer Display]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.8 ---
+# [Features: 1.7.8 RTT Kernel Extraction (*) Restored | Connection Drop Fixed]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -287,9 +287,9 @@ get_tunnel_status() {
     if ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
     
     if [ "$TYPE" == "1" ]; then
-        if ss -tn src ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "WAITING"; fi
+        if ss -nt state established src ":$LINK_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "CONNECTED"; else echo "WAITING"; fi
     else
-        if ss -tn dst ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "RECONNECTING"; fi
+        if ss -nt state established dst ":$LINK_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "CONNECTED"; else echo "RECONNECTING"; fi
     fi
 }
 
@@ -300,7 +300,7 @@ get_peer_ping() {
     
     local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
-        local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
+        local ping_val=$(echo "$ping_res" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
         echo "${ping_val}ms"
         return
     fi
@@ -380,7 +380,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_type" == "1" ]; then
-                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+                local conn=$(ss -nt state established src ":$tmp_port" 2>/dev/null | grep "ESTAB" | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -407,7 +407,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MRathole Engine v2.9.5 "
+    local title=" MRathole Engine v2.9.8 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -436,7 +436,7 @@ show_tunnel_registry() {
             ping_val=$(get_peer_ping "$REMOTE_IP" "$LINK_PORT")
             connected_peer="$REMOTE_IP"
         elif [ "$TYPE" == "1" ]; then
-            local conn=$(ss -tn src ":$LINK_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+            local conn=$(ss -nt state established src ":$LINK_PORT" 2>/dev/null | grep "ESTAB" | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 ping_val=$(get_peer_ping "$p_ip" "$LINK_PORT")

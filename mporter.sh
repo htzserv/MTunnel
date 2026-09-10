@@ -1,6 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.4 ---
-# [Features: Anti-Hang Kill-Switch | Timeout Wrapped APT & Curl | OTA Updater]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.5 ---
+# [Features: Version Preview | Offline Editor | ParsPack OTA | Anti-Hang]
+
+MODULE_VERSION="8.3.5"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -21,40 +23,76 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
 fi
 
 self_update_module() {
-    local s_name="mporter"
     local rel_path="mporter.sh"
-    local repo_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path"
-    local gh_proxy="https://ghproxy.net"
-    local tmp_file="/tmp/.${s_name}_update.$$"
     local cb="?t=$(date +%s)"
 
-    clear; echo -e "\n  ${C}⟳${NC} ${W}Checking for ${Y}MPorter${W} updates...${NC}"
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MPorter Engine) ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
 
-    local dl_success=false
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
-        [ "$dl_success" = false ] && curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --timeout=10 -O "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
-        [ "$dl_success" = false ] && wget -q --timeout=10 -O "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
+    local tmp_file="$SECURE_TMP/.mporter_update.$$"
+    > "$tmp_file"
+
+    if [[ "$src_opt" == "4" ]]; then
+        if command -v nano >/dev/null 2>&1; then
+            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
+            sleep 2; nano "$tmp_file"
+        elif command -v vi >/dev/null 2>&1; then
+            vi "$tmp_file"
+        else
+            echo -e "  ${R}✖ No text editor (nano/vi) found on this system!${NC}"; rm -f "$tmp_file"; sleep 2; return
+        fi
+    elif [[ "$src_opt" =~ ^[123]$ ]]; then
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url; dl_url=$(echo "$custom_url" | tr -d '\r ') ;;
+        esac
+        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
+        fi
+    else
+        rm -f "$tmp_file"
+        return
     fi
 
-    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
-        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
-        chmod +x "$tmp_file"
-        
-        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
-        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
-        
-        mkdir -p "$LOCAL_DIR" 2>/dev/null
-        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
-        
-        rm -f "$tmp_file"
-        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
-        sleep 1.5
-        exec "$INSTALL_PATH" "$@"
+    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
+        local new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
+        [ -z "$new_ver" ] && new_ver="Unknown"
+
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
+
+        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
+            sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+            chmod +x "$tmp_file"
+
+            cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+            [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+
+            rm -f "$tmp_file"
+            echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+            sleep 1.5
+            exec "$INSTALL_PATH" "$@"
+        else
+            echo -e "  ${Y}● Update cancelled by user.${NC}"
+            rm -f "$tmp_file"; sleep 1.5
+        fi
     else
-        echo -e "  ${R}✖ Update failed. Network or GitHub timeout.${NC}"
+        echo -e "  ${R}✖ Update failed. Invalid format or network timeout.${NC}"
         rm -f "$tmp_file"
         sleep 2
     fi
@@ -66,10 +104,9 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-# --- BULLETPROOF PROGRESS BAR ---
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=28; local progress=0
-    local ticks=0; local max_ticks=480 # 480 * 0.25s = 120 seconds Max Timeout
+    local ticks=0; local max_ticks=480
     tput civis 2>/dev/null || true
     
     while kill -0 "$pid" 2>/dev/null; do
@@ -233,7 +270,6 @@ install_core_engines() {
     
     echo -e "\n  ${DIM}┌─[ INITIALIZING INSTALLATION ]${NC}"
     
-    # [FIXED: Added timeout wrappers to prevent infinite APT hangs]
     (
         sysctl -w fs.file-max=2000000 >/dev/null 2>&1
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
@@ -284,7 +320,6 @@ EOF_HAP
                 local G_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
                 local G_PROXY="https://ghproxy.net/"
                 local dl_ok=false
-                # [FIXED: Added --max-time to prevent silent curl data freezes]
                 if command -v curl >/dev/null 2>&1; then
                     curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
                     [ "$dl_ok" = false ] && curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
@@ -335,7 +370,6 @@ EOF_GST
     sleep 1
 }
 
-# --- SMART TUNNEL TYPE DETECTION ---
 get_iface_info() {
     local target_ip=$1
     local iface=$(ip route get "$target_ip" 2>/dev/null | head -n 1 | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}')
@@ -428,13 +462,13 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter 8.3.4 │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter v${MODULE_VERSION} │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter 8.3.4${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"

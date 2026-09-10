@@ -1,12 +1,77 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.2 ---
-# [Features: Bulletproof Ping Tracker | Dual-Line UI Layout | L4 Load Balancing]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.3 ---
+# [Features: Secure Path Lock | Scaffolded UI | Rename Fabric | Smart OTA]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+INSTALL_PATH="/usr/bin/mxlan"
 CONF_DIR="/etc/mgre/vxlan"
 SERVICE_FILE="/etc/systemd/system/mxlan.service"
+LOCAL_DIR="/root/mtunnel"
+SECURE_TMP="$LOCAL_DIR/tmp"
 
-mkdir -p "$CONF_DIR"
+# 1. Block Path Conflicts Automatically
+[ -f "/usr/local/bin/mxlan" ] && rm -f "/usr/local/bin/mxlan" 2>/dev/null
+
+mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$SECURE_TMP" 2>/dev/null
+
+if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
+    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
+    chmod +x "$INSTALL_PATH" 2>/dev/null
+fi
+
+self_update_module() {
+    local rel_path="tunnels/mxlan.sh"
+    local cb="?t=$(date +%s)"
+    
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
+    
+    local dl_url=""
+    case $src_opt in
+        1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        3) 
+           echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mxlan.sh: ${NC}"; read custom_url
+           dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
+           [ -z "$dl_url" ] && return
+           ;;
+        0|*) return ;;
+    esac
+
+    local tmp_file="$SECURE_TMP/.mxlan_update.$$"
+    echo -e "\n  ${C}⟳${NC} ${W}Downloading MXLAN Update...${NC}"
+
+    local dl_success=false
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+    fi
+
+    if [ "$dl_success" = true ] && [ -s "$tmp_file" ]; then
+        sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+        chmod +x "$tmp_file"
+        
+        cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+        [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+        
+        cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+        
+        rm -f "$tmp_file"
+        echo -e "  ${G}✔ Update successful! Rebooting module...${NC}"
+        sleep 1.5
+        exec "$INSTALL_PATH" "$@"
+    else
+        echo -e "  ${R}✖ Update failed. Invalid link or network timeout.${NC}"
+        rm -f "$tmp_file"
+        sleep 2
+    fi
+}
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -138,7 +203,7 @@ apply_all_fabrics() { for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply
 draw_mxlan_header() {
     local s_ip=$(get_local_ip); local active_fabrics=0; local total_vips=0
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; LB_MODE="0"; source "$conf"
+        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; LB_MODE="0"; source "$conf" 2>/dev/null
         if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" != "down" ]; then ((active_fabrics++)); fi
         total_vips=$((total_vips + MAX_IPS))
     done
@@ -148,7 +213,7 @@ draw_mxlan_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MXLAN Layer-2 Edge 1.5.2 "
+    local str1=" MXLAN Layer-2 Edge 1.5.3 "
     local str2=" IP: $s_ip "
     local str3=" FABRICS: $active_fabrics "
     local str4=" V-IPS: $total_vips "
@@ -165,7 +230,7 @@ draw_mxlan_header() {
 show_mxlan_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
     for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
+        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
         mapfile -t v_ips < <(ip -4 addr show dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
 
         local title_txt="${VX_NAME}/${BR_NAME}"
@@ -226,7 +291,7 @@ show_fabric_details() {
 
     echo -e "\n  ${M}● Deployed Fabrics Registry:${NC}"
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
         local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
@@ -283,7 +348,7 @@ edit_fabric() {
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
     
     if [[ -n "${configs[$t_idx]}" ]]; then
-        local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf"
+        local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
         
         echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${VX_NAME}${DIM} ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
@@ -292,6 +357,7 @@ edit_fabric() {
         if [ "$TYPE" == "1" ]; then
             echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Port Forwarding & Load Balancer${NC}"
         fi
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Rename Fabric Interface (Current: ${VX_NAME})${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
 
@@ -355,6 +421,28 @@ edit_fabric() {
                 echo "LB_MODE=$new_lb" >> "${sel_conf}.tmp"
                 mv "${sel_conf}.tmp" "$sel_conf"
                 ;;
+            5)
+                echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}${VX_NAME#vx_}${W}, Max 4-5 chars): ${NC}"; read new_suffix
+                new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
+                if [ -n "$new_suffix" ]; then
+                    local new_vx_name="vx_${new_suffix}"
+                    local new_br_name="br_${new_suffix}"
+                    
+                    if [ -f "$CONF_DIR/${new_vx_name}.conf" ]; then echo -e "  ${R}● Error: Fabric [${new_vx_name}] already exists!${NC}"; sleep 1.5; return; fi
+                    
+                    clean_fwd_rules "$VX_NAME"
+                    ip link del "$VX_NAME" >/dev/null 2>&1
+                    ip link del "$BR_NAME" >/dev/null 2>&1
+                    
+                    sed -i "s/^VX_NAME=.*/VX_NAME=$new_vx_name/" "$sel_conf"
+                    sed -i "s/^BR_NAME=.*/BR_NAME=$new_br_name/" "$sel_conf"
+                    mv "$sel_conf" "$CONF_DIR/${new_vx_name}.conf"
+                    sel_conf="$CONF_DIR/${new_vx_name}.conf"
+                    VX_NAME="$new_vx_name"
+                    BR_NAME="$new_br_name"
+                    echo -e "  ${G}● Fabric successfully renamed to: ${new_vx_name}${NC}"
+                fi
+                ;;
             *) return ;;
         esac
 
@@ -382,7 +470,23 @@ if [[ "$1" == "--apply" ]]; then apply_all_fabrics; exit 0; fi
 
 while true; do
     draw_mxlan_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (VNI Mesh)${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Advanced Edit Fabric (IPs / VNI / NAT Limits)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Fabric Configurations & Details${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (VNI Mesh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Advanced Edit Fabric (IPs / VNI / NAT / Rename)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Fabric Configurations & Details${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
+    
     echo -ne "  ${M}MXLAN ❯❯ ${NC}"; read opt
     case $opt in
         1) 
@@ -518,6 +622,38 @@ while true; do
            fi ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No active fabrics to remove!${NC}" && sleep 1.5 && continue
+           echo -e "\n  ${B}╭────────────────── Select Fabric to Erase ──────────────────╮${NC}"
+           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
+           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+           echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
+           [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
+           
+           if [[ "$del_idx" == "all" ]]; then
+               echo -ne "  ${R}● DANGER: Delete ALL VXLAN fabrics? (y/n): ${NC}"; read confirm_all
+               if [[ "$confirm_all" == "y" ]]; then
+                   for conf in "${configs[@]}"; do
+                       TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "$conf" 2>/dev/null
+                       clean_fwd_rules "$VX_NAME"
+                       ip link del "$VX_NAME" >/dev/null 2>&1
+                       ip link del "$BR_NAME" >/dev/null 2>&1
+                       rm -f "$conf"
+                   done
+                   [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
+                   echo -e "  ${G}● All fabrics safely purged.${NC}"; sleep 1.5
+               fi; continue
+           fi
+           if [[ -n "${configs[$del_idx]}" ]]; then
+               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "${configs[$del_idx]}" 2>/dev/null
+               clean_fwd_rules "$VX_NAME"
+               ip link del "$VX_NAME" >/dev/null 2>&1
+               ip link del "$BR_NAME" >/dev/null 2>&1
+               rm -f "${configs[$del_idx]}"
+               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
+               echo -e "  ${G}● Fabric [${VX_NAME}] destroyed.${NC}"; sleep 1.5
+           fi ;;
+        3)
+           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No fabrics configured yet!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Fabric for vIPs ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
@@ -526,7 +662,7 @@ while true; do
            while true; do echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx; [[ "$t_idx" == "q" ]] && break 2; [[ -n "$t_idx" ]] && break; done
            
            if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; LB_MODE="0"; source "$sel_conf"
+               sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
                echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
                while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
                [[ "$vip_action" == "q" ]] && continue
@@ -547,39 +683,10 @@ while true; do
                    if [[ "$confirm_vip" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_fabric "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
                fi
            fi ;;
-        3) while true; do draw_mxlan_header; show_mxlan_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
-        4)
-           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No active fabrics to remove!${NC}" && sleep 1.5 && continue
-           echo -e "\n  ${B}╭────────────────── Select Fabric to Erase ──────────────────╮${NC}"
-           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
-           [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
-           
-           if [[ "$del_idx" == "all" ]]; then
-               echo -ne "  ${R}● DANGER: Delete ALL VXLAN fabrics? (y/n): ${NC}"; read confirm_all
-               if [[ "$confirm_all" == "y" ]]; then
-                   for conf in "${configs[@]}"; do
-                       TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "$conf"
-                       clean_fwd_rules "$VX_NAME"
-                       ip link del "$VX_NAME" >/dev/null 2>&1
-                       ip link del "$BR_NAME" >/dev/null 2>&1
-                       rm -f "$conf"
-                   done
-                   [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
-                   echo -e "  ${G}● All fabrics safely purged.${NC}"; sleep 1.5
-               fi; continue
-           fi
-           if [[ -n "${configs[$del_idx]}" ]]; then
-               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "${configs[$del_idx]}"
-               clean_fwd_rules "$VX_NAME"
-               ip link del "$VX_NAME" >/dev/null 2>&1
-               ip link del "$BR_NAME" >/dev/null 2>&1
-               rm -f "${configs[$del_idx]}"
-               [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
-               echo -e "  ${G}● Fabric [${VX_NAME}] destroyed.${NC}"; sleep 1.5
-           fi ;;
-        5) edit_fabric ;; 6) show_fabric_details ;; 0) break ;;
+        4) edit_fabric ;; 
+        5) while true; do draw_mxlan_header; show_mxlan_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+        6) show_fabric_details ;; 
+        7) self_update_module ;; 
+        0) break ;;
     esac
 done

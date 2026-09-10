@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.13 ---
-# [Features: Synced 1.7.8 Ping Logic | ParsPack Mirror OTA | Cleartext]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.14 ---
+# [Features: 1.7.8 RTT Kernel Extraction (*) Restored | Connection Drop Fixed]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -278,9 +278,9 @@ check_bh_connection() {
     if ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$ROLE" == "1" ]; then
-        if ss -tn src ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
+        if ss -nt state established src ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
     else
-        if ss -tn dst ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
+        if ss -nt state established dst ":$TUN_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
     fi
 }
 
@@ -289,13 +289,15 @@ get_peer_ping() {
     local port=$(echo "$2" | tr -d ' \n\r')
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
     
+    # 1. Native ICMP Ping
     local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
-        local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
+        local ping_val=$(echo "$ping_res" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
         echo "${ping_val}ms"
         return
     fi
     
+    # 2. Kernel Socket Extraction (ss) fallback
     if command -v ss >/dev/null 2>&1; then
         local tcp_rtt=$(ss -nti dst "$target_ip" 2>/dev/null | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
         if [ -n "$tcp_rtt" ]; then
@@ -305,6 +307,7 @@ get_peer_ping() {
         fi
     fi
 
+    # 3. Bash TCP Ping (Ultimate Fallback)
     if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
         local start_ts=$(date +%s%3N 2>/dev/null)
         if timeout 1 bash -c "</dev/tcp/$target_ip/$port" 2>/dev/null; then
@@ -521,7 +524,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+                local conn=$(ss -nt state established src ":$tmp_port" 2>/dev/null | grep "ESTAB" | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -548,7 +551,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MBackhaul Engine v1.7.13 "
+    local title=" MBackhaul Engine v1.7.14 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -577,7 +580,7 @@ show_tunnel_registry() {
             ping_val=$(get_peer_ping "$REMOTE_IP" "$TUN_PORT")
             connected_peer="$REMOTE_IP"
         elif [ "$ROLE" == "1" ]; then
-            local conn=$(ss -tn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+            local conn=$(ss -nt state established src ":$TUN_PORT" 2>/dev/null | grep "ESTAB" | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 ping_val=$(get_peer_ping "$p_ip" "$TUN_PORT")

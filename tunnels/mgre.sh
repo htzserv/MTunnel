@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.4 ---
-# [Features: Secure Path Lock | Smart OTA Updater | Dynamic Padding Fix]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.5 ---
+# [Features: ParsPack Mirror OTA | Cleartext Secrets | Stable UI]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -26,7 +26,7 @@ self_update_module() {
     
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MGRE Engine) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
@@ -34,7 +34,7 @@ self_update_module() {
     local dl_url=""
     case $src_opt in
         1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
         3) 
            echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mgre.sh: ${NC}"; read custom_url
            dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
@@ -212,7 +212,7 @@ draw_mgre_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MDesign Core 5.4.4 "
+    local str1=" MDesign Core 5.4.5 "
     local str2=" IP: $s_ip "
     local str3=" TUNNELS: $active_tunnels "
     local str4=" V-IPS: $total_vips "
@@ -301,9 +301,7 @@ show_tunnel_details() {
         local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
         local s_key="${SYNC_KEY:-[ NOT SET ]}"
         local t_id="${TUN_ID:-[ NOT SET ]}"
-        
-        local t_sec="[ NOT SET ]"
-        [ -n "$TUN_SECRET" ] && t_sec="********"
+        local t_sec="${TUN_SECRET:-[ NOT SET ]}"
 
         local proto_lbl="IPv4 GRE"; [[ "$TUN_PROTO" == "6to4" ]] && proto_lbl="6to4 IP6GRE"
 
@@ -437,12 +435,10 @@ edit_tunnel() {
                     if [ "$check_len" -gt 15 ]; then echo -e "  ${R}● Error: Name too long! Kernel limit is 15 chars.${NC}"; sleep 1.5; return; fi
                     if [ -f "$CONF_DIR/${new_t_name}.conf" ]; then echo -e "  ${R}● Error: Tunnel interface [${new_t_name}] already exists!${NC}"; sleep 1.5; return; fi
                     
-                    # Cleanup Old Interface
                     iptables -t mangle -S FORWARD 2>/dev/null | grep "MGRE_MSS_${T_NAME}\"" | sed 's/^-A /-D /' | while read r; do iptables -t mangle $r 2>/dev/null; done
                     clean_fwd_rules "$T_NAME"
                     ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
                     
-                    # Apply Name Change
                     sed -i "s/^T_NAME=.*/T_NAME=$new_t_name/" "$sel_conf"
                     mv "$sel_conf" "$CONF_DIR/${new_t_name}.conf"
                     sel_conf="$CONF_DIR/${new_t_name}.conf"

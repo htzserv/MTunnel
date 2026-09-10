@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.0 ---
-# [Features: Path Lock | Scaffolded UI | Smart OTA Updater | Domain Support]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.2 ---
+# [Features: Kernel RTT Extraction (ss Fallback) | Path Lock | Smart OTA]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -9,7 +9,6 @@ SERVICE_TPL="/etc/systemd/system/mrathole@.service"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-# 1. Block Path Conflicts Automatically
 [ -f "/usr/local/bin/mrathole" ] && rm -f "/usr/local/bin/mrathole" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
@@ -100,7 +99,7 @@ menu_install_core() {
     echo -e "  ${R}● Purging old Rathole binaries and processes...${NC}"
     systemctl stop mrathole@* 2>/dev/null
     killall -9 rathole 2>/dev/null
-    rm -f /usr/local/bin/rathole /usr/bin/rathole "$SECURE_TMP/rh_dl" "$SECURE_TMP/rathole"
+    rm -f /usr/local/bin/rathole /usr/bin/rathole "$SECURE_TMP/rh_dl.zip" "$SECURE_TMP/rathole"
 
     if [[ "$src_choice" == "1" || "$src_choice" == "2" ]]; then
         echo -e "  ${DIM}● Downloading latest binary...${NC}"
@@ -284,22 +283,32 @@ get_tunnel_status() {
     if ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
     
     if [ "$TYPE" == "1" ]; then
-        if ss -nt state established src ":$LINK_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "CONNECTED"; else echo "WAITING"; fi
+        if ss -tn src ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "WAITING"; fi
     else
-        if ss -nt state established dst ":$LINK_PORT" 2>/dev/null | grep -q "ESTAB"; then echo "CONNECTED"; else echo "RECONNECTING"; fi
+        if ss -tn dst ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "RECONNECTING"; fi
     fi
 }
 
 get_peer_ping() {
     local target_ip="$1"
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
+    
     local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
-        local ping_val=$(echo "$ping_res" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+        local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
         echo "${ping_val}ms"
-    else
-        echo "Timeout"
+        return
     fi
+    
+    if command -v ss >/dev/null 2>&1; then
+        local tcp_rtt=$(ss -nti dst "$target_ip" 2>/dev/null | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
+        if [ -n "$tcp_rtt" ]; then
+            local rounded_rtt=$(echo "$tcp_rtt" | awk '{print int($1+0.5)}')
+            echo "${rounded_rtt}ms*"
+            return
+        fi
+    fi
+    echo "Timeout"
 }
 
 draw_header() {
@@ -351,7 +360,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_type" == "1" ]; then
-                local conn=$(ss -nt state established src ":$tmp_port" 2>/dev/null | awk '{print $5}' | head -n 1)
+                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -362,14 +371,15 @@ draw_header() {
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local gp=$(ping -c 1 -W 1 "$peer_ip" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
-        if [ -n "$gp" ]; then
-            local p_int=${gp%.*}
+        local p_val=$(get_peer_ping "$peer_ip")
+        if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
+            local p_int=$(echo "$p_val" | tr -dc '0-9')
+            if [ -z "$p_int" ]; then p_int=0; fi
             if [ "$p_int" -lt 90 ]; then g_color="${G}"
             elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
             else g_color="${R}"
             fi
-            g_text="${gp} ms"
+            g_text="${p_val}"
         else
             g_color="${R}"; g_text="Timeout"
         fi
@@ -377,7 +387,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MRathole Engine v2.9.0 "
+    local title=" MRathole Engine v2.9.2 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -405,7 +415,7 @@ show_tunnel_registry() {
         if [ "$TYPE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
             ping_val=$(get_peer_ping "$REMOTE_IP")
         elif [ "$TYPE" == "1" ]; then
-            local conn=$(ss -nt state established src ":$LINK_PORT" 2>/dev/null | awk '{print $5}' | head -n 1)
+            local conn=$(ss -tn src ":$LINK_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 ping_val=$(get_peer_ping "$p_ip")
@@ -616,8 +626,8 @@ while true; do
            
            echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Leave blank if none]: ${NC}"; read tcp_p
            echo -ne "  ${C}●${NC} ${W}UDP Ports to Forward (e.g. 53) [Leave blank if none]: ${NC}"; read udp_p
-           tcp_p=$(echo "$tcp_p" | tr -d ' ' | tr -d '\r')
-           udp_p=$(echo "$udp_p" | tr -d ' ' | tr -d '\r')
+           tcp_p=$(echo "$tcp_p" | tr -dc '0-9,')
+           udp_p=$(echo "$udp_p" | tr -dc '0-9,')
            
            mkdir -p "$CONF_DIR/$t_name"
            echo -e "TYPE=$s_type\nLINK_PORT=$t_port\nREMOTE_IP=$r_ip\nTOKEN=$t_token\nTCP_PORTS=$tcp_p\nUDP_PORTS=$udp_p" > "$CONF_DIR/$t_name/meta.conf"
@@ -625,7 +635,7 @@ while true; do
            generate_toml "$t_name"
            systemctl enable mrathole@$t_name >/dev/null 2>&1
            systemctl restart mrathole@$t_name
-           echo -e "  ${G}● Tunnel Deployed Successfully!${NC}"; sleep 1.5 ;;
+           echo -e "  ${G}● Tunnel Deployed with Anti-Flap Optimizations!${NC}"; sleep 1.5 ;;
            
         2)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
@@ -658,7 +668,7 @@ while true; do
         3|4|5|6|10|11)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
-           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; source "$SELECTED_TUN/meta.conf"
+           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; source "$SELECTED_TUN/meta.conf" 2>/dev/null
            
            if [[ "$opt" == "3" ]]; then
                while true; do
@@ -674,12 +684,12 @@ while true; do
                
            elif [[ "$opt" == "4" ]]; then
                echo -ne "  ${C}●${NC} ${W}Enter TCP Ports (e.g. 80,443) [Current: ${Y}${TCP_PORTS:-None}${W}]: ${NC}"; read n_tcp
-               n_tcp=$(echo "$n_tcp" | tr -d ' ' | tr -d '\r')
+               n_tcp=$(echo "$n_tcp" | tr -dc '0-9,')
                [ -n "$n_tcp" ] && sed -i "s/^TCP_PORTS=.*/TCP_PORTS=$n_tcp/" "$SELECTED_TUN/meta.conf"
                
            elif [[ "$opt" == "5" ]]; then
                echo -ne "  ${C}●${NC} ${W}Enter UDP Ports (e.g. 53) [Current: ${C}${UDP_PORTS:-None}${W}]: ${NC}"; read n_udp
-               n_udp=$(echo "$n_udp" | tr -d ' ' | tr -d '\r')
+               n_udp=$(echo "$n_udp" | tr -dc '0-9,')
                [ -n "$n_udp" ] && sed -i "s/^UDP_PORTS=.*/UDP_PORTS=$n_udp/" "$SELECTED_TUN/meta.conf"
                
            elif [[ "$opt" == "6" ]]; then

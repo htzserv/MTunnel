@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.5 ---
-# [Features: Version Preview | Offline Editor | ParsPack OTA | Anti-Hang]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.8 ---
+# [Features: Dual-Path Scanner | Fixed Menu Order | 60s Proxy Timeout]
 
-MODULE_VERSION="8.3.5"
+MODULE_VERSION="8.3.8"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -23,18 +23,17 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
 fi
 
 self_update_module() {
-    local rel_path="mporter.sh"
     local cb="?t=$(date +%s)"
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MPorter Engine) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (Script Only) ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC} ${DIM}(Multi-Mirror Fallback)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
 
-    local tmp_file="$SECURE_TMP/.mporter_update.$$"
+    local tmp_file="/tmp/.mporter_update.$$"
     > "$tmp_file"
 
     if [[ "$src_opt" == "4" ]]; then
@@ -47,19 +46,64 @@ self_update_module() {
             echo -e "  ${R}✖ No text editor (nano/vi) found on this system!${NC}"; rm -f "$tmp_file"; sleep 2; return
         fi
     elif [[ "$src_opt" =~ ^[123]$ ]]; then
-        local dl_url=""
-        case $src_opt in
-            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
-            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url; dl_url=$(echo "$custom_url" | tr -d '\r ') ;;
-        esac
-        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+        local dl_success=false
+        echo -e "\n  ${C}⟳${NC} ${W}Scanning Paths & Downloading Update...${NC}"
+        
+        if [[ "$src_opt" == "1" ]]; then
+            local mirrors=(
+                "https://raw.githubusercontent.com/htzserv/MTunnel/main"
+                "https://mirror.ghproxy.com/https://raw.githubusercontent.com/htzserv/MTunnel/main"
+                "https://ghp.ci/https://raw.githubusercontent.com/htzserv/MTunnel/main"
+                "https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main"
+            )
+            local paths=("/mporter.sh" "/tunnels/mporter.sh")
+            
+            for p in "${paths[@]}"; do
+                for m in "${mirrors[@]}"; do
+                    local test_url="${m}${p}${cb}"
+                    echo -e "  ${DIM}● Testing:${NC} ${test_url:0:45}..."
+                    if command -v curl >/dev/null 2>&1; then
+                        curl -kSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$test_url" 2>/dev/null
+                    else
+                        wget -q --no-check-certificate --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
+                    fi
+                    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; break 2; fi
+                done
+            done
 
-        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
+        elif [[ "$src_opt" == "2" ]]; then
+            local mirrors=("https://c107328.parspack.net/c107328/MTunnel")
+            local paths=("/mporter.sh" "/tunnels/mporter.sh")
+            
+            for p in "${paths[@]}"; do
+                for m in "${mirrors[@]}"; do
+                    local test_url="${m}${p}${cb}"
+                    echo -e "  ${DIM}● Testing:${NC} ${test_url:0:45}..."
+                    if command -v curl >/dev/null 2>&1; then
+                        curl -kSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$test_url" 2>/dev/null
+                    else
+                        wget -q --no-check-certificate --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
+                    fi
+                    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; break 2; fi
+                done
+            done
+
+        elif [[ "$src_opt" == "3" ]]; then
+            echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
+            local dl_url=$(echo "$custom_url" | tr -d '\r ')
+            [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+            
+            echo -e "  ${DIM}● Fetching custom link...${NC}"
+            if command -v curl >/dev/null 2>&1; then
+                curl -kSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            else
+                wget -q --no-check-certificate --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            fi
+        fi
+
+        if [ "$dl_success" != true ]; then
+            echo -e "  ${R}✖ Update failed. File not found in root/tunnels or mirrors are unreachable.${NC}"
+            rm -f "$tmp_file"; sleep 2; return
         fi
     else
         rm -f "$tmp_file"
@@ -81,7 +125,9 @@ self_update_module() {
 
             cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
             [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
-            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            
+            mkdir -p "$LOCAL_DIR" 2>/dev/null
+            cp -f "$tmp_file" "$LOCAL_DIR/mporter.sh" 2>/dev/null
 
             rm -f "$tmp_file"
             echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
@@ -92,7 +138,7 @@ self_update_module() {
             rm -f "$tmp_file"; sleep 1.5
         fi
     else
-        echo -e "  ${R}✖ Update failed. Invalid format or network timeout.${NC}"
+        echo -e "  ${R}✖ Update failed. Invalid format (Missing #!/bin/bash).${NC}"
         rm -f "$tmp_file"
         sleep 2
     fi
@@ -106,7 +152,7 @@ get_local_ip() {
 
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=28; local progress=0
-    local ticks=0; local max_ticks=480
+    local ticks=0; local max_ticks=480 # 120 seconds Max Timeout
     tput civis 2>/dev/null || true
     
     while kill -0 "$pid" 2>/dev/null; do
@@ -321,11 +367,11 @@ EOF_HAP
                 local G_PROXY="https://ghproxy.net/"
                 local dl_ok=false
                 if command -v curl >/dev/null 2>&1; then
-                    curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
+                    curl -fkSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
+                    [ "$dl_ok" = false ] && curl -fkSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
                 elif command -v wget >/dev/null 2>&1; then
-                    wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
+                    wget -q --no-check-certificate --timeout=15 --tries=2 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
+                    [ "$dl_ok" = false ] && wget -q --no-check-certificate --timeout=15 --tries=2 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
                 fi
                 
                 if [ -s "/tmp/gost.gz" ]; then
@@ -1195,13 +1241,30 @@ manual_restart() {
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACTIONS ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install & Configure Tri-Core System${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Add Port Mappings (Strict 1-to-1)${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Delete & Purge Mappings (By Interface/IP/All)${NC}\n  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Uninstall Engines & Purge (Nuclear Wipe)${NC}\n  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}\n  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}\n  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Force Sync Module)${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
+    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Install & Configure Tri-Core System${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Uninstall Engines & Purge (Nuclear Wipe)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Add Port Mappings (Strict 1-to-1)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Delete & Purge Mappings (By Interface/IP/All)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View IP -> Port Matrix${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Script Only)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
+
     echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -t 30 opt
     opt=$(echo "$opt" | tr -dc '0-9')
     case $opt in
-        1) install_core_engines ;; 2) smart_map ;; 3) edit_mapping ;; 4) show_table ;;
-        5) purge_menu ;;
-        6) echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
+        1) install_core_engines ;;
+        2) echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read confirm
            confirm=$(echo "$confirm" | tr -dc 'yn')
            if [[ "$confirm" == "y" ]]; then 
                systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
@@ -1218,7 +1281,12 @@ while true; do
                iptables -t nat -S POSTROUTING 2>/dev/null | grep "MPORTER_NAT_" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
                echo -e "  ${G}● Erased from system completely.${NC}"; sleep 1; exit 0
            fi ;;
-        7) smart_watchdog_menu ;; 8) manual_restart ;; 
+        3) smart_map ;; 
+        4) edit_mapping ;; 
+        5) purge_menu ;;
+        6) show_table ;;
+        7) smart_watchdog_menu ;; 
+        8) manual_restart ;; 
         9) self_update_module ;;
         0) clear; exit 0 ;;
     esac

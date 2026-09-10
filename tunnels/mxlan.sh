@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.3 ---
-# [Features: Secure Path Lock | Scaffolded UI | Rename Fabric | Smart OTA]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.4 ---
+# [Features: ParsPack Mirror OTA | Stable UI Updates]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -20,13 +20,19 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
+is_valid_host() {
+    local host=$1
+    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]]; then return 0; fi
+    return 1
+}
+
 self_update_module() {
     local rel_path="tunnels/mxlan.sh"
     local cb="?t=$(date +%s)"
     
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
@@ -34,7 +40,7 @@ self_update_module() {
     local dl_url=""
     case $src_opt in
         1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
         3) 
            echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mxlan.sh: ${NC}"; read custom_url
            dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
@@ -213,7 +219,7 @@ draw_mxlan_header() {
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
     
     clear; echo ""
-    local str1=" MXLAN Layer-2 Edge 1.5.3 "
+    local str1=" MXLAN Layer-2 Edge 1.5.4 "
     local str2=" IP: $s_ip "
     local str3=" FABRICS: $active_fabrics "
     local str4=" V-IPS: $total_vips "

@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v7.5.1 ---
-# [Features: Boot Restorer | Scaffolded UI | Rename Tunnel | Smart OTA]
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v7.5.2 ---
+# [Features: Full ParsPack Mirror (Scripts & Cores) | Cleartext Token]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -9,7 +9,6 @@ SERVICE_DIR="/etc/systemd/system"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-# 1. Block Path Conflicts Automatically
 [ -f "/usr/local/bin/mpaqet" ] && rm -f "/usr/local/bin/mpaqet" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
@@ -32,7 +31,7 @@ self_update_module() {
     
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MPaqet Engine) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
@@ -40,7 +39,7 @@ self_update_module() {
     local dl_url=""
     case $src_opt in
         1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
         3) 
            echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mpaqet.sh: ${NC}"; read custom_url
            dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
@@ -107,7 +106,7 @@ format_total() {
 menu_install_core() {
     echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE PAQET CORE ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/paqet)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
@@ -130,14 +129,14 @@ menu_install_core() {
         local target="amd64"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
         
-        local api_url="https://api.github.com/repos/hanselime/paqet/releases/latest"
-        local dl_url=$(curl -m 10 -s "$api_url" | grep "browser_download_url.*linux-${target}" | cut -d '"' -f 4 | head -1)
-        
-        if [ -z "$dl_url" ]; then
-            dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
+        local dl_url=""
+        if [ "$src_choice" == "1" ]; then
+            local api_url="https://api.github.com/repos/hanselime/paqet/releases/latest"
+            dl_url=$(curl -m 10 -s "$api_url" | grep "browser_download_url.*linux-${target}" | cut -d '"' -f 4 | head -1)
+            [ -z "$dl_url" ] && dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
+        else
+            dl_url="https://c107328.parspack.net/c107328/MTunnel/packages/paqet-linux-${target}.tar.gz"
         fi
-        
-        [ "$src_choice" == "2" ] && dl_url="https://ghproxy.net/${dl_url}"
         
         if [ -n "$dl_url" ]; then
             wget -q --timeout=15 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" || { echo -e "  ${R}✖ Download failed!${NC}"; return; }
@@ -156,6 +155,8 @@ menu_install_core() {
             else
                 echo -e "  ${R}✖ Downloaded file is corrupted or not a valid archive!${NC}"
             fi
+        else
+            echo -e "  ${R}✖ Failed to fetch release URL from GitHub!${NC}"
         fi
 
     elif [[ "$src_choice" == "3" ]]; then
@@ -211,17 +212,13 @@ install_paqet_silent() {
         local target="amd64"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
         
-        local api_url="https://api.github.com/repos/hanselime/paqet/releases/latest"
-        local dl_url=$(curl -m 10 -s "$api_url" | grep "browser_download_url.*linux-${target}" | cut -d '"' -f 4 | head -1)
-        
-        if [ -z "$dl_url" ]; then
-            dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
-        fi
+        local dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
+        local mirror_url="https://c107328.parspack.net/c107328/MTunnel/packages/paqet-linux-${target}.tar.gz"
         
         if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "https://ghproxy.net/$dl_url" 2>/dev/null
+            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
         else
-            wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "https://ghproxy.net/$dl_url" 2>/dev/null
+            wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
         fi
 
         if [ -s "$SECURE_TMP/paqet.tar.gz" ]; then
@@ -261,7 +258,6 @@ zero_paqet_counters() {
     iptables -Z -t raw 2>/dev/null || true
 }
 
-# --- RESTORE COUNTERS ON BOOT ---
 if [[ "$1" == "--apply" ]]; then
     for conf in "$CONF_DIR"/*.meta; do
         [ -f "$conf" ] || continue
@@ -312,11 +308,11 @@ check_paqet_connection() {
 }
 
 get_peer_ping() {
-    local target_ip="$1"
+    local target_ip=$(echo "$1" | tr -d ' \n\r')
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
     local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
-        local ping_val=$(echo "$ping_res" | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
+        local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
         echo "${ping_val}ms"
     else
         echo "Timeout"
@@ -372,7 +368,7 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -tHn src ":$tmp_port" 2>/dev/null | awk '{print $5}' | head -n 1)
+                local conn=$(ss -tHn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
                 if [ -n "$conn" ]; then
                     peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                     break
@@ -383,14 +379,15 @@ draw_header() {
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local gp=$(ping -c 1 -W 1 "$peer_ip" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
-        if [ -n "$gp" ]; then
-            local p_int=${gp%.*}
+        local p_val=$(get_peer_ping "$peer_ip")
+        if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
+            local p_int=$(echo "$p_val" | tr -dc '0-9')
+            if [ -z "$p_int" ]; then p_int=0; fi
             if [ "$p_int" -lt 90 ]; then g_color="${G}"
             elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
             else g_color="${R}"
             fi
-            g_text="${gp} ms"
+            g_text="${p_val}"
         else
             g_color="${R}"; g_text="Timeout"
         fi
@@ -398,7 +395,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MPaqet Engine v7.5.1 "
+    local title=" MPaqet Engine v7.5.2 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -407,89 +404,6 @@ draw_header() {
     clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${title}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${B}│${NC}${DIM} Core:${NC} ${core_color}${core_raw}${NC} ${B}│${NC}${DIM} Peer Ping:${NC} ${g_color}${g_text}${NC} ${B}│${NC}${DIM} ACTIVE:${NC} ${act_color}${act_text}${NC} ${B}│${NC}${DIM} STATUS:${NC} ${stat_color}${stat_icon} ${stat_text}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
-}
-
-show_tunnel_registry() {
-    draw_header
-    echo -e "\n  ${Y}● Deployed Paqet Tunnels Registry:${NC}"
-    local count=0
-    for conf in "$CONF_DIR"/*.meta; do
-        [ ! -f "$conf" ] && continue
-        local t_name=$(basename "$conf" .meta)
-        ROLE=""; TUN_PORT=""; REMOTE_IP=""; TCP_PORTS=""
-        source "$conf" 2>/dev/null
-        
-        local yaml_f="$CONF_DIR/${t_name}.yaml"
-        [ ! -f "$yaml_f" ] && continue
-        
-        local key=$(grep "key:" "$yaml_f" | awk -F'"' '{print $2}')
-        local mode=$(grep "mode:" "$yaml_f" | awk -F'"' '{print $2}')
-        local block=$(grep "block:" "$yaml_f" | awk -F'"' '{print $2}')
-        local mtu=$(grep "mtu:" "$yaml_f" | awk '{print $2}')
-        local conn_c=$(grep "conn:" "$yaml_f" | head -1 | awk '{print $2}')
-        
-        local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
-        local peer_text=$([ "$ROLE" == "1" ] && echo "Listening on :${TUN_PORT}" || echo "${REMOTE_IP}:${TUN_PORT}")
-        
-        local ping_val="N/A"
-        if [ "$ROLE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
-            ping_val=$(get_peer_ping "$REMOTE_IP")
-        elif [ "$ROLE" == "1" ]; then
-            local est_conn=$(ss -tHn src ":$TUN_PORT" 2>/dev/null | awk '{print $5}' | head -n 1)
-            if [ -n "$est_conn" ]; then
-                local p_ip=$(echo "$est_conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                ping_val=$(get_peer_ping "$p_ip")
-            else
-                ping_val="Waiting"
-            fi
-        fi
-
-        local st=$(check_paqet_connection "$t_name")
-        local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
-        if [ "$st" == "ONLINE" ]; then stat_icon="●"; stat_text="CONNECTED"; stat_color="${G}";
-        elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}";
-        elif [ "$st" == "CONNECTING" ]; then stat_icon="◎"; stat_text="CONNECTING..."; stat_color="${Y}"; fi
-
-        local rx=$(get_paqet_rx "$t_name"); local tx=$(get_paqet_tx "$t_name")
-        local masked_token="${key:0:4}********${key: -4}"
-        [ ${#key} -le 6 ] && masked_token="********"
-
-        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
-        local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
-        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
-        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
-        
-        local l1="Link Port    : ${TUN_PORT}"; local r1="Latency: ${ping_val}"
-        local pad1=$(( 122 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
-        
-        local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_icon} ${stat_text}"
-        local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-        local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
-
-        local l3="Secret Key   : ${masked_token}"; local r3="Crypto: ${block^^}"
-        local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${Y}Secret Key   :${NC} ${W}${masked_token}${NC}${sp3}${DIM}Crypto:${NC} ${C}${block^^}${NC} ${B}│${NC}"
-
-        local l4="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"; local r4="Mode: ${mode^^} | MTU: ${mtu} | Conn: ${conn_c}"
-        local pad4=$(( 122 - ${#l4} - ${#r4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
-        echo -e "  ${B}│${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp4}${DIM}${r4}${NC} ${B}│${NC}"
-        
-        if [ "$ROLE" == "2" ]; then
-            local p_str="${TCP_PORTS:0:100}"
-            [ ${#TCP_PORTS} -gt 100 ] && p_str="${p_str}..."
-            local l5="Port Mappings: ${p_str}"
-            local pad5=$(( 122 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; local sp5=$(printf '%*s' "$pad5" "")
-            echo -e "  ${B}│${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${B}│${NC}"
-        fi
-        
-        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n"
-        ((count++))
-    done
-    if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
-    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
 setup_systemd_service() {
@@ -527,6 +441,94 @@ EOF
     systemctl enable mpaqet-apply.service >/dev/null 2>&1
 }
 
+show_tunnel_registry() {
+    draw_header
+    echo -e "\n  ${Y}● Deployed Paqet Tunnels Registry:${NC}"
+    local count=0
+    for conf in "$CONF_DIR"/*.meta; do
+        [ ! -f "$conf" ] && continue
+        local t_name=$(basename "$conf" .meta)
+        ROLE=""; TUN_PORT=""; REMOTE_IP=""; TCP_PORTS=""
+        source "$conf" 2>/dev/null
+        
+        local yaml_f="$CONF_DIR/${t_name}.yaml"
+        [ ! -f "$yaml_f" ] && continue
+        
+        local key=$(grep "key:" "$yaml_f" | awk -F'"' '{print $2}')
+        local mode=$(grep "mode:" "$yaml_f" | awk -F'"' '{print $2}')
+        local block=$(grep "block:" "$yaml_f" | awk -F'"' '{print $2}')
+        local mtu=$(grep "mtu:" "$yaml_f" | awk '{print $2}')
+        local conn_c=$(grep "conn:" "$yaml_f" | head -1 | awk '{print $2}')
+        
+        local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
+        local ping_val="N/A"
+        local connected_peer=""
+
+        if [ "$ROLE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
+            ping_val=$(get_peer_ping "$REMOTE_IP")
+            connected_peer="$REMOTE_IP"
+        elif [ "$ROLE" == "1" ]; then
+            local est_conn=$(ss -tHn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
+            if [ -n "$est_conn" ]; then
+                local p_ip=$(echo "$est_conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+                ping_val=$(get_peer_ping "$p_ip")
+                connected_peer="$p_ip"
+            else
+                ping_val="Waiting"
+            fi
+        fi
+
+        local peer_text=$([ "$ROLE" == "1" ] && echo "Listening on :${TUN_PORT}" || echo "${REMOTE_IP}:${TUN_PORT}")
+        if [ "$ROLE" == "1" ] && [ -n "$connected_peer" ]; then
+            peer_text="${connected_peer}:${TUN_PORT} (Active)"
+        fi
+
+        local st=$(check_paqet_connection "$t_name")
+        local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
+        if [ "$st" == "ONLINE" ]; then stat_icon="●"; stat_text="CONNECTED"; stat_color="${G}";
+        elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}";
+        elif [ "$st" == "CONNECTING" ]; then stat_icon="◎"; stat_text="CONNECTING..."; stat_color="${Y}"; fi
+
+        local rx=$(get_paqet_rx "$t_name"); local tx=$(get_paqet_tx "$t_name")
+
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
+        local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
+        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
+        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
+        
+        local l1="Link Port    : ${TUN_PORT}"; local r1="Latency: ${ping_val}"
+        local pad1=$(( 122 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
+        echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
+        
+        local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_icon} ${stat_text}"
+        local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
+        local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
+        echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+
+        local l3="Secret Key   : ${key}"; local r3="Crypto: ${block^^}"
+        local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
+        echo -e "  ${B}│${NC} ${Y}Secret Key   :${NC} ${W}${key}${NC}${sp3}${DIM}Crypto:${NC} ${C}${block^^}${NC} ${B}│${NC}"
+
+        local l4="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"; local r4="Mode: ${mode^^} | MTU: ${mtu} | Conn: ${conn_c}"
+        local pad4=$(( 122 - ${#l4} - ${#r4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
+        echo -e "  ${B}│${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp4}${DIM}${r4}${NC} ${B}│${NC}"
+        
+        if [ "$ROLE" == "2" ]; then
+            local p_str="${TCP_PORTS:0:100}"
+            [ ${#TCP_PORTS} -gt 100 ] && p_str="${p_str}..."
+            local l5="Port Mappings: ${p_str}"
+            local pad5=$(( 122 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; local sp5=$(printf '%*s' "$pad5" "")
+            echo -e "  ${B}│${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${B}│${NC}"
+        fi
+        
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n"
+        ((count++))
+    done
+    if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+}
+
 show_live_radar() {
     tput civis; clear
     declare -A rx_old tx_old
@@ -541,9 +543,9 @@ show_live_radar() {
     while true; do
         printf "\033[H"; draw_header
         echo -e "\n  ${DIM}┌─[ PAQET TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
-        echo -e "  ${B}╭──────────────────────┬────────────────┬──────────────────┬──────────────────┬────────────────────┬────────────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${C}%-16s${NC} ${B}│${NC} ${M}%-16s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC}\n" "TUNNEL NAME" "STATUS" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL RX" "∑ TOTAL TX"
-        echo -e "  ${B}├──────────────────────┼────────────────┼──────────────────┼──────────────────┼────────────────────┼────────────────────┤${NC}"
+        echo -e "  ${B}╭──────────────────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────╮${NC}"
+        printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TUNNEL NAME" "STATUS" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL RX" "∑ TOTAL TX"
+        echo -e "  ${B}├──────────────────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┤${NC}"
 
         local count=0
         for conf in "$CONF_DIR"/*.meta; do
@@ -564,14 +566,14 @@ show_live_radar() {
             local c_rx="${DIM}"; [ "$rx_s" -gt 0 ] && c_rx="${G}"
             local c_tx="${DIM}"; [ "$tx_s" -gt 0 ] && c_tx="${Y}"
 
-            printf "  ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-14s%b ${B}│${NC} %b%-16s%b ${B}│${NC} %b%-16s%b ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC}\n" "$t_name" "$st_color" "$st_text" "$NC" "$c_rx" "$(format_speed $rx_s)" "$NC" "$c_tx" "$(format_speed $tx_s)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
+            printf "  ${B}│${NC} ${W}%-16s${NC} ${B}│${NC} %b%-10s%b ${B}│${NC} %b%-12s%b ${B}│${NC} %b%-12s%b ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "$t_name" "$st_color" "$st_text" "$NC" "$c_rx" "$(format_speed $rx_s)" "$NC" "$c_tx" "$(format_speed $tx_s)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
             ((count++))
         done
 
         if [ "$count" -eq 0 ]; then
-            printf "  ${B}│${NC} ${DIM}%-120s${NC} ${B}│${NC}\n" "  No active Paqet tunnels configured."
+            printf "  ${B}│${NC} ${DIM}%-86s${NC} ${B}│${NC}\n" "  No active Paqet tunnels configured."
         fi
-        echo -e "  ${B}╰──────────────────────┴────────────────┴──────────────────┴──────────────────┴────────────────────┴────────────────────╯${NC}"
+        echo -e "  ${B}╰──────────────────┴────────────┴──────────────┴──────────────┴──────────────┴──────────────╯${NC}"
         printf "\033[J"
         read -t 1 -n 1 -s key; if [[ "$key" == "q" || "$key" == "Q" || "$key" == $'\e' ]]; then break; fi
     done
@@ -588,8 +590,8 @@ edit_paqet_tunnel() {
     done
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}● Select Index or 'q': ${NC}"; read t_idx
-    t_idx=$(echo "$t_idx" | tr -d '\r')
-    [[ "$t_idx" == "q" || -z "$t_idx" || -z "${configs[$t_idx]}" ]] && return
+    t_idx=$(echo "$t_idx" | tr -dc '0-9')
+    [[ -z "$t_idx" || -z "${configs[$t_idx]}" ]] && return
 
     local sel_cfg="${configs[$t_idx]}"
     local old_tname=$(basename "$sel_cfg" .yaml)
@@ -695,25 +697,20 @@ setup_systemd_service
 
 while true; do
     draw_header
-    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "\n  ${DIM}┌─[ PAQET ACTIONS ]${NC}\n  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup Server Tunnel${NC} ${DIM}(Kharej Raw Listener)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Setup Client Tunnel${NC} ${DIM}(Iran Port Forward)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC} ${DIM}(Specific / ALL)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Advanced Edit Tunnel${NC} ${DIM}(Mode/MTU/Conn/Rename)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Live Traffic & Bandwidth Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Advanced Edit Tunnel${NC} ${DIM}(Mode/MTU/Conn/Rename)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Live Traffic & Bandwidth Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Tunnels Registry & Settings${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     
     echo -ne "  ${C}PAQET ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -dc '0-9')
@@ -834,10 +831,9 @@ EOF
            fi
            
            while true; do
-               echo -ne "  ${C}● Remote Kharej Server Host/IP: ${NC}"; read r_ip
-               r_ip=$(echo "$r_ip" | tr -d '\r')
-               is_valid_host "$r_ip" && break
-               echo -e "  ${R}✖ Invalid Host or IP format!${NC}"
+               echo -ne "  ${C}● Remote Kharej Server IP: ${NC}"; read r_ip
+               r_ip=$(echo "$r_ip" | tr -dc '0-9.')
+               if [[ "$r_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then break; else echo -e "  ${R}✖ Invalid IPv4 format!${NC}"; fi
            done
            
            while true; do
@@ -933,11 +929,8 @@ EOF
         4) show_live_radar ;;
         5)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No tunnels to delete!${NC}" && sleep 1.5 && continue
-           echo -e "\n  ${B}╭────────────────── Select Tunnel to Erase ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}● Enter Index, 'all', or 'q': ${NC}"; read del_idx
+           echo -ne "  ${C}● Enter Index or 'all': ${NC}"; read del_idx
            del_idx=$(echo "$del_idx" | tr -dc '0-9a-zA-Z')
            
            if [[ "$del_idx" == "all" ]]; then
@@ -953,9 +946,9 @@ EOF
                systemctl stop "mpaqet@${t_name}" 2>/dev/null; systemctl disable "mpaqet@${t_name}" 2>/dev/null
                clean_paqet_counters "$t_name"
                rm -f "${configs[$del_idx]}" "$CONF_DIR/${t_name}.yaml"
-               echo -e "  ${G}● Tunnel Purged!${NC}"; sleep 1.5
+               echo -e "  ${G}● Purged!${NC}"; sleep 1.5
            else
-               echo -e "  ${R}✖ Cancelled or Invalid Selection!${NC}"; sleep 1.5
+               echo -e "  ${R}✖ Invalid Selection!${NC}"; sleep 1.5
            fi ;;
         6) show_tunnel_registry ;;
         7) 

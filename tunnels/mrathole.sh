@@ -1,6 +1,6 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.2 ---
-# [Features: Kernel RTT Extraction (ss Fallback) | Path Lock | Smart OTA]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.5 ---
+# [Features: Full ParsPack Mirror (Scripts & Cores) | Active Peer Display]
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -31,7 +31,7 @@ self_update_module() {
     
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MRathole) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
@@ -39,7 +39,7 @@ self_update_module() {
     local dl_url=""
     case $src_opt in
         1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-        2) dl_url="https://ghproxy.net/https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+        2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
         3) 
            echo -ne "  ${C}●${NC} ${W}Enter Direct Link to mrathole.sh: ${NC}"; read custom_url
            dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
@@ -87,7 +87,7 @@ get_local_ip() {
 menu_install_core() {
     echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Official Iranian Mirror${NC} ${DIM}(Anti-Filter)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
@@ -106,9 +106,10 @@ menu_install_core() {
         local arch=$(uname -m)
         local target="x86_64-unknown-linux-gnu"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="aarch64-unknown-linux-gnu"
+        local archive="rathole-${target}.zip"
         
-        local dl_url="https://github.com/rapiz1/rathole/releases/download/v0.5.0/rathole-${target}.zip"
-        [ "$src_choice" == "2" ] && dl_url="https://ghproxy.net/${dl_url}"
+        local dl_url="https://github.com/rapiz1/rathole/releases/download/v0.5.0/${archive}"
+        [ "$src_choice" == "2" ] && dl_url="https://c107328.parspack.net/c107328/MTunnel/packages/${archive}"
 
         local dl_ok=false
         if command -v curl >/dev/null 2>&1; then
@@ -168,15 +169,18 @@ install_rathole_silent() {
         local arch=$(uname -m)
         local target="x86_64-unknown-linux-gnu"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="aarch64-unknown-linux-gnu"
-        local dl_url="https://github.com/rapiz1/rathole/releases/download/v0.5.0/rathole-${target}.zip"
+        local archive="rathole-${target}.zip"
+        
+        local dl_url="https://github.com/rapiz1/rathole/releases/download/v0.5.0/${archive}"
+        local mirror_url="https://c107328.parspack.net/c107328/MTunnel/packages/${archive}"
         
         apt-get update -y -q >/dev/null 2>&1
         apt-get install -y -q unzip >/dev/null 2>&1
         
         if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/rh.zip" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/rh.zip" "https://ghproxy.net/$dl_url" 2>/dev/null
+            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/rh.zip" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/rh.zip" "$mirror_url" 2>/dev/null
         else
-            wget -q --timeout=12 -O "$SECURE_TMP/rh.zip" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/rh.zip" "https://ghproxy.net/$dl_url" 2>/dev/null
+            wget -q --timeout=12 -O "$SECURE_TMP/rh.zip" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/rh.zip" "$mirror_url" 2>/dev/null
         fi
 
         if [ -s "$SECURE_TMP/rh.zip" ]; then
@@ -290,7 +294,8 @@ get_tunnel_status() {
 }
 
 get_peer_ping() {
-    local target_ip="$1"
+    local target_ip=$(echo "$1" | tr -d ' \n\r')
+    local port=$(echo "$2" | tr -d ' \n\r')
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
     
     local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
@@ -308,6 +313,20 @@ get_peer_ping() {
             return
         fi
     fi
+
+    if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
+        local start_ts=$(date +%s%3N 2>/dev/null)
+        if timeout 1 bash -c "</dev/tcp/$target_ip/$port" 2>/dev/null; then
+            local end_ts=$(date +%s%3N 2>/dev/null)
+            if [[ "$start_ts" =~ ^[0-9]+$ ]] && [[ "$end_ts" =~ ^[0-9]+$ ]]; then
+                local t_rtt=$((end_ts - start_ts))
+                [ "$t_rtt" -le 0 ] && t_rtt=1
+                echo "${t_rtt}ms*"
+                return
+            fi
+        fi
+    fi
+
     echo "Timeout"
 }
 
@@ -350,11 +369,12 @@ draw_header() {
     fi
 
     local peer_ip=""
+    local tmp_port=""
     for d in "$CONF_DIR"/*; do
         if [ -d "$d" ] && [ -f "$d/meta.conf" ]; then
             local tmp_type=$(grep "^TYPE=" "$d/meta.conf" | cut -d'=' -f2)
             local tmp_remote=$(grep "^REMOTE_IP=" "$d/meta.conf" | cut -d'=' -f2)
-            local tmp_port=$(grep "^LINK_PORT=" "$d/meta.conf" | cut -d'=' -f2)
+            tmp_port=$(grep "^LINK_PORT=" "$d/meta.conf" | cut -d'=' -f2)
             
             if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
                 peer_ip="$tmp_remote"
@@ -371,7 +391,7 @@ draw_header() {
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local p_val=$(get_peer_ping "$peer_ip")
+        local p_val=$(get_peer_ping "$peer_ip" "$tmp_port")
         if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
             local p_int=$(echo "$p_val" | tr -dc '0-9')
             if [ -z "$p_int" ]; then p_int=0; fi
@@ -387,7 +407,7 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
-    local title=" MRathole Engine v2.9.2 "
+    local title=" MRathole Engine v2.9.5 "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
@@ -409,19 +429,26 @@ show_tunnel_registry() {
         source "$d/meta.conf" 2>/dev/null
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
-        local peer_text=$([ "$TYPE" == "1" ] && echo "Listening on :${LINK_PORT}" || echo "${REMOTE_IP}:${LINK_PORT}")
-        
         local ping_val="N/A"
+        local connected_peer=""
+
         if [ "$TYPE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
-            ping_val=$(get_peer_ping "$REMOTE_IP")
+            ping_val=$(get_peer_ping "$REMOTE_IP" "$LINK_PORT")
+            connected_peer="$REMOTE_IP"
         elif [ "$TYPE" == "1" ]; then
             local conn=$(ss -tn src ":$LINK_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
             if [ -n "$conn" ]; then
                 local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                ping_val=$(get_peer_ping "$p_ip")
+                ping_val=$(get_peer_ping "$p_ip" "$LINK_PORT")
+                connected_peer="$p_ip"
             else
                 ping_val="Waiting"
             fi
+        fi
+
+        local peer_text=$([ "$TYPE" == "1" ] && echo "Listening on :${LINK_PORT}" || echo "${REMOTE_IP}:${LINK_PORT}")
+        if [ "$TYPE" == "1" ] && [ -n "$connected_peer" ]; then
+            peer_text="${connected_peer}:${LINK_PORT} (Active)"
         fi
 
         local st=$(get_tunnel_status "$t_name")
@@ -429,9 +456,6 @@ show_tunnel_registry() {
         if [ "$st" == "CONNECTED" ]; then stat_icon="●"; stat_text="CONNECTED"; stat_color="${G}";
         elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}";
         elif [ "$st" == "RECONNECTING" ]; then stat_icon="◎"; stat_text="RECONNECTING..."; stat_color="${Y}"; fi
-
-        local masked_token="${TOKEN:0:4}********${TOKEN: -4}"
-        [ ${#TOKEN} -le 6 ] && masked_token="********"
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
@@ -448,9 +472,9 @@ show_tunnel_registry() {
         local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
 
-        local l3="Auth Token   : ${masked_token}"; local r3="Protocol: TCP (Rathole Native)"
+        local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: TCP (Rathole Native)"
         local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${masked_token}${NC}${sp3}${DIM}Protocol:${NC} ${C}TCP (Rathole Native)${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}TCP (Rathole Native)${NC} ${B}│${NC}"
 
         local tcp_str="${TCP_PORTS:0:100}"; [ ${#TCP_PORTS} -gt 100 ] && tcp_str="${tcp_str}..."
         local udp_str="${UDP_PORTS:0:100}"; [ ${#UDP_PORTS} -gt 100 ] && udp_str="${udp_str}..."

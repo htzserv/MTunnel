@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.9 ---
-# [Features: Pure Raw URLs (No Query Params) | Header Cache Busting | Scaffolded UI]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.11 ---
+# [Features: Synced 1.7.8 OTA Engine | Target URL Reveal | Version Preview]
 
-MODULE_VERSION="8.3.9"
+MODULE_VERSION="8.3.11"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -12,7 +12,7 @@ OBFS_DIR="/etc/mporter/obfs_rules"
 IPT_DIR="/etc/mporter/iptables_core"
 IPT_CONF="$IPT_DIR/rules.sh"
 LOCAL_DIR="/root/mtunnel"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+SECURE_TMP="$LOCAL_DIR/tmp"
 
 mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost "$OBFS_DIR" "$IPT_DIR" /usr/sbin /usr/local/sbin /usr/local/bin 2>/dev/null
 touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
@@ -23,83 +23,56 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
 fi
 
 self_update_module() {
+    local rel_path="mporter.sh"
+    local cb="?t=$(date +%s)"
+    
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (Script Only) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC} ${DIM}(Multi-Mirror Fallback)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
-
-    local tmp_file="/tmp/.mporter_update.$$"
-    > "$tmp_file"
+    
+    local tmp_file="$SECURE_TMP/.mporter_update.$$"
+    local dl_success=false
 
     if [[ "$src_opt" == "4" ]]; then
+        > "$tmp_file"
         if command -v nano >/dev/null 2>&1; then
             echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
             sleep 2; nano "$tmp_file"
         elif command -v vi >/dev/null 2>&1; then
             vi "$tmp_file"
         else
-            echo -e "  ${R}✖ No text editor (nano/vi) found on this system!${NC}"; rm -f "$tmp_file"; sleep 2; return
+            echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -f "$tmp_file"; sleep 2; return
         fi
+        dl_success=true
     elif [[ "$src_opt" =~ ^[123]$ ]]; then
-        local dl_success=false
-        echo -e "\n  ${C}⟳${NC} ${W}Connecting & Downloading Update...${NC}"
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) 
+               echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
+               dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
+               [ -z "$dl_url" ] && return
+               ;;
+        esac
+
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading MPorter Update...${NC}"
+        echo -e "  ${DIM}Target URL: ${dl_url}${NC}"
         
-        if [[ "$src_opt" == "1" ]]; then
-            local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh"
-            local mirrors=(
-                "$raw_url"
-                "https://mirror.ghproxy.com/$raw_url"
-                "https://ghp.ci/$raw_url"
-                "https://ghproxy.net/$raw_url"
-            )
-            
-            for test_url in "${mirrors[@]}"; do
-                echo -e "  ${DIM}● Testing:${NC} ${test_url:0:55}..."
-                if command -v curl >/dev/null 2>&1; then
-                    curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 -o "$tmp_file" "$test_url" 2>/dev/null
-                else
-                    wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
-                fi
-                if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; break; fi
-            done
-
-        elif [[ "$src_opt" == "2" ]]; then
-            local test_url="https://c107328.parspack.net/c107328/MTunnel/mporter.sh"
-            echo -e "  ${DIM}● Testing:${NC} $test_url..."
-            if command -v curl >/dev/null 2>&1; then
-                curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 -o "$tmp_file" "$test_url" 2>/dev/null
-            else
-                wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
-            fi
-            if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; fi
-
-        elif [[ "$src_opt" == "3" ]]; then
-            echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
-            local test_url=$(echo "$custom_url" | tr -d '\r ')
-            [ -z "$test_url" ] && rm -f "$tmp_file" && return
-            
-            echo -e "  ${DIM}● Fetching custom link...${NC}"
-            if command -v curl >/dev/null 2>&1; then
-                curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 10 --max-time 30 -o "$tmp_file" "$test_url" 2>/dev/null
-            else
-                wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=15 -O "$tmp_file" "$test_url" 2>/dev/null
-            fi
-            if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then dl_success=true; fi
-        fi
-
-        if [ "$dl_success" != true ]; then
-            echo -e "  ${R}✖ Update failed. Mirrors unreachable or proxy blocked the file.${NC}"
-            rm -f "$tmp_file"; sleep 2; return
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
         fi
     else
-        rm -f "$tmp_file"
         return
     fi
 
-    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
+    if [ "$dl_success" = true ] && [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
         local new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
         [ -z "$new_ver" ] && new_ver="Unknown"
 
@@ -111,13 +84,12 @@ self_update_module() {
         if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
             sed -i 's/\r$//' "$tmp_file" 2>/dev/null
             chmod +x "$tmp_file"
-
+            
             cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
             [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
             
-            mkdir -p "$LOCAL_DIR" 2>/dev/null
-            cp -f "$tmp_file" "$LOCAL_DIR/mporter.sh" 2>/dev/null
-
+            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            
             rm -f "$tmp_file"
             echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
             sleep 1.5
@@ -127,9 +99,9 @@ self_update_module() {
             rm -f "$tmp_file"; sleep 1.5
         fi
     else
-        echo -e "  ${R}✖ Update failed. Invalid format (Missing #!/bin/bash).${NC}"
+        echo -e "  ${R}✖ Update failed. File not found or network timeout.${NC}"
         rm -f "$tmp_file"
-        sleep 2
+        sleep 3
     fi
 }
 

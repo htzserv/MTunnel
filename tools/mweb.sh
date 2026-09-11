@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.7.2 ---
 # [Features: Versioned Telemetry | Background Sync | Cleaned Daemons]
 
-MODULE_VERSION="5.7.2"
+MODULE_VERSION="5.7.3"
 
 CONF_FILE="/etc/mweb/web.conf"
 LOCAL_DIR="/root/mtunnel"

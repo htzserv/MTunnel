@@ -2,7 +2,7 @@
 # --- MDesign BBR Accelerator Core (mbbr.sh) v1.0.1 ---
 # [Features: Async Background Checker | MDesign UI Spacing | Minimal OTA]
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="1.0.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbbr"

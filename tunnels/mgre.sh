@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.7 ---
-# [Features: Version Preview | Offline Editor | Scaffolded UI]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.8 ---
+# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
 
-MODULE_VERSION="5.4.7"
+MODULE_VERSION="5.4.8"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -22,15 +22,50 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
+# --- ASYNC BACKGROUND UPDATE CHECKER ---
+check_update_bg() {
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mgre.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mgre.sh${cb}"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mgre_remote_ver"
+}
+check_update_bg &
+# ---------------------------------------
+
 self_update_module() {
     local rel_path="tunnels/mgre.sh"
     local cb="?t=$(date +%s)"
     
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mgre_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mgre_remote_ver" | tr -d '\r\n ')
+
+    local gh_text="${C}Official GitHub Server${NC}"
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+    else
+        gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
+    fi
+
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MGRE Engine) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
     
@@ -387,6 +422,7 @@ edit_tunnel() {
         local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
         
         echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${T_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit Tunnel Network ID (Current: ${TUN_ID})${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Core Subnet (Current: ${CORE_SUBNET}.x)${NC}"
@@ -394,20 +430,21 @@ edit_tunnel() {
             echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Port Forwarding & Load Balancer${NC}"
         fi
         echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Rename Tunnel Interface (Current: ${T_NAME})${NC}"
+        echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
 
         case $e_opt in
             1)
-                echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Enter to Skip): ${NC}"; read new_local
-                echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Enter to Skip): ${NC}"; read new_remote
+                echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}]: ${NC}"; read new_local
+                echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}]: ${NC}"; read new_remote
                 new_local=$(echo "$new_local" | tr -dc '0-9.')
                 new_remote=$(echo "$new_remote" | tr -dc '0-9.')
                 [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
                 [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
                 ;;
             2)
-                echo -ne "  ${C}●${NC} ${W}New Tunnel Network ID (1-250) [Enter to Skip]: ${NC}"; read new_tun_id
+                echo -ne "  ${C}●${NC} ${W}New Tunnel Network ID (1-250): ${NC}"; read new_tun_id
                 new_tun_id=$(echo "$new_tun_id" | tr -dc '0-9')
                 if [ -n "$new_tun_id" ]; then
                     if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
@@ -426,7 +463,7 @@ edit_tunnel() {
                 fi
                 ;;
             3)
-                echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.76.5) [Enter to Skip]: ${NC}"; read new_sub
+                echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.76.5): ${NC}"; read new_sub
                 new_sub=$(echo "$new_sub" | tr -dc '0-9.')
                 if [ -n "$new_sub" ]; then
                     sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$sel_conf"
@@ -434,15 +471,15 @@ edit_tunnel() {
                 ;;
             4)
                 if [ "$TYPE" != "1" ]; then return; fi
-                echo -ne "  ${C}●${NC} ${W}New TCP Ports (e.g. 80,443)  [Current: ${Y}${FWD_TCP:-None}${W}]: ${NC}"; read new_tcp
-                echo -ne "  ${C}●${NC} ${W}New UDP Ports (e.g. 53,7000) [Current: ${C}${FWD_UDP:-None}${W}]: ${NC}"; read new_udp
+                echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read new_tcp
+                echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read new_udp
                 new_tcp=$(echo "$new_tcp" | tr -dc '0-9,')
                 new_udp=$(echo "$new_udp" | tr -dc '0-9,')
                 local new_lb="0"
                 if [ -n "$new_tcp" ] || [ -n "$new_udp" ]; then
-                    echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
-                    ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-                    if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then new_lb="1"; fi
+                    echo -ne "  ${C}●${NC} ${W}Load Balance across all Virtual IPs? (y/n): ${NC}"; read ask_lb
+                    ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
+                    [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]] && new_lb="1"
                 fi
                 grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${sel_conf}.tmp"
                 echo "FWD_TCP=$new_tcp" >> "${sel_conf}.tmp"
@@ -451,14 +488,14 @@ edit_tunnel() {
                 mv "${sel_conf}.tmp" "$sel_conf"
                 ;;
             5)
-                echo -ne "  ${C}●${NC} ${W}New Interface Suffix (Current: ${Y}${T_NAME#gre*}${W}, Max 4-5 chars): ${NC}"; read new_suffix
+                echo -ne "  ${C}●${NC} ${W}New Interface Suffix (Current: ${Y}${T_NAME#gre*}${W}): ${NC}"; read new_suffix
                 new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
                 if [ -n "$new_suffix" ]; then
                     local pfx=$([ "$TUN_PROTO" == "6to4" ] && echo "$([ "$TYPE" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$TYPE" == "1" ] && echo "greir" || echo "grekh")")
                     local new_t_name="${pfx}${new_suffix}"
                     local check_len=${#new_t_name}; [ "$TUN_PROTO" == "6to4" ] && check_len=$((check_len + 4))
-                    if [ "$check_len" -gt 15 ]; then echo -e "  ${R}● Error: Name too long! Kernel limit is 15 chars.${NC}"; sleep 1.5; return; fi
-                    if [ -f "$CONF_DIR/${new_t_name}.conf" ]; then echo -e "  ${R}● Error: Tunnel interface [${new_t_name}] already exists!${NC}"; sleep 1.5; return; fi
+                    if [ "$check_len" -gt 15 ]; then echo -e "  ${R}● Error: Name too long!${NC}"; sleep 1.5; return; fi
+                    if [ -f "$CONF_DIR/${new_t_name}.conf" ]; then echo -e "  ${R}● Error: Interface exists!${NC}"; sleep 1.5; return; fi
                     
                     iptables -t mangle -S FORWARD 2>/dev/null | grep "MGRE_MSS_${T_NAME}\"" | sed 's/^-A /-D /' | while read r; do iptables -t mangle $r 2>/dev/null; done
                     clean_fwd_rules "$T_NAME"
@@ -468,7 +505,7 @@ edit_tunnel() {
                     mv "$sel_conf" "$CONF_DIR/${new_t_name}.conf"
                     sel_conf="$CONF_DIR/${new_t_name}.conf"
                     T_NAME="$new_t_name"
-                    echo -e "  ${G}● Tunnel successfully renamed to: ${new_t_name}${NC}"
+                    echo -e "  ${G}● Tunnel renamed to: ${new_t_name}${NC}"
                 fi
                 ;;
             *) return ;;
@@ -496,35 +533,54 @@ EOF
 if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
 
 while true; do
+    badge=""
+    if [ -f "$SECURE_TMP/.mgre_remote_ver" ]; then
+        rv=$(cat "$SECURE_TMP/.mgre_remote_ver" | tr -d '\r\n ')
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+            badge=" ${Y}(Update Available: v${rv})${NC}"
+        fi
+    fi
+
     draw_mgre_header
     echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (IPs / NetID / Subnet / NAT)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Tunnel Configurations & Details${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     
     echo -ne "  ${C}MGRE ❯❯ ${NC}"; read opt
     case $opt in
         1) 
-           echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}\n  ${DIM}├─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}"
-           while true; do echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read proto_choice; [[ "$proto_choice" == "q" ]] && break; [[ "$proto_choice" == "1" || "$proto_choice" == "2" ]] && break; done
+           echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}"
+           echo -e "  ${DIM}│${NC}"
+           echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}"
+           echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC}"
+           echo -e "  ${DIM}│${NC}"
+           echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}\n"
+           while true; do echo -ne "  ${C}Select Protocol ❯❯ ${NC}"; read proto_choice; [[ "$proto_choice" == "q" ]] && break; [[ "$proto_choice" == "1" || "$proto_choice" == "2" ]] && break; done
            [[ "$proto_choice" == "q" ]] && continue
            tun_proto="ipv4"; [ "$proto_choice" == "2" ] && tun_proto="6to4"
+           
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type; [[ "$s_type" == "q" ]] && break; [[ "$s_type" == "1" || "$s_type" == "2" ]] && break; done
            [[ "$s_type" == "q" ]] && continue
+           
            while true; do
-               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars, e.g. fr): ${NC}"; read suffix
+               echo -ne "  ${C}●${NC} ${W}Interface Suffix Name (Max 4-5 chars): ${NC}"; read suffix
                suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
                [[ "$suffix" == "q" ]] && break; [[ -z "$suffix" ]] && continue
                pfx=$([ "$tun_proto" == "6to4" ] && echo "$([ "$s_type" == "1" ] && echo "gre6ir" || echo "gre6kh")" || echo "$([ "$s_type" == "1" ] && echo "greir" || echo "grekh")")
@@ -534,11 +590,11 @@ while true; do
            done
            [[ "$suffix" == "q" ]] && continue
            
-           if [ -f "$CONF_DIR/${t_name}.conf" ]; then echo -e "\n  ${R}● Error: Tunnel interface name [${W}${t_name}${R}] already exists!${NC}"; sleep 2; continue; fi
+           if [ -f "$CONF_DIR/${t_name}.conf" ]; then echo -e "\n  ${R}● Error: Interface name [${t_name}] already exists!${NC}"; sleep 2; continue; fi
            
            local_ip=$(get_local_ip)
            while true; do
-               echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}] (Enter for default | q:Back): ${NC}"; read custom_ip
+               echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_ip
                [[ "$custom_ip" == "q" ]] && break
                custom_ip=$(echo "$custom_ip" | tr -dc '0-9.'); [ -n "$custom_ip" ] && local_ip=$custom_ip
                break
@@ -569,7 +625,7 @@ while true; do
                echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
                [[ "$user_tun_id" == "q" ]] && break
                user_tun_id=$(echo "$user_tun_id" | tr -dc '0-9'); [[ -z "$user_tun_id" ]] && continue
-               if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Error: Network ID [${W}${user_tun_id}${R}] is already assigned!${NC}"; continue; fi
+               if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Error: Network ID [${user_tun_id}] is already assigned!${NC}"; continue; fi
                break
            done
            [[ "$user_tun_id" == "q" ]] && continue
@@ -595,7 +651,7 @@ while true; do
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
                
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
-               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
                    echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
                    echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
@@ -609,7 +665,7 @@ while true; do
                fi
                
                echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
-               setup_vip=$(echo "$setup_vip" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+               setup_vip=$(echo "$setup_vip" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                if [[ "$setup_vip" == "y" || "$setup_vip" == "yes" ]]; then
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
                    if [[ "$n" != "q" ]]; then
@@ -629,7 +685,7 @@ while true; do
 
                if [ "$s_type" == "1" ]; then
                    echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Port Forwarding? (y/n): ${NC}"; read setup_pf
-                   setup_pf=$(echo "$setup_pf" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+                   setup_pf=$(echo "$setup_pf" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                    if [[ "$setup_pf" == "y" || "$setup_pf" == "yes" ]]; then
                        echo -ne "  ${C}●${NC} ${Y}NAT Forward TCP Ports (e.g. 80,443)  [Enter to skip]: ${NC}"; read fwd_tcp
                        echo -ne "  ${C}●${NC} ${C}NAT Forward UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read fwd_udp
@@ -639,7 +695,7 @@ while true; do
                        local run_lb="0"
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
-                           ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+                           ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                            if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then run_lb="1"; fi
                        fi
                        
@@ -692,8 +748,13 @@ while true; do
            
            if [[ -n "${configs[$t_idx]}" ]]; then
                sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
-               echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-               while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
+               echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}"
+               echo -e "  ${DIM}│${NC}"
+               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}"
+               echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}"
+               echo -e "  ${DIM}│${NC}"
+               echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+               while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
                [[ "$vip_action" == "q" ]] && continue
                if [[ "$vip_action" == "1" ]]; then
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done

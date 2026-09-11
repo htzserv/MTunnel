@@ -1,7 +1,14 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.8.0 ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v3.8.1 ---
+# [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
+
+MODULE_VERSION="3.8.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
+INSTALL_PATH="/usr/bin/mstats"
+LOCAL_DIR="/root/mtunnel"
+SECURE_TMP="$LOCAL_DIR/tmp"
+
 CONF_FILE="/etc/mweb/web.conf"
 WEB_SVC_FILE="/etc/systemd/system/mweb.service"
 source "$CONF_FILE" 2>/dev/null
@@ -12,6 +19,121 @@ CONF_PQ="/etc/paqet"
 
 export CACHE_IPT_IN=""
 export CACHE_IPT_OUT=""
+
+mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tools" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$SECURE_TMP" 2>/dev/null
+
+if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
+    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
+    chmod +x "$INSTALL_PATH" 2>/dev/null
+fi
+
+# --- ASYNC BACKGROUND UPDATE CHECKER ---
+check_update_bg() {
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tools/mstats.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tools/mstats.sh${cb}"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mstats_remote_ver"
+}
+check_update_bg &
+# ---------------------------------------
+
+self_update_module() {
+    local rel_path="tools/mstats.sh"
+    local cb="?t=$(date +%s)"
+    
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mstats_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mstats_remote_ver" | tr -d '\r\n ')
+
+    local gh_text="${C}Official GitHub Server${NC}"
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+    else
+        gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
+    fi
+
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MStats Radar) ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
+    
+    local tmp_file="$SECURE_TMP/.mstats_update.$$"
+    > "$tmp_file"
+
+    if [[ "$src_opt" == "4" ]]; then
+        if command -v nano >/dev/null 2>&1; then
+            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
+            sleep 2; nano "$tmp_file"
+        elif command -v vi >/dev/null 2>&1; then
+            vi "$tmp_file"
+        else
+            echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -f "$tmp_file"; sleep 2; return
+        fi
+    elif [[ "$src_opt" =~ ^[123]$ ]]; then
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url; dl_url=$(echo "$custom_url" | tr -d '\r ') ;;
+        esac
+        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
+        fi
+    else
+        rm -f "$tmp_file"; return
+    fi
+
+    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
+        local new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
+        [ -z "$new_ver" ] && new_ver="Unknown"
+        
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
+        
+        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
+            sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+            chmod +x "$tmp_file"
+            cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+            [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            rm -f "$tmp_file"
+            echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+            sleep 1.5
+            exec "$INSTALL_PATH" "$@"
+        else
+            echo -e "  ${Y}● Update cancelled by user.${NC}"
+            rm -f "$tmp_file"; sleep 1.5
+        fi
+    else
+        echo -e "  ${R}✖ Update failed. Invalid format or network timeout.${NC}"
+        rm -f "$tmp_file"; sleep 2
+    fi
+}
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -24,7 +146,7 @@ draw_mstats_header() {
     local w_stat="${DIM}DISABLED${NC}"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then w_stat="${C}PORT ${WEB_PORT}${NC}"; fi
     clear; echo ""
-    local str1=" MStats Omni-Radar Core 3.8.0 "
+    local str1=" MStats Omni-Radar Core v${MODULE_VERSION} "
     local raw_len=$(( ${#str1} ))
     local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
@@ -38,8 +160,8 @@ format_speed() {
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B/s"; return; fi
     if [ "$bytes" -lt 1024 ]; then echo "${bytes} B/s"
     elif [ "$bytes" -lt 1048576 ]; then echo "$((bytes / 1024)) KB/s"
-    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf "%.1f MB/s", $bytes/1048576}"
-    else awk "BEGIN {printf "%.2f GB/s", $bytes/1073741824}"; fi
+    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB/s\", $bytes/1048576}"
+    else awk "BEGIN {printf \"%.2f GB/s\", $bytes/1073741824}"; fi
 }
 
 format_total() {
@@ -47,9 +169,9 @@ format_total() {
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B"; return; fi
     if [ "$bytes" -lt 1024 ]; then echo "${bytes} B"
     elif [ "$bytes" -lt 1048576 ]; then echo "$((bytes / 1024)) KB"
-    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf "%.1f MB", $bytes/1048576}"
-    elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf "%.2f GB", $bytes/1073741824}"
-    else awk "BEGIN {printf "%.2f TB", $bytes/1099511627776}"; fi
+    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB\", $bytes/1048576}"
+    elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf \"%.2f GB\", $bytes/1073741824}"
+    else awk "BEGIN {printf \"%.2f TB\", $bytes/1099511627776}"; fi
 }
 
 get_iface_rx() {
@@ -176,19 +298,35 @@ show_live_radar() {
 }
 
 while true; do
+    badge=""
+    if [ -f "$SECURE_TMP/.mstats_remote_ver" ]; then
+        rv=$(cat "$SECURE_TMP/.mstats_remote_ver" | tr -d '\r\n ')
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+            badge=" ${Y}(Update Available: v${rv})${NC}"
+        fi
+    fi
+
     clear; draw_mstats_header
-    echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}\n  ${DIM}│${NC}"
+    echo -e "\n  ${DIM}┌─[ TRAFFIC & BANDWIDTH ACTIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Live Omni-Radar${NC} ${DIM}(CLI Real-Time Monitor)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}TCP/UDP Connection Tracker${NC} ${DIM}(Active Clients)${NC}"
-    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+
     echo -ne "  ${C}MSTATS ❯❯ ${NC}"; read opt
-    opt=$(echo "$opt" | tr -d '\r' | tr -d ' ')
+    opt=$(echo "$opt" | tr -d '\r ')
     case $opt in
         1) show_live_radar ;;
         2) 
            echo -e "\n  ${DIM}┌─[ TOP ACTIVE CLIENTS ]${NC}"
            ss -tun state established 2>/dev/null | awk 'NR>1 {print $5}' | rev | cut -d: -f2- | rev | tr -d '[]' | grep -Ev '^(127\.0\.0\.1|0\.0\.0\.0|\*)$' | sort | uniq -c | sort -nr | head -n 10
            echo -ne "\n  ${DIM}Press Enter...${NC}"; read dummy ;;
+        3) self_update_module ;;
         0) break ;;
     esac
 done

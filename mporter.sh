@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.14 ---
-# [Features: Async Background Update Checker | Stable OTA | Offline Editor]
+# [Features: Fixed Global Scope Locals | Instant Background Cache-Buster]
 
 MODULE_VERSION="8.3.14"
 
@@ -24,17 +24,20 @@ fi
 
 # --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
-    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh"
-    local ver_file="$SECURE_TMP/.mporter_remote_ver"
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/mporter.sh${cb}"
     local remote_ver=""
     
     if command -v curl >/dev/null 2>&1; then
         remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
         remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
     
-    [ -n "$remote_ver" ] && echo "$remote_ver" > "$ver_file"
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mporter_remote_ver"
 }
 check_update_bg &
 # ---------------------------------------
@@ -1229,7 +1232,7 @@ manual_restart() {
 while true; do
     local badge=""
     if [ -f "$SECURE_TMP/.mporter_remote_ver" ]; then
-        local rv=$(cat "$SECURE_TMP/.mporter_remote_ver" | tr -d '\r\n ')
+        rv=$(cat "$SECURE_TMP/.mporter_remote_ver" | tr -d '\r\n ')
         if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
             badge=" ${Y}(Update Available ➔ v${rv})${NC}"
         fi

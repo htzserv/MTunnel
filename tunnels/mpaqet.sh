@@ -27,6 +27,59 @@ is_valid_host() {
     return 1
 }
 
+MAIN_PID=$$
+NEED_REFRESH=false
+trap 'NEED_REFRESH=true' SIGUSR1
+
+# فاصله‌ی چک خودکار آپدیت در پس‌زمینه (ثانیه) - پیشنهاد حداقل 20-30 ثانیه
+UPDATE_CHECK_INTERVAL=30
+
+# --- Character-by-character read که رفرش زنده رو بدون پاک شدن تایپ کاربر مدیریت می‌کنه ---
+read_with_refresh() {
+    local prompt="$1"
+    local __resultvar="$2"
+    local redraw_func="$3"
+    local buffer=""
+    local char rc
+
+    echo -ne "$prompt"
+
+    while true; do
+        if [ "$NEED_REFRESH" = true ]; then
+            NEED_REFRESH=false
+            if [ -n "$redraw_func" ]; then
+                "$redraw_func"
+            fi
+            echo -ne "$prompt$buffer"
+        fi
+
+        IFS= read -rsn1 -t 0.3 char
+        rc=$?
+
+        if [ $rc -ne 0 ]; then
+            continue
+        fi
+
+        if [[ -z "$char" ]]; then
+            echo ""
+            break
+        fi
+
+        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
+            if [ -n "$buffer" ]; then
+                buffer="${buffer%?}"
+                echo -ne "\b \b"
+            fi
+            continue
+        fi
+
+        buffer+="$char"
+        echo -ne "$char"
+    done
+
+    eval "$__resultvar=\"\$buffer\""
+}
+
 # --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
     local cb="?t=$(date +%s)"
@@ -44,7 +97,14 @@ check_update_bg() {
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mpaqet_remote_ver"
 }
-check_update_bg &
+update_watcher_loop() {
+    while true; do
+        check_update_bg
+        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        sleep "$UPDATE_CHECK_INTERVAL"
+    done
+}
+update_watcher_loop &
 # ---------------------------------------
 
 self_update_module() {
@@ -784,7 +844,7 @@ edit_paqet_tunnel() {
 install_paqet_silent
 setup_systemd_service
 
-while true; do
+render_mpaqet_menu() {
     badge=""
     if [ -f "$SECURE_TMP/.mpaqet_remote_ver" ]; then
         rv=$(cat "$SECURE_TMP/.mpaqet_remote_ver" | tr -d '\r\n ')
@@ -817,8 +877,11 @@ while true; do
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
-    
-    echo -ne "  ${C}PAQET ❯❯ ${NC}"; read opt
+}
+
+while true; do
+    render_mpaqet_menu
+    read_with_refresh "  ${C}PAQET ❯❯ ${NC}" opt render_mpaqet_menu
     opt=$(echo "$opt" | tr -dc '0-9')
     
     case $opt in

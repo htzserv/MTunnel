@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.5 ---
-# [Features: Version Preview | Offline Editor | Scaffolded UI]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.6 ---
+# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
 
-MODULE_VERSION="1.5.5"
+MODULE_VERSION="1.5.6"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -28,15 +28,50 @@ is_valid_host() {
     return 1
 }
 
+# --- ASYNC BACKGROUND UPDATE CHECKER ---
+check_update_bg() {
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mxlan.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mxlan.sh${cb}"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mxlan_remote_ver"
+}
+check_update_bg &
+# ---------------------------------------
+
 self_update_module() {
     local rel_path="tunnels/mxlan.sh"
     local cb="?t=$(date +%s)"
     
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mxlan_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mxlan_remote_ver" | tr -d '\r\n ')
+
+    local gh_text="${C}Official GitHub Server${NC}"
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+    else
+        gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
+    fi
+
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
     
@@ -382,6 +417,7 @@ edit_fabric() {
         local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
         
         echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${VX_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit VNI Network ID (Current: ${VNI_ID})${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Core Subnet (Current: ${CORE_SUBNET}.x)${NC}"
@@ -389,6 +425,7 @@ edit_fabric() {
             echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Port Forwarding & Load Balancer${NC}"
         fi
         echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Rename Fabric Interface (Current: ${VX_NAME})${NC}"
+        echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
 
@@ -500,21 +537,33 @@ EOF
 if [[ "$1" == "--apply" ]]; then apply_all_fabrics; exit 0; fi
 
 while true; do
+    badge=""
+    if [ -f "$SECURE_TMP/.mxlan_remote_ver" ]; then
+        rv=$(cat "$SECURE_TMP/.mxlan_remote_ver" | tr -d '\r\n ')
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+            badge=" ${Y}(Update Available: v${rv})${NC}"
+        fi
+    fi
+
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (VNI Mesh)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Advanced Edit Fabric (IPs / VNI / NAT / Rename)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Fabric Configurations & Details${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
     
@@ -522,7 +571,6 @@ while true; do
     case $opt in
         1) 
            echo -e "\n  ${DIM}┌─[ VXLAN DEPLOYMENT ]${NC}"
-           
            while true; do
                echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read s_type
                [[ "$s_type" == "q" || "$s_type" == "1" || "$s_type" == "2" ]] && break
@@ -537,7 +585,7 @@ while true; do
                
                vx_name="vx_${suffix}"; br_name="br_${suffix}"
                if [ -f "$CONF_DIR/${vx_name}.conf" ] || ip link show "$vx_name" >/dev/null 2>&1; then
-                   echo -e "  ${R}● Error: Fabric interface [${W}${vx_name}${R}] already exists!${NC}"; continue
+                   echo -e "  ${R}● Error: Interface [${vx_name}] already exists!${NC}"; continue
                fi
                break
            done
@@ -547,7 +595,7 @@ while true; do
            while true; do
                echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}] (Enter for default): ${NC}"; read custom_ip
                [[ "$custom_ip" == "q" ]] && break
-               custom_ip=$(echo "$custom_ip" | tr -dc '0-9.') # Security Sanitize
+               custom_ip=$(echo "$custom_ip" | tr -dc '0-9.')
                [ -n "$custom_ip" ] && local_ip=$custom_ip
                break
            done
@@ -556,7 +604,7 @@ while true; do
            while true; do
                echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read r_ip
                [[ "$r_ip" == "q" ]] && break
-               r_ip=$(echo "$r_ip" | tr -dc '0-9.') # Security Sanitize
+               r_ip=$(echo "$r_ip" | tr -dc '0-9.')
                [[ -n "$r_ip" ]] && break
            done
            [[ "$r_ip" == "q" ]] && continue
@@ -564,9 +612,9 @@ while true; do
            while true; do
                echo -ne "  ${C}●${NC} ${W}Tunnel Network ID / VNI (1-16777215): ${NC}"; read vni_id
                [[ "$vni_id" == "q" ]] && break
-               vni_id=$(echo "$vni_id" | tr -dc '0-9') # Security Sanitize
+               vni_id=$(echo "$vni_id" | tr -dc '0-9')
                [[ -z "$vni_id" ]] && continue
-               if grep -q "VNI_ID=$vni_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Error: VNI [${W}${vni_id}${R}] is already assigned!${NC}"; continue; fi
+               if grep -q "VNI_ID=$vni_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Error: VNI assigned!${NC}"; continue; fi
                break
            done
            [[ "$vni_id" == "q" ]] && continue
@@ -582,58 +630,56 @@ while true; do
            apply_fabric "$conf_path"
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
-               echo -e "  ${G}● Fabric [${vx_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
+               echo -e "  ${G}● Fabric [${vx_name}] deployed (Subnet: ${core_sub}.x)${NC}"
                
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
                
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
-               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
                    echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
                    echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
                    if echo "$ping_res" | grep -q "time="; then
                        lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
+                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Latency: ${Y}${lat}ms${NC}"
                    else
-                       echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
+                       echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Host Unreachable."
                    fi
                fi
                
-               echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
-               setup_vip=$(echo "$setup_vip" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+               echo -ne "\n  ${C}●${NC} ${W}Setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
+               setup_vip=$(echo "$setup_vip" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                if [[ "$setup_vip" == "y" || "$setup_vip" == "yes" ]]; then
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
                    if [[ "$n" != "q" ]]; then
                        while true; do 
-                           echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; 
-                           [[ "$k" == "q" ]] && break; 
-                           k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); # Security Sanitize
-                           [[ -n "$k" ]] && break; 
+                           echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; [[ "$k" == "q" ]] && break
+                           k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break
                        done
                        if [[ "$k" != "q" ]]; then
                            sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$conf_path"
                            sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$conf_path"
                            apply_fabric "$conf_path"
-                           echo -e "  ${G}● Virtual IPs applied successfully.${NC}"
+                           echo -e "  ${G}● Virtual IPs applied.${NC}"
                        fi
                    fi
                fi
 
                if [ "$s_type" == "1" ]; then
-                   echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Port Forwarding? (y/n): ${NC}"; read setup_pf
-                   setup_pf=$(echo "$setup_pf" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+                   echo -ne "\n  ${C}●${NC} ${W}Setup Port Forwarding? (y/n): ${NC}"; read setup_pf
+                   setup_pf=$(echo "$setup_pf" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                    if [[ "$setup_pf" == "y" || "$setup_pf" == "yes" ]]; then
-                       echo -ne "  ${C}●${NC} ${Y}NAT Forward TCP Ports (e.g. 80,443)  [Enter to skip]: ${NC}"; read fwd_tcp
-                       echo -ne "  ${C}●${NC} ${C}NAT Forward UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read fwd_udp
+                       echo -ne "  ${C}●${NC} ${Y}NAT TCP Ports: ${NC}"; read fwd_tcp
+                       echo -ne "  ${C}●${NC} ${C}NAT UDP Ports: ${NC}"; read fwd_udp
                        fwd_tcp=$(echo "$fwd_tcp" | tr -dc '0-9,')
                        fwd_udp=$(echo "$fwd_udp" | tr -dc '0-9,')
                        
                        local run_lb="0"
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
-                           echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
-                           ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-                           if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then run_lb="1"; fi
+                           echo -ne "  ${C}●${NC} ${W}Load Balance across all Virtual IPs? (y/n): ${NC}"; read ask_lb
+                           ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
+                           [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]] && run_lb="1"
                        fi
                        
                        grep -v "^FWD_TCP=" "$conf_path" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${conf_path}.tmp"
@@ -643,17 +689,17 @@ while true; do
                        mv "${conf_path}.tmp" "$conf_path"
                        
                        apply_fabric "$conf_path"
-                       echo -e "  ${G}● Port Forwarding applied successfully.${NC}"
+                       echo -e "  ${G}● Port Forwarding applied.${NC}"
                    fi
                fi
                
                sleep 2
            else
-               echo -e "\n  ${R}● FATAL ERROR: Kernel rejected VXLAN creation!${NC}"; rm -f "$conf_path"; sleep 3.5
+               echo -e "\n  ${R}● FATAL ERROR: Creation rejected!${NC}"; rm -f "$conf_path"; sleep 3.5
            fi ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No active fabrics to remove!${NC}" && sleep 1.5 && continue
+           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No fabrics to remove!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Fabric to Erase ──────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
@@ -661,21 +707,21 @@ while true; do
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
            
            if [[ "$del_idx" == "all" ]]; then
-               echo -ne "  ${R}● DANGER: Delete ALL VXLAN fabrics? (y/n): ${NC}"; read confirm_all
+               echo -ne "  ${R}● Delete ALL VXLAN fabrics? (y/n): ${NC}"; read confirm_all
                if [[ "$confirm_all" == "y" ]]; then
                    for conf in "${configs[@]}"; do
-                       TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "$conf" 2>/dev/null
+                       source "$conf" 2>/dev/null
                        clean_fwd_rules "$VX_NAME"
                        ip link del "$VX_NAME" >/dev/null 2>&1
                        ip link del "$BR_NAME" >/dev/null 2>&1
                        rm -f "$conf"
                    done
                    [ -x "/usr/bin/mporter" ] && /usr/bin/mporter --cleanup-orphans >/dev/null 2>&1 &
-                   echo -e "  ${G}● All fabrics safely purged.${NC}"; sleep 1.5
+                   echo -e "  ${G}● All fabrics purged.${NC}"; sleep 1.5
                fi; continue
            fi
            if [[ -n "${configs[$del_idx]}" ]]; then
-               TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; source "${configs[$del_idx]}" 2>/dev/null
+               source "${configs[$del_idx]}" 2>/dev/null
                clean_fwd_rules "$VX_NAME"
                ip link del "$VX_NAME" >/dev/null 2>&1
                ip link del "$BR_NAME" >/dev/null 2>&1
@@ -693,7 +739,7 @@ while true; do
            while true; do echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx; [[ "$t_idx" == "q" ]] && break 2; [[ -n "$t_idx" ]] && break; done
            
            if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
+               sel_conf="${configs[$t_idx]}"; source "$sel_conf" 2>/dev/null
                echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
                while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
                [[ "$vip_action" == "q" ]] && continue
@@ -702,12 +748,10 @@ while true; do
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ -n "$n" ]] && break; done
                    [[ "$n" == "q" ]] && continue
                    while true; do 
-                       echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; 
-                       k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); # Security Sanitize
-                       [[ -n "$k" ]] && break; 
+                       echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break
                    done
                    [[ "$k" == "q" ]] && continue
-                   sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"; apply_fabric "$sel_conf"; echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
+                   sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"; apply_fabric "$sel_conf"; echo -e "  ${G}● IPs synchronized.${NC}"; sleep 1.5
                elif [[ "$vip_action" == "2" ]]; then
                    if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
                    echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${VX_NAME}]? (y/n): ${NC}"; read confirm_vip

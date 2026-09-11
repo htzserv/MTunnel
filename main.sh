@@ -112,6 +112,8 @@ update_watcher_loop() {
     done
 }
 update_watcher_loop &
+WATCHER_PID=$!
+trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
 # -------------------------------------------
 
 get_local_ip() {

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel Core Modular Installer v8.3.1 ---
-# [Features: Pure GitHub | Version-Tagged Progress | MDesign Hierarchy]
+# --- MTunnel Core Modular Installer v8.3.2 ---
+# [Features: Pure GitHub | Fixed ANSI Alignment | MDesign Hierarchy]
 
-MODULE_VERSION="8.3.1"
+MODULE_VERSION="8.3.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
@@ -31,25 +31,39 @@ mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$LOCAL_DIR/tools" "$LOCAL_D
 chmod 700 "$LOCAL_DIR/tmp" 2>/dev/null
 
 draw_progress() {
-    local n=$1; local total=$2; local text=$3; local ver=$4; local width=22
+    local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
     [ -z "$total" ] || [ "$total" -le 0 ] && total=1
     local percent=$(( n * 100 / total ))
     local filled=$(( percent * width / 100 ))
     local empty=$(( width - filled ))
     local bar=$(printf "%${filled}s" "" | tr ' ' '#')
     local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
-    
-    local label="${text}"
-    [ -n "$ver" ] && [ "$ver" != "Unknown" ] && label="${text} ${Y}(v${ver})${NC}"
-    
-    local clean_label="${text}"
-    [ -n "$ver" ] && [ "$ver" != "Unknown" ] && clean_label="${text} (v${ver})"
-    local pad_spaces=$(( 26 - ${#clean_label} ))
+
+    local ver_clean=""
+    [ -n "$ver" ] && [ "$ver" != "Unknown" ] && ver_clean=" (v${ver})"
+
+    local plain_label="${text}${ver_clean}"
+    local pad_spaces=$(( 26 - ${#plain_label} ))
     [ "$pad_spaces" -lt 0 ] && pad_spaces=0
     local padding=$(printf '%*s' "$pad_spaces" "")
 
     tput civis 2>/dev/null || true
-    printf "\r  %b✔%b %b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" "$G" "$NC" "$W" "$label" "$NC" "$padding" "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" "$W" "$percent" "$NC"
+    if [ -n "$ver_clean" ]; then
+        printf "\r  %b✔%b %b%s%b%b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
+            "$G" "$NC" \
+            "$W" "$text" "$NC" \
+            "$Y" "$ver_clean" "$NC" \
+            "$padding" \
+            "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
+            "$W" "$percent" "$NC"
+    else
+        printf "\r  %b✔%b %b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
+            "$G" "$NC" \
+            "$W" "$text" "$NC" \
+            "$padding" \
+            "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
+            "$W" "$percent" "$NC"
+    fi
     tput cnorm 2>/dev/null || true
 }
 

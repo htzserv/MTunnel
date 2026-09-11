@@ -407,10 +407,11 @@ generate_toml() {
 
 get_tunnel_status() {
     local t_name="$1"
+    local known_active="$2"
     local meta="$CONF_DIR/$t_name/meta.conf"
     TYPE=""; LINK_PORT=""; source "$meta" 2>/dev/null
     
-    if ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
+    if [ "$known_active" != "1" ] && ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
     
     if [ "$TYPE" == "1" ]; then
         if ss -tn src ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "WAITING"; fi
@@ -458,17 +459,26 @@ get_peer_ping() {
 
 draw_header() {
     local s_ip=$(get_local_ip); local total_t=0; local active_t=0; local online_t=0
+    local t_names=() units=()
     for d in "$CONF_DIR"/*; do
         if [ -d "$d" ]; then
-            ((total_t++))
             local t_name=$(basename "$d")
-            if systemctl is-active --quiet mrathole@$t_name; then
-                ((active_t++))
-                local st=$(get_tunnel_status "$t_name")
-                [ "$st" == "CONNECTED" ] && ((online_t++))
-            fi
+            t_names+=("$t_name"); units+=("mrathole@$t_name")
         fi
     done
+    total_t=${#t_names[@]}
+    if [ "$total_t" -gt 0 ]; then
+        local states=() i=0
+        while IFS= read -r st_line; do states+=("$st_line"); done < <(systemctl is-active "${units[@]}" 2>/dev/null)
+        for t_name in "${t_names[@]}"; do
+            if [ "${states[$i]}" == "active" ]; then
+                ((active_t++))
+                local st=$(get_tunnel_status "$t_name" "1")
+                [ "$st" == "CONNECTED" ] && ((online_t++))
+            fi
+            ((i++))
+        done
+    fi
     
     local core_color="${R}"; local core_raw="Not Installed"
     if command -v rathole >/dev/null 2>&1 || [ -f "/usr/local/bin/rathole" ]; then

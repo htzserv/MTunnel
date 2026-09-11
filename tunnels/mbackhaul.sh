@@ -395,11 +395,12 @@ get_bh_tx() {
 
 check_bh_connection() {
     local t_name="$1"
+    local known_active="$2"
     local meta="$CONF_DIR/${t_name}.meta"
     [ ! -f "$meta" ] && { echo "OFFLINE"; return; }
     
     ROLE=""; TUN_PORT=""; REMOTE_IP=""; source "$meta" 2>/dev/null
-    if ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
+    if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$ROLE" == "1" ]; then
         if ss -tn src ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
@@ -600,17 +601,26 @@ EOF
 
 draw_header() {
     local s_ip=$(get_local_ip); local total_t=0; local active_t=0; local online_t=0
+    local t_names=() units=()
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
-            ((total_t++))
             local t_name=$(basename "$conf" .meta)
-            if systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then
-                ((active_t++))
-                local st=$(check_bh_connection "$t_name")
-                [ "$st" == "ONLINE" ] && ((online_t++))
-            fi
+            t_names+=("$t_name"); units+=("mbackhaul@$t_name")
         fi
     done
+    total_t=${#t_names[@]}
+    if [ "$total_t" -gt 0 ]; then
+        local states=() i=0
+        while IFS= read -r st_line; do states+=("$st_line"); done < <(systemctl is-active "${units[@]}" 2>/dev/null)
+        for t_name in "${t_names[@]}"; do
+            if [ "${states[$i]}" == "active" ]; then
+                ((active_t++))
+                local st=$(check_bh_connection "$t_name" "1")
+                [ "$st" == "ONLINE" ] && ((online_t++))
+            fi
+            ((i++))
+        done
+    fi
 
     local core_color="${R}"; local core_raw="Not Installed"
     if command -v bh >/dev/null 2>&1 || [ -f "/usr/local/bin/bh" ]; then

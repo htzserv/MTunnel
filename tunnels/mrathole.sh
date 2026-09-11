@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.10 ---
-# [Features: Version Preview | Offline Editor | 1.7.8 RTT Kernel Extraction]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.11 ---
+# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
 
-MODULE_VERSION="2.9.10"
+MODULE_VERSION="2.9.11"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -27,15 +27,50 @@ is_valid_host() {
     return 1
 }
 
+# --- ASYNC BACKGROUND UPDATE CHECKER ---
+check_update_bg() {
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mrathole.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mrathole.sh${cb}"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mrathole_remote_ver"
+}
+check_update_bg &
+# ---------------------------------------
+
 self_update_module() {
     local rel_path="tunnels/mrathole.sh"
     local cb="?t=$(date +%s)"
     
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mrathole_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mrathole_remote_ver" | tr -d '\r\n ')
+
+    local gh_text="${C}Official GitHub Server${NC}"
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+    else
+        gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
+    fi
+
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MRathole) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
     
@@ -49,7 +84,7 @@ self_update_module() {
         elif command -v vi >/dev/null 2>&1; then
             vi "$tmp_file"
         else
-            echo -e "  ${R}✖ No text editor (nano/vi) found on this system!${NC}"; rm -f "$tmp_file"; sleep 2; return
+            echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -f "$tmp_file"; sleep 2; return
         fi
     elif [[ "$src_opt" =~ ^[123]$ ]]; then
         local dl_url=""
@@ -111,10 +146,12 @@ get_local_ip() {
 
 menu_install_core() {
     echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
@@ -219,19 +256,21 @@ install_rathole_silent() {
 }
 
 setup_systemd() {
-    echo "[Unit]" > "$SERVICE_TPL"
-    echo "Description=MRathole Reverse Engine (%i)" >> "$SERVICE_TPL"
-    echo "After=network.target" >> "$SERVICE_TPL"
-    echo "" >> "$SERVICE_TPL"
-    echo "[Service]" >> "$SERVICE_TPL"
-    echo "Type=simple" >> "$SERVICE_TPL"
-    echo "ExecStart=/usr/local/bin/rathole /etc/mrathole/tunnels/%i/config.toml" >> "$SERVICE_TPL"
-    echo "Restart=always" >> "$SERVICE_TPL"
-    echo "RestartSec=3" >> "$SERVICE_TPL"
-    echo "LimitNOFILE=1048576" >> "$SERVICE_TPL"
-    echo "" >> "$SERVICE_TPL"
-    echo "[Install]" >> "$SERVICE_TPL"
-    echo "WantedBy=multi-user.target" >> "$SERVICE_TPL"
+    cat <<EOF > "$SERVICE_TPL"
+[Unit]
+Description=MRathole Reverse Engine (%i)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/rathole /etc/mrathole/tunnels/%i/config.toml
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
     systemctl daemon-reload
 }
 
@@ -562,8 +601,10 @@ manage_cron() {
     local cron_script="$CONF_DIR/$t_name/restart.sh"
     
     echo -e "\n  ${DIM}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read cr_opt
 
@@ -612,27 +653,39 @@ install_rathole_silent
 setup_systemd
 
 while true; do
+    badge=""
+    if [ -f "$SECURE_TMP/.mrathole_remote_ver" ]; then
+        rv=$(cat "$SECURE_TMP/.mrathole_remote_ver" | tr -d '\r\n ')
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+            badge=" ${Y}(Update Available: v${rv})${NC}"
+        fi
+    fi
+
     draw_header
     echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Deploy New Reverse Tunnel${NC} ${DIM}(Rathole)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC} ${DIM}(Specific / ALL)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Edit Remote Host / IP Address${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit TCP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit UDP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
     echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     

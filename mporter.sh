@@ -125,33 +125,7 @@ self_update_module() {
             exec "$INSTALL_PATH" "$@"
         else
             echo -e "  ${Y}● Update cancelled by user.${NC}"
-            rm -f "$tmp_file"; sleep 1.5
-        fi
-    else
-        echo -e "  ${R}✖ Update failed. File not found or network timeout.${NC}"
-        rm -f "$tmp_file"
-        sleep 3
-    fi
-}
 
-get_local_ip() {
-    local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
-    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
-    echo "${ip:-Unknown}"
-}
-
-draw_progress_bar() {
-    local pid=$1; local text=$2; local width=28; local progress=0
-    local ticks=0; local max_ticks=480
-    tput civis 2>/dev/null || true
-    
-    while kill -0 "$pid" 2>/dev/null; do
-        ((progress++)); [ "$progress" -gt 95 ] && progress=95
-        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
-        printf "\r  ${C}⟳${NC} ${W}%-26s${NC} ${B}[${G}%s${DIM}%s${B}]${NC} ${C}%3d%%${NC}" "$text" "$bar" "$empty_bar" "$progress"
-        sleep 0.25
-        ((ticks++))
         
         if [ "$ticks" -gt "$max_ticks" ]; then
             kill -9 "$pid" 2>/dev/null || true

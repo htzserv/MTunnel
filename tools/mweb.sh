@@ -1,8 +1,16 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.7.0 ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v5.7.1 ---
+# [Features: Versioned Telemetry | Background Sync | Cleaned Daemons]
+
+MODULE_VERSION="5.7.1"
 
 CONF_FILE="/etc/mweb/web.conf"
-mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon 2>/dev/null
+LOCAL_DIR="/root/mtunnel"
+SECURE_TMP="$LOCAL_DIR/tmp"
+
+mkdir -p /etc/mweb /etc/mstats/uptimes /tmp/mweb_daemon "$SECURE_TMP" 2>/dev/null
+chmod 700 "$SECURE_TMP" 2>/dev/null
+
 if [ ! -f "$CONF_FILE" ]; then
     echo -e "WEB_PORT=1000\nWEB_USER=admin\nWEB_PASS=admin" > "$CONF_FILE"
 fi
@@ -13,6 +21,26 @@ W_USER=${WEB_USER:-admin}
 W_PASS=${WEB_PASS:-admin}
 
 cd /tmp/mweb_daemon
+
+# --- ASYNC BACKGROUND UPDATE CHECKER ---
+check_update_bg() {
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tools/mweb.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tools/mweb.sh${cb}"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mweb_remote_ver"
+}
+check_update_bg &
+# ---------------------------------------
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
@@ -26,8 +54,8 @@ format_speed() {
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B/s"; return; fi
     if [ "$bytes" -lt 1024 ]; then echo "${bytes} B/s"
     elif [ "$bytes" -lt 1048576 ]; then echo "$((bytes / 1024)) KB/s"
-    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf "%.1f MB/s", $bytes/1048576}"
-    else awk "BEGIN {printf "%.2f GB/s", $bytes/1073741824}"; fi
+    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB/s\", $bytes/1048576}"
+    else awk "BEGIN {printf \"%.2f GB/s\", $bytes/1073741824}"; fi
 }
 
 format_total() {
@@ -35,9 +63,9 @@ format_total() {
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B"; return; fi
     if [ "$bytes" -lt 1024 ]; then echo "${bytes} B"
     elif [ "$bytes" -lt 1048576 ]; then echo "$((bytes / 1024)) KB"
-    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf "%.1f MB", $bytes/1048576}"
-    elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf "%.2f GB", $bytes/1073741824}"
-    else awk "BEGIN {printf "%.2f TB", $bytes/1099511627776}"; fi
+    elif [ "$bytes" -lt 1073741824 ]; then awk "BEGIN {printf \"%.1f MB\", $bytes/1048576}"
+    elif [ "$bytes" -lt 1099511627776 ]; then awk "BEGIN {printf \"%.2f GB\", $bytes/1073741824}"
+    else awk "BEGIN {printf \"%.2f TB\", $bytes/1099511627776}"; fi
 }
 
 get_iface_rx() {
@@ -59,15 +87,19 @@ init_frp_counters() {
         local s_addr=$(awk -F'=' '/^serverAddr/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' "')
         local s_port=$(awk -F'=' '/^serverPort/ {print $2}' /etc/frp/frpc.toml 2>/dev/null | tr -d ' ')
         if [ -n "$s_addr" ] && [ -n "$s_port" ]; then
-            iptables -t mangle -C OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 ||             iptables -t mangle -A OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
-            iptables -t mangle -C INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 ||             iptables -t mangle -A INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
+            iptables -t mangle -C OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 || \
+            iptables -t mangle -A OUTPUT -d "$s_addr" -p tcp --dport "$s_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
+            iptables -t mangle -C INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 || \
+            iptables -t mangle -A INPUT -s "$s_addr" -p tcp --sport "$s_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
         fi
     fi
     if [ -f "/etc/frp/frps.toml" ] && systemctl is-active --quiet frps 2>/dev/null; then
         local b_port=$(awk -F'=' '/^bindPort/ {print $2}' /etc/frp/frps.toml 2>/dev/null | tr -d ' ')
         if [ -n "$b_port" ]; then
-            iptables -t mangle -C OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 ||             iptables -t mangle -A OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
-            iptables -t mangle -C INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 ||             iptables -t mangle -A INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
+            iptables -t mangle -C OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" >/dev/null 2>&1 || \
+            iptables -t mangle -A OUTPUT -p tcp --sport "$b_port" -m comment --comment "FRP_CNT_TX" 2>/dev/null
+            iptables -t mangle -C INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" >/dev/null 2>&1 || \
+            iptables -t mangle -A INPUT -p tcp --dport "$b_port" -m comment --comment "FRP_CNT_RX" 2>/dev/null
         fi
     fi
 }
@@ -197,7 +229,6 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                 port = data.get('port')
                 dst_ip = data.get('dst_ip')
                 iface = data.get('iface')
-                engine = data.get('engine', 'haproxy')
 
                 if iface and iface != 'manual':
                     try:
@@ -211,7 +242,7 @@ class APIHandler(http.server.SimpleHTTPRequestHandler):
                         else:
                             self.wfile.write(json.dumps({"status": "error", "message": f"No IPs found on {iface}"}).encode())
                             return
-                    except Exception as e:
+                    except Exception:
                         self.wfile.write(json.dumps({"status": "error", "message": "Interface Error"}).encode())
                         return
 
@@ -241,7 +272,7 @@ PY_EOF
 
 python3 server.py "$PORT" "$W_USER" "$W_PASS" >/dev/null 2>&1 &
 PY_PID=$!
-trap "kill $PY_PID; rm -rf /tmp/mweb_daemon; exit" SIGINT SIGTERM
+trap "kill $PY_PID 2>/dev/null; rm -rf /tmp/mweb_daemon 2>/dev/null; exit" SIGINT SIGTERM
 
 cat <<'EOF' > index.html
 <!DOCTYPE html>
@@ -321,7 +352,6 @@ cat <<'EOF' > index.html
         }
         
         .side-btn:hover { transform: scale(1.05); border-color: var(--border); background: rgba(255,255,255,0.1); }
-        
         .side-btn.btn-neon-sky:hover { border-color: var(--sky); background: rgba(56, 189, 248, 0.15); box-shadow: 0 0 15px rgba(56, 189, 248, 0.4); color: var(--sky) !important; }
         .side-btn.btn-neon-yellow:hover { border-color: var(--yellow); background: rgba(251, 191, 36, 0.15); box-shadow: 0 0 15px rgba(251, 191, 36, 0.4); color: var(--yellow) !important; }
         .side-btn.btn-neon-red:hover { border-color: var(--red); background: rgba(248, 113, 113, 0.15); box-shadow: 0 0 15px rgba(248, 113, 113, 0.4); color: var(--red) !important; }
@@ -840,7 +870,7 @@ while true; do
     cpu_load="0.0"
     if [ -n "$prev_total" ] && [ "$curr_total" -ne "$prev_total" ]; then
         total_diff=$((curr_total - prev_total)); idle_diff=$((curr_idle - prev_idle))
-        if [ "$total_diff" -gt 0 ]; then cpu_load=$(awk "BEGIN {printf "%.1f", 100 * ($total_diff - $idle_diff) / $total_diff}"); fi
+        if [ "$total_diff" -gt 0 ]; then cpu_load=$(awk "BEGIN {printf \"%.1f\", 100 * ($total_diff - $idle_diff) / $total_diff}"); fi
     fi
     prev_total=$curr_total; prev_idle=$curr_idle
     ram_usage=$(free -m | awk '/Mem:/ {printf "%.1f", $3/$2 * 100}')
@@ -874,13 +904,13 @@ while true; do
             remote_list+=("$REMOTE_PUB")
             
             ping_res=""
-            local inner_rip=""
+            inner_rip=""
             if [ -n "$CORE_SUBNET" ]; then
                 inner_rip="${CORE_SUBNET}.$([ "$TYPE" == "1" ] && echo "2" || echo "1")"
             fi
             
             if [[ "$st_badge" == "ONLINE" ]]; then
-                local target_ping="$inner_rip"
+                target_ping="$inner_rip"
                 [ -z "$target_ping" ] && target_ping="$rip"
                 ping_res=$(ping -c 1 -W 1 "$target_ping" 2>/dev/null | awk -F'time=' '/time=/{print $2}' | awk '{print $1}')
                 [ -z "$ping_res" ] && st_badge="OFFLINE"
@@ -892,7 +922,7 @@ while true; do
             [ "$is_vx" = true ] && type_txt="VXLAN"
             
             if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
-            TUNNELS_JSON+="{"iface":"$name", "type":"$type_txt", "endpoint":"$rip", "state":"$st_badge", "ping":"$ping_res", "uptime":"$t_uptime", "rx_spd":"$(format_speed $rx_s)", "tx_spd":"$(format_speed $tx_s)", "rx_tot":"$(format_total $r_new)", "tx_tot":"$(format_total $t_new)", "comb_spd":"$(format_speed $comb_spd)", "comb_tot":"$(format_total $comb_tot)"}"
+            TUNNELS_JSON+="{\"iface\":\"$name\", \"type\":\"$type_txt\", \"endpoint\":\"$rip\", \"state\":\"$st_badge\", \"ping\":\"$ping_res\", \"uptime\":\"$t_uptime\", \"rx_spd\":\"$(format_speed $rx_s)\", \"tx_spd\":\"$(format_speed $tx_s)\", \"rx_tot\":\"$(format_total $r_new)\", \"tx_tot\":\"$(format_total $t_new)\", \"comb_spd\":\"$(format_speed $comb_spd)\", \"comb_tot\":\"$(format_total $comb_tot)\"}"
         fi
     done
 
@@ -922,7 +952,7 @@ while true; do
         comb_spd_f=$((rx_s_f + tx_s_f)); comb_tot_f=$((r_new_f + t_new_f))
 
         if [ "$first_tun" = true ]; then first_tun=false; else TUNNELS_JSON+=","; fi
-        TUNNELS_JSON+="{"iface":"$frp_name", "type":"$frp_type", "endpoint":"$frp_rip", "state":"$frp_state", "ping":"$frp_ping", "uptime":"$frp_uptime", "rx_spd":"$(format_speed $rx_s_f)", "tx_spd":"$(format_speed $tx_s_f)", "rx_tot":"$(format_total $r_new_f)", "tx_tot":"$(format_total $t_new_f)", "comb_spd":"$(format_speed $comb_spd_f)", "comb_tot":"$(format_total $comb_tot_f)"}"
+        TUNNELS_JSON+="{\"iface\":\"$frp_name\", \"type\":\"$frp_type\", \"endpoint\":\"$frp_rip\", \"state\":\"$frp_state\", \"ping\":\"$frp_ping\", \"uptime\":\"$frp_uptime\", \"rx_spd\":\"$(format_speed $rx_s_f)\", \"tx_spd\":\"$(format_speed $tx_s_f)\", \"rx_tot\":\"$(format_total $r_new_f)\", \"tx_tot\":\"$(format_total $t_new_f)\", \"comb_spd\":\"$(format_speed $comb_spd_f)\", \"comb_tot\":\"$(format_total $comb_tot_f)\"}"
     fi
 
     TUNNELS_JSON+="]"
@@ -930,12 +960,12 @@ while true; do
     unique_remotes=($(echo "${remote_list[@]}" | tr ' ' '\n' | sort -u | grep -v '^$'))
     remotes_json="["
     total_r=${#unique_remotes[@]}
-    for ((i=0; i<total_r; i++)); do remotes_json+=""${unique_remotes[$i]}""; [ $i -lt $((total_r - 1)) ] && remotes_json+=","; done
+    for ((i=0; i<total_r; i++)); do remotes_json+="\"${unique_remotes[$i]}\""; [ $i -lt $((total_r - 1)) ] && remotes_json+=","; done
     remotes_json+="]"
 
     cat <<EOF > /tmp/mweb_daemon/api_data.json
 {
-    "local": {"ip": "${MY_PUB_IP}", "cpu": "${cpu_load}%", "ram": "${ram_usage}%", "uptime": "${sys_uptime}"},
+    "local": {"ip": "${MY_PUB_IP}", "cpu": "${cpu_load}%", "ram": "${ram_usage}%", "uptime": "${sys_uptime}", "version": "${MODULE_VERSION}"},
     "remotes": ${remotes_json},
     "tunnels": ${TUNNELS_JSON}
 }

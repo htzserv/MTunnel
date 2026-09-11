@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.12 ---
-# [Features: Restored 8.3.4 Pure OTA Logic | Version Preview | Offline Editor]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.13 ---
+# [Features: Async Background Update Checker | Stable OTA | Offline Editor]
 
-MODULE_VERSION="8.3.12"
+MODULE_VERSION="8.3.13"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -22,12 +22,39 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
+# --- ASYNC BACKGROUND UPDATE CHECKER ---
+check_update_bg() {
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh"
+    local ver_file="$SECURE_TMP/.mporter_remote_ver"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$ver_file"
+}
+check_update_bg &
+# ---------------------------------------
+
 self_update_module() {
     local rel_path="mporter.sh"
     local cb="?t=$(date +%s)"
     
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mporter_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mporter_remote_ver" | tr -d '\r\n ')
+
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (Script Only) ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC} ${DIM}(Auto-Proxy Fallback)${NC}"
+    
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        echo -e "  ${DIM}├─${NC} ${Y}Update Available: v${MODULE_VERSION} ➔ v${remote_v}${NC}"
+    else
+        echo -e "  ${DIM}├─${NC} ${DIM}Current Version: v${MODULE_VERSION}${NC}"
+    fi
+
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
@@ -49,35 +76,23 @@ self_update_module() {
         fi
         dl_success=true
     elif [[ "$src_opt" =~ ^[123]$ ]]; then
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) 
+               echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
+               dl_url=$(echo "$custom_url" | tr -d '\r' | tr -d ' ')
+               [ -z "$dl_url" ] && return
+               ;;
+        esac
+
         echo -e "\n  ${C}⟳${NC} ${W}Downloading MPorter Update...${NC}"
         
-        if [[ "$src_opt" == "1" ]]; then
-            local repo_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path"
-            local gh_proxy="https://ghproxy.net"
-            
-            if command -v curl >/dev/null 2>&1; then
-                curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
-                [ "$dl_success" = false ] && curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
-            elif command -v wget >/dev/null 2>&1; then
-                wget -q --timeout=10 -O "$tmp_file" "$repo_url$cb" 2>/dev/null && dl_success=true
-                [ "$dl_success" = false ] && wget -q --timeout=10 -O "$tmp_file" "$gh_proxy/$repo_url$cb" 2>/dev/null && dl_success=true
-            fi
-        elif [[ "$src_opt" == "2" ]]; then
-            local dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb"
-            if command -v curl >/dev/null 2>&1; then
-                curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-            else
-                wget -q --timeout=10 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-            fi
-        elif [[ "$src_opt" == "3" ]]; then
-            echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url
-            local dl_url=$(echo "$custom_url" | tr -d '\r ' )
-            [ -z "$dl_url" ] && rm -f "$tmp_file" && return
-            if command -v curl >/dev/null 2>&1; then
-                curl -fsSL --connect-timeout 8 --max-time 30 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-            else
-                wget -q --timeout=10 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
-            fi
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
         fi
     else
         return
@@ -110,7 +125,7 @@ self_update_module() {
             rm -f "$tmp_file"; sleep 1.5
         fi
     else
-        echo -e "  ${R}✖ Update failed. File not found or invalid format.${NC}"
+        echo -e "  ${R}✖ Update failed. File not found or network timeout.${NC}"
         rm -f "$tmp_file"
         sleep 3
     fi
@@ -1212,6 +1227,14 @@ manual_restart() {
 }
 
 while true; do
+    local badge=""
+    if [ -f "$SECURE_TMP/.mporter_remote_ver" ]; then
+        local rv=$(cat "$SECURE_TMP/.mporter_remote_ver" | tr -d '\r\n ')
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+            badge=" ${Y}(Update Available ➔ v${rv})${NC}"
+        fi
+    fi
+
     draw_header
     echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Install & Configure Tri-Core System${NC}"
@@ -1228,7 +1251,7 @@ while true; do
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Smart Interface Watchdog (Auto-Cleanup)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Script Only)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Script Only)${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
 

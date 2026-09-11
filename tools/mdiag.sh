@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mdiag.sh) | MDiag Omni-Scanner v4.0.1 (Full Edition) ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="4.0.1"
+MODULE_VERSION="4.0.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mdiag"

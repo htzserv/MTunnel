@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.3.4 ---
-# [Features: True Parallel Multi-Checker | Fast Responsive OTA | Zero-Lag Signal]
+# --- MDesign Master Core | Central Dashboard v8.3.9 ---
+# [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.3.4"
+MODULE_VERSION="8.3.10"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -46,10 +46,20 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# --- TRUE PARALLEL BACKGROUND CHECKER ---
-check_single_module() {
+# فاصله‌ی زمانی بین هر دور چک خودکار آپدیت (ثانیه)
+# پیشنهاد: حداقل 20-30 ثانیه. عدد خیلی کوچیک (مثلا 5) باعث ریت‌لیمیت شدن توسط
+# گیت‌هاب/میرور و مصرف بی‌خودی CPU/شبکه سرور میشه.
+UPDATE_CHECK_INTERVAL=30
+
+# --- PARALLEL BACKGROUND CHECKER (WORKER) ---
+# هر ماژول جدا و موازی چک میشه، نتیجه در فایل موقت جدای خودش نوشته میشه
+# (بدون سیگنال فوری) تا وقتی همه‌ی چک‌های این دور تموم بشن.
+check_single_module_silent() {
     local mod="$1"
     local rel_path="$2"
+    local out_file="$SECURE_TMP/.chk_${mod}"
+    rm -f "$out_file"
+
     local local_file="$LOCAL_DIR/$rel_path"
     [ ! -f "$local_file" ] && [ -f "/usr/bin/$mod" ] && local_file="/usr/bin/$mod"
 
@@ -60,31 +70,105 @@ check_single_module() {
     local cb="?t=$(date +%s%N)"
     local rem_v=""
     if command -v curl >/dev/null 2>&1; then
-        rem_v=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 4 --max-time 6 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        rem_v=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
-        rem_v=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=6 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        rem_v=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
 
     if [ -n "$rem_v" ] && [ "$rem_v" != "$cur_v" ]; then
-        echo "${mod}:${cur_v}:${rem_v}" >> "$UPDATE_FILE"
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        echo "${mod}:${cur_v}:${rem_v}" > "$out_file"
     fi
 }
 
-check_all_updates_bg() {
-    > "$UPDATE_FILE"
+# یک دور کامل چک: همه‌ی ماژول‌ها موازی اجرا میشن (ورکرهای بالا)،
+# صبر می‌کنه همه تموم بشن، نتیجه‌ی همه رو یکجا در UPDATE_FILE می‌نویسه
+# و فقط یک بار سیگنال رفرش می‌فرسته.
+check_all_updates_round() {
+    local pids=()
     for mod in "${!MOD_MAP[@]}"; do
-        check_single_module "$mod" "${MOD_MAP[$mod]}" &
+        check_single_module_silent "$mod" "${MOD_MAP[$mod]}" &
+        pids+=("$!")
     done
-    wait
+    for p in "${pids[@]}"; do
+        wait "$p" 2>/dev/null
+    done
+
+    : > "$UPDATE_FILE.new"
+    for mod in "${!MOD_MAP[@]}"; do
+        f="$SECURE_TMP/.chk_${mod}"
+        [ -s "$f" ] && cat "$f" >> "$UPDATE_FILE.new"
+        rm -f "$f"
+    done
+    mv -f "$UPDATE_FILE.new" "$UPDATE_FILE" 2>/dev/null
+
+    kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
 }
-check_all_updates_bg &
-# ----------------------------------------
+
+# ورکر دائمی در پس‌زمینه: هر UPDATE_CHECK_INTERVAL ثانیه یک دور کامل اجرا می‌کنه
+update_watcher_loop() {
+    while true; do
+        check_all_updates_round
+        sleep "$UPDATE_CHECK_INTERVAL"
+    done
+}
+update_watcher_loop &
+# -------------------------------------------
 
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+# --- Character-by-character read that survives live refreshes without losing typed input ---
+# Usage: read_with_refresh "PROMPT_TEXT" result_var redraw_function_name
+read_with_refresh() {
+    local prompt="$1"
+    local __resultvar="$2"
+    local redraw_func="$3"
+    local buffer=""
+    local char rc
+
+    echo -ne "$prompt"
+
+    while true; do
+        # اگر آپدیتی در پس‌زمینه رسیده، صفحه رو دوباره بکش ولی چیزی که کاربر تایپ کرده رو حفظ کن
+        if [ "$NEED_REFRESH" = true ]; then
+            NEED_REFRESH=false
+            if [ -n "$redraw_func" ]; then
+                "$redraw_func"
+            fi
+            echo -ne "$prompt$buffer"
+        fi
+
+        IFS= read -rsn1 -t 0.3 char
+        rc=$?
+
+        # rc != 0 یعنی تایم‌اوت شد (کاراکتری خونده نشد) => فقط برو بالا و دوباره چک کن
+        if [ $rc -ne 0 ]; then
+            continue
+        fi
+
+        # وقتی رشته خالی برگرده ولی rc=0 یعنی کاربر Enter زده
+        if [[ -z "$char" ]]; then
+            echo ""
+            break
+        fi
+
+        # پشتیبانی از Backspace
+        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
+            if [ -n "$buffer" ]; then
+                buffer="${buffer%?}"
+                echo -ne "\b \b"
+            fi
+            continue
+        fi
+
+        buffer+="$char"
+        echo -ne "$char"
+    done
+
+    eval "$__resultvar=\"\$buffer\""
 }
 
 draw_progress_bar() {
@@ -117,10 +201,10 @@ download_file_to_cache() {
     [ -z "$rel_path" ] && rel_path="${mod}.sh"
     local target_file="$LOCAL_DIR/$rel_path"
     local tmp="${target_file}.$$"
-    
+
     mkdir -p "$(dirname "$target_file")" 2>/dev/null
     rm -f "$tmp"
-    
+
     local CB="?t=$(date +%s%N)"
     local DL_SUCCESS=false
 
@@ -149,6 +233,11 @@ deploy_cached_module() {
     else
         chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
     fi
+    if [ "$mod" = "main" ]; then
+        if ! same_file "$target_file" "$MTUNNEL_PATH"; then
+            install -m 0755 "$target_file" "$MTUNNEL_PATH" 2>/dev/null || true
+        fi
+    fi
 }
 
 ensure_module() {
@@ -173,7 +262,7 @@ ensure_module() {
 run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
 
 show_ota_update_hub() {
-    while true; do
+    render_ota_menu() {
         clear; echo ""
         echo -e "  ${B}╭──────────────────────────────────────────────────────────────╮${NC}"
         echo -e "  ${B}│${NC} ${W}MDesign Ecosystem Central Updater${NC}                           ${B}│${NC}"
@@ -183,37 +272,52 @@ show_ota_update_hub() {
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Sync All Scripts from Official GitHub${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Sync All Scripts from Iranian Mirror (ParsPack)${NC}"
+
+        main_sub_badge=""
+        if [ -f "$UPDATE_FILE" ]; then
+            m_line=$(grep "^main:" "$UPDATE_FILE")
+            if [ -n "$m_line" ]; then
+                o_v=$(echo "$m_line" | cut -d: -f2)
+                n_v=$(echo "$m_line" | cut -d: -f3)
+                main_sub_badge="  ${Y}(v${o_v} ➔ v${n_v})${NC}"
+            fi
+        fi
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Update Master Core Dashboard (Main Script Only)${NC}${main_sub_badge}"
+
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─[ BINARY PACKAGES & CORES ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Fetch Binary Packages from Official GitHub Archive${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Fetch Binary Packages from Iranian Mirror${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch Binary Packages from Official GitHub Archive${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch Binary Packages from Iranian Mirror${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Offline Editor)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Raw Editor)${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
+    }
 
-        echo -ne "  ${C}OTA-HUB ❯❯ ${NC}"; read ota_opt
+    while true; do
+        render_ota_menu
+        read_with_refresh "  ${C}OTA-HUB ❯❯ ${NC}" ota_opt render_ota_menu
         ota_opt=$(echo "$ota_opt" | tr -d '\r ')
 
         case $ota_opt in
             1|2)
-                local s_url="$REPO_SCRIPTS"
-                local s_name="Official GitHub"
+                s_url="$REPO_SCRIPTS"
+                s_name="Official GitHub"
                 [ "$ota_opt" == "2" ] && s_url="$MIRROR_SCRIPTS" && s_name="ParsPack Mirror"
 
                 clear; echo -e "\n  ${DIM}┌─[ SYNCING SCRIPTS: ${W}${s_name}${DIM} ]${NC}"
                 echo -e "  ${DIM}├────────────────────────────────────────────────────────────${NC}"
 
                 for mod in "${ALL_MODULES[@]}"; do
-                    local rel_p="${MOD_MAP[$mod]}"
+                    rel_p="${MOD_MAP[$mod]}"
                     printf "  ${C}→${NC} %-22s " "$mod ($rel_p)"
                     if download_file_to_cache "$mod" "$s_url"; then
                         deploy_cached_module "$mod"
-                        local n_v=$(grep -m1 '^MODULE_VERSION=' "$LOCAL_DIR/$rel_p" 2>/dev/null | cut -d'"' -f2)
+                        n_v=$(grep -m1 '^MODULE_VERSION=' "$LOCAL_DIR/$rel_p" 2>/dev/null | cut -d'"' -f2)
                         printf "${G}[✔ UPGRADED: v%s]${NC}\n" "${n_v:-OK}"
                     else
                         printf "${R}[✖ FAILED]${NC}\n"
@@ -226,12 +330,28 @@ show_ota_update_hub() {
                 ;;
 
             3)
+                clear; echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}"
+                printf "  ${C}→${NC} %-22s " "main (main.sh)"
+                if download_file_to_cache "main" "$REPO_SCRIPTS"; then
+                    deploy_cached_module "main"
+                    m_new_v=$(grep -m1 '^MODULE_VERSION=' "$LOCAL_DIR/main.sh" 2>/dev/null | cut -d'"' -f2)
+                    printf "${G}[✔ UPGRADED: v%s]${NC}\n" "${m_new_v:-OK}"
+                    echo -e "\n  ${G}● Master Core successfully updated! Reloading...${NC}"
+                    sleep 1.5
+                    exec "$MTUNNEL_PATH"
+                else
+                    printf "${R}[✖ FAILED]${NC}\n"
+                    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+                fi
+                ;;
+
+            4)
                 echo -e "\n  ${DIM}┌─[ GITHUB ASSETS DOWNLOADER ]${NC}"
                 mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-                local tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
+                tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
                 rm -f "$tmp_zip"
-                local CB="?t=$(date +%s)"
-                
+                CB="?t=$(date +%s)"
+
                 (
                     if command -v curl >/dev/null 2>&1; then
                         curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null
@@ -239,13 +359,13 @@ show_ota_update_hub() {
                         wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null
                     fi
                 ) &
-                local pid=$!; draw_progress_bar "$pid" "Fetching GitHub Packages"; wait "$pid"
-                
+                pid=$!; draw_progress_bar "$pid" "Fetching GitHub Packages"; wait "$pid"
+
                 if [ -s "$tmp_zip" ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
                     (
-                        local tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
+                        tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
                         unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
-                        local pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
+                        pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
                         if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
                             cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
                             chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
@@ -267,16 +387,16 @@ show_ota_update_hub() {
                 rm -f "$tmp_zip"; sleep 1.5
                 ;;
 
-            4)
+            5)
                 echo -e "\n  ${DIM}┌─[ PARSPACK IRANIAN MIRROR PACKAGES ]${NC}"
                 mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
-                local bins=("rathole" "bh" "paqet" "gost" "haproxy")
-                local CB="?t=$(date +%s)"
-                
+                bins=("rathole" "bh" "paqet" "gost" "haproxy")
+                CB="?t=$(date +%s)"
+
                 for b in "${bins[@]}"; do
                     printf "  ${C}→${NC} Downloading %-15s " "$b"
-                    local t_out="$LOCAL_DIR/packages/$b"
-                    local dl_ok=false
+                    t_out="$LOCAL_DIR/packages/$b"
+                    dl_ok=false
                     if command -v curl >/dev/null 2>&1; then
                         curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$MIRROR_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
                     elif command -v wget >/dev/null 2>&1; then
@@ -295,13 +415,13 @@ show_ota_update_hub() {
                 echo -e "  ${G}● Iranian mirror packages deployed.${NC}"; sleep 1.5
                 ;;
 
-            5)
+            6)
                 echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}"
                 echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read custom_url
                 custom_url=$(echo "$custom_url" | tr -d '\r ')
                 [ -z "$custom_url" ] && continue
 
-                local tmp_dl="$SECURE_TMP/.custom_download.$$"
+                tmp_dl="$SECURE_TMP/.custom_download.$$"
                 rm -f "$tmp_dl"
 
                 if command -v curl >/dev/null 2>&1; then
@@ -312,9 +432,9 @@ show_ota_update_hub() {
 
                 if [ -s "$tmp_dl" ]; then
                     if command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_dl" >/dev/null 2>&1; then
-                        local t_dir="$(mktemp -d /tmp/custom-unzip.XXXXXX)"
+                        t_dir="$(mktemp -d /tmp/custom-unzip.XXXXXX)"
                         unzip -q -o "$tmp_dl" -d "$t_dir" 2>/dev/null
-                        local r_root="$(find "$t_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
+                        r_root="$(find "$t_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
                         if [ -n "$r_root" ] && [ -d "$r_root" ]; then
                             cp -rf "$r_root"/* "$LOCAL_DIR/" 2>/dev/null
                             for m in "${ALL_MODULES[@]}"; do deploy_cached_module "$m" 2>/dev/null; done
@@ -323,19 +443,22 @@ show_ota_update_hub() {
                         rm -rf "$t_dir"
                     elif grep -q "#!/bin/bash" "$tmp_dl"; then
                         echo -e "\n  ${DIM}Select Module Target to overwrite:${NC}"
-                        local i=1
+                        i=1
                         for m in "${ALL_MODULES[@]}"; do
                             printf "  ${DIM}%2d)${NC} %-12s " "$i" "$m"
                             ((i % 3 == 0)) && echo ""
                             ((i++))
                         done
                         echo -ne "\n  ${C}Enter number: ${NC}"; read m_num
-                        local chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
+                        chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                         if [ -n "$chosen_mod" ]; then
-                            local dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
+                            dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
                             cat "$tmp_dl" > "$dest"
                             deploy_cached_module "$chosen_mod"
                             echo -e "  ${G}✔ Successfully applied to ${chosen_mod}!${NC}"
+                            if [ "$chosen_mod" = "main" ]; then
+                                sleep 1.5; exec "$MTUNNEL_PATH"
+                            fi
                         fi
                     fi
                 else
@@ -344,30 +467,65 @@ show_ota_update_hub() {
                 rm -f "$tmp_dl"; sleep 2
                 ;;
 
-            6)
-                echo -e "\n  ${DIM}┌─[ MANUAL SCRIPT CODE PASTE ]${NC}"
+            7)
+                echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}"
                 echo -e "  ${DIM}Select target module to edit:${NC}"
-                local i=1
+                i=1
                 for m in "${ALL_MODULES[@]}"; do
                     printf "  ${DIM}%2d)${NC} %-12s " "$i" "$m"
                     ((i % 3 == 0)) && echo ""
                     ((i++))
                 done
                 echo -ne "\n  ${C}Enter number: ${NC}"; read m_num
-                local chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
+                chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                 if [ -n "$chosen_mod" ]; then
-                    local dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
+                    dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
                     mkdir -p "$(dirname "$dest")" 2>/dev/null
-                    [ ! -f "$dest" ] && touch "$dest"
+
+                    temp_paste_file="$SECURE_TMP/.manual_paste.$$"
+                    > "$temp_paste_file"
+
                     if command -v nano >/dev/null 2>&1; then
-                        nano "$dest"
+                        echo -e "  ${DIM}● Opening clean editor... Paste your raw code, save (Ctrl+O, Enter) and exit (Ctrl+X).${NC}"
+                        sleep 1.5
+                        nano "$temp_paste_file"
                     elif command -v vi >/dev/null 2>&1; then
-                        vi "$dest"
+                        vi "$temp_paste_file"
                     fi
-                    chmod +x "$dest"
-                    deploy_cached_module "$chosen_mod"
-                    echo -e "  ${G}✔ Module ${chosen_mod} saved and deployed!${NC}"
-                    sleep 1.5
+
+                    if [ -s "$temp_paste_file" ] && grep -q "#!/bin/bash" "$temp_paste_file"; then
+                        new_ver=$(grep -m1 '^MODULE_VERSION=' "$temp_paste_file" | cut -d'"' -f2)
+                        [ -z "$new_ver" ] && new_ver="Unknown"
+
+                        current_v="Unknown"
+                        [ -f "$dest" ] && current_v=$(grep -m1 '^MODULE_VERSION=' "$dest" 2>/dev/null | cut -d'"' -f2)
+                        [ -z "$current_v" ] && current_v="Unknown"
+
+                        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+                        echo -e "  ${DIM}├─${NC} ${W}Target Module   :${NC} ${C}${chosen_mod}${NC}"
+                        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v}${NC}"
+                        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+                        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
+
+                        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
+                            sed -i 's/\r$//' "$temp_paste_file" 2>/dev/null
+                            chmod +x "$temp_paste_file"
+                            cat "$temp_paste_file" > "$dest"
+                            rm -f "$temp_paste_file"
+
+                            deploy_cached_module "$chosen_mod"
+                            echo -e "  ${G}✔ Module ${chosen_mod} (v${new_ver}) successfully applied! Rebooting core...${NC}"
+                            sleep 1.5
+                            exec "$MTUNNEL_PATH"
+                        else
+                            echo -e "  ${Y}● Manual update cancelled by user.${NC}"
+                            rm -f "$temp_paste_file"
+                        fi
+                    else
+                        echo -e "  ${R}✖ Invalid format (Missing #!/bin/bash) or empty paste!${NC}"
+                        rm -f "$temp_paste_file"
+                    fi
+                    sleep 2
                 fi
                 ;;
 
@@ -388,10 +546,10 @@ run_iperf3() {
             DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1
             DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::ForceIPv4=true -y -q iperf3 >/dev/null 2>&1
         ) &
-        local pid=$!
+        pid=$!
         draw_progress_bar "$pid" "Installing iPerf3 Benchmark"
         wait "$pid" 2>/dev/null
-        
+
         if command -v iperf3 >/dev/null 2>&1; then
             echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}"
         else
@@ -401,13 +559,13 @@ run_iperf3() {
         sleep 1
     fi
 
-    while true; do
+    render_iperf_menu() {
         clear; echo ""
-        local s_ip=$(get_local_ip)
-        local str1=" iPerf3 Network Bandwidth Benchmark "
-        local raw_len=$(( ${#str1} ))
-        local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
-        local padding=$(printf '%*s' "$pad_len" "")
+        s_ip=$(get_local_ip)
+        str1=" iPerf3 Network Bandwidth Benchmark "
+        raw_len=$(( ${#str1} ))
+        pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
+        padding=$(printf '%*s' "$pad_len" "")
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Port:${NC} ${C}5201 TCP/UDP${NC} ${padding}${B}│${NC}"
@@ -417,15 +575,19 @@ run_iperf3() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run as Server (Listener Mode)${NC} ${DIM}(Wait for peer connections)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Client (Sender Mode)${NC}   ${DIM}(Push bandwidth stream to server)${NC}"
         echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
-        echo -ne "  ${C}iPerf3 ❯❯ ${NC}"; read i_opt
+    }
+
+    while true; do
+        render_iperf_menu
+        read_with_refresh "  ${C}iPerf3 ❯❯ ${NC}" i_opt render_iperf_menu
         i_opt=$(echo "$i_opt" | tr -d '\r ' )
 
         case $i_opt in
-            1) 
+            1)
                 echo -e "\n  ${G}● iPerf3 Server listening on port 5201 (Press Ctrl+C to stop)...${NC}\n"
                 iperf3 -s -p 5201
                 echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
-            2) 
+            2)
                 echo -ne "\n  ${C}●${NC} ${W}Enter Target Server IP / Tunnel IP: ${NC}"; read t_ip
                 t_ip=$(echo "$t_ip" | tr -d '\r ' )
                 [ -z "$t_ip" ] && continue
@@ -440,34 +602,34 @@ run_iperf3() {
 }
 
 draw_main_header() {
-    local s_ip=$(get_local_ip)
-    local st_gre="○"; local c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
-    local st_vx="○"; local c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
-    local st_rh="○"; local c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
-    local st_bh="○"; local c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.meta 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
-    local st_pq="○"; local c_pq="${DIM}"; [ -n "$(ls -A /etc/paqet/*.yaml 2>/dev/null)" ] && { st_pq="●"; c_pq="${G}"; }
+    s_ip=$(get_local_ip)
+    st_gre="○"; c_gre="${DIM}"; [ -n "$(ls -A /etc/mgre/tunnels/*.conf 2>/dev/null)" ] && { st_gre="●"; c_gre="${G}"; }
+    st_vx="○"; c_vx="${DIM}"; [ -n "$(ls -A /etc/mgre/vxlan/*.conf 2>/dev/null)" ] && { st_vx="●"; c_vx="${G}"; }
+    st_rh="○"; c_rh="${DIM}"; [ -n "$(ls -A /etc/mrathole/tunnels/*.toml 2>/dev/null)" ] && { st_rh="●"; c_rh="${G}"; }
+    st_bh="○"; c_bh="${DIM}"; [ -n "$(ls -A /etc/mbackhaul/tunnels/*.meta 2>/dev/null)" ] && { st_bh="●"; c_bh="${G}"; }
+    st_pq="○"; c_pq="${DIM}"; [ -n "$(ls -A /etc/paqet/*.yaml 2>/dev/null)" ] && { st_pq="●"; c_pq="${G}"; }
 
-    local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
-    local bbr_stat="${DIM}○ OFF${NC}"
-    local raw_bbr="○ OFF"
+    bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+    bbr_stat="${DIM}○ OFF${NC}"
+    raw_bbr="○ OFF"
     if [ "$bbr_cc" == "bbr" ]; then bbr_stat="${G}● ON${NC}"; raw_bbr="● ON"; fi
 
-    local web_stat="${DIM}○ OFFLINE${NC}"
-    local raw_web="○ OFFLINE"
+    web_stat="${DIM}○ OFFLINE${NC}"
+    raw_web="○ OFFLINE"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then
-        local w_port="1000"
+        w_port="1000"
         [ -f "/etc/mweb/web.conf" ] && w_port=$(grep "WEB_PORT" /etc/mweb/web.conf | cut -d= -f2 | tr -d ' ' | tr -d '\r')
         web_stat="${G}● PORT ${w_port}${NC}"
         raw_web="● PORT ${w_port}"
     fi
 
-    local raw_top=" MDesign Master Core v${MODULE_VERSION} │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
-    local pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
-    local padding_top=$(printf '%*s' "$pad_top" "")
+    raw_top=" MDesign Master Core v${MODULE_VERSION} │ IP: ${s_ip} │ Web: ${raw_web} │ BBR: ${raw_bbr} "
+    pad_top=$(( 94 - ${#raw_top} )); [ "$pad_top" -lt 0 ] && pad_top=0
+    padding_top=$(printf '%*s' "$pad_top" "")
 
-    local raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  Backhaul:${st_bh}  Paqet:${st_pq} "
-    local pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
-    local padding_bot=$(printf '%*s' "$pad_bot" "")
+    raw_bot=" Hub: GRE:${st_gre}  VXLAN:${st_vx}  RatHole:${st_rh}  Backhaul:${st_bh}  Paqet:${st_pq} "
+    pad_bot=$(( 94 - ${#raw_bot} )); [ "$pad_bot" -lt 0 ] && pad_bot=0
+    padding_bot=$(printf '%*s' "$pad_bot" "")
 
     clear; echo ""
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -478,76 +640,88 @@ draw_main_header() {
 }
 
 show_tunnel_hub() {
-    while true; do
-        local b_gre="" b_vx="" b_rh="" b_bh="" b_pq=""
+    render_tunnel_menu() {
+        badge_mgre="" badge_mxlan="" badge_mrathole="" badge_mbackhaul="" badge_mpaqet=""
         if [ -f "$UPDATE_FILE" ]; then
-            grep -q "^mgre:" "$UPDATE_FILE" && b_gre=" ${Y}(Update Available)${NC}"
-            grep -q "^mxlan:" "$UPDATE_FILE" && b_vx=" ${Y}(Update Available)${NC}"
-            grep -q "^mrathole:" "$UPDATE_FILE" && b_rh=" ${Y}(Update Available)${NC}"
-            grep -q "^mbackhaul:" "$UPDATE_FILE" && b_bh=" ${Y}(Update Available)${NC}"
-            grep -q "^mpaqet:" "$UPDATE_FILE" && b_pq=" ${Y}(Update Available)${NC}"
+            grep -q "^mgre:" "$UPDATE_FILE" && badge_mgre=" ${Y}(Update Available: v$(grep "^mgre:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
+            grep -q "^mxlan:" "$UPDATE_FILE" && badge_mxlan=" ${Y}(Update Available: v$(grep "^mxlan:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
+            grep -q "^mrathole:" "$UPDATE_FILE" && badge_mrathole=" ${Y}(Update Available: v$(grep "^mrathole:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
+            grep -q "^mbackhaul:" "$UPDATE_FILE" && badge_mbackhaul=" ${Y}(Update Available: v$(grep "^mbackhaul:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
+            grep -q "^mpaqet:" "$UPDATE_FILE" && badge_mpaqet=" ${Y}(Update Available: v$(grep "^mpaqet:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
         fi
 
-        draw_main_header; echo ""
-        echo -e "  ${DIM}┌─[ PRIMARY INFRASTRUCTURE HUB ]${NC}"
+        draw_main_header
+        echo -e "\n  ${DIM}┌─[ PRIMARY INFRASTRUCTURE HUB ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}${b_gre}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}${b_vx}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC}${b_rh}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Free Multiplexer (MBackhaul)${NC}${b_bh}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel (MPaqet)${NC}${b_pq}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}${badge_mgre}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}${badge_mxlan}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC}${badge_mrathole}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Free Multiplexer (MBackhaul)${NC}${badge_mbackhaul}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel (MPaqet)${NC}${badge_mpaqet}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
-        echo -ne "  ${C}TUNNEL ❯❯ ${NC}"; read t_opt
+    }
+
+    while true; do
+        render_tunnel_menu
+        read_with_refresh "  ${C}TUNNEL ❯❯ ${NC}" t_opt render_tunnel_menu
+        t_opt=$(echo "$t_opt" | tr -d '\r ')
         case $t_opt in
             1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mrathole" ;; 4) run_mod "mbackhaul" ;; 5) run_mod "mpaqet" ;; 0) break ;;
         esac
     done
 }
 
-while true; do
-    NEED_REFRESH=false
+render_main_menu() {
     badge_hub="" badge_porter="" badge_main="" badge_bbr="" badge_diag="" badge_shield="" badge_link="" badge_stats="" badge_healer="" badge_iface=""
-    
+
     if [ -f "$UPDATE_FILE" ]; then
-        if grep -qE "^(mgre|mxlan|mrathole|mbackhaul|mpaqet):" "$UPDATE_FILE"; then
-            badge_hub=" ${Y}(Update Available)${NC}"
+        tun_updates=""
+        grep -q "^mgre:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(MGRE)${NC}"
+        grep -q "^mxlan:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(MXLAN)${NC}"
+        grep -q "^mrathole:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Rathole)${NC}"
+        grep -q "^mbackhaul:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Backhaul)${NC}"
+        grep -q "^mpaqet:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Paqet)${NC}"
+
+        if [ -n "$tun_updates" ]; then
+            badge_hub=" ${Y}(Update Available)${NC}${tun_updates}"
         fi
+
         if grep -q "^mporter:" "$UPDATE_FILE"; then
-            local p_ver=$(grep "^mporter:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_porter=" ${Y}(v${p_ver})${NC}"
+            p_ver=$(grep "^mporter:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_porter=" ${Y}(Update Available: v${p_ver})${NC}"
         fi
         if grep -q "^main:" "$UPDATE_FILE"; then
-            local m_ver=$(grep "^main:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_main=" ${Y}(v${m_ver})${NC}"
+            m_ver=$(grep "^main:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_main=" ${Y}(Update Available: v${m_ver})${NC}"
         fi
         if grep -q "^mbbr:" "$UPDATE_FILE"; then
-            local b_ver=$(grep "^mbbr:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_bbr=" ${Y}(v${b_ver})${NC}"
+            b_ver=$(grep "^mbbr:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_bbr=" ${Y}(Update Available: v${b_ver})${NC}"
         fi
         if grep -q "^mdiag:" "$UPDATE_FILE"; then
-            local d_ver=$(grep "^mdiag:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_diag=" ${Y}(v${d_ver})${NC}"
+            d_ver=$(grep "^mdiag:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_diag=" ${Y}(Update Available: v${d_ver})${NC}"
         fi
         if grep -q "^mshield:" "$UPDATE_FILE"; then
-            local s_ver=$(grep "^mshield:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_shield=" ${Y}(v${s_ver})${NC}"
+            s_ver=$(grep "^mshield:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_shield=" ${Y}(Update Available: v${s_ver})${NC}"
         fi
         if grep -q "^linktest:" "$UPDATE_FILE"; then
-            local l_ver=$(grep "^linktest:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_link=" ${Y}(v${l_ver})${NC}"
+            l_ver=$(grep "^linktest:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_link=" ${Y}(Update Available: v${l_ver})${NC}"
         fi
         if grep -q "^mstats:" "$UPDATE_FILE"; then
-            local st_ver=$(grep "^mstats:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_stats=" ${Y}(v${st_ver})${NC}"
+            st_ver=$(grep "^mstats:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_stats=" ${Y}(Update Available: v${st_ver})${NC}"
         fi
         if grep -q "^mhealer:" "$UPDATE_FILE"; then
-            local h_ver=$(grep "^mhealer:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_healer=" ${Y}(v${h_ver})${NC}"
+            h_ver=$(grep "^mhealer:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_healer=" ${Y}(Update Available: v${h_ver})${NC}"
         fi
         if grep -q "^minterface:" "$UPDATE_FILE"; then
-            local if_ver=$(grep "^minterface:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_iface=" ${Y}(v${if_ver})${NC}"
+            if_ver=$(grep "^minterface:" "$UPDATE_FILE" | cut -d: -f3)
+            badge_iface=" ${Y}(Update Available: v${if_ver})${NC}"
         fi
     fi
 
@@ -569,21 +743,17 @@ while true; do
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}${badge_bbr}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Unified Multi-Tier OTA Update Hub${NC}${badge_main}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Offline Local Deploy (Packages & Modules)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}${badge_bbr}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC} ${DIM}❯${NC} ${G}Unified Multi-Tier OTA Update Hub${NC}${badge_main}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC} ${DIM}❯${NC} ${M}Offline Local Deploy (Packages & Modules)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
+}
 
-    echo -ne "  ${C}CORE ❯❯ ${NC}"; read -t 15 opt
-    read_exit_status=$?
-
-    # بررسی دریافت سیگنال از چکر پس‌زمینه برای رفرش آنی
-    if [ "$NEED_REFRESH" = true ] && [ "$read_exit_status" -gt 128 ]; then
-        continue
-    fi
-
+while true; do
+    render_main_menu
+    read_with_refresh "  ${C}CORE ❯❯ ${NC}" opt render_main_menu
     opt=$(echo "$opt" | tr -d '\r ')
 
     case $opt in
@@ -613,7 +783,7 @@ while true; do
                    for b in bh backhaul rathole paqet gost frpc frps; do
                        if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; fi
                    done
-                   if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$local_pkg_dir"/*.deb >/dev/null 2>&1 || true; fi
+                   if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1 || true; fi
                fi
            ) &
            pid=$!; draw_progress_bar "$pid" "Deploying Modules & Packages"; wait "$pid"

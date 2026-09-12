@@ -2,7 +2,7 @@
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.18 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal Badges]
 
-MODULE_VERSION="1.8.0"
+MODULE_VERSION="1.9.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -415,7 +415,7 @@ get_peer_ping() {
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
     
     # 1. Native ICMP Ping
-    local ping_res=$(ping -c 1 -W 1 "$target_ip" 2>/dev/null)
+    local ping_res=$(timeout 2 ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
         local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
         echo "${ping_val}ms"
@@ -569,7 +569,9 @@ setup_systemd_service() {
     cat <<'EOF' > /etc/systemd/system/mbackhaul@.service
 [Unit]
 Description=MBackhaul Multi-Multiplexer (%i)
+Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -669,17 +671,39 @@ draw_header() {
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local p_val=$(get_peer_ping "$peer_ip" "$tmp_port")
-        if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
-            local p_int=$(echo "$p_val" | tr -dc '0-9')
-            if [ -z "$p_int" ]; then p_int=0; fi
-            if [ "$p_int" -lt 90 ]; then g_color="${G}"
-            elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
-            else g_color="${R}"
+        local ping_cache="$SECURE_TMP/.mbackhaul_ping_cache"
+        local ping_lock="$SECURE_TMP/.mbackhaul_ping_lock"
+        local now=$(date +%s)
+        local cache_ts=0; [ -f "$ping_cache" ] && cache_ts=$(stat -c %Y "$ping_cache" 2>/dev/null || echo 0)
+        local cache_age=$(( now - cache_ts ))
+
+        if [ -f "$ping_cache" ] && [ "$cache_age" -lt 15 ]; then
+            local p_val=$(cat "$ping_cache" 2>/dev/null)
+            if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
+                local p_int=$(echo "$p_val" | tr -dc '0-9')
+                if [ -z "$p_int" ]; then p_int=0; fi
+                if [ "$p_int" -lt 90 ]; then g_color="${G}"
+                elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
+                else g_color="${R}"
+                fi
+                g_text="${p_val}"
+            else
+                g_color="${R}"; g_text="Timeout"
             fi
-            g_text="${p_val}"
         else
-            g_color="${R}"; g_text="Timeout"
+            g_color="${DIM}"; g_text="Calculating..."
+        fi
+
+        local lock_ts=0; [ -f "$ping_lock" ] && lock_ts=$(stat -c %Y "$ping_lock" 2>/dev/null || echo 0)
+        local lock_age=$(( now - lock_ts ))
+        if { [ ! -f "$ping_cache" ] || [ "$cache_age" -ge 15 ]; } && { [ ! -f "$ping_lock" ] || [ "$lock_age" -gt 5 ]; }; then
+            touch "$ping_lock"
+            (
+                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port")
+                echo "$bg_val" > "$ping_cache"
+                rm -f "$ping_lock"
+                kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+            ) &
         fi
     else
         g_color="${DIM}"; g_text="Waiting"

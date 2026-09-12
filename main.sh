@@ -348,45 +348,33 @@ show_ota_update_hub() {
                 ;;
 
             4)
-                echo -e "\n  ${DIM}┌─[ GITHUB ASSETS DOWNLOADER ]${NC}"
-                mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-                tmp_zip="$(mktemp /tmp/mtunnel-packages.XXXXXX.zip 2>/dev/null || echo /tmp/mtunnel-packages.zip)"
-                rm -f "$tmp_zip"
+                echo -e "\n  ${DIM}┌─[ GITHUB ASSETS DOWNLOADER (DIRECT) ]${NC}"
+                mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
+                bins=("rathole" "bh" "paqet" "gost" "haproxy")
                 CB="?t=$(date +%s)"
+                # آدرس مستقیم پوشه پکیج‌ها در گیت‌هاب
+                GITHUB_PACKAGES="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
 
-                (
+                for b in "${bins[@]}"; do
+                    printf "  ${C}→${NC} Downloading %-15s " "$b"
+                    t_out="$LOCAL_DIR/packages/$b"
+                    dl_ok=false
                     if command -v curl >/dev/null 2>&1; then
-                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 --max-time 180 -o "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null
+                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$GITHUB_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
                     elif command -v wget >/dev/null 2>&1; then
-                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$tmp_zip" "$REPO_ZIP$CB" 2>/dev/null
+                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$GITHUB_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
                     fi
-                ) &
-                pid=$!; draw_progress_bar "$pid" "Fetching GitHub Packages"; wait "$pid"
 
-                if [ -s "$tmp_zip" ] && command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_zip" >/dev/null 2>&1; then
-                    (
-                        tmp_dir="$(mktemp -d /tmp/mtunnel-packages.XXXXXX)"
-                        unzip -q -o "$tmp_zip" -d "$tmp_dir" 2>/dev/null
-                        pkg_root="$(find "$tmp_dir" -maxdepth 2 -type d -name packages -print -quit 2>/dev/null)"
-                        if [ -n "$pkg_root" ] && [ -d "$pkg_root" ]; then
-                            cp -f "$pkg_root"/* "$LOCAL_DIR/packages/" 2>/dev/null || true
-                            chmod +x "$LOCAL_DIR/packages/"* 2>/dev/null || true
-                            [ -f "$LOCAL_DIR/packages/haproxy" ] && install -m 0755 "$LOCAL_DIR/packages/haproxy" /usr/sbin/haproxy 2>/dev/null || true
-                            for bin in bh backhaul rathole paqet gost frpc frps; do
-                                if [ -f "$LOCAL_DIR/packages/$bin" ]; then
-                                    install -m 0755 "$LOCAL_DIR/packages/$bin" "/usr/local/bin/$bin" 2>/dev/null || true
-                                fi
-                            done
-                            if ls "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1; then dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1 || true; fi
-                        fi
-                        rm -rf "$tmp_dir"
-                    ) &
-                    pid=$!; draw_progress_bar "$pid" "Deploying Packages"; wait "$pid"
-                    echo -e "  ${G}● Official binary packages updated successfully.${NC}"
-                else
-                    echo -e "  ${R}● Failed to download or read archive.${NC}"
-                fi
-                rm -f "$tmp_zip"; sleep 1.5
+                    if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
+                        chmod +x "$t_out"
+                        [ "$b" == "haproxy" ] && install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
+                        [ "$b" != "haproxy" ] && install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
+                        printf "${G}[✔ INSTALLED]${NC}\n"
+                    else
+                        printf "${R}[✖ FAILED]${NC}\n"
+                    fi
+                done
+                echo -e "  ${G}● Official binary packages deployed.${NC}"; sleep 1.5
                 ;;
 
             5)

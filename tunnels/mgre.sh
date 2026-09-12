@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.4.10 ---
-# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.6.1 ---
+# [Features: Strict Net-Match | Enforced TLS | Clean Scope]
 
-MODULE_VERSION="5.5.0"
+MODULE_VERSION="5.6.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -11,7 +11,6 @@ SERVICE_FILE="/etc/systemd/system/mgre.service"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-# 1. Block Path Conflicts Automatically
 [ -f "/usr/local/bin/mgre" ] && rm -f "/usr/local/bin/mgre" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
@@ -26,10 +25,8 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# فاصله‌ی چک خودکار آپدیت در پس‌زمینه (ثانیه) - پیشنهاد حداقل 20-30 ثانیه
 UPDATE_CHECK_INTERVAL=30
 
-# --- Character-by-character read که رفرش زنده رو بدون پاک شدن تایپ کاربر مدیریت می‌کنه ---
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -75,7 +72,6 @@ read_with_refresh() {
     eval "$__resultvar=\"\$buffer\""
 }
 
-# --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mgre.sh${cb}"
@@ -83,11 +79,11 @@ check_update_bg() {
     local remote_ver=""
     
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mgre_remote_ver"
@@ -102,7 +98,6 @@ update_watcher_loop() {
 update_watcher_loop &
 WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
-# ---------------------------------------
 
 self_update_module() {
     local rel_path="tunnels/mgre.sh"
@@ -154,7 +149,7 @@ self_update_module() {
 
         echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
         if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+            curl -fSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
         elif command -v wget >/dev/null 2>&1; then
             wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
         fi
@@ -213,7 +208,7 @@ apply_tunnel() {
     [ ! -s "$conf" ] && return
     TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf"
     
-    local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+    local c_sub="${CORE_SUBNET}"
     local local_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
     local remote_tun=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
     
@@ -257,7 +252,7 @@ apply_tunnel() {
             local tip="$o1.$o2.$o3.$last_remote"
             
             all_targets+=("$tip")
-            if ! ip route show | grep -q "$nip"; then ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null; fi
+            if ! ip route show | grep -qw "$nip"; then ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null; fi
         done
     fi
 
@@ -381,11 +376,11 @@ show_mgre_monitor() {
         printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
         echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
 
-        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        local c_sub="${CORE_SUBNET}"
         local main_tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         local main_lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         
-        local ping_res=$(ping -c 1 -W 1 "$main_tip" 2>/dev/null)
+        local ping_res=$(timeout 2 ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         local lat lat_raw lat_color stat_icon stat_text stat_color
         if echo "$ping_res" | grep -q "time="; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
@@ -398,7 +393,7 @@ show_mgre_monitor() {
         local total_v=${#v_ips[@]}
         for ((idx=0; idx<total_v; idx++)); do
             local lip="${v_ips[$idx]}"; local base_ip=$(echo "$lip" | cut -d'.' -f1-3); local last=$(echo "$lip" | cut -d'.' -f4); local tip="$base_ip.$([ "$last" == "1" ] && echo "2" || echo "1")"
-            ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
+            ping_res=$(timeout 2 ping -c 1 -W 1 "$tip" 2>/dev/null)
             if echo "$ping_res" | grep -q "time="; then
                 lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
                 lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
@@ -417,13 +412,12 @@ show_tunnel_details() {
     echo -e "\n  ${Y}● Deployed Tunnels Registry:${NC}"
     for conf in "${configs[@]}"; do
         TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
-        local c_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        local c_sub="${CORE_SUBNET}"
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
-        local s_key="${SYNC_KEY:-[ NOT SET ]}"
-        local t_id="${TUN_ID:-[ NOT SET ]}"
         local t_sec="${TUN_SECRET:-[ NOT SET ]}"
+        local t_id="${TUN_ID:-[ NOT SET ]}"
 
         local proto_lbl="IPv4 GRE"; [[ "$TUN_PROTO" == "6to4" ]] && proto_lbl="6to4 IP6GRE"
 
@@ -433,13 +427,13 @@ show_tunnel_details() {
         echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp} ${DIM}${right_p}${NC} ${B}│${NC}"
         echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
         
-        local l1="vIP Sync Key : ${s_key}"; local r1="Protocol: ${proto_lbl}"
+        local l1="Master Token : ${t_sec}"; local r1="Protocol: ${proto_lbl}"
         local pad1=$(( 89 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}vIP Sync Key :${NC} ${W}${s_key}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${M}Master Token :${NC} ${W}${t_sec}${NC}${sp1} ${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
         
-        local l2="Tunnel Secret: ${t_sec}"; local r2="Network ID: ${t_id}"
+        local l2="vIP Sync Key : ${SYNC_KEY}"; local r2="Generated Network Key: ${t_id}"
         local pad2=$(( 89 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}Tunnel Secret:${NC} ${W}${t_sec}${NC}${sp2} ${DIM}Network ID:${NC} ${W}${t_id}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${SYNC_KEY}${NC}${sp2} ${DIM}Generated Network Key:${NC} ${Y}${t_id}${NC} ${B}│${NC}"
         
         local l3="Public IPs   : ${LOCAL_PUB} -> ${REMOTE_PUB}"
         local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
@@ -452,7 +446,7 @@ show_tunnel_details() {
             echo -e "  ${B}│${NC} ${Y}NAT FWD TCP  :${NC} ${W}${FWD_TCP:-None}${NC}${sp5} ${C}Load Balancer:${NC} ${W}${lb_txt}${NC} ${B}│${NC}"
         fi
         
-        local ping_res=$(ping -c 1 -W 1 "$tip" 2>/dev/null)
+        local ping_res=$(timeout 2 ping -c 1 -W 1 "$tip" 2>/dev/null)
         local lat lat_raw lat_color stat_icon stat_text stat_color
         if echo "$ping_res" | grep -q "time="; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
@@ -486,8 +480,8 @@ edit_tunnel() {
         echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${T_NAME}${DIM} ]${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit Tunnel Network ID (Current: ${TUN_ID})${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Core Subnet (Current: ${CORE_SUBNET}.x)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit Master Secret Token (Regenerates Network)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Manual Override: Core Subnet Base (Current: ${CORE_SUBNET}.x)${NC}"
         if [ "$TYPE" == "1" ]; then
             echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Port Forwarding & Load Balancer${NC}"
         fi
@@ -506,22 +500,27 @@ edit_tunnel() {
                 [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
                 ;;
             2)
-                echo -ne "  ${C}●${NC} ${W}New Tunnel Network ID (1-250): ${NC}"; read new_tun_id
-                new_tun_id=$(echo "$new_tun_id" | tr -dc '0-9')
-                if [ -n "$new_tun_id" ]; then
-                    if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then
-                        echo -e "  ${R}✖ Network ID [${new_tun_id}] is already in use!${NC}"; sleep 1.5; return
-                    fi
-                    local hash_c=$(echo -n "core_${new_tun_id}" | sha256sum)
-                    local class_selector=$(( new_tun_id % 3 ))
+                echo -ne "  ${C}●${NC} ${W}New Tunnel Secret Token (Regenerates Key & Subnet): ${NC}"; read new_tok
+                new_tok=$(echo "$new_tok" | tr -dc 'a-zA-Z0-9_=-')
+                if [ -n "$new_tok" ]; then
+                    local hash_c=$(echo -n "core_${new_tok}" | sha256sum)
+                    local new_tun_id=$(( 16#${hash_c:0:6} ))
+                    local class_selector=$(( 16#${hash_c:6:2} % 3 ))
                     local c1=""; local c2=""; local c3=""
-                    if [ "$class_selector" == "1" ]; then c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-                    elif [ "$class_selector" == "2" ]; then c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-                    else c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
+                    if [ "$class_selector" == "0" ]; then c1="10"; c2=$(( (16#${hash_c:8:2} % 254) + 1 )); c3=$(( (16#${hash_c:10:2} % 254) + 1 ))
+                    elif [ "$class_selector" == "1" ]; then c1="172"; c2=$(( (16#${hash_c:8:2} % 16) + 16 )); c3=$(( (16#${hash_c:10:2} % 254) + 1 ))
+                    else c1="192"; c2="168"; c3=$(( (16#${hash_c:10:2} % 254) + 1 )); fi
                     local new_core_sub="${c1}.${c2}.${c3}"
+                    
+                    if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$new_core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
+                        echo -e "  ${R}● Collision detected with an existing tunnel! Please use a different Token.${NC}"; sleep 2; return
+                    fi
+                    
+                    sed -i "s/^TUN_SECRET=.*/TUN_SECRET=$new_tok/" "$sel_conf"
                     sed -i "s/^TUN_ID=.*/TUN_ID=$new_tun_id/" "$sel_conf"
                     sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$sel_conf"
-                    echo -e "  ${G}● Network ID updated. Subnet automatically changed to ${new_core_sub}.x${NC}"
+                    sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$new_tok/" "$sel_conf"
+                    echo -e "  ${G}● Token updated. Key: ${new_tun_id}, Subnet: ${new_core_sub}.x${NC}"
                 fi
                 ;;
             3)
@@ -578,7 +577,8 @@ edit_tunnel() {
 }
 
 setup_service() {
-    cat <<EOF > "$SERVICE_FILE"
+    local tmp_srv="$SECURE_TMP/mgre_tpl.service"
+    cat <<EOF > "$tmp_srv"
 [Unit]
 Description=MGRE Native Edge Service
 After=network.target
@@ -589,7 +589,12 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload && systemctl enable mgre.service >/dev/null 2>&1
+    if ! cmp -s "$tmp_srv" "$SERVICE_FILE" 2>/dev/null; then
+        mv -f "$tmp_srv" "$SERVICE_FILE"
+        systemctl daemon-reload && systemctl enable mgre.service >/dev/null 2>&1
+    else
+        rm -f "$tmp_srv"
+    fi
 }
 
 if [[ "$1" == "--apply" ]]; then apply_all_tunnels; exit 0; fi
@@ -612,7 +617,7 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (IPs / NetID / Subnet / NAT)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Advanced Edit Tunnel (Token / IPs / NAT)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -625,6 +630,8 @@ render_mgre_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
+
+[ ! -f "$SERVICE_FILE" ] && setup_service
 
 while true; do
     render_mgre_menu
@@ -673,37 +680,36 @@ while true; do
            done
            [[ "$r_ip" == "q" ]] && continue
 
-           local_ip6=""; remote_ip6=""; tun_secret=""
+           # Generate Master Token
+           s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null)
+           [ -z "$s_key" ] && s_key=$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)
+           echo -ne "  ${C}●${NC} ${M}Master Secret Token [Default ${s_key}]: ${NC}"; read u_key
+           [[ "$u_key" == "q" ]] && continue
+           u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-')
+           tun_secret=${u_key:-$s_key}
+
+           local_ip6=""; remote_ip6=""
            if [[ "$tun_proto" == "6to4" ]]; then
-               while true; do
-                   echo -ne "  ${C}●${NC} ${M}Tunnel Secret Key: ${NC}"; read tun_secret
-                   [[ "$tun_secret" == "q" ]] && break
-                   tun_secret=$(echo "$tun_secret" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$tun_secret" ]] && break
-               done
-               [[ "$tun_secret" == "q" ]] && continue
                hash_str=$(echo -n "${tun_secret}_MHDesign" | sha256sum)
                pfx_v6="fd${hash_str:0:2}:${hash_str:2:4}:${hash_str:6:4}:${hash_str:10:4}"
                if [[ "$s_type" == "1" ]]; then local_ip6="${pfx_v6}::1"; remote_ip6="${pfx_v6}::2"; else local_ip6="${pfx_v6}::2"; remote_ip6="${pfx_v6}::1"; fi
            fi
            
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Tunnel Network ID (1-250): ${NC}"; read user_tun_id
-               [[ "$user_tun_id" == "q" ]] && break
-               user_tun_id=$(echo "$user_tun_id" | tr -dc '0-9'); [[ -z "$user_tun_id" ]] && continue
-               if grep -q "TUN_ID=$user_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null; then echo -e "  ${R}● Error: Network ID [${user_tun_id}] is already assigned!${NC}"; continue; fi
-               break
-           done
-           [[ "$user_tun_id" == "q" ]] && continue
+           hash_c=$(echo -n "core_${tun_secret}" | sha256sum)
+           tun_id=$(( 16#${hash_c:0:6} ))
            
-           tun_id=$user_tun_id
-           hash_c=$(echo -n "core_${tun_id}" | sha256sum)
-           class_selector=$(( tun_id % 3 ))
+           class_selector=$(( 16#${hash_c:6:2} % 3 ))
            c1=""; c2=""; c3=""
-           if [ "$class_selector" == "1" ]; then c1="10"; c2=$(( (0x${hash_c:2:2} % 254) + 1 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-           elif [ "$class_selector" == "2" ]; then c1="172"; c2=$(( (0x${hash_c:2:2} % 16) + 16 )); c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-           else c1="192"; c2="168"; c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
+           if [ "$class_selector" == "0" ]; then c1="10"; c2=$(( (16#${hash_c:8:2} % 254) + 1 )); c3=$(( (16#${hash_c:10:2} % 254) + 1 ))
+           elif [ "$class_selector" == "1" ]; then c1="172"; c2=$(( (16#${hash_c:8:2} % 16) + 16 )); c3=$(( (16#${hash_c:10:2} % 254) + 1 ))
+           else c1="192"; c2="168"; c3=$(( (16#${hash_c:10:2} % 254) + 1 )); fi
            
            core_sub="${c1}.${c2}.${c3}"
+           
+           if grep -q "TUN_ID=$tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
+               echo -e "  ${R}● Collision detected with an existing tunnel! Please use a different Token.${NC}"; sleep 2; continue
+           fi
+           
            conf_path="$CONF_DIR/${t_name}.conf"
            
            echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_SECRET=$tun_secret\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0" > "$conf_path"
@@ -717,7 +723,7 @@ while true; do
                
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
                run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
+               if [[ "${run_initial_ping,,}" == "y" || "${run_initial_ping,,}" == "yes" ]]; then
                    echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
                    echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
@@ -731,37 +737,32 @@ while true; do
                
                echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
                setup_vip=$(echo "$setup_vip" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$setup_vip" == "y" || "$setup_vip" == "yes" ]]; then
+               if [[ "${setup_vip,,}" == "y" || "${setup_vip,,}" == "yes" ]]; then
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
                    if [[ "$n" != "q" ]]; then
-                       while true; do 
-                           echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; 
-                           [[ "$k" == "q" ]] && break; 
-                           k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break; 
-                       done
-                       if [[ "$k" != "q" ]]; then
-                           sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$conf_path"
-                           sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$conf_path"
-                           apply_tunnel "$conf_path"
-                           echo -e "  ${G}● Virtual IPs applied successfully.${NC}"
-                       fi
+                       k=$tun_secret
+                       echo -e "  ${DIM}● Sync Key automatically linked to Master Token.${NC}"
+                       sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$conf_path"
+                       sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$conf_path"
+                       apply_tunnel "$conf_path"
+                       echo -e "  ${G}● Virtual IPs applied successfully.${NC}"
                    fi
                fi
 
                if [ "$s_type" == "1" ]; then
                    echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Port Forwarding? (y/n): ${NC}"; read setup_pf
                    setup_pf=$(echo "$setup_pf" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                   if [[ "$setup_pf" == "y" || "$setup_pf" == "yes" ]]; then
+                   if [[ "${setup_pf,,}" == "y" || "${setup_pf,,}" == "yes" ]]; then
                        echo -ne "  ${C}●${NC} ${Y}NAT Forward TCP Ports (e.g. 80,443)  [Enter to skip]: ${NC}"; read fwd_tcp
                        echo -ne "  ${C}●${NC} ${C}NAT Forward UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read fwd_udp
                        fwd_tcp=$(echo "$fwd_tcp" | tr -dc '0-9,')
                        fwd_udp=$(echo "$fwd_udp" | tr -dc '0-9,')
                        
-                       local run_lb="0"
+                       run_lb="0"
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
                            ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                           if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then run_lb="1"; fi
+                           if [[ "${ask_lb,,}" == "y" || "${ask_lb,,}" == "yes" ]]; then run_lb="1"; fi
                        fi
                        
                        grep -v "^FWD_TCP=" "$conf_path" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${conf_path}.tmp"
@@ -785,10 +786,11 @@ while true; do
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
+           del_idx=$(echo "$del_idx" | tr -d '\r')
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
-           if [[ "$del_idx" == "all" ]]; then
+           if [[ "${del_idx,,}" == "all" ]]; then
                echo -ne "  ${R}● DANGER: Delete ALL tunnels? (y/n): ${NC}"; read confirm_all
-               if [[ "$confirm_all" == "y" ]]; then
+               if [[ "${confirm_all,,}" == "y" ]]; then
                    for conf in "${configs[@]}"; do
                        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
                        clean_fwd_rules "$T_NAME"; ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1; rm -f "$conf"
@@ -824,17 +826,15 @@ while true; do
                if [[ "$vip_action" == "1" ]]; then
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
                    [[ "$n" == "q" ]] && continue
-                   while true; do 
-                       echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; [[ "$k" == "q" ]] && break; 
-                       k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break; 
-                       echo -e "  ${R}Error: Only alphanumeric characters allowed!${NC}"
-                   done
-                   [[ "$k" == "q" ]] && continue
+                   
+                   k=$TUN_SECRET
+                   echo -e "  ${DIM}● Sync Key automatically linked to Master Token.${NC}"
+                   
                    sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
                elif [[ "$vip_action" == "2" ]]; then
                    if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
                    echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${T_NAME}]? (y/n): ${NC}"; read confirm_vip
-                   if [[ "$confirm_vip" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
+                   if [[ "${confirm_vip,,}" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
                fi
            fi ;;
         4) edit_tunnel ;;

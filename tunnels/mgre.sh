@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v5.6.1 ---
-# [Features: Strict Net-Match | Enforced TLS | Clean Scope]
+# [Features: Scope Fixed | Safe IP Matching | Master Token Gen]
 
 MODULE_VERSION="5.6.1"
 
@@ -79,11 +79,11 @@ check_update_bg() {
     local remote_ver=""
     
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mgre_remote_ver"
@@ -149,7 +149,7 @@ self_update_module() {
 
         echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
         if command -v curl >/dev/null 2>&1; then
-            curl -fSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
         elif command -v wget >/dev/null 2>&1; then
             wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
         fi
@@ -723,7 +723,7 @@ while true; do
                
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
                run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "${run_initial_ping,,}" == "y" || "${run_initial_ping,,}" == "yes" ]]; then
+               if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
                    echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
                    echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
@@ -737,7 +737,7 @@ while true; do
                
                echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
                setup_vip=$(echo "$setup_vip" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "${setup_vip,,}" == "y" || "${setup_vip,,}" == "yes" ]]; then
+               if [[ "$setup_vip" == "y" || "$setup_vip" == "yes" ]]; then
                    while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
                    if [[ "$n" != "q" ]]; then
                        k=$tun_secret
@@ -752,7 +752,7 @@ while true; do
                if [ "$s_type" == "1" ]; then
                    echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Port Forwarding? (y/n): ${NC}"; read setup_pf
                    setup_pf=$(echo "$setup_pf" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                   if [[ "${setup_pf,,}" == "y" || "${setup_pf,,}" == "yes" ]]; then
+                   if [[ "$setup_pf" == "y" || "$setup_pf" == "yes" ]]; then
                        echo -ne "  ${C}●${NC} ${Y}NAT Forward TCP Ports (e.g. 80,443)  [Enter to skip]: ${NC}"; read fwd_tcp
                        echo -ne "  ${C}●${NC} ${C}NAT Forward UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read fwd_udp
                        fwd_tcp=$(echo "$fwd_tcp" | tr -dc '0-9,')
@@ -762,7 +762,7 @@ while true; do
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
                            ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                           if [[ "${ask_lb,,}" == "y" || "${ask_lb,,}" == "yes" ]]; then run_lb="1"; fi
+                           if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then run_lb="1"; fi
                        fi
                        
                        grep -v "^FWD_TCP=" "$conf_path" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${conf_path}.tmp"
@@ -786,11 +786,10 @@ while true; do
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read del_idx
-           del_idx=$(echo "$del_idx" | tr -d '\r')
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
-           if [[ "${del_idx,,}" == "all" ]]; then
+           if [[ "$del_idx" == "all" ]]; then
                echo -ne "  ${R}● DANGER: Delete ALL tunnels? (y/n): ${NC}"; read confirm_all
-               if [[ "${confirm_all,,}" == "y" ]]; then
+               if [[ "$confirm_all" == "y" ]]; then
                    for conf in "${configs[@]}"; do
                        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
                        clean_fwd_rules "$T_NAME"; ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1; rm -f "$conf"
@@ -834,7 +833,7 @@ while true; do
                elif [[ "$vip_action" == "2" ]]; then
                    if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
                    echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${T_NAME}]? (y/n): ${NC}"; read confirm_vip
-                   if [[ "${confirm_vip,,}" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
+                   if [[ "$confirm_vip" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_tunnel "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
                fi
            fi ;;
         4) edit_tunnel ;;

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v7.5.4 ---
-# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v7.9.0 ---
+# [Features: Async Background Installer | Smart Systemd Guard | Zero-Delay Entry]
 
-MODULE_VERSION="7.7.0"
+MODULE_VERSION="7.9.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -31,10 +31,8 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# فاصله‌ی چک خودکار آپدیت در پس‌زمینه (ثانیه) - پیشنهاد حداقل 20-30 ثانیه
 UPDATE_CHECK_INTERVAL=30
 
-# --- Character-by-character read که رفرش زنده رو بدون پاک شدن تایپ کاربر مدیریت می‌کنه ---
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -80,7 +78,6 @@ read_with_refresh() {
     eval "$__resultvar=\"\$buffer\""
 }
 
-# --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mpaqet.sh${cb}"
@@ -97,6 +94,7 @@ check_update_bg() {
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mpaqet_remote_ver"
 }
+
 update_watcher_loop() {
     while true; do
         check_update_bg
@@ -107,7 +105,6 @@ update_watcher_loop() {
 update_watcher_loop &
 WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
-# ---------------------------------------
 
 self_update_module() {
     local rel_path="tunnels/mpaqet.sh"
@@ -329,32 +326,30 @@ menu_install_core() {
 }
 
 install_paqet_silent() {
-    if ! command -v paqet >/dev/null 2>&1 && [ ! -f "/usr/local/bin/paqet" ]; then
-        apt-get update -y -q >/dev/null 2>&1 || true
-        apt-get install -y -q libpcap-dev wget curl xxd >/dev/null 2>&1 || true
-        local arch=$(uname -m)
-        local target="amd64"
-        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
-        
-        local dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
-        local mirror_url="https://c107328.parspack.net/c107328/MTunnel/packages/paqet-linux-${target}.tar.gz"
-        
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
-        else
-            wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
-        fi
+    apt-get update -y -q >/dev/null 2>&1 || true
+    apt-get install -y -q libpcap-dev wget curl xxd >/dev/null 2>&1 || true
+    local arch=$(uname -m)
+    local target="amd64"
+    [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
+    
+    local dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/packages/paqet-linux-${target}.tar.gz"
+    
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
+    else
+        wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
+    fi
 
-        if [ -s "$SECURE_TMP/paqet.tar.gz" ]; then
-            if gzip -t "$SECURE_TMP/paqet.tar.gz" 2>/dev/null; then
-                tar -xzf "$SECURE_TMP/paqet.tar.gz" -C "$SECURE_TMP/" >/dev/null 2>&1
-                local bin_found=$(find "$SECURE_TMP" -maxdepth 1 -type f -name "*paqet*" -executable | head -1)
-                if [ -n "$bin_found" ]; then
-                    mv "$bin_found" /usr/local/bin/paqet
-                    chmod +x /usr/local/bin/paqet
-                fi
-                rm -f "$SECURE_TMP"/paqet*
+    if [ -s "$SECURE_TMP/paqet.tar.gz" ]; then
+        if gzip -t "$SECURE_TMP/paqet.tar.gz" 2>/dev/null; then
+            tar -xzf "$SECURE_TMP/paqet.tar.gz" -C "$SECURE_TMP/" >/dev/null 2>&1
+            local bin_found=$(find "$SECURE_TMP" -maxdepth 1 -type f -name "*paqet*" -executable | head -1)
+            if [ -n "$bin_found" ]; then
+                mv "$bin_found" /usr/local/bin/paqet
+                chmod +x /usr/local/bin/paqet
             fi
+            rm -f "$SECURE_TMP"/paqet*
         fi
     fi
     [ -f "/usr/local/bin/paqet" ] && ln -sf /usr/local/bin/paqet /usr/bin/paqet 2>/dev/null
@@ -589,11 +584,15 @@ draw_header() {
 }
 
 setup_systemd_service() {
-    cat <<'EOF' > /etc/systemd/system/mpaqet@.service
+    local changed=false
+    local tmp_srv="$SECURE_TMP/mpaqet_tpl.service"
+    local tmp_app="$SECURE_TMP/mpaqet_apply.service"
+
+    cat <<'EOF' > "$tmp_srv"
 [Unit]
 Description=MPaqet Raw Packet Tunnel (%i)
-After=network-online.target
 Wants=network-online.target
+After=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
@@ -607,7 +606,8 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-    cat <<'EOF' > /etc/systemd/system/mpaqet-apply.service
+
+    cat <<'EOF' > "$tmp_app"
 [Unit]
 Description=MPaqet Boot Restorer
 After=network.target
@@ -620,8 +620,25 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable mpaqet-apply.service >/dev/null 2>&1
+
+    if ! cmp -s "$tmp_srv" "/etc/systemd/system/mpaqet@.service" 2>/dev/null; then
+        mv -f "$tmp_srv" "/etc/systemd/system/mpaqet@.service"
+        changed=true
+    else
+        rm -f "$tmp_srv"
+    fi
+
+    if ! cmp -s "$tmp_app" "/etc/systemd/system/mpaqet-apply.service" 2>/dev/null; then
+        mv -f "$tmp_app" "/etc/systemd/system/mpaqet-apply.service"
+        changed=true
+    else
+        rm -f "$tmp_app"
+    fi
+
+    if [ "$changed" = true ]; then
+        systemctl daemon-reload
+        systemctl enable mpaqet-apply.service >/dev/null 2>&1
+    fi
 }
 
 show_tunnel_registry() {
@@ -876,8 +893,10 @@ edit_paqet_tunnel() {
     fi
 }
 
-install_paqet_silent
-setup_systemd_service
+if ! command -v paqet >/dev/null 2>&1 && [ ! -f "/usr/local/bin/paqet" ]; then
+    ( install_paqet_silent ) &
+fi
+[ ! -f "/etc/systemd/system/mpaqet@.service" ] && setup_systemd_service
 
 render_mpaqet_menu() {
     badge=""

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.3.9 ---
+# --- MDesign Master Core | Central Dashboard v8.4.0 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.4.0"
+MODULE_VERSION="8.4.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -47,13 +47,9 @@ NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
 # فاصله‌ی زمانی بین هر دور چک خودکار آپدیت (ثانیه)
-# پیشنهاد: حداقل 20-30 ثانیه. عدد خیلی کوچیک (مثلا 5) باعث ریت‌لیمیت شدن توسط
-# گیت‌هاب/میرور و مصرف بی‌خودی CPU/شبکه سرور میشه.
 UPDATE_CHECK_INTERVAL=30
 
 # --- PARALLEL BACKGROUND CHECKER (WORKER) ---
-# هر ماژول جدا و موازی چک میشه، نتیجه در فایل موقت جدای خودش نوشته میشه
-# (بدون سیگنال فوری) تا وقتی همه‌ی چک‌های این دور تموم بشن.
 check_single_module_silent() {
     local mod="$1"
     local rel_path="$2"
@@ -80,9 +76,6 @@ check_single_module_silent() {
     fi
 }
 
-# یک دور کامل چک: همه‌ی ماژول‌ها موازی اجرا میشن (ورکرهای بالا)،
-# صبر می‌کنه همه تموم بشن، نتیجه‌ی همه رو یکجا در UPDATE_FILE می‌نویسه
-# و فقط یک بار سیگنال رفرش می‌فرسته.
 check_all_updates_round() {
     local pids=()
     for mod in "${!MOD_MAP[@]}"; do
@@ -104,7 +97,6 @@ check_all_updates_round() {
     kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
 }
 
-# ورکر دائمی در پس‌زمینه: هر UPDATE_CHECK_INTERVAL ثانیه یک دور کامل اجرا می‌کنه
 update_watcher_loop() {
     while true; do
         check_all_updates_round
@@ -122,8 +114,6 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-# --- Character-by-character read that survives live refreshes without losing typed input ---
-# Usage: read_with_refresh "PROMPT_TEXT" result_var redraw_function_name
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -134,7 +124,6 @@ read_with_refresh() {
     echo -ne "$prompt"
 
     while true; do
-        # اگر آپدیتی در پس‌زمینه رسیده، صفحه رو دوباره بکش ولی چیزی که کاربر تایپ کرده رو حفظ کن
         if [ "$NEED_REFRESH" = true ]; then
             NEED_REFRESH=false
             if [ -n "$redraw_func" ]; then
@@ -146,18 +135,15 @@ read_with_refresh() {
         IFS= read -rsn1 -t 0.3 char
         rc=$?
 
-        # rc != 0 یعنی تایم‌اوت شد (کاراکتری خونده نشد) => فقط برو بالا و دوباره چک کن
         if [ $rc -ne 0 ]; then
             continue
         fi
 
-        # وقتی رشته خالی برگرده ولی rc=0 یعنی کاربر Enter زده
         if [[ -z "$char" ]]; then
             echo ""
             break
         fi
 
-        # پشتیبانی از Backspace
         if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
             if [ -n "$buffer" ]; then
                 buffer="${buffer%?}"
@@ -308,26 +294,54 @@ show_ota_update_hub() {
         case $ota_opt in
             1|2)
                 s_url="$REPO_SCRIPTS"
-                s_name="Official GitHub"
-                [ "$ota_opt" == "2" ] && s_url="$MIRROR_SCRIPTS" && s_name="ParsPack Mirror"
+                [ "$ota_opt" == "2" ] && s_url="$MIRROR_SCRIPTS"
 
-                clear; echo -e "\n  ${DIM}┌─[ SYNCING SCRIPTS: ${W}${s_name}${DIM} ]${NC}"
-                echo -e "  ${DIM}├────────────────────────────────────────────────────────────${NC}"
+                clear; echo ""
+                echo -e "  ${B}╭──────────────────────────────────────────────────────────────╮${NC}"
+                echo -e "  ${B}│${NC} ${W}MDesign Ecosystem Central Updater${NC}                           ${B}│${NC}"
+                echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}\n"
+
+                total_mods=${#ALL_MODULES[@]}
+                current=0
+                width=30
 
                 for mod in "${ALL_MODULES[@]}"; do
+                    ((current++))
                     rel_p="${MOD_MAP[$mod]}"
-                    printf "  ${C}→${NC} %-22s " "$mod ($rel_p)"
+                    
+                    percent=$(( current * 100 / total_mods ))
+                    filled=$(( percent * width / 100 ))
+                    empty=$(( width - filled ))
+                    
+                    bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
+                    bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
+
                     if download_file_to_cache "$mod" "$s_url"; then
                         deploy_cached_module "$mod"
                         n_v=$(grep -m1 '^MODULE_VERSION=' "$LOCAL_DIR/$rel_p" 2>/dev/null | cut -d'"' -f2)
-                        printf "${G}[✔ UPGRADED: v%s]${NC}\n" "${n_v:-OK}"
+                        n_v="${n_v:-Unknown}"
+                        
+                        ver_str=" (v${n_v})"
+                        plain_len=$(( ${#mod} + ${#ver_str} ))
+                        pad_len=$(( 26 - plain_len ))
+                        [ "$pad_len" -lt 0 ] && pad_len=0
+                        padding=$(printf '%*s' "$pad_len" "")
+
+                        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$mod" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     else
-                        printf "${R}[✖ FAILED]${NC}\n"
+                        ver_str=" (FAILED)"
+                        plain_len=$(( ${#mod} + ${#ver_str} ))
+                        pad_len=$(( 26 - plain_len ))
+                        [ "$pad_len" -lt 0 ] && pad_len=0
+                        padding=$(printf '%*s' "$pad_len" "")
+
+                        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$mod" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     fi
                 done
+                
                 > "$UPDATE_FILE"
-                echo -e "  ${DIM}└────────────────────────────────────────────────────────────┘${NC}"
-                echo -e "  ${G}● Script sync finished. Press Enter to reload core...${NC}"; read dummy
+                echo -e "\n  ${G}● Script sync finished. Press Enter to reload core...${NC}"
+                read dummy
                 exec "$MTUNNEL_PATH"
                 ;;
 

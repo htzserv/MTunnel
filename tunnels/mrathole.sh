@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V2.9.11 ---
-# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.2.0 ---
+# [Features: Async Background Checker | Smart Systemd Reload | Zero-Delay Entry]
 
-MODULE_VERSION="3.1.0"
+MODULE_VERSION="3.2.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -31,10 +31,8 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# فاصله‌ی چک خودکار آپدیت در پس‌زمینه (ثانیه) - پیشنهاد حداقل 20-30 ثانیه
 UPDATE_CHECK_INTERVAL=30
 
-# --- Character-by-character read که رفرش زنده رو بدون پاک شدن تایپ کاربر مدیریت می‌کنه ---
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -80,7 +78,6 @@ read_with_refresh() {
     eval "$__resultvar=\"\$buffer\""
 }
 
-# --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mrathole.sh${cb}"
@@ -107,7 +104,6 @@ update_watcher_loop() {
 update_watcher_loop &
 WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
-# ---------------------------------------
 
 self_update_module() {
     local rel_path="tunnels/mrathole.sh"
@@ -318,7 +314,8 @@ install_rathole_silent() {
 }
 
 setup_systemd() {
-    cat <<EOF > "$SERVICE_TPL"
+    local tmp_srv="$SECURE_TMP/mrathole_tpl.service"
+    cat <<'EOF' > "$tmp_srv"
 [Unit]
 Description=MRathole Reverse Engine (%i)
 Wants=network-online.target
@@ -335,7 +332,12 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
+    if ! cmp -s "$tmp_srv" "$SERVICE_TPL" 2>/dev/null; then
+        mv -f "$tmp_srv" "$SERVICE_TPL"
+        systemctl daemon-reload
+    else
+        rm -f "$tmp_srv"
+    fi
 }
 
 generate_toml() {
@@ -922,7 +924,7 @@ while true; do
                manage_cron "$t_name"; continue
                
            elif [[ "$opt" == "11" ]]; then
-               true # Proceed to generation and restart
+               true
            fi
            
            generate_toml "$t_name"

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v1.7.18 ---
-# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.0.0 ---
+# [Features: Async Background Checker | Smart Systemd Reload | Zero-Delay Entry]
 
-MODULE_VERSION="1.9.0"
+MODULE_VERSION="2.0.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -31,10 +31,8 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# فاصله‌ی چک خودکار آپدیت در پس‌زمینه (ثانیه) - پیشنهاد حداقل 20-30 ثانیه
 UPDATE_CHECK_INTERVAL=30
 
-# --- Character-by-character read که رفرش زنده رو بدون پاک شدن تایپ کاربر مدیریت می‌کنه ---
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -80,7 +78,6 @@ read_with_refresh() {
     eval "$__resultvar=\"\$buffer\""
 }
 
-# --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mbackhaul.sh${cb}"
@@ -107,7 +104,6 @@ update_watcher_loop() {
 update_watcher_loop &
 WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
-# ---------------------------------------
 
 self_update_module() {
     local rel_path="tunnels/mbackhaul.sh"
@@ -226,11 +222,16 @@ format_total() {
 }
 
 apply_bbr_optimization() {
-    sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
-    sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
-    grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-    grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-    sysctl -p >/dev/null 2>&1
+    local current_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null)
+    local current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+    
+    if [ "$current_qdisc" != "fq" ] || [ "$current_cc" != "bbr" ]; then
+        sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
+        sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
+        grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf 2>/dev/null || echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+        grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf 2>/dev/null || echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+        sysctl -p >/dev/null 2>&1
+    fi
 }
 
 generate_ssl_cert() {
@@ -414,7 +415,6 @@ get_peer_ping() {
     local port=$(echo "$2" | tr -d ' \n\r')
     if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
     
-    # 1. Native ICMP Ping
     local ping_res=$(timeout 2 ping -c 1 -W 1 "$target_ip" 2>/dev/null)
     if echo "$ping_res" | grep -q "time="; then
         local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
@@ -422,7 +422,6 @@ get_peer_ping() {
         return
     fi
     
-    # 2. Kernel Socket Extraction (ss 1.7.8 Fallback)
     if command -v ss >/dev/null 2>&1; then
         local tcp_rtt=$(ss -nti | grep -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
         if [ -n "$tcp_rtt" ]; then
@@ -432,7 +431,6 @@ get_peer_ping() {
         fi
     fi
 
-    # 3. Bash TCP Ping (Ultimate Fallback)
     if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
         local start_ts=$(date +%s%3N 2>/dev/null)
         if timeout 1 bash -c "</dev/tcp/$target_ip/$port" 2>/dev/null; then
@@ -566,7 +564,11 @@ write_bh_config() {
 }
 
 setup_systemd_service() {
-    cat <<'EOF' > /etc/systemd/system/mbackhaul@.service
+    local changed=false
+    local tmp_srv="$SECURE_TMP/mbackhaul_tpl.service"
+    local tmp_app="$SECURE_TMP/mbackhaul_apply.service"
+
+    cat <<'EOF' > "$tmp_srv"
 [Unit]
 Description=MBackhaul Multi-Multiplexer (%i)
 Wants=network-online.target
@@ -584,7 +586,8 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF
-    cat <<'EOF' > /etc/systemd/system/mbackhaul-apply.service
+
+    cat <<'EOF' > "$tmp_app"
 [Unit]
 Description=MBackhaul Boot Restorer
 After=network.target
@@ -597,8 +600,25 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload
-    systemctl enable mbackhaul-apply.service >/dev/null 2>&1
+
+    if ! cmp -s "$tmp_srv" "/etc/systemd/system/mbackhaul@.service" 2>/dev/null; then
+        mv -f "$tmp_srv" "/etc/systemd/system/mbackhaul@.service"
+        changed=true
+    else
+        rm -f "$tmp_srv"
+    fi
+
+    if ! cmp -s "$tmp_app" "/etc/systemd/system/mbackhaul-apply.service" 2>/dev/null; then
+        mv -f "$tmp_app" "/etc/systemd/system/mbackhaul-apply.service"
+        changed=true
+    else
+        rm -f "$tmp_app"
+    fi
+
+    if [ "$changed" = true ]; then
+        systemctl daemon-reload
+        systemctl enable mbackhaul-apply.service >/dev/null 2>&1
+    fi
 }
 
 draw_header() {
@@ -906,8 +926,8 @@ select_tunnel() {
 }
 
 install_backhaul_silent
-setup_systemd_service
 apply_bbr_optimization
+setup_systemd_service
 
 render_mbackhaul_menu() {
     badge=""
@@ -1121,7 +1141,7 @@ while true; do
                manage_cron "$t_name"; continue
                
            elif [[ "$opt" == "11" ]]; then
-               zero_bh_counters "$t_name" # Reset traffic memory on restart
+               zero_bh_counters "$t_name"
            fi
            
            write_bh_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS"

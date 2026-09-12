@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.2.1 ---
-# [Features: Async Background Checker | Smart Systemd Reload | Strict Bin Check]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.3.0 ---
+# [Features: Async Background Checker | Smart Systemd Reload | Zero-Delay Entry]
+# [Fix v3.3.0: 'local' outside function bugs fixed | Real core-binary validity check]
 
-MODULE_VERSION="3.2.1"
+MODULE_VERSION="3.3.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -202,6 +203,24 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+is_rathole_core_valid() {
+    local bin_path=""
+    if command -v rathole >/dev/null 2>&1; then
+        bin_path=$(command -v rathole)
+    elif [ -x "/usr/local/bin/rathole" ]; then
+        bin_path="/usr/local/bin/rathole"
+    else
+        return 1
+    fi
+    [ -s "$bin_path" ] || return 1
+    if command -v file >/dev/null 2>&1; then
+        file "$bin_path" 2>/dev/null | grep -qiE "ELF|executable" && return 0
+        return 1
+    fi
+    head -c4 "$bin_path" 2>/dev/null | grep -q $'\x7fELF' && return 0
+    return 1
+}
+
 menu_install_core() {
     echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -243,11 +262,11 @@ menu_install_core() {
             unzip -q -o "$SECURE_TMP/rh_dl.zip" -d "$SECURE_TMP/" >/dev/null 2>&1
             [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
             chmod +x /usr/local/bin/rathole 2>/dev/null || true
-            if command -v rathole >/dev/null 2>&1 && /usr/local/bin/rathole --version >/dev/null 2>&1; then
+            if is_rathole_core_valid; then
                 echo -e "  ${G}✔ Rathole Core installed successfully.${NC}"
             else
-                echo -e "  ${R}✖ Downloaded file is corrupted or not a valid binary!${NC}"
                 rm -f /usr/local/bin/rathole
+                echo -e "  ${R}✖ Download did not contain a valid binary! Installation aborted.${NC}"
             fi
         else
             echo -e "  ${R}✖ Download failed!${NC}"
@@ -267,11 +286,11 @@ menu_install_core() {
                     mv "$SECURE_TMP/rh_dl.zip" /usr/local/bin/rathole
                 fi
                 chmod +x /usr/local/bin/rathole 2>/dev/null || true
-                if command -v rathole >/dev/null 2>&1 && /usr/local/bin/rathole --version >/dev/null 2>&1; then
+                if is_rathole_core_valid; then
                     echo -e "  ${G}✔ Rathole Core installed from custom link.${NC}"
                 else
-                    echo -e "  ${R}✖ Downloaded file is corrupted or not a valid binary!${NC}"
                     rm -f /usr/local/bin/rathole
+                    echo -e "  ${R}✖ Downloaded file is not a valid binary! Installation aborted.${NC}"
                 fi
             else
                 echo -e "  ${R}✖ Download failed! Check the link.${NC}"
@@ -282,7 +301,12 @@ menu_install_core() {
         if [ -s "$LOCAL_DIR/packages/rathole" ]; then
             cp "$LOCAL_DIR/packages/rathole" /usr/local/bin/rathole
             chmod +x /usr/local/bin/rathole
-            echo -e "  ${G}✔ Rathole Core restored from Local Directory.${NC}"
+            if is_rathole_core_valid; then
+                echo -e "  ${G}✔ Rathole Core restored from Local Directory.${NC}"
+            else
+                rm -f /usr/local/bin/rathole
+                echo -e "  ${R}✖ Local file is not a valid binary! Installation aborted.${NC}"
+            fi
         else
             echo -e "  ${R}✖ File not found in $LOCAL_DIR/packages/rathole!${NC}"
         fi
@@ -295,7 +319,7 @@ menu_install_core() {
 }
 
 install_rathole_silent() {
-    if ! (command -v rathole >/dev/null 2>&1 && rathole --version >/dev/null 2>&1); then
+    if ! command -v rathole >/dev/null 2>&1 && [ ! -f "/usr/local/bin/rathole" ]; then
         local arch=$(uname -m)
         local target="x86_64-unknown-linux-gnu"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="aarch64-unknown-linux-gnu"
@@ -318,6 +342,7 @@ install_rathole_silent() {
             [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
             chmod +x /usr/local/bin/rathole 2>/dev/null
             rm -f "$SECURE_TMP/rh.zip"
+            is_rathole_core_valid || rm -f /usr/local/bin/rathole
         fi
     fi
     [ -f "/usr/local/bin/rathole" ] && ln -sf /usr/local/bin/rathole /usr/bin/rathole 2>/dev/null
@@ -495,7 +520,7 @@ draw_header() {
     fi
     
     local core_color="${R}"; local core_raw="Not Installed"
-    if command -v rathole >/dev/null 2>&1 && rathole --version >/dev/null 2>&1; then
+    if is_rathole_core_valid; then
         core_color="${G}"; core_raw="Installed"
     fi
     
@@ -726,13 +751,13 @@ manage_cron() {
         echo "systemctl restart mrathole@${t_name}" >> "$cron_script"
         chmod +x "$cron_script"
         
-        cron_tmp="$SECURE_TMP/crontab.$$"
+        local cron_tmp="$SECURE_TMP/crontab.$$"
         crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
         echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
         crontab "$cron_tmp"; rm -f "$cron_tmp"
         echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
     elif [[ "$cr_opt" == "2" ]]; then
-        cron_tmp="$SECURE_TMP/crontab.$$"
+        local cron_tmp="$SECURE_TMP/crontab.$$"
         crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
         crontab "$cron_tmp"; rm -f "$cron_tmp"
         rm -f "$cron_script"

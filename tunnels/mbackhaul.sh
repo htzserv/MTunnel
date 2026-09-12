@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.0.0 ---
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.1.0 ---
 # [Features: Async Background Checker | Smart Systemd Reload | Zero-Delay Entry]
+# [Fix v2.1.0: 'local' outside function bugs fixed | Real core-binary validity check | Per-tunnel zero counters]
 
-MODULE_VERSION="2.0.0"
+MODULE_VERSION="2.1.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -202,6 +203,24 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+is_bh_core_valid() {
+    local bin_path=""
+    if command -v bh >/dev/null 2>&1; then
+        bin_path=$(command -v bh)
+    elif [ -x "/usr/local/bin/bh" ]; then
+        bin_path="/usr/local/bin/bh"
+    else
+        return 1
+    fi
+    [ -s "$bin_path" ] || return 1
+    if command -v file >/dev/null 2>&1; then
+        file "$bin_path" 2>/dev/null | grep -qiE "ELF|executable" && return 0
+        return 1
+    fi
+    head -c4 "$bin_path" 2>/dev/null | grep -q $'\x7fELF' && return 0
+    return 1
+}
+
 format_speed() {
     local bytes=$1
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B/s"; return; fi
@@ -283,7 +302,12 @@ menu_install_core() {
             [ -f "$SECURE_TMP/backhaul" ] && mv "$SECURE_TMP/backhaul" /usr/local/bin/bh 2>/dev/null
             [ -f "$SECURE_TMP/bh" ] && mv "$SECURE_TMP/bh" /usr/local/bin/bh 2>/dev/null
             chmod +x /usr/local/bin/bh 2>/dev/null || true
-            echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
+            if is_bh_core_valid; then
+                echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
+            else
+                rm -f /usr/local/bin/bh
+                echo -e "  ${R}✖ Download did not contain a valid binary! Installation aborted.${NC}"
+            fi
         else
             echo -e "  ${R}✖ Download failed!${NC}"
         fi
@@ -303,7 +327,12 @@ menu_install_core() {
                     mv "$SECURE_TMP/bh_dl" /usr/local/bin/bh
                 fi
                 chmod +x /usr/local/bin/bh 2>/dev/null || true
-                echo -e "  ${G}✔ Backhaul Core installed from custom link.${NC}"
+                if is_bh_core_valid; then
+                    echo -e "  ${G}✔ Backhaul Core installed from custom link.${NC}"
+                else
+                    rm -f /usr/local/bin/bh
+                    echo -e "  ${R}✖ Downloaded file is not a valid binary! Installation aborted.${NC}"
+                fi
             else
                 echo -e "  ${R}✖ Download failed! Check the link.${NC}"
             fi
@@ -313,7 +342,12 @@ menu_install_core() {
         if [ -s "$LOCAL_DIR/packages/bh" ]; then
             cp "$LOCAL_DIR/packages/bh" /usr/local/bin/bh
             chmod +x /usr/local/bin/bh
-            echo -e "  ${G}✔ Backhaul Core restored from Local Directory.${NC}"
+            if is_bh_core_valid; then
+                echo -e "  ${G}✔ Backhaul Core restored from Local Directory.${NC}"
+            else
+                rm -f /usr/local/bin/bh
+                echo -e "  ${R}✖ Local file is not a valid binary! Installation aborted.${NC}"
+            fi
         else
             echo -e "  ${R}✖ File not found in $LOCAL_DIR/packages/bh!${NC}"
         fi
@@ -345,6 +379,7 @@ install_backhaul_silent() {
             [ -f "$SECURE_TMP/bh" ] && mv "$SECURE_TMP/bh" /usr/local/bin/bh 2>/dev/null
             chmod +x /usr/local/bin/bh 2>/dev/null
             rm -f "$SECURE_TMP/bh.tar.gz"
+            is_bh_core_valid || rm -f /usr/local/bin/bh
         fi
     fi
     [ -f "/usr/local/bin/bh" ] && ln -sf /usr/local/bin/bh /usr/bin/bh 2>/dev/null
@@ -371,7 +406,12 @@ clean_bh_counters() {
 
 zero_bh_counters() {
     local name="$1"
-    iptables -Z -t mangle 2>/dev/null || true
+    local chain rulenum
+    for chain in INPUT OUTPUT; do
+        while read -r rulenum; do
+            [ -n "$rulenum" ] && iptables -Z -t mangle "$chain" "$rulenum" 2>/dev/null
+        done < <(iptables -t mangle -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MBH_(RX|TX)_${name}( |\*/)" | awk '{print $1}')
+    done
 }
 
 if [[ "$1" == "--apply" ]]; then
@@ -645,7 +685,7 @@ draw_header() {
     fi
 
     local core_color="${R}"; local core_raw="Not Installed"
-    if command -v bh >/dev/null 2>&1 || [ -f "/usr/local/bin/bh" ]; then
+    if is_bh_core_valid; then
         core_color="${G}"; core_raw="Installed"
     fi
     
@@ -1047,7 +1087,7 @@ while true; do
                    t_name=$(basename "$conf" .meta)
                    systemctl stop mbackhaul@$t_name 2>/dev/null; systemctl disable mbackhaul@$t_name 2>/dev/null
                    clean_bh_counters "$t_name"
-                   local cron_tmp="$SECURE_TMP/crontab.$$"
+                   cron_tmp="$SECURE_TMP/crontab.$$"
                    crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
                    crontab "$cron_tmp"; rm -f "$cron_tmp"
                    rm -f "$conf" "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${t_name}_restart.sh"
@@ -1057,7 +1097,7 @@ while true; do
                t_name=$(basename "${configs[$del_idx]}" .meta)
                systemctl stop mbackhaul@$t_name 2>/dev/null; systemctl disable mbackhaul@$t_name 2>/dev/null
                clean_bh_counters "$t_name"
-               local cron_tmp="$SECURE_TMP/crontab.$$"
+               cron_tmp="$SECURE_TMP/crontab.$$"
                crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
                crontab "$cron_tmp"; rm -f "$cron_tmp"
                rm -f "${configs[$del_idx]}" "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${t_name}_restart.sh"
@@ -1112,7 +1152,7 @@ while true; do
                echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix Name (Current: ${Y}${t_name#bh_}${W}): ${NC}"; read new_suffix
                new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
                if [ -n "$new_suffix" ]; then
-                   local new_t_name="bh_${new_suffix}"
+                   new_t_name="bh_${new_suffix}"
                    if [ -f "$CONF_DIR/${new_t_name}.meta" ]; then
                        echo -e "  ${R}● Error: Tunnel name [${new_t_name}] already exists!${NC}"; sleep 1.5; continue
                    fi
@@ -1121,7 +1161,7 @@ while true; do
                    clean_bh_counters "$t_name"
                    
                    if crontab -l 2>/dev/null | grep -q "mbackhaul@${t_name}"; then
-                       local cron_tmp="$SECURE_TMP/crontab.$$"
+                       cron_tmp="$SECURE_TMP/crontab.$$"
                        crontab -l | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
                        crontab "$cron_tmp"; rm -f "$cron_tmp"
                        rm -f "$CONF_DIR/${t_name}_restart.sh"

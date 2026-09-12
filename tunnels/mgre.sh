@@ -1,6 +1,7 @@
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v5.6.1 ---
-# [Features: Scope Fixed | Safe IP Matching | Master Token Gen]
+# [Features: Master Token Auto-Gen | 16M Tunnel Limit | Zero-Delay Entry]
+# [Fix v5.6.1: 'local' outside function bug fixed]
 
 MODULE_VERSION="5.6.1"
 
@@ -252,7 +253,7 @@ apply_tunnel() {
             local tip="$o1.$o2.$o3.$last_remote"
             
             all_targets+=("$tip")
-            if ! ip route show | grep -qw "$nip"; then ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null; fi
+            if ! ip route show | grep -q "$nip"; then ip addr add "$nip/30" dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null; fi
         done
     fi
 

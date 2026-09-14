@@ -2,7 +2,7 @@
 # --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.6 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal Badges]
 
-MODULE_VERSION="1.6.0"
+MODULE_VERSION="1.6.5"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -107,8 +107,53 @@ update_watcher_loop() {
 }
 update_watcher_loop &
 WATCHER_PID=$!
-trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
 # ---------------------------------------
+
+# --- LIVE PING (Header) | Async Background Checker | Refresh every 5s ---
+PING_CHECK_INTERVAL=5
+check_ping_bg() {
+    local total_lat="0" lat_count="0"
+    local total_loss="0" loss_count="0"
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        TYPE=""; VX_NAME=""; CORE_SUBNET=""; VNI_ID=""; source "$conf" 2>/dev/null
+        [ -z "$VX_NAME" ] && continue
+        ip link show "$VX_NAME" >/dev/null 2>&1 || continue
+        local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
+        local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+        local res=$(timeout 6 ping -c 10 -i 0.2 -W 1 "$tip" 2>/dev/null)
+        local loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)')
+        if [ -n "$loss" ]; then
+            total_loss=$((total_loss + loss))
+            loss_count=$((loss_count + 1))
+        fi
+        if echo "$res" | grep -q "min/avg/max"; then
+            local avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
+            if [ -n "$avg" ]; then
+                total_lat=$(awk "BEGIN{print $total_lat + $avg}")
+                lat_count=$((lat_count + 1))
+            fi
+        fi
+    done
+
+    local out_lat="N/A" out_loss="N/A"
+    [ "$lat_count" -gt 0 ] && out_lat=$(awk "BEGIN{printf \"%.1fms\", $total_lat/$lat_count}")
+    [ "$loss_count" -gt 0 ] && out_loss=$(awk "BEGIN{printf \"%.0f\", $total_loss/$loss_count}")
+
+    echo "${out_lat}|${out_loss}" > "$SECURE_TMP/.mxlan_live_ping" 2>/dev/null
+}
+ping_watcher_loop() {
+    while true; do
+        check_ping_bg
+        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        sleep "$PING_CHECK_INTERVAL"
+    done
+}
+ping_watcher_loop &
+PING_WATCHER_PID=$!
+# -------------------------------------------------------------------------
+
+trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
 
 self_update_module() {
     local rel_path="tunnels/mxlan.sh"
@@ -205,6 +250,40 @@ get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+merge_ports() {
+    local current="$1"; local add="$2"
+    local -a result=()
+    local IFS=','
+    local -a cur_arr=($current)
+    local -a add_arr=($add)
+    for p in "${cur_arr[@]}"; do [ -n "$p" ] && result+=("$p"); done
+    for p in "${add_arr[@]}"; do
+        [ -z "$p" ] && continue
+        local found=0
+        for e in "${result[@]}"; do [ "$e" == "$p" ] && found=1 && break; done
+        [ "$found" -eq 0 ] && result+=("$p")
+    done
+    local out=""
+    for p in "${result[@]}"; do out+="${p},"; done
+    echo "${out%,}"
+}
+
+remove_ports() {
+    local current="$1"; local rem="$2"
+    [ -z "$rem" ] && { echo "$current"; return; }
+    local IFS=','
+    local -a cur_arr=($current)
+    local -a rem_arr=($rem)
+    local out=""
+    for p in "${cur_arr[@]}"; do
+        [ -z "$p" ] && continue
+        local skip=0
+        for r in "${rem_arr[@]}"; do [ "$p" == "$r" ] && skip=1 && break; done
+        [ "$skip" -eq 0 ] && out+="${p},"
+    done
+    echo "${out%,}"
 }
 
 clean_fwd_rules() {
@@ -339,6 +418,25 @@ draw_mxlan_header() {
     local ip_fwd=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
     local fwd_val=$([ "$ip_fwd" == "1" ] && echo "ON" || echo "OFF")
     local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
+
+    local live_ping="N/A" live_loss="N/A"
+    if [ -f "$SECURE_TMP/.mxlan_live_ping" ]; then
+        local cache_val=$(cat "$SECURE_TMP/.mxlan_live_ping" 2>/dev/null)
+        if [[ "$cache_val" == *"|"* ]]; then
+            live_ping="${cache_val%%|*}"
+            live_loss="${cache_val##*|}"
+        fi
+    fi
+    [ -z "$live_ping" ] && live_ping="N/A"
+    [ -z "$live_loss" ] && live_loss="N/A"
+    local ping_color="${DIM}"; [ "$live_ping" != "N/A" ] && ping_color="${G}"
+    local loss_color="${DIM}"; local loss_disp="N/A"
+    if [ "$live_loss" != "N/A" ]; then
+        loss_disp="${live_loss}%"
+        if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_color="${G}"
+        elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_color="${Y}"
+        else loss_color="${R}"; fi
+    fi
     
     clear; echo ""
     local str1=" MXLAN Layer-2 Edge v${MODULE_VERSION} "
@@ -346,13 +444,18 @@ draw_mxlan_header() {
     local str3=" FABRICS: $active_fabrics "
     local str4=" V-IPS: $total_vips "
     local str5=" FWD: $fwd_val "
+    local str6=" PING: $live_ping "
+    local str7=" LOSS: $loss_disp "
     
-    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} + 1 + ${#str5} ))
-    local pad_len=$(( 92 - raw_len )); [ "$pad_len" -lt 0 ] && pad_len=0; local padding=$(printf '%*s' "$pad_len" "")
+    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} + 1 + ${#str5} + 1 + ${#str6} + 1 + ${#str7} ))
+    local box_width=$raw_len
+    [ "$box_width" -lt 92 ] && box_width=92
+    local pad_len=$(( box_width - raw_len )); local padding=$(printf '%*s' "$pad_len" "")
+    local border=$(printf '─%.0s' $(seq 1 "$box_width"))
     
-    echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} FABRICS:${NC}${M} ${active_fabrics} ${NC}${B}│${NC}${DIM} V-IPS:${NC}${Y} ${total_vips} ${NC}${B}│${NC}${DIM} FWD:${NC}${fwd_color} ${fwd_val} ${NC}${padding}${B}│${NC}"
-    echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${B}╭${border}╮${NC}"
+    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} FABRICS:${NC}${M} ${active_fabrics} ${NC}${B}│${NC}${DIM} V-IPS:${NC}${Y} ${total_vips} ${NC}${B}│${NC}${DIM} FWD:${NC}${fwd_color} ${fwd_val} ${NC}${B}│${NC}${DIM} PING:${NC}${ping_color} ${live_ping} ${NC}${B}│${NC}${DIM} LOSS:${NC}${loss_color} ${loss_disp} ${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}╰${border}╯${NC}"
 }
 
 show_mxlan_monitor() {
@@ -533,23 +636,75 @@ edit_fabric() {
                 ;;
             4)
                 if [ "$TYPE" != "1" ]; then return; fi
-                echo -ne "  ${C}●${NC} ${W}New TCP Ports (e.g. 80,443) [Current: ${Y}${FWD_TCP:-None}${W}]: ${NC}"; read new_tcp
-                echo -ne "  ${C}●${NC} ${W}New UDP Ports (e.g. 53,7000) [Current: ${C}${FWD_UDP:-None}${W}]: ${NC}"; read new_udp
-                new_tcp=$(echo "$new_tcp" | tr -dc '0-9,')
-                new_udp=$(echo "$new_udp" | tr -dc '0-9,')
-                
-                local new_lb="0"
-                if [ -n "$new_tcp" ] || [ -n "$new_udp" ]; then
-                    echo -ne "  ${C}●${NC} ${W}Load Balance (Distribute) traffic across all Virtual IPs? (y/n): ${NC}"; read ask_lb
-                    ask_lb=$(echo "$ask_lb" | tr -d '\r' | tr -d ' ' | tr '[:upper:]' '[:lower:]')
-                    if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then new_lb="1"; fi
-                fi
-                
-                grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${sel_conf}.tmp"
-                echo "FWD_TCP=$new_tcp" >> "${sel_conf}.tmp"
-                echo "FWD_UDP=$new_udp" >> "${sel_conf}.tmp"
-                echo "LB_MODE=$new_lb" >> "${sel_conf}.tmp"
-                mv "${sel_conf}.tmp" "$sel_conf"
+                while true; do
+                    echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
+                    echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
+                    echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
+                    echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo "${G}ON${NC}" || echo "${DIM}OFF${NC}")"
+                    echo -e "  ${DIM}│${NC}"
+                    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
+                    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
+                    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
+                    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer${NC}"
+                    echo -e "  ${DIM}│${NC}"
+                    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
+                    echo -ne "  ${C}Select ❯❯ ${NC}"; read pf_opt
+
+                    case $pf_opt in
+                        1)
+                            echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read add_tcp
+                            echo -ne "  ${C}●${NC} ${W}Add UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read add_udp
+                            add_tcp=$(echo "$add_tcp" | tr -dc '0-9,')
+                            add_udp=$(echo "$add_udp" | tr -dc '0-9,')
+                            local m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp")
+                            local m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
+                            grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" > "${sel_conf}.tmp"
+                            echo "FWD_TCP=$m_tcp" >> "${sel_conf}.tmp"
+                            echo "FWD_UDP=$m_udp" >> "${sel_conf}.tmp"
+                            mv "${sel_conf}.tmp" "$sel_conf"
+                            FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                            apply_fabric "$sel_conf"
+                            echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
+                            ;;
+                        2)
+                            echo -ne "  ${C}●${NC} ${W}Remove TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read rm_tcp
+                            echo -ne "  ${C}●${NC} ${W}Remove UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read rm_udp
+                            rm_tcp=$(echo "$rm_tcp" | tr -dc '0-9,')
+                            rm_udp=$(echo "$rm_udp" | tr -dc '0-9,')
+                            local m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp")
+                            local m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
+                            grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" > "${sel_conf}.tmp"
+                            echo "FWD_TCP=$m_tcp" >> "${sel_conf}.tmp"
+                            echo "FWD_UDP=$m_udp" >> "${sel_conf}.tmp"
+                            mv "${sel_conf}.tmp" "$sel_conf"
+                            FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                            apply_fabric "$sel_conf"
+                            echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
+                            ;;
+                        3)
+                            echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read new_tcp
+                            echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read new_udp
+                            new_tcp=$(echo "$new_tcp" | tr -dc '0-9,')
+                            new_udp=$(echo "$new_udp" | tr -dc '0-9,')
+                            grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" > "${sel_conf}.tmp"
+                            echo "FWD_TCP=$new_tcp" >> "${sel_conf}.tmp"
+                            echo "FWD_UDP=$new_udp" >> "${sel_conf}.tmp"
+                            mv "${sel_conf}.tmp" "$sel_conf"
+                            FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
+                            apply_fabric "$sel_conf"
+                            echo -e "  ${G}● Ports replaced. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
+                            ;;
+                        4)
+                            local new_lb="1"; [ "$LB_MODE" == "1" ] && new_lb="0"
+                            sed -i "s/^LB_MODE=.*/LB_MODE=$new_lb/" "$sel_conf"
+                            LB_MODE="$new_lb"
+                            apply_fabric "$sel_conf"
+                            echo -e "  ${G}● Load Balancer set to $([ "$new_lb" == "1" ] && echo ON || echo OFF).${NC}"; sleep 1.5
+                            ;;
+                        0) break ;;
+                    esac
+                done
+                return
                 ;;
             5)
                 echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}${VX_NAME#vx_}${W}, Max 4-5 chars): ${NC}"; read new_suffix

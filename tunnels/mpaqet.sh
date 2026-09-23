@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v7.9.0 ---
-# [Features: Async Background Installer | Smart Systemd Guard | Zero-Delay Entry]
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.0.0 ---
+# [Features: First-Run Prompt | Universal Download | Port Guard | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="7.9.0"
+MODULE_VERSION="8.0.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -15,6 +15,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
+rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
@@ -23,7 +24,7 @@ fi
 
 is_valid_host() {
     local host=$1
-    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]]; then return 0; fi
+    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]] || [[ "$host" =~ ^([a-fA-F0-9:]+)$ ]]; then return 0; fi
     return 1
 }
 
@@ -31,7 +32,7 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-UPDATE_CHECK_INTERVAL=30
+UPDATE_CHECK_INTERVAL=60
 
 read_with_refresh() {
     local prompt="$1"
@@ -40,6 +41,7 @@ read_with_refresh() {
     local buffer=""
     local char rc
 
+    touch "$SECURE_TMP/.mpaqet_in_menu"
     echo -ne "$prompt"
 
     while true; do
@@ -75,6 +77,7 @@ read_with_refresh() {
         echo -ne "$char"
     done
 
+    rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null
     eval "$__resultvar=\"\$buffer\""
 }
 
@@ -98,13 +101,15 @@ check_update_bg() {
 update_watcher_loop() {
     while true; do
         check_update_bg
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        if [ -f "$SECURE_TMP/.mpaqet_in_menu" ]; then
+            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
 update_watcher_loop &
 WATCHER_PID=$!
-trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
+trap 'kill "$WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null' EXIT
 
 self_update_module() {
     local rel_path="tunnels/mpaqet.sh"
@@ -203,6 +208,30 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+is_paqet_core_valid() {
+    local bin_path=""
+    if [ -x "/usr/local/bin/paqet" ]; then
+        bin_path="/usr/local/bin/paqet"
+    elif [ -x "/usr/bin/paqet" ]; then
+        bin_path="/usr/bin/paqet"
+    elif command -v paqet >/dev/null 2>&1; then
+        bin_path=$(command -v paqet)
+    else
+        return 1
+    fi
+
+    [ -f "$bin_path" ] && [ -s "$bin_path" ] || return 1
+
+    if command -v file >/dev/null 2>&1; then
+        file -L "$bin_path" 2>/dev/null | grep -qiE "ELF.*executable" && return 0
+        return 1
+    fi
+
+    local magic=$(head -c 4 "$bin_path" 2>/dev/null)
+    [ "$magic" = $'\x7fELF' ] && return 0
+    return 1
+}
+
 format_speed() {
     local bytes=$1
     if [ -z "$bytes" ] || [ "$bytes" -eq 0 ]; then echo "0 B/s"; return; fi
@@ -222,30 +251,21 @@ format_total() {
     else awk "BEGIN {printf \"%.2f TB\", $bytes/1099511627776}"; fi
 }
 
-menu_install_core() {
-    echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE PAQET CORE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/paqet)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
-    src_choice=$(echo "$src_choice" | tr -d '\r\n ')
-
-    [[ "$src_choice" == "q" ]] && return
-
-    echo -e "  ${R}● Purging old MPaqet binaries and processes...${NC}"
+install_core_from_source() {
+    local src_choice="$1"
     systemctl stop mpaqet@* 2>/dev/null
     killall -9 paqet 2>/dev/null
+    
+    if [ -f "/usr/local/bin/paqet" ] || [ -f "/usr/bin/paqet" ]; then
+        echo -e "  ${Y}● Purging previous MPaqet installation...${NC}"
+    fi
     rm -f /usr/local/bin/paqet /usr/bin/paqet "$SECURE_TMP/paqet_dl" "$SECURE_TMP/paqet.tar.gz"
 
     apt-get update -y -q >/dev/null 2>&1 || true
     apt-get install -y -q libpcap-dev wget curl xxd >/dev/null 2>&1 || true
 
     if [[ "$src_choice" == "1" || "$src_choice" == "2" ]]; then
-        echo -e "  ${DIM}● Fetching latest release from GitHub API...${NC}"
+        echo -e "  ${DIM}● Fetching latest release binary...${NC}"
         local arch=$(uname -m)
         local target="amd64"
         [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
@@ -259,10 +279,16 @@ menu_install_core() {
             dl_url="https://c107328.parspack.net/c107328/MTunnel/packages/paqet-linux-${target}.tar.gz"
         fi
         
-        if [ -n "$dl_url" ]; then
-            wget -q --timeout=15 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" || { echo -e "  ${R}✖ Download failed!${NC}"; return; }
+        local dl_ok=false
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null && dl_ok=true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null && dl_ok=true
+        fi
+
+        if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/paqet.tar.gz" ]; then
             if gzip -t "$SECURE_TMP/paqet.tar.gz" 2>/dev/null; then
-                tar -xzf "$SECURE_TMP/paqet.tar.gz" -C "$SECURE_TMP/" >/dev/null 2>&1 || { echo -e "  ${R}✖ Extraction failed!${NC}"; return; }
+                tar -xzf "$SECURE_TMP/paqet.tar.gz" -C "$SECURE_TMP/" >/dev/null 2>&1
                 local bin_found=$(find "$SECURE_TMP" -maxdepth 1 -type f -name "*paqet*" -executable | head -1)
                 
                 if [ -n "$bin_found" ]; then
@@ -274,33 +300,42 @@ menu_install_core() {
                 fi
                 rm -f "$SECURE_TMP"/paqet*
             else
-                echo -e "  ${R}✖ Downloaded file is corrupted or not a valid archive!${NC}"
+                echo -e "  ${R}✖ Downloaded file is corrupted!${NC}"
             fi
         else
-            echo -e "  ${R}✖ Failed to fetch release URL from GitHub!${NC}"
+            echo -e "  ${R}✖ Download failed! Check connection.${NC}"
         fi
 
     elif [[ "$src_choice" == "3" ]]; then
         echo -ne "  ${C}● Enter Direct Link: ${NC}"; read custom_url
-        custom_url=$(echo "$custom_url" | tr -d '\r')
+        custom_url=$(echo "$custom_url" | tr -d '\r ')
         if [ -n "$custom_url" ]; then
             echo -e "  ${DIM}● Downloading from Custom Link...${NC}"
-            wget -q --timeout=15 -O "$SECURE_TMP/paqet_dl" "$custom_url" || { echo -e "  ${R}✖ Download failed! Check the link.${NC}"; return; }
-            
-            if gzip -t "$SECURE_TMP/paqet_dl" 2>/dev/null; then
-                tar -xzf "$SECURE_TMP/paqet_dl" -C "$SECURE_TMP/" >/dev/null 2>&1
-                local bin_found=$(find "$SECURE_TMP" -maxdepth 1 -type f -name "*paqet*" -executable | head -1)
-                if [ -n "$bin_found" ]; then 
-                    mv "$bin_found" /usr/local/bin/paqet
-                else 
+            local dl_ok=false
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 10 --max-time 60 -o "$SECURE_TMP/paqet_dl" "$custom_url" 2>/dev/null && dl_ok=true
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q --timeout=15 -O "$SECURE_TMP/paqet_dl" "$custom_url" 2>/dev/null && dl_ok=true
+            fi
+
+            if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/paqet_dl" ]; then
+                if gzip -t "$SECURE_TMP/paqet_dl" 2>/dev/null; then
+                    tar -xzf "$SECURE_TMP/paqet_dl" -C "$SECURE_TMP/" >/dev/null 2>&1
+                    local bin_found=$(find "$SECURE_TMP" -maxdepth 1 -type f -name "*paqet*" -executable | head -1)
+                    if [ -n "$bin_found" ]; then 
+                        mv "$bin_found" /usr/local/bin/paqet
+                    else 
+                        mv "$SECURE_TMP/paqet_dl" /usr/local/bin/paqet
+                    fi
+                else
                     mv "$SECURE_TMP/paqet_dl" /usr/local/bin/paqet
                 fi
+                chmod +x /usr/local/bin/paqet
+                echo -e "  ${G}✔ MPaqet Core installed from custom link.${NC}"
+                rm -f "$SECURE_TMP"/paqet*
             else
-                mv "$SECURE_TMP/paqet_dl" /usr/local/bin/paqet
+                echo -e "  ${R}✖ Download failed! Check the link.${NC}"
             fi
-            chmod +x /usr/local/bin/paqet
-            echo -e "  ${G}✔ MPaqet Core installed from custom link.${NC}"
-            rm -f "$SECURE_TMP/paqet"*
         fi
 
     elif [[ "$src_choice" == "4" ]]; then
@@ -318,41 +353,51 @@ menu_install_core() {
     echo -e "  ${DIM}● Restarting active tunnels...${NC}"
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
-            t_name=$(basename "$conf" .meta)
+            local t_name=$(basename "$conf" .meta)
             systemctl start "mpaqet@${t_name}" 2>/dev/null
         fi
     done
-    sleep 2
+    sleep 1.5
 }
 
-install_paqet_silent() {
-    apt-get update -y -q >/dev/null 2>&1 || true
-    apt-get install -y -q libpcap-dev wget curl xxd >/dev/null 2>&1 || true
-    local arch=$(uname -m)
-    local target="amd64"
-    [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="arm64"
-    
-    local dl_url="https://github.com/hanselime/paqet/releases/latest/download/paqet-linux-${target}.tar.gz"
-    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/packages/paqet-linux-${target}.tar.gz"
-    
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
-    else
-        wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/paqet.tar.gz" "$mirror_url" 2>/dev/null
-    fi
+menu_install_core() {
+    echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE PAQET CORE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/paqet)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
+    src_choice=$(echo "$src_choice" | tr -d '\r\n ')
 
-    if [ -s "$SECURE_TMP/paqet.tar.gz" ]; then
-        if gzip -t "$SECURE_TMP/paqet.tar.gz" 2>/dev/null; then
-            tar -xzf "$SECURE_TMP/paqet.tar.gz" -C "$SECURE_TMP/" >/dev/null 2>&1
-            local bin_found=$(find "$SECURE_TMP" -maxdepth 1 -type f -name "*paqet*" -executable | head -1)
-            if [ -n "$bin_found" ]; then
-                mv "$bin_found" /usr/local/bin/paqet
-                chmod +x /usr/local/bin/paqet
+    [[ "$src_choice" =~ ^[1-4]$ ]] && install_core_from_source "$src_choice"
+}
+
+check_first_run_core() {
+    if ! is_paqet_core_valid; then
+        local first_prompt_flag="$CONF_DIR/.core_prompted"
+        if [ ! -f "$first_prompt_flag" ]; then
+            touch "$first_prompt_flag"
+            clear
+            echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+            echo -e "  ${B}│${NC}   ${R}● Paqet Core binary is NOT installed on this machine!${NC}                   ${B}│${NC}"
+            echo -e "  ${B}│${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${B}│${NC}"
+            echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/paqet)${NC}"
+            echo -e "  ${DIM}│${NC}"
+            echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
+            init_opt=$(echo "$init_opt" | tr -d '\r ')
+            if [[ "$init_opt" =~ ^[1-4]$ ]]; then
+                install_core_from_source "$init_opt"
             fi
-            rm -f "$SECURE_TMP"/paqet*
         fi
     fi
-    [ -f "/usr/local/bin/paqet" ] && ln -sf /usr/local/bin/paqet /usr/bin/paqet 2>/dev/null
 }
 
 setup_paqet_counters() {
@@ -368,8 +413,17 @@ setup_paqet_counters() {
 
 clean_paqet_counters() {
     local name="$1"
-    iptables -t mangle -S 2>/dev/null | grep -E "MPAQET_(RX|TX|RST)_${name}" | sed 's/^-A /-D /' | while read -r r; do iptables -t mangle $r 2>/dev/null; done
-    iptables -t raw -S 2>/dev/null | grep "MPAQET_RAW_${name}" | sed 's/^-A /-D /' | while read -r r; do iptables -t raw $r 2>/dev/null; done
+    local chain rulenum
+    for chain in INPUT OUTPUT; do
+        while read -r rulenum; do
+            [ -n "$rulenum" ] && iptables -t mangle -D "$chain" "$rulenum" 2>/dev/null
+        done < <(iptables -t mangle -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MPAQET_(RX|TX|RST)_${name}( |\*/)" | awk '{print $1}' | tac)
+    done
+    for chain in PREROUTING OUTPUT; do
+        while read -r rulenum; do
+            [ -n "$rulenum" ] && iptables -t raw -D "$chain" "$rulenum" 2>/dev/null
+        done < <(iptables -t raw -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MPAQET_RAW_${name}( |\*/)" | awk '{print $1}' | tac)
+    done
 }
 
 zero_paqet_counters() {
@@ -488,7 +542,7 @@ draw_header() {
     fi
     
     local core_color="${R}"; local core_raw="Not Installed"
-    if command -v paqet >/dev/null 2>&1 || [ -f "/usr/local/bin/paqet" ]; then
+    if is_paqet_core_valid; then
         core_color="${G}"; core_raw="Installed"
     fi
 
@@ -565,7 +619,9 @@ draw_header() {
                 bg_val=$(get_peer_ping "$peer_ip" "$tmp_port")
                 echo "$bg_val" > "$ping_cache"
                 rm -f "$ping_lock"
-                kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+                if [ -f "$SECURE_TMP/.mpaqet_in_menu" ]; then
+                    kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+                fi
             ) &
         fi
     else
@@ -802,7 +858,8 @@ edit_paqet_tunnel() {
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Edit MTU Size${NC} ${DIM}(1000-1500)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Connection Count${NC} ${DIM}(conn: 1-32)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Edit Encryption${NC} ${DIM}(aes-128-gcm, aes-256, none)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Edit Secret Key${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
@@ -844,6 +901,16 @@ edit_paqet_tunnel() {
            fi
            ;;
         5)
+           echo -ne "  ${C}● New Secret Key: ${NC}"; read n_k
+           n_k=$(echo "$n_k" | tr -dc 'a-zA-Z0-9_=-')
+           if [ -n "$n_k" ]; then
+               sed -i "s|key:.*|key: \"$n_k\"|" "$sel_cfg"
+               echo -e "  ${G}✔ Secret Key updated.${NC}"
+           else
+               echo -e "  ${Y}● No changes made.${NC}"; sleep 1; return
+           fi
+           ;;
+        6)
            echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix (Current: ${Y}${old_tname#pq_}${W}, Max 5 chars): ${NC}"; read new_suffix
            new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
            if [ -n "$new_suffix" ]; then
@@ -893,10 +960,53 @@ edit_paqet_tunnel() {
     fi
 }
 
-if ! command -v paqet >/dev/null 2>&1 && [ ! -f "/usr/local/bin/paqet" ]; then
-    ( install_paqet_silent ) &
-fi
-[ ! -f "/etc/systemd/system/mpaqet@.service" ] && setup_systemd_service
+uninstall_mpaqet() {
+    clear
+    echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MPAQET${NC}                   ${R}│${NC}"
+    echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All active Paqet tunnels & systemd units                               ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All YAML configurations & metadata in /etc/paqet                       ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All raw & mangle iptables counters                                    ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● Paqet core binary (/usr/local/bin/paqet) & mpaqet module               ${R}│${NC}"
+    echo -e "  ${R}╰────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    
+    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
+    confirm=$(echo "$confirm" | tr -d '\r ')
+    
+    if [ "$confirm" != "yes" ]; then
+        echo -e "  ${G}● Uninstallation cancelled.${NC}"; sleep 1.5; return
+    fi
+
+    echo -e "\n  ${DIM}● [1/5] Stopping services & killing processes...${NC}"
+    systemctl stop mpaqet@* mpaqet-apply.service 2>/dev/null
+    systemctl disable mpaqet@* mpaqet-apply.service 2>/dev/null
+    killall -9 paqet 2>/dev/null
+
+    echo -e "  ${DIM}● [2/5] Purging raw & mangle iptables rules...${NC}"
+    for tbl in mangle raw; do
+        iptables -t $tbl -S 2>/dev/null | grep -E "MPAQET_" | sed 's/^-A /-D /' | while read -r r; do
+            iptables -t $tbl $r 2>/dev/null
+        done
+    done
+
+    echo -e "  ${DIM}● [3/5] Removing systemd unit files...${NC}"
+    rm -f /etc/systemd/system/mpaqet@.service /etc/systemd/system/mpaqet-apply.service
+    systemctl daemon-reload 2>/dev/null
+
+    echo -e "  ${DIM}● [4/5] Deleting configurations & core binary...${NC}"
+    rm -rf /etc/paqet "$SECURE_TMP/.mpaqet"* /usr/local/bin/paqet /usr/bin/paqet
+
+    echo -e "  ${DIM}● [5/5] Removing mpaqet wrapper script...${NC}"
+    rm -f "$INSTALL_PATH" 2>/dev/null
+    [ -f "$0" ] && rm -f "$0" 2>/dev/null
+
+    echo -e "\n  ${G}✔ MPaqet ecosystem has been completely eradicated from this system.${NC}\n"
+    exit 0
+}
+
+check_first_run_core
+setup_systemd_service
 
 render_mpaqet_menu() {
     badge=""
@@ -916,7 +1026,7 @@ render_mpaqet_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Advanced Edit Tunnel${NC} ${DIM}(Mode/MTU/Conn/Rename)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Advanced Edit Tunnel${NC} ${DIM}(Mode/MTU/Conn/Secret/Rename)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -929,6 +1039,7 @@ render_mpaqet_menu() {
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -970,7 +1081,15 @@ while true; do
                echo -ne "  ${C}● Tunnel Listen Port [8888]: ${NC}"; read t_port
                t_port=$(echo "$t_port" | tr -dc '0-9')
                t_port=${t_port:-8888}
-               if [ -n "$t_port" ] && [ "$t_port" -le 65535 ]; then break; else echo -e "  ${R}✖ Invalid port!${NC}"; fi
+               if [ -z "$t_port" ] || [ "$t_port" -lt 1 ] || [ "$t_port" -gt 65535 ]; then
+                   echo -e "  ${R}✖ Invalid port!${NC}"
+                   continue
+               fi
+               if ss -tuln 2>/dev/null | grep -qE ":${t_port}\s"; then
+                   echo -e "  ${R}Error: Port ${t_port} is already in use by another service!${NC}"
+                   continue
+               fi
+               break
            done
            
            s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null)
@@ -1054,9 +1173,10 @@ EOF
            fi
            
            while true; do
-               echo -ne "  ${C}● Remote Kharej Server IP: ${NC}"; read r_ip
-               r_ip=$(echo "$r_ip" | tr -dc '0-9.')
-               if [[ "$r_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then break; else echo -e "  ${R}✖ Invalid IPv4 format!${NC}"; fi
+               echo -ne "  ${C}● Remote Kharej Server Host/IP: ${NC}"; read r_ip
+               r_ip=$(echo "$r_ip" | tr -d '\r ')
+               is_valid_host "$r_ip" && break
+               echo -e "  ${R}✖ Invalid Host/IP format!${NC}"
            done
            
            while true; do
@@ -1092,7 +1212,7 @@ log:
 forward:
 EOF
            IFS=',' read -ra P_ARR <<< "$fwd_ports"
-           local meta_ports=""
+           meta_ports=""
            for p_raw in "${P_ARR[@]}"; do
                p_clean=$(echo "$p_raw" | tr -dc '0-9')
                if [ -n "$p_clean" ] && [ "$p_clean" -le 65535 ]; then
@@ -1187,6 +1307,7 @@ EOF
         8) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
         9) menu_install_core ;;
         10) self_update_module ;;
+        11) uninstall_mpaqet ;;
         0) break ;;
     esac
 done

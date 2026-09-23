@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.0 ---
-# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Conflict Check | Secret Editor]
+# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Collision Check | Secret Editor]
 
 MODULE_VERSION="3.5.0"
 
@@ -234,9 +234,12 @@ is_rathole_core_valid() {
 
 install_core_from_source() {
     local src_choice="$1"
-    echo -e "  ${R}● Purging old Rathole binaries and processes...${NC}"
     systemctl stop mrathole@* 2>/dev/null
     killall -9 rathole 2>/dev/null
+    
+    if [ -f "/usr/local/bin/rathole" ] || [ -f "/usr/bin/rathole" ]; then
+        echo -e "  ${Y}● Purging previous Rathole installation...${NC}"
+    fi
     rm -f /usr/local/bin/rathole /usr/bin/rathole "$SECURE_TMP/rh_dl.zip" "$SECURE_TMP/rathole"
 
     command -v unzip >/dev/null 2>&1 || {

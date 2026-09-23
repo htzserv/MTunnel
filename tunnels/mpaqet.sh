@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.0.0 ---
-# [Features: First-Run Prompt | Universal Download | Port Guard | Signal-Safe Menu | Full Uninstaller]
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.1.0 ---
+# [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="8.0.0"
+MODULE_VERSION="8.1.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -836,128 +836,21 @@ show_live_radar() {
     tput cnorm
 }
 
-edit_paqet_tunnel() {
+select_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.yaml 2>/dev/null))
-    [ ${#configs[@]} -eq 0 ] && { echo -e "\n  ${R}● No tunnels configured!${NC}"; sleep 1.5; return; }
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
 
-    echo -e "\n  ${B}╭────────────────── Select Tunnel to Edit ───────────────────╮${NC}"
+    echo -e "\n  ${B}╭────────────────── Select Tunnel to Manage ─────────────────╮${NC}"
     for i in "${!configs[@]}"; do
         printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .yaml)"
     done
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-    echo -ne "  ${C}● Select Index or 'q': ${NC}"; read t_idx
-    t_idx=$(echo "$t_idx" | tr -dc '0-9')
-    [[ -z "$t_idx" || -z "${configs[$t_idx]}" ]] && return
+    echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
+    t_idx=$(echo "$t_idx" | tr -d '\r')
+    if [[ "$t_idx" == "q" || -z "$t_idx" || -z "${configs[$t_idx]}" ]]; then return 1; fi
 
-    local sel_cfg="${configs[$t_idx]}"
-    local old_tname=$(basename "$sel_cfg" .yaml)
-
-    echo -e "\n  ${DIM}┌─[ EDIT PAQET TUNNEL: ${W}${old_tname}${DIM} ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit KCP Mode${NC} ${DIM}(normal, fast, fast2, fast3)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Edit MTU Size${NC} ${DIM}(1000-1500)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Connection Count${NC} ${DIM}(conn: 1-32)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Edit Encryption${NC} ${DIM}(aes-128-gcm, aes-256, none)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Edit Secret Key${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-    echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
-    e_opt=$(echo "$e_opt" | tr -dc '0-9')
-
-    case $e_opt in
-        1)
-           echo -ne "  ${C}● New KCP Mode [normal|fast|fast2|fast3]: ${NC}"; read n_m
-           n_m=$(echo "$n_m" | tr -dc 'a-zA-Z0-9')
-           if [[ "$n_m" =~ ^(normal|fast|fast2|fast3)$ ]]; then
-               sed -i "s|mode:.*|mode: \"$n_m\"|" "$sel_cfg"
-           else
-               echo -e "  ${R}✖ Invalid Mode!${NC}"; sleep 1.5; return
-           fi
-           ;;
-        2)
-           echo -ne "  ${C}● New MTU Size [1000-1500]: ${NC}"; read n_mtu
-           n_mtu=$(echo "$n_mtu" | tr -dc '0-9')
-           if [[ ! "$n_mtu" =~ ^[0-9]+$ ]] || [ "$n_mtu" -lt 1000 ] || [ "$n_mtu" -gt 1500 ]; then 
-               echo -e "  ${R}✖ MTU must be between 1000 and 1500!${NC}"; sleep 1.5; return
-           fi
-           sed -i "s|mtu:.*|mtu: $n_mtu|" "$sel_cfg"
-           ;;
-        3)
-           echo -ne "  ${C}● New Connections Count [1-32]: ${NC}"; read n_c
-           n_c=$(echo "$n_c" | tr -dc '0-9')
-           if [[ ! "$n_c" =~ ^[0-9]+$ ]] || [ "$n_c" -lt 1 ] || [ "$n_c" -gt 32 ]; then 
-               echo -e "  ${R}✖ Connections must be between 1 and 32!${NC}"; sleep 1.5; return
-           fi
-           sed -i "s|conn:.*|conn: $n_c|" "$sel_cfg"
-           ;;
-        4)
-           echo -ne "  ${C}● New Encryption Block [aes-128-gcm|aes-256|none]: ${NC}"; read n_b
-           n_b=$(echo "$n_b" | tr -dc 'a-zA-Z0-9-')
-           if [[ "$n_b" =~ ^(aes-128-gcm|aes-256|none)$ ]]; then
-               sed -i "s|block:.*|block: \"$n_b\"|" "$sel_cfg"
-           else
-               echo -e "  ${R}✖ Invalid Encryption!${NC}"; sleep 1.5; return
-           fi
-           ;;
-        5)
-           echo -ne "  ${C}● New Secret Key: ${NC}"; read n_k
-           n_k=$(echo "$n_k" | tr -dc 'a-zA-Z0-9_=-')
-           if [ -n "$n_k" ]; then
-               sed -i "s|key:.*|key: \"$n_k\"|" "$sel_cfg"
-               echo -e "  ${G}✔ Secret Key updated.${NC}"
-           else
-               echo -e "  ${Y}● No changes made.${NC}"; sleep 1; return
-           fi
-           ;;
-        6)
-           echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix (Current: ${Y}${old_tname#pq_}${W}, Max 5 chars): ${NC}"; read new_suffix
-           new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
-           if [ -n "$new_suffix" ]; then
-               local new_t_name="pq_${new_suffix}"
-               if [ -f "$CONF_DIR/${new_t_name}.yaml" ]; then
-                   echo -e "  ${R}● Error: Tunnel [${new_t_name}] already exists!${NC}"; sleep 1.5; return
-               fi
-               
-               systemctl stop "mpaqet@${old_tname}" 2>/dev/null; systemctl disable "mpaqet@${old_tname}" 2>/dev/null
-               clean_paqet_counters "$old_tname"
-               
-               mv "$sel_cfg" "$CONF_DIR/${new_t_name}.yaml"
-               mv "$CONF_DIR/${old_tname}.meta" "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
-               
-               ROLE=""; TUN_PORT=""; TCP_PORTS=""; source "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
-               if [ "$ROLE" == "1" ]; then
-                   setup_paqet_counters "$new_t_name" "$TUN_PORT"
-               else
-                   if [ -n "$TCP_PORTS" ]; then
-                       IFS=',' read -ra P_ARR <<< "$TCP_PORTS"
-                       for p_clean in "${P_ARR[@]}"; do
-                           if [ -n "$p_clean" ] && [ "$p_clean" -le 65535 ]; then
-                               setup_paqet_counters "$new_t_name" "$p_clean"
-                           fi
-                       done
-                   fi
-               fi
-               
-               old_tname="$new_t_name"
-               systemctl enable "mpaqet@${old_tname}" >/dev/null 2>&1
-               echo -e "  ${G}● Tunnel successfully renamed to: ${new_t_name}${NC}"
-           else
-               return
-           fi
-           ;;
-        *) return ;;
-    esac
-
-    systemctl restart "mpaqet@${old_tname}" 2>/dev/null
-    sleep 1.5
-    if systemctl is-active --quiet "mpaqet@${old_tname}"; then
-        echo -e "\n  ${G}● Tunnel [${old_tname}] updated and restarted successfully!${NC}"; sleep 2
-    else
-        echo -e "\n  ${R}✖ Failed to start! Checking logs...${NC}"
-        journalctl -u "mpaqet@${old_tname}" -n 5 --no-pager
-        echo -ne "  ${DIM}Press Enter...${NC}"; read dummy
-    fi
+    SELECTED_TUN="${configs[$t_idx]}"
+    return 0
 }
 
 uninstall_mpaqet() {
@@ -1022,24 +915,29 @@ render_mpaqet_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup Server Tunnel${NC} ${DIM}(Kharej Raw Listener)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Setup Client Tunnel${NC} ${DIM}(Iran Port Forward)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC} ${DIM}(Specific / ALL)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Advanced Edit Tunnel${NC} ${DIM}(Mode/MTU/Conn/Secret/Rename)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Secret Key${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Edit KCP Mode${NC} ${DIM}(normal, fast, fast2, fast3)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit MTU Size${NC} ${DIM}(1000-1500)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Edit Connection Count${NC} ${DIM}(conn: 1-32)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${M}Edit Encryption${NC} ${DIM}(aes-128-gcm, aes-256, none)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Live Traffic & Bandwidth Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Live Traffic & Bandwidth Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1047,7 +945,7 @@ render_mpaqet_menu() {
 while true; do
     render_mpaqet_menu
     read_with_refresh "  ${C}PAQET ❯❯ ${NC}" opt render_mpaqet_menu
-    opt=$(echo "$opt" | tr -dc '0-9')
+    opt=$(echo "$opt" | tr -d '\r')
     
     case $opt in
         1)
@@ -1268,13 +1166,14 @@ EOF
            fi
            ;;
 
-        3) edit_paqet_tunnel ;;
-        4) show_live_radar ;;
-        5)
+        3)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
+           [ ${#configs[@]} -eq 0 ] && continue
+           echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ─────────────────╮${NC}"
            for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
-           echo -ne "  ${C}● Enter Index or 'all': ${NC}"; read del_idx
-           del_idx=$(echo "$del_idx" | tr -dc '0-9a-zA-Z')
+           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+           echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read del_idx
+           del_idx=$(echo "$del_idx" | tr -d '\r ')
            
            if [[ "$del_idx" == "all" ]]; then
                for conf in "${configs[@]}"; do
@@ -1290,24 +1189,135 @@ EOF
                clean_paqet_counters "$t_name"
                rm -f "${configs[$del_idx]}" "$CONF_DIR/${t_name}.yaml"
                echo -e "  ${G}● Purged!${NC}"; sleep 1.5
+           fi ;;
+
+        4|5|6|7|8|9)
+           select_tunnel || continue
+           sel_cfg="$SELECTED_TUN"
+           old_tname=$(basename "$sel_cfg" .yaml)
+
+           if [[ "$opt" == "4" ]]; then
+               curr_key=$(grep "key:" "$sel_cfg" | awk -F'"' '{print $2}')
+               echo -ne "  ${C}●${NC} ${W}New Secret Key [Current: ${Y}${curr_key}${W}]: ${NC}"; read n_k
+               n_k=$(echo "$n_k" | tr -dc 'a-zA-Z0-9_=-')
+               if [ -n "$n_k" ]; then
+                   sed -i "s|key:.*|key: \"$n_k\"|" "$sel_cfg"
+                   echo -e "  ${G}✔ Secret Key updated.${NC}"
+               else
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+
+           elif [[ "$opt" == "5" ]]; then
+               curr_mode=$(grep "mode:" "$sel_cfg" | awk -F'"' '{print $2}')
+               echo -ne "  ${C}●${NC} ${W}New KCP Mode [normal|fast|fast2|fast3] [Current: ${Y}${curr_mode}${W}]: ${NC}"; read n_m
+               n_m=$(echo "$n_m" | tr -dc 'a-zA-Z0-9')
+               if [ -z "$n_m" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               if [[ "$n_m" =~ ^(normal|fast|fast2|fast3)$ ]]; then
+                   sed -i "s|mode:.*|mode: \"$n_m\"|" "$sel_cfg"
+                   echo -e "  ${G}✔ KCP Mode updated.${NC}"
+               else
+                   echo -e "  ${R}✖ Invalid Mode!${NC}"; sleep 1.5; continue
+               fi
+
+           elif [[ "$opt" == "6" ]]; then
+               curr_mtu=$(grep "mtu:" "$sel_cfg" | awk '{print $2}')
+               echo -ne "  ${C}●${NC} ${W}New MTU Size [1000-1500] [Current: ${Y}${curr_mtu}${W}]: ${NC}"; read n_mtu
+               n_mtu=$(echo "$n_mtu" | tr -dc '0-9')
+               if [ -z "$n_mtu" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               if [ "$n_mtu" -lt 1000 ] || [ "$n_mtu" -gt 1500 ]; then 
+                   echo -e "  ${R}✖ MTU must be between 1000 and 1500!${NC}"; sleep 1.5; continue
+               fi
+               sed -i "s|mtu:.*|mtu: $n_mtu|" "$sel_cfg"
+               echo -e "  ${G}✔ MTU updated.${NC}"
+
+           elif [[ "$opt" == "7" ]]; then
+               curr_conn=$(grep "conn:" "$sel_cfg" | head -1 | awk '{print $2}')
+               echo -ne "  ${C}●${NC} ${W}New Connections Count [1-32] [Current: ${Y}${curr_conn}${W}]: ${NC}"; read n_c
+               n_c=$(echo "$n_c" | tr -dc '0-9')
+               if [ -z "$n_c" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               if [ "$n_c" -lt 1 ] || [ "$n_c" -gt 32 ]; then 
+                   echo -e "  ${R}✖ Connections must be between 1 and 32!${NC}"; sleep 1.5; continue
+               fi
+               sed -i "s|conn:.*|conn: $n_c|" "$sel_cfg"
+               echo -e "  ${G}✔ Connection count updated.${NC}"
+
+           elif [[ "$opt" == "8" ]]; then
+               curr_block=$(grep "block:" "$sel_cfg" | awk -F'"' '{print $2}')
+               echo -ne "  ${C}●${NC} ${W}New Encryption Block [aes-128-gcm|aes-256|none] [Current: ${Y}${curr_block}${W}]: ${NC}"; read n_b
+               n_b=$(echo "$n_b" | tr -dc 'a-zA-Z0-9-')
+               if [ -z "$n_b" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               if [[ "$n_b" =~ ^(aes-128-gcm|aes-256|none)$ ]]; then
+                   sed -i "s|block:.*|block: \"$n_b\"|" "$sel_cfg"
+                   echo -e "  ${G}✔ Encryption Block updated.${NC}"
+               else
+                   echo -e "  ${R}✖ Invalid Encryption!${NC}"; sleep 1.5; continue
+               fi
+
+           elif [[ "$opt" == "9" ]]; then
+               echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix (Current: ${Y}${old_tname#pq_}${W}): ${NC}"; read new_suffix
+               new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
+               if [ -n "$new_suffix" ]; then
+                   new_t_name="pq_${new_suffix}"
+                   if [ -f "$CONF_DIR/${new_t_name}.yaml" ]; then
+                       echo -e "  ${R}● Error: Tunnel [${new_t_name}] already exists!${NC}"; sleep 1.5; continue
+                   fi
+                   
+                   systemctl stop "mpaqet@${old_tname}" 2>/dev/null; systemctl disable "mpaqet@${old_tname}" 2>/dev/null
+                   clean_paqet_counters "$old_tname"
+                   
+                   mv "$sel_cfg" "$CONF_DIR/${new_t_name}.yaml"
+                   mv "$CONF_DIR/${old_tname}.meta" "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
+                   
+                   ROLE=""; TUN_PORT=""; TCP_PORTS=""; source "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
+                   if [ "$ROLE" == "1" ]; then
+                       setup_paqet_counters "$new_t_name" "$TUN_PORT"
+                   else
+                       if [ -n "$TCP_PORTS" ]; then
+                           IFS=',' read -ra P_ARR <<< "$TCP_PORTS"
+                           for p_clean in "${P_ARR[@]}"; do
+                               if [ -n "$p_clean" ] && [ "$p_clean" -le 65535 ]; then
+                                   setup_paqet_counters "$new_t_name" "$p_clean"
+                               fi
+                           done
+                       fi
+                   fi
+                   
+                   old_tname="$new_t_name"
+                   systemctl enable "mpaqet@${old_tname}" >/dev/null 2>&1
+                   echo -e "  ${G}● Tunnel successfully renamed to: ${new_t_name}${NC}"
+               else
+                   echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
+               fi
+           fi
+
+           systemctl restart "mpaqet@${old_tname}" 2>/dev/null
+           sleep 1.5
+           if systemctl is-active --quiet "mpaqet@${old_tname}"; then
+               echo -e "  ${G}✔ Tunnel updated and restarted successfully.${NC}"; sleep 1.5
            else
-               echo -e "  ${R}✖ Invalid Selection!${NC}"; sleep 1.5
-           fi ;;
-        6) show_tunnel_registry ;;
-        7) 
-           configs=($(ls "$CONF_DIR"/*.yaml 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && continue
-           echo -e "\n  ${B}╭────────────────── Select Tunnel for Logs ──────────────────╮${NC}"
-           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .yaml)"; done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-           echo -ne "  ${C}● Select Index: ${NC}"; read l_idx
-           if [[ -n "${configs[$l_idx]}" ]]; then
-               journalctl -u "mpaqet@$(basename "${configs[$l_idx]}" .yaml)" -n 50 -f
-           fi ;;
-        8) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
-        9) menu_install_core ;;
-        10) self_update_module ;;
-        11) uninstall_mpaqet ;;
+               echo -e "  ${R}✖ Tunnel failed to start. Please check logs!${NC}"; sleep 2
+           fi
+           ;;
+
+        10) show_live_radar ;;
+        11) show_tunnel_registry ;;
+        12) 
+           select_tunnel || continue
+           t_name=$(basename "$SELECTED_TUN" .yaml)
+           journalctl -u "mpaqet@${t_name}" -n 50 -f; continue
+           ;;
+        13) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
+        14) menu_install_core ;;
+        15) self_update_module ;;
+        16) uninstall_mpaqet ;;
         0) break ;;
     esac
 done

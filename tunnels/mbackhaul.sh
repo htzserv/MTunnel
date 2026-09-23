@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.5.0 ---
-# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Conflict Check | Secret Editor]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.5.1 ---
+# [Features: Smart Clean Install | Full Uninstaller | Signal-Safe Menu | UDP Switch | Port Guard]
 
-MODULE_VERSION="2.5.0"
+MODULE_VERSION="2.5.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -275,10 +275,16 @@ generate_ssl_cert() {
 
 install_core_from_source() {
     local src_choice="$1"
-    echo -e "  ${R}● Purging old Backhaul binaries and processes...${NC}"
-    systemctl stop mbackhaul@* 2>/dev/null
-    killall -9 bh 2>/dev/null
-    rm -f /usr/local/bin/bh /usr/bin/bh "$SECURE_TMP/bh_dl" "$SECURE_TMP/backhaul" "$SECURE_TMP/bh"
+    
+    # هوشمندسازی: فقط در صورت وجود باینری یا پروسس قبلی پیام نمایش داده می‌شود
+    if command -v bh >/dev/null 2>&1 || [ -f "/usr/local/bin/bh" ] || pgrep -x bh >/dev/null 2>&1; then
+        echo -e "  ${Y}● Updating: Stopping active instances & replacing binary...${NC}"
+        systemctl stop mbackhaul@* 2>/dev/null
+        killall -9 bh 2>/dev/null
+        rm -f /usr/local/bin/bh /usr/bin/bh "$SECURE_TMP/bh_dl" "$SECURE_TMP/backhaul" "$SECURE_TMP/bh" 2>/dev/null
+    else
+        rm -f "$SECURE_TMP/bh_dl" "$SECURE_TMP/backhaul" "$SECURE_TMP/bh" 2>/dev/null
+    fi
 
     if [[ "$src_choice" == "1" || "$src_choice" == "2" ]]; then
         echo -e "  ${DIM}● Downloading latest binary...${NC}"

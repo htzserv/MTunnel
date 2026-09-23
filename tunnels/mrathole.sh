@@ -1,9 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.3.0 ---
-# [Features: Async Background Checker | Smart Systemd Reload | Zero-Delay Entry]
-# [Fix v3.3.0: 'local' outside function bugs fixed | Real core-binary validity check]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.4.0 ---
+# [Features: Signal-Safe Menu Tracker | Universal curl/wget Core | Port Collision Protection | Secret Editor]
 
-MODULE_VERSION="3.3.0"
+MODULE_VERSION="3.4.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -16,6 +15,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
+rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
@@ -24,7 +24,7 @@ fi
 
 is_valid_host() {
     local host=$1
-    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]]; then return 0; fi
+    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]] || [[ "$host" =~ ^([a-fA-F0-9:]+)$ ]]; then return 0; fi
     return 1
 }
 
@@ -32,7 +32,7 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-UPDATE_CHECK_INTERVAL=30
+UPDATE_CHECK_INTERVAL=60
 
 read_with_refresh() {
     local prompt="$1"
@@ -41,6 +41,7 @@ read_with_refresh() {
     local buffer=""
     local char rc
 
+    touch "$SECURE_TMP/.mrathole_in_menu"
     echo -ne "$prompt"
 
     while true; do
@@ -76,6 +77,7 @@ read_with_refresh() {
         echo -ne "$char"
     done
 
+    rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
     eval "$__resultvar=\"\$buffer\""
 }
 
@@ -95,16 +97,19 @@ check_update_bg() {
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mrathole_remote_ver"
 }
+
 update_watcher_loop() {
     while true; do
         check_update_bg
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        if [ -f "$SECURE_TMP/.mrathole_in_menu" ]; then
+            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
 update_watcher_loop &
 WATCHER_PID=$!
-trap 'kill "$WATCHER_PID" 2>/dev/null' EXIT
+trap 'kill "$WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null' EXIT
 
 self_update_module() {
     local rel_path="tunnels/mrathole.sh"
@@ -205,40 +210,39 @@ get_local_ip() {
 
 is_rathole_core_valid() {
     local bin_path=""
-    if command -v rathole >/dev/null 2>&1; then
-        bin_path=$(command -v rathole)
-    elif [ -x "/usr/local/bin/rathole" ]; then
+    if [ -x "/usr/local/bin/rathole" ]; then
         bin_path="/usr/local/bin/rathole"
+    elif [ -x "/usr/bin/rathole" ]; then
+        bin_path="/usr/bin/rathole"
+    elif command -v rathole >/dev/null 2>&1; then
+        bin_path=$(command -v rathole)
     else
         return 1
     fi
-    [ -s "$bin_path" ] || return 1
+
+    [ -f "$bin_path" ] && [ -s "$bin_path" ] || return 1
+
     if command -v file >/dev/null 2>&1; then
-        file "$bin_path" 2>/dev/null | grep -qiE "ELF|executable" && return 0
+        file -L "$bin_path" 2>/dev/null | grep -qiE "ELF.*executable" && return 0
         return 1
     fi
-    head -c4 "$bin_path" 2>/dev/null | grep -q $'\x7fELF' && return 0
+
+    local magic=$(head -c 4 "$bin_path" 2>/dev/null)
+    [ "$magic" = $'\x7fELF' ] && return 0
     return 1
 }
 
-menu_install_core() {
-    echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
-    src_choice=$(echo "$src_choice" | tr -d '\r')
-
-    [[ "$src_choice" == "q" ]] && return
-
+install_core_from_source() {
+    local src_choice="$1"
     echo -e "  ${R}● Purging old Rathole binaries and processes...${NC}"
     systemctl stop mrathole@* 2>/dev/null
     killall -9 rathole 2>/dev/null
     rm -f /usr/local/bin/rathole /usr/bin/rathole "$SECURE_TMP/rh_dl.zip" "$SECURE_TMP/rathole"
+
+    command -v unzip >/dev/null 2>&1 || {
+        apt-get update -y -q >/dev/null 2>&1
+        apt-get install -y -q unzip >/dev/null 2>&1 || true
+    }
 
     if [[ "$src_choice" == "1" || "$src_choice" == "2" ]]; then
         echo -e "  ${DIM}● Downloading latest binary...${NC}"
@@ -258,7 +262,6 @@ menu_install_core() {
         fi
 
         if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/rh_dl.zip" ]; then
-            apt-get install -y -q unzip >/dev/null 2>&1 || true
             unzip -q -o "$SECURE_TMP/rh_dl.zip" -d "$SECURE_TMP/" >/dev/null 2>&1
             [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
             chmod +x /usr/local/bin/rathole 2>/dev/null || true
@@ -269,16 +272,22 @@ menu_install_core() {
                 echo -e "  ${R}✖ Download did not contain a valid binary! Installation aborted.${NC}"
             fi
         else
-            echo -e "  ${R}✖ Download failed!${NC}"
+            echo -e "  ${R}✖ Download failed! Check connection.${NC}"
         fi
 
     elif [[ "$src_choice" == "3" ]]; then
         echo -ne "  ${C}● Enter Direct Link: ${NC}"; read custom_url
-        custom_url=$(echo "$custom_url" | tr -d '\r')
+        custom_url=$(echo "$custom_url" | tr -d '\r ')
         if [ -n "$custom_url" ]; then
             echo -e "  ${DIM}● Downloading from Custom Link...${NC}"
-            wget -q --timeout=15 -O "$SECURE_TMP/rh_dl.zip" "$custom_url" 2>/dev/null
-            if [ -s "$SECURE_TMP/rh_dl.zip" ]; then
+            local dl_ok=false
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 10 --max-time 60 -o "$SECURE_TMP/rh_dl.zip" "$custom_url" 2>/dev/null && dl_ok=true
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q --timeout=15 -O "$SECURE_TMP/rh_dl.zip" "$custom_url" 2>/dev/null && dl_ok=true
+            fi
+
+            if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/rh_dl.zip" ]; then
                 if unzip -t "$SECURE_TMP/rh_dl.zip" >/dev/null 2>&1; then
                     unzip -q -o "$SECURE_TMP/rh_dl.zip" -d "$SECURE_TMP/" >/dev/null 2>&1
                     [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
@@ -314,38 +323,53 @@ menu_install_core() {
 
     [ -f "/usr/local/bin/rathole" ] && ln -sf /usr/local/bin/rathole /usr/bin/rathole 2>/dev/null
     rm -f "$SECURE_TMP/rh_dl.zip" "$SECURE_TMP/rathole" 2>/dev/null
-    systemctl start mrathole@* 2>/dev/null
-    sleep 2
+
+    for d in "$CONF_DIR"/*; do
+        [ -d "$d" ] || continue
+        local t_name=$(basename "$d")
+        systemctl is-enabled "mrathole@${t_name}" >/dev/null 2>&1 && systemctl restart "mrathole@${t_name}" 2>/dev/null
+    done
+    sleep 1.5
 }
 
-install_rathole_silent() {
-    if ! command -v rathole >/dev/null 2>&1 && [ ! -f "/usr/local/bin/rathole" ]; then
-        local arch=$(uname -m)
-        local target="x86_64-unknown-linux-gnu"
-        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="aarch64-unknown-linux-gnu"
-        local archive="rathole-${target}.zip"
-        
-        local dl_url="https://github.com/rapiz1/rathole/releases/download/v0.5.0/${archive}"
-        local mirror_url="https://c107328.parspack.net/c107328/MTunnel/packages/${archive}"
-        
-        apt-get update -y -q >/dev/null 2>&1
-        apt-get install -y -q unzip >/dev/null 2>&1
-        
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/rh.zip" "$dl_url" 2>/dev/null || curl -fsSL --connect-timeout 8 --max-time 40 -o "$SECURE_TMP/rh.zip" "$mirror_url" 2>/dev/null
-        else
-            wget -q --timeout=12 -O "$SECURE_TMP/rh.zip" "$dl_url" 2>/dev/null || wget -q --timeout=12 -O "$SECURE_TMP/rh.zip" "$mirror_url" 2>/dev/null
-        fi
+menu_install_core() {
+    echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
+    src_choice=$(echo "$src_choice" | tr -d '\r')
 
-        if [ -s "$SECURE_TMP/rh.zip" ]; then
-            unzip -q -o "$SECURE_TMP/rh.zip" -d "$SECURE_TMP/" >/dev/null 2>&1
-            [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
-            chmod +x /usr/local/bin/rathole 2>/dev/null
-            rm -f "$SECURE_TMP/rh.zip"
-            is_rathole_core_valid || rm -f /usr/local/bin/rathole
+    [[ "$src_choice" =~ ^[1-4]$ ]] && install_core_from_source "$src_choice"
+}
+
+check_first_run_core() {
+    if ! is_rathole_core_valid; then
+        local first_prompt_flag="$CONF_DIR/.core_prompted"
+        if [ ! -f "$first_prompt_flag" ]; then
+            touch "$first_prompt_flag"
+            clear
+            echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+            echo -e "  ${B}│${NC}   ${R}● Rathole Core binary is NOT installed on this machine!${NC}                  ${B}│${NC}"
+            echo -e "  ${B}│${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${B}│${NC}"
+            echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
+            echo -e "  ${DIM}│${NC}"
+            echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
+            init_opt=$(echo "$init_opt" | tr -d '\r')
+            if [[ "$init_opt" =~ ^[1-4]$ ]]; then
+                install_core_from_source "$init_opt"
+            fi
         fi
     fi
-    [ -f "/usr/local/bin/rathole" ] && ln -sf /usr/local/bin/rathole /usr/bin/rathole 2>/dev/null
 }
 
 setup_systemd() {
@@ -381,7 +405,8 @@ generate_toml() {
     local meta="$dir/meta.conf"
     local toml="$dir/config.toml"
     
-    TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; source "$meta"
+    local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS=""
+    source "$meta" 2>/dev/null
     
     > "$toml"
     if [ "$TYPE" == "1" ]; then
@@ -395,23 +420,27 @@ generate_toml() {
         echo "[server.transport.tcp]" >> "$toml"
         echo "nodelay = true" >> "$toml"
 
-        IFS=',' read -ra TCP_ARR <<< "$TCP_PORTS"
-        for p in "${TCP_ARR[@]}"; do
-            p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
-            echo "" >> "$toml"
-            echo "[server.services.tcp_${p}]" >> "$toml"
-            echo "type = \"tcp\"" >> "$toml"
-            echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
-        done
+        if [ -n "$TCP_PORTS" ]; then
+            IFS=',' read -ra TCP_ARR <<< "$TCP_PORTS"
+            for p in "${TCP_ARR[@]}"; do
+                p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
+                echo "" >> "$toml"
+                echo "[server.services.tcp_${p}]" >> "$toml"
+                echo "type = \"tcp\"" >> "$toml"
+                echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
+            done
+        fi
 
-        IFS=',' read -ra UDP_ARR <<< "$UDP_PORTS"
-        for p in "${UDP_ARR[@]}"; do
-            p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
-            echo "" >> "$toml"
-            echo "[server.services.udp_${p}]" >> "$toml"
-            echo "type = \"udp\"" >> "$toml"
-            echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
-        done
+        if [ -n "$UDP_PORTS" ]; then
+            IFS=',' read -ra UDP_ARR <<< "$UDP_PORTS"
+            for p in "${UDP_ARR[@]}"; do
+                p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
+                echo "" >> "$toml"
+                echo "[server.services.udp_${p}]" >> "$toml"
+                echo "type = \"udp\"" >> "$toml"
+                echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
+            done
+        fi
     else
         echo "[client]" >> "$toml"
         echo "remote_addr = \"${REMOTE_IP}:${LINK_PORT}\"" >> "$toml"
@@ -424,23 +453,27 @@ generate_toml() {
         echo "[client.transport.tcp]" >> "$toml"
         echo "nodelay = true" >> "$toml"
 
-        IFS=',' read -ra TCP_ARR <<< "$TCP_PORTS"
-        for p in "${TCP_ARR[@]}"; do
-            p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
-            echo "" >> "$toml"
-            echo "[client.services.tcp_${p}]" >> "$toml"
-            echo "type = \"tcp\"" >> "$toml"
-            echo "local_addr = \"127.0.0.1:${p}\"" >> "$toml"
-        done
+        if [ -n "$TCP_PORTS" ]; then
+            IFS=',' read -ra TCP_ARR <<< "$TCP_PORTS"
+            for p in "${TCP_ARR[@]}"; do
+                p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
+                echo "" >> "$toml"
+                echo "[client.services.tcp_${p}]" >> "$toml"
+                echo "type = \"tcp\"" >> "$toml"
+                echo "local_addr = \"127.0.0.1:${p}\"" >> "$toml"
+            done
+        fi
 
-        IFS=',' read -ra UDP_ARR <<< "$UDP_PORTS"
-        for p in "${UDP_ARR[@]}"; do
-            p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
-            echo "" >> "$toml"
-            echo "[client.services.udp_${p}]" >> "$toml"
-            echo "type = \"udp\"" >> "$toml"
-            echo "local_addr = \"127.0.0.1:${p}\"" >> "$toml"
-        done
+        if [ -n "$UDP_PORTS" ]; then
+            IFS=',' read -ra UDP_ARR <<< "$UDP_PORTS"
+            for p in "${UDP_ARR[@]}"; do
+                p=$(echo "$p" | tr -d ' '); [ -z "$p" ] && continue
+                echo "" >> "$toml"
+                echo "[client.services.udp_${p}]" >> "$toml"
+                echo "type = \"udp\"" >> "$toml"
+                echo "local_addr = \"127.0.0.1:${p}\"" >> "$toml"
+            done
+        fi
     fi
 }
 
@@ -448,7 +481,8 @@ get_tunnel_status() {
     local t_name="$1"
     local known_active="$2"
     local meta="$CONF_DIR/$t_name/meta.conf"
-    TYPE=""; LINK_PORT=""; source "$meta" 2>/dev/null
+    local TYPE="" LINK_PORT=""
+    source "$meta" 2>/dev/null
     
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
     
@@ -597,7 +631,9 @@ draw_header() {
                 bg_val=$(get_peer_ping "$peer_ip" "$tmp_port")
                 echo "$bg_val" > "$ping_cache"
                 rm -f "$ping_lock"
-                kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+                if [ -f "$SECURE_TMP/.mrathole_in_menu" ]; then
+                    kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+                fi
             ) &
         fi
     else
@@ -622,7 +658,7 @@ show_tunnel_registry() {
     for d in "$CONF_DIR"/*; do
         [ ! -d "$d" ] && continue
         local t_name=$(basename "$d")
-        TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""
+        local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS=""
         source "$d/meta.conf" 2>/dev/null
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
@@ -704,7 +740,8 @@ show_live_radar() {
         for d in "$CONF_DIR"/*; do
             [ ! -d "$d" ] && continue
             local t_name=$(basename "$d")
-            TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; source "$d/meta.conf" 2>/dev/null
+            local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS=""
+            source "$d/meta.conf" 2>/dev/null
             
             local st=$(get_tunnel_status "$t_name")
             local st_color="${R}"; local st_text="OFFLINE"
@@ -782,7 +819,7 @@ select_tunnel() {
     return 0
 }
 
-install_rathole_silent
+check_first_run_core
 setup_systemd
 
 render_mrathole_menu() {
@@ -805,20 +842,21 @@ render_mrathole_menu() {
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Edit Remote Host / IP Address${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit TCP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit UDP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Auth Token (Secret)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -855,8 +893,20 @@ while true; do
                done
            fi
            
-           echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5050): ${NC}"; read t_port
-           t_port=$(echo "$t_port" | tr -dc '0-9')
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5050): ${NC}"; read t_port
+               t_port=$(echo "$t_port" | tr -dc '0-9')
+               if [ -z "$t_port" ] || [ "$t_port" -lt 1 ] || [ "$t_port" -gt 65535 ]; then
+                   echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"
+                   continue
+               fi
+
+               if ss -tuln 2>/dev/null | grep -qE ":${t_port}\s"; then
+                   echo -e "  ${R}Error: Port ${t_port} is already in use by another service!${NC}"
+                   continue
+               fi
+               break
+           done
            
            echo -ne "  ${C}●${NC} ${W}Custom Token (Leave blank to generate auto): ${NC}"; read t_token
            t_token=$(echo "$t_token" | tr -dc 'a-zA-Z0-9_-')
@@ -868,7 +918,14 @@ while true; do
            udp_p=$(echo "$udp_p" | tr -dc '0-9,')
            
            mkdir -p "$CONF_DIR/$t_name"
-           echo -e "TYPE=$s_type\nLINK_PORT=$t_port\nREMOTE_IP=$r_ip\nTOKEN=$t_token\nTCP_PORTS=$tcp_p\nUDP_PORTS=$udp_p" > "$CONF_DIR/$t_name/meta.conf"
+           cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
+TYPE=$s_type
+LINK_PORT=$t_port
+REMOTE_IP=$r_ip
+TOKEN=$t_token
+TCP_PORTS=$tcp_p
+UDP_PORTS=$udp_p
+EOF
            
            generate_toml "$t_name"
            systemctl enable mrathole@$t_name >/dev/null 2>&1
@@ -903,34 +960,49 @@ while true; do
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
 
-        3|4|5|6|10|11)
+        3|4|5|6|7|11|12)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
-           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; source "$SELECTED_TUN/meta.conf" 2>/dev/null
+           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""
+           source "$SELECTED_TUN/meta.conf" 2>/dev/null
            
            if [[ "$opt" == "3" ]]; then
-               while true; do
-                   echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip
-                   n_ip=$(echo "$n_ip" | tr -d '\r')
-                   [ -z "$n_ip" ] && break
-                   is_valid_host "$n_ip" && {
-                       sed -i "s/^REMOTE_IP=.*/REMOTE_IP=$n_ip/" "$SELECTED_TUN/meta.conf"
-                       break
-                   }
-                   echo -e "  ${R}Error: Invalid Host or IP format!${NC}"
-               done
+               echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip
+               n_ip=$(echo "$n_ip" | tr -d '\r')
+               if [ -z "$n_ip" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               if ! is_valid_host "$n_ip"; then
+                   echo -e "  ${R}Error: Invalid Host or IP format!${NC}"; sleep 1.5; continue
+               fi
+               REMOTE_IP="$n_ip"
                
            elif [[ "$opt" == "4" ]]; then
                echo -ne "  ${C}●${NC} ${W}Enter TCP Ports (e.g. 80,443) [Current: ${Y}${TCP_PORTS:-None}${W}]: ${NC}"; read n_tcp
                n_tcp=$(echo "$n_tcp" | tr -dc '0-9,')
-               [ -n "$n_tcp" ] && sed -i "s/^TCP_PORTS=.*/TCP_PORTS=$n_tcp/" "$SELECTED_TUN/meta.conf"
+               if [ -z "$n_tcp" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               TCP_PORTS="$n_tcp"
                
            elif [[ "$opt" == "5" ]]; then
                echo -ne "  ${C}●${NC} ${W}Enter UDP Ports (e.g. 53) [Current: ${C}${UDP_PORTS:-None}${W}]: ${NC}"; read n_udp
                n_udp=$(echo "$n_udp" | tr -dc '0-9,')
-               [ -n "$n_udp" ] && sed -i "s/^UDP_PORTS=.*/UDP_PORTS=$n_udp/" "$SELECTED_TUN/meta.conf"
-               
+               if [ -z "$n_udp" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               UDP_PORTS="$n_udp"
+
            elif [[ "$opt" == "6" ]]; then
+               echo -ne "  ${C}●${NC} ${W}New Auth Token / Secret [Current: ${Y}${TOKEN}${W}]: ${NC}"; read n_tok
+               n_tok=$(echo "$n_tok" | tr -dc 'a-zA-Z0-9_-')
+               if [ -z "$n_tok" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+               TOKEN="$n_tok"
+               echo -e "  ${G}✔ Auth Token updated.${NC}"
+               
+           elif [[ "$opt" == "7" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Tunnel Name (Current: ${Y}${t_name}${W}): ${NC}"; read new_name
                new_name=$(echo "$new_name" | tr -dc 'a-zA-Z0-9_-')
                if [ -n "$new_name" ]; then
@@ -949,19 +1021,29 @@ while true; do
 
                    mv "$CONF_DIR/$t_name" "$CONF_DIR/$new_name" 2>/dev/null
                    t_name="$new_name"
+                   SELECTED_TUN="$CONF_DIR/$new_name"
                    systemctl enable mrathole@$t_name >/dev/null 2>&1
                    echo -e "  ${G}● Tunnel successfully renamed to: ${new_name}${NC}"
                else
-                   continue
+                   echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
                fi
                
-           elif [[ "$opt" == "10" ]]; then
+           elif [[ "$opt" == "11" ]]; then
                manage_cron "$t_name"; continue
                
-           elif [[ "$opt" == "11" ]]; then
+           elif [[ "$opt" == "12" ]]; then
                true
            fi
            
+           cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
+TYPE=$TYPE
+LINK_PORT=$LINK_PORT
+REMOTE_IP=$REMOTE_IP
+TOKEN=$TOKEN
+TCP_PORTS=$TCP_PORTS
+UDP_PORTS=$UDP_PORTS
+EOF
+
            generate_toml "$t_name"
            systemctl restart mrathole@$t_name
            if systemctl is-active --quiet mrathole@$t_name; then
@@ -971,16 +1053,16 @@ while true; do
            fi
            ;;
 
-        7) show_live_radar ;;
-        8) show_tunnel_registry ;;
-        9) 
+        8) show_live_radar ;;
+        9) show_tunnel_registry ;;
+        10) 
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            journalctl -u mrathole@$t_name -n 50 -f; continue
            ;;
            
-        12) menu_install_core ;;
-        13) self_update_module ;;
+        13) menu_install_core ;;
+        14) self_update_module ;;
         0) break ;;
     esac
 done

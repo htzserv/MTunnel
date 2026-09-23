@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.0 ---
 # [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Collision Check | Secret Editor]
 
-MODULE_VERSION="3.5.0"
+MODULE_VERSION="3.5.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.4.0 ---
-# [Features: Signal-Safe Menu Tracker | Universal curl/wget Core | Port Collision Protection | Secret Editor]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.0 ---
+# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Conflict Check | Secret Editor]
 
-MODULE_VERSION="3.4.0"
+MODULE_VERSION="3.5.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -802,6 +802,49 @@ manage_cron() {
     fi
 }
 
+uninstall_mrathole() {
+    clear
+    echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MRATHOLE${NC}                  ${R}│${NC}"
+    echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All active Rathole tunnels & systemd units                             ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All TOML configuration files & metadata                                ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All restart cronjobs                                                   ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● Rathole core binary (/usr/local/bin/rathole) & mrathole module         ${R}│${NC}"
+    echo -e "  ${R}╰────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    
+    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
+    confirm=$(echo "$confirm" | tr -d '\r ')
+    
+    if [ "$confirm" != "yes" ]; then
+        echo -e "  ${G}● Uninstallation cancelled.${NC}"; sleep 1.5; return
+    fi
+
+    echo -e "\n  ${DIM}● [1/5] Stopping services & killing processes...${NC}"
+    systemctl stop mrathole@* 2>/dev/null
+    systemctl disable mrathole@* 2>/dev/null
+    killall -9 rathole 2>/dev/null
+
+    echo -e "  ${DIM}● [2/5] Purging scheduled auto-restart cronjobs...${NC}"
+    local cron_tmp="$SECURE_TMP/crontab.$$"
+    crontab -l 2>/dev/null | grep -v "mrathole@" > "$cron_tmp"
+    crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+
+    echo -e "  ${DIM}● [3/5] Removing systemd unit templates...${NC}"
+    rm -f /etc/systemd/system/mrathole@.service
+    systemctl daemon-reload 2>/dev/null
+
+    echo -e "  ${DIM}● [4/5] Deleting configurations & core binary...${NC}"
+    rm -rf /etc/mrathole "$SECURE_TMP/.mrathole"* /usr/local/bin/rathole /usr/bin/rathole
+
+    echo -e "  ${DIM}● [5/5] Removing mrathole wrapper script...${NC}"
+    rm -f "$INSTALL_PATH" 2>/dev/null
+    [ -f "$0" ] && rm -f "$0" 2>/dev/null
+
+    echo -e "\n  ${G}✔ MRathole ecosystem has been completely eradicated from this system.${NC}\n"
+    exit 0
+}
+
 select_tunnel() {
     local configs=($(ls -d "$CONF_DIR"/* 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
@@ -857,6 +900,7 @@ render_mrathole_menu() {
     echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
     echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
     echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1063,6 +1107,7 @@ EOF
            
         13) menu_install_core ;;
         14) self_update_module ;;
+        15) uninstall_mrathole ;;
         0) break ;;
     esac
 done

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.4.0 ---
-# [Features: Signal-Safe Menu Tracker | Universal curl/wget Custom Core | Smart Role-Aware UDP UI]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.5.0 ---
+# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Conflict Check | Secret Editor]
 
-MODULE_VERSION="2.4.0"
+MODULE_VERSION="2.5.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -989,6 +989,56 @@ manage_cron() {
     fi
 }
 
+uninstall_mbackhaul() {
+    clear
+    echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MBACKHAUL${NC}                 ${R}│${NC}"
+    echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All active Backhaul tunnels & systemd units                            ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All configurations, metadata & SSL certificates                        ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All iptables traffic counters & crontabs                               ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● Backhaul core binaries (/usr/local/bin/bh) & mbackhaul module          ${R}│${NC}"
+    echo -e "  ${R}╰────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    
+    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
+    confirm=$(echo "$confirm" | tr -d '\r ')
+    
+    if [ "$confirm" != "yes" ]; then
+        echo -e "  ${G}● Uninstallation cancelled.${NC}"; sleep 1.5; return
+    fi
+
+    echo -e "\n  ${DIM}● [1/6] Stopping services & killing processes...${NC}"
+    systemctl stop mbackhaul@* mbackhaul-apply.service 2>/dev/null
+    systemctl disable mbackhaul@* mbackhaul-apply.service 2>/dev/null
+    killall -9 bh 2>/dev/null
+
+    echo -e "  ${DIM}● [2/6] Purging iptables traffic counters...${NC}"
+    for chain in INPUT OUTPUT; do
+        while read -r rulenum; do
+            [ -n "$rulenum" ] && iptables -t mangle -D "$chain" "$rulenum" 2>/dev/null
+        done < <(iptables -t mangle -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MBH_(RX|TX)_" | awk '{print $1}' | tac)
+    done
+
+    echo -e "  ${DIM}● [3/6] Purging scheduled auto-restart cronjobs...${NC}"
+    local cron_tmp="$SECURE_TMP/crontab.$$"
+    crontab -l 2>/dev/null | grep -v "mbackhaul@" > "$cron_tmp"
+    crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+
+    echo -e "  ${DIM}● [4/6] Removing systemd unit files...${NC}"
+    rm -f /etc/systemd/system/mbackhaul@.service /etc/systemd/system/mbackhaul-apply.service
+    systemctl daemon-reload 2>/dev/null
+
+    echo -e "  ${DIM}● [5/6] Deleting configs, certificates & core binary...${NC}"
+    rm -rf /etc/mbackhaul "$SECURE_TMP/.mbackhaul"* /usr/local/bin/bh /usr/bin/bh
+
+    echo -e "  ${DIM}● [6/6] Removing mbackhaul wrapper script...${NC}"
+    rm -f "$INSTALL_PATH" 2>/dev/null
+    [ -f "$0" ] && rm -f "$0" 2>/dev/null
+
+    echo -e "\n  ${G}✔ MBackhaul ecosystem has been completely eradicated from this system.${NC}\n"
+    exit 0
+}
+
 select_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
@@ -1046,6 +1096,7 @@ render_mbackhaul_menu() {
     echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
     echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
     echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Uninstall MBackhaul${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1289,6 +1340,7 @@ while true; do
            
         14) menu_install_core ;;
         15) self_update_module ;;
+        16) uninstall_mbackhaul ;;
         0) break ;;
     esac
 done

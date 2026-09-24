@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="9.0.1"
+MODULE_VERSION="9.1.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -589,14 +589,17 @@ show_ota_update_hub() {
                         fi
                         rm -rf "$t_dir"
                     elif grep -q "#!/bin/bash" "$tmp_dl"; then
-                        echo -e "\n  ${DIM}Select Module Target to overwrite:${NC}\n"
-                        i=1
+                        clear
+                        echo -e "\n  ${DIM}┌─[ SELECT MODULE TARGET TO OVERWRITE ]${NC}\n  ${DIM}│${NC}"
+                        idx=1
+                        tot_m=${#ALL_MODULES[@]}
                         for m in "${ALL_MODULES[@]}"; do
-                            printf "  ${DIM}%2d)${NC} %-12s " "$i" "$m"
-                            ((i % 3 == 0)) && echo ""
-                            ((i++))
+                            branch="├─"
+                            [ "$idx" -eq "$tot_m" ] && branch="└─"
+                            echo -e "  ${DIM}${branch}${NC} ${W}${idx}${NC} ${DIM}❯${NC} ${C}${m}${NC}"
+                            ((idx++))
                         done
-                        echo -ne "\n\n  ${C}Enter number: ${NC}"; read m_num
+                        echo -ne "\n  ${C}OVERWRITE ❯❯ ${NC}"; read m_num
                         chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                         if [ -n "$chosen_mod" ]; then
                             dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
@@ -621,15 +624,16 @@ show_ota_update_hub() {
 
             7)
                 clear
-                echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n"
-                echo -e "  ${DIM}Select target module to edit:${NC}\n"
-                i=1
+                echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n  ${DIM}│${NC}"
+                idx=1
+                tot_m=${#ALL_MODULES[@]}
                 for m in "${ALL_MODULES[@]}"; do
-                    printf "  ${DIM}%2d)${NC} %-12s " "$i" "$m"
-                    ((i % 3 == 0)) && echo ""
-                    ((i++))
+                    branch="├─"
+                    [ "$idx" -eq "$tot_m" ] && branch="└─"
+                    echo -e "  ${DIM}${branch}${NC} ${W}${idx}${NC} ${DIM}❯${NC} ${C}${m}${NC}"
+                    ((idx++))
                 done
-                echo -ne "\n\n  ${C}Enter number: ${NC}"; read m_num
+                echo -ne "\n  ${C}EDITOR ❯❯ ${NC}"; read m_num
                 chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                 if [ -n "$chosen_mod" ]; then
                     dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
@@ -654,11 +658,13 @@ show_ota_update_hub() {
                         [ -f "$dest" ] && current_v=$(grep -m1 '^MODULE_VERSION=' "$dest" 2>/dev/null | cut -d'"' -f2)
                         [ -z "$current_v" ] && current_v="Unknown"
 
-                        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+                        clear
+                        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${DIM}│${NC}"
                         echo -e "  ${DIM}├─${NC} ${W}Target Module   :${NC} ${C}${chosen_mod}${NC}"
                         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v}${NC}"
                         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-                        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
+                        echo -e "  ${DIM}│${NC}"
+                        echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read confirm
 
                         if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
                             sed -i 's/\r$//' "$temp_paste_file" 2>/dev/null

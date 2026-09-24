@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.4.5 ---
+# --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.4.5"
+MODULE_VERSION="8.4.6"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -335,6 +335,7 @@ show_ota_update_hub() {
 
         case $ota_opt in
             1|2)
+                clear
                 s_url="$REPO_SCRIPTS"
                 sync_name="OFFICIAL GITHUB"
                 if [ "$ota_opt" == "2" ]; then
@@ -390,6 +391,7 @@ show_ota_update_hub() {
                 ;;
 
             3)
+                clear
                 echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}"
                 width=30
                 bar_full=$(printf "%${width}s" "" | tr ' ' '#')
@@ -397,7 +399,7 @@ show_ota_update_hub() {
                 if download_file_to_cache "main" "$REPO_SCRIPTS"; then
                     deploy_cached_module "main"
                     m_new_v=$(grep -m1 '^MODULE_VERSION=' "$LOCAL_DIR/main.sh" 2>/dev/null | cut -d'"' -f2)
-                    m_new_v="${m_new_v:-OK}"
+                    m_new_v="${m_new_v:-Unknown}"
                     
                     ver_str=" (v${m_new_v})"
                     plain_len=$(( 4 + ${#ver_str} ))
@@ -424,6 +426,7 @@ show_ota_update_hub() {
                 ;;
 
             4|5)
+                clear
                 target_name="OFFICIAL GITHUB"
                 pkg_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
                 if [ "$ota_opt" == "5" ]; then
@@ -470,12 +473,23 @@ show_ota_update_hub() {
                             install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
                         fi
 
-                        plain_len=${#b}
+                        b_ver=""
+                        case "$b" in
+                            rathole)  b_ver=$("$t_out" --version 2>/dev/null | awk '{print $2}' | tr -d 'v') ;;
+                            bh)       b_ver=$("$t_out" -v 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
+                            paqet)    b_ver=$("$t_out" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
+                            gost)     b_ver=$("$t_out" -V 2>/dev/null | awk '{print $2}' | tr -d 'v') ;;
+                            haproxy)  b_ver=$(haproxy -v 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
+                        esac
+                        [ -z "$b_ver" ] && b_ver="Core"
+
+                        ver_str=" (v${b_ver})"
+                        plain_len=$(( ${#b} + ${#ver_str} ))
                         pad_len=$(( 26 - plain_len ))
                         [ "$pad_len" -lt 0 ] && pad_len=0
                         padding=$(printf '%*s' "$pad_len" "")
 
-                        printf "  ${G}✔${NC} ${W}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$padding" "$bar_f" "$bar_e" "$percent"
+                        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     else
                         ver_str=" (FAILED)"
                         plain_len=$(( ${#b} + ${#ver_str} ))
@@ -491,6 +505,7 @@ show_ota_update_hub() {
                 ;;
 
             6)
+                clear
                 echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}"
                 echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read custom_url
                 custom_url=$(echo "$custom_url" | tr -d '\r ')
@@ -523,13 +538,9 @@ show_ota_update_hub() {
                         r_root="$(find "$t_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
                         
                         if [ -n "$r_root" ] && [ -d "$r_root" ]; then
-                            # انتقال تمام فایل‌ها به مسیر اصلی پروژه
                             cp -rf "$r_root"/* "$LOCAL_DIR/" 2>/dev/null
-                            
-                            # استقرار ماژول‌های متنی
                             for m in "${ALL_MODULES[@]}"; do deploy_cached_module "$m" 2>/dev/null; done
                             
-                            # استقرار تمامی هسته‌ها و باینری‌ها
                             if [ -d "$r_root/packages" ]; then
                                 deploy_binaries_from_dir "$r_root/packages"
                             elif [ -d "$t_dir/packages" ]; then
@@ -543,7 +554,6 @@ show_ota_update_hub() {
                             kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
-                            # main.sh پیدا نشد؛ بررسی پکیج‌های باینری
                             pkg_root="$(find "$t_dir" -maxdepth 3 -type d -iname "packages" | head -n 1)"
 
                             if [ -z "$pkg_root" ]; then
@@ -555,7 +565,7 @@ show_ota_update_hub() {
                                 done
                             fi
                             if [ -z "$pkg_root" ] && [ -n "$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' | head -n 1)" ]; then
-                                pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' | head -n 1)"
+                                pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' -exec dirname {} \; | head -n 1)"
                             fi
 
                             if [ -n "$pkg_root" ] && deploy_binaries_from_dir "$pkg_root"; then
@@ -597,6 +607,7 @@ show_ota_update_hub() {
                 ;;
 
             7)
+                clear
                 echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}"
                 echo -e "  ${DIM}Select target module to edit:${NC}"
                 i=1

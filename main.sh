@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.4.3"
+MODULE_VERSION="8.4.4"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -495,7 +495,26 @@ show_ota_update_hub() {
                             kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
-                            echo -e "  ${R}✖ Error: Valid main.sh not found inside the ZIP archive!${NC}"
+                            # main.sh پیدا نشد؛ شاید این یک زیپ فقط-پکیج (فقط هسته‌های باینری) باشد
+                            pkg_root="$(find "$t_dir" -maxdepth 3 -type d -iname "packages" | head -n 1)"
+
+                            if [ -z "$pkg_root" ]; then
+                                for b in rathole bh backhaul paqet gost frpc frps haproxy; do
+                                    if [ -n "$(find "$t_dir" -maxdepth 3 -type f -name "$b" | head -n 1)" ]; then
+                                        pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name "$b" -exec dirname {} \; | head -n 1)"
+                                        break
+                                    fi
+                                done
+                            fi
+                            if [ -z "$pkg_root" ] && [ -n "$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' | head -n 1)" ]; then
+                                pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' -exec dirname {} \; | head -n 1)"
+                            fi
+
+                            if [ -n "$pkg_root" ] && deploy_binaries_from_dir "$pkg_root"; then
+                                echo -e "  ${G}✔ No main.sh found, but binary cores were detected and deployed successfully!${NC}"
+                            else
+                                echo -e "  ${R}✖ Error: Neither main.sh nor recognizable binary packages found inside the ZIP archive!${NC}"
+                            fi
                         fi
                         rm -rf "$t_dir"
                     elif grep -q "#!/bin/bash" "$tmp_dl"; then

@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="9.1.0"
+MODULE_VERSION="9.2.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -50,6 +50,15 @@ ALL_PACKAGES=(
     "qrencode_4.1.1-1build2_amd64.deb"
     "socat_1.8.0.0-4ubuntu0.1_amd64.deb"
     "wget_1.21.4-1ubuntu4.1_amd64.deb"
+)
+
+# نسخه‌های مشخص برای نمایش دقیق برچسب زرد رنگ
+declare -A BIN_VERSIONS=(
+    ["bh"]="0.6.5"
+    ["rathole"]="0.5.0"
+    ["paqet"]="1.0.0"
+    ["gost"]="2.11.5"
+    ["haproxy"]="2.8.16"
 )
 
 mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$LOCAL_DIR/tools" "$SECURE_TMP" 2>/dev/null
@@ -280,7 +289,7 @@ deploy_binaries_from_dir() {
         [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir/backhaul" "$LOCAL_DIR/packages/" 2>/dev/null
     fi
 
-    # استقرار پکیج‌های DEB
+    # استقرار بسته‌های deb
     if compgen -G "$src_dir/*.deb" > /dev/null; then
         dpkg -i --force-confdef --force-confold "$src_dir"/*.deb >/dev/null 2>&1 || true
         [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir"/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
@@ -333,15 +342,20 @@ show_ota_update_hub() {
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Update Master Core Dashboard (Main Script Only)${NC}${main_sub_badge}"
 
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─[ BINARY PACKAGES & PREREQUISITES ]${NC}"
+        echo -e "  ${DIM}├─[ BINARY CORES ONLY (BH, RAT, PAQET, GOST, HAPROXY) ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch All Prerequisites & Packages from Official GitHub${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch All Prerequisites & Packages from Iranian Mirror${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch Binary Cores from Official GitHub${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch Binary Cores from Iranian Mirror${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─[ FULL PREREQUISITES & DEB PACKAGES ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Fetch All Packages & Prerequisites from GitHub${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Fetch All Packages & Prerequisites from Iranian Mirror${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Raw Editor)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Raw Editor)${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
     }
@@ -356,10 +370,7 @@ show_ota_update_hub() {
                 clear
                 s_url="$REPO_SCRIPTS"
                 sync_name="OFFICIAL GITHUB"
-                if [ "$ota_opt" == "2" ]; then
-                    s_url="$MIRROR_SCRIPTS"
-                    sync_name="IRANIAN MIRROR (PARSPACK)"
-                fi
+                [ "$ota_opt" == "2" ] && s_url="$MIRROR_SCRIPTS" && sync_name="IRANIAN MIRROR (PARSPACK)"
 
                 echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${sync_name} ]${NC}\n"
 
@@ -452,7 +463,78 @@ show_ota_update_hub() {
                     pkg_url="$MIRROR_PACKAGES"
                 fi
 
-                echo -e "\n  ${DIM}┌─[ FETCHING PREREQUISITES & PACKAGES FROM ${target_name} ]${NC}\n"
+                echo -e "\n  ${DIM}┌─[ FETCHING BINARY CORES FROM ${target_name} ]${NC}\n"
+                mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
+                bins=("bh" "rathole" "paqet" "gost" "haproxy")
+                CB="?t=$(date +%s)"
+                
+                total_bins=${#bins[@]}
+                current=0
+                width=30
+
+                for b in "${bins[@]}"; do
+                    ((current++))
+                    t_out="$LOCAL_DIR/packages/$b"
+                    dl_ok=false
+                    
+                    percent=$(( current * 100 / total_bins ))
+                    filled=$(( percent * width / 100 ))
+                    empty=$(( width - filled ))
+                    
+                    bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
+                    bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
+
+                    if command -v curl >/dev/null 2>&1; then
+                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
+                    elif command -v wget >/dev/null 2>&1; then
+                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
+                    fi
+
+                    b_ver="${BIN_VERSIONS[$b]:-Core}"
+                    ver_str=" (v${b_ver})"
+                    plain_len=$(( ${#b} + ${#ver_str} ))
+                    pad_len=$(( 26 - plain_len ))
+                    [ "$pad_len" -lt 0 ] && pad_len=0
+                    padding=$(printf '%*s' "$pad_len" "")
+
+                    if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
+                        chmod +x "$t_out"
+                        if [ "$b" == "haproxy" ]; then
+                            install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
+                            ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
+                        elif [ "$b" == "bh" ]; then
+                            install -m 0755 "$t_out" /usr/local/bin/bh 2>/dev/null
+                            ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
+                        else
+                            install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
+                        fi
+
+                        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
+                    else
+                        ver_str=" (FAILED)"
+                        plain_len=$(( ${#b} + ${#ver_str} ))
+                        pad_len=$(( 26 - plain_len ))
+                        [ "$pad_len" -lt 0 ] && pad_len=0
+                        padding=$(printf '%*s' "$pad_len" "")
+
+                        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
+                    fi
+                done
+
+                echo -e "\n\n  ${G}● Binary cores deployed successfully.${NC}\n"
+                echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy
+                ;;
+
+            6|7)
+                clear
+                target_name="OFFICIAL GITHUB"
+                pkg_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
+                if [ "$ota_opt" == "7" ]; then
+                    target_name="PARSPACK IRANIAN MIRROR"
+                    pkg_url="$MIRROR_PACKAGES"
+                fi
+
+                echo -e "\n  ${DIM}┌─[ FETCHING ALL PREREQUISITES & PACKAGES FROM ${target_name} ]${NC}\n"
                 mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
                 CB="?t=$(date +%s)"
                 
@@ -478,12 +560,18 @@ show_ota_update_hub() {
                         wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$pkg_url/$item$CB" 2>/dev/null && dl_ok=true
                     fi
 
-                    display_name="$item"
+                    # استخراج نام و نسخه جهت نمایش زرد رنگ مشابه عکس دوم
                     if [[ "$item" == *.deb ]]; then
-                        display_name=$(echo "$item" | cut -d'_' -f1)".deb"
+                        item_name=$(echo "$item" | cut -d'_' -f1)
+                        item_ver=$(echo "$item" | cut -d'_' -f2 | cut -d'-' -f1)
+                    else
+                        item_name="$item"
+                        item_ver="${BIN_VERSIONS[$item]:-Core}"
                     fi
 
-                    pad_len=$(( 26 - ${#display_name} ))
+                    ver_str=" (v${item_ver})"
+                    plain_len=$(( ${#item_name} + ${#ver_str} ))
+                    pad_len=$(( 26 - plain_len ))
                     [ "$pad_len" -lt 0 ] && pad_len=0
                     padding=$(printf '%*s' "$pad_len" "")
 
@@ -503,9 +591,15 @@ show_ota_update_hub() {
                             fi
                         fi
 
-                        printf "  ${G}✔${NC} ${W}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$display_name" "$padding" "$bar_f" "$bar_e" "$percent"
+                        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     else
-                        printf "  ${R}✖${NC} ${R}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$display_name" "$padding" "$bar_f" "$bar_e" "$percent"
+                        ver_str=" (FAILED)"
+                        plain_len=$(( ${#item_name} + ${#ver_str} ))
+                        pad_len=$(( 26 - plain_len ))
+                        [ "$pad_len" -lt 0 ] && pad_len=0
+                        padding=$(printf '%*s' "$pad_len" "")
+
+                        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     fi
                 done
 
@@ -513,7 +607,7 @@ show_ota_update_hub() {
                 echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy
                 ;;
 
-            6)
+            8)
                 clear
                 echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}\n"
                 echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read custom_url
@@ -622,7 +716,7 @@ show_ota_update_hub() {
                 rm -f "$tmp_dl"; sleep 2
                 ;;
 
-            7)
+            9)
                 clear
                 echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n  ${DIM}│${NC}"
                 idx=1
@@ -961,7 +1055,7 @@ while true; do
                 fi
             fi
 
-            # 1. استقرار اسکریپت‌ها با تطبیق نقشه ماژول‌ها
+            # 1. استقرار اسکریپت‌ها با تطبیق دقیق ماژول‌ها
             while IFS= read -r sh_file; do
                 bname=$(basename "$sh_file" .sh)
                 dest_rel="${MOD_MAP[$bname]:-${bname}.sh}"
@@ -995,12 +1089,17 @@ while true; do
                     bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
                     bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
 
-                    display_name="$item"
                     if [[ "$item" == *.deb ]]; then
-                        display_name=$(echo "$item" | cut -d'_' -f1)".deb"
+                        item_name=$(echo "$item" | cut -d'_' -f1)
+                        item_ver=$(echo "$item" | cut -d'_' -f2 | cut -d'-' -f1)
+                    else
+                        item_name="$item"
+                        item_ver="${BIN_VERSIONS[$item]:-Core}"
                     fi
 
-                    pad_len=$(( 26 - ${#display_name} ))
+                    ver_str=" (v${item_ver})"
+                    plain_len=$(( ${#item_name} + ${#ver_str} ))
+                    pad_len=$(( 26 - plain_len ))
                     [ "$pad_len" -lt 0 ] && pad_len=0
                     padding=$(printf '%*s' "$pad_len" "")
 
@@ -1021,7 +1120,7 @@ while true; do
                         fi
                     fi
 
-                    printf "  ${G}✔${NC} ${W}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$display_name" "$padding" "$bar_f" "$bar_e" "$percent"
+                    printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                 done
                 echo -e "\n\n  ${G}● All local packages, binaries and scripts deployed successfully.${NC}\n"
             else
@@ -1046,11 +1145,9 @@ while true; do
             if [[ "$del_confirm" == "WIPE-MTUNNEL" ]]; then
                 echo -e "\n  ${C}● Terminating services and wiping files...${NC}"
                 
-                # توقف و غیرفعال‌سازی سرویس‌ها
                 systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* gost@* 2>/dev/null || true
                 systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* gost@* 2>/dev/null || true
                 
-                # حذف Unit فایل‌های سرویس‌ها
                 rm -f /etc/systemd/system/mgre.service \
                       /etc/systemd/system/mxlan.service \
                       /etc/systemd/system/mporter.service \
@@ -1064,13 +1161,10 @@ while true; do
                       /etc/systemd/system/gost@.service 2>/dev/null || true
                 systemctl daemon-reload 2>/dev/null || true
 
-                # حذف تمام پوشه‌های کانفیگ
                 rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /etc/mhealer /etc/minterface /etc/mdiag /etc/linktest /etc/mbbr /root/mtunnel /tmp/custom-unzip.* /tmp/mtunnel-local-deploy.* 2>/dev/null || true
 
-                # حذف فایل‌های اجرایی اسکریپتی (شامل main و بدون mstat زائد)
                 rm -f /usr/bin/mtunnel /usr/bin/main /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
 
-                # حذف باینری‌ها و هسته‌های کامپایل‌شده
                 rm -f /usr/local/bin/rathole /usr/local/bin/bh /usr/local/bin/backhaul /usr/local/bin/paqet /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps /usr/local/bin/haproxy /usr/sbin/haproxy
 
                 kill "$WATCHER_PID" 2>/dev/null

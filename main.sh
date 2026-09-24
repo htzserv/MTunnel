@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.4.6"
+MODULE_VERSION="9.0.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -33,6 +33,25 @@ declare -A MOD_MAP=(
 )
 
 ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mweb" "mstats" "mhealer" "minterface" "mbbr" "mdiag" "mshield" "linktest")
+
+# پکیج‌ها و باینری‌های پوشه packages
+ALL_PACKAGES=(
+    "bh"
+    "rathole"
+    "paqet"
+    "gost"
+    "haproxy"
+    "cron_3.0pl1-184ubuntu2_amd64.deb"
+    "curl_8.5.0-2ubuntu10.11_amd64.deb"
+    "gzip_1.12-1ubuntu3.2_amd64.deb"
+    "haproxy_2.8.16-0ubuntu0.24.04.3_amd64.deb"
+    "iperf3_3.16-1build2_amd64.deb"
+    "iproute2_6.1.0-1ubuntu6.4_amd64.deb"
+    "jq_1.7.1-3ubuntu0.24.04.2_amd64.deb"
+    "qrencode_4.1.1-1build2_amd64.deb"
+    "socat_1.8.0.0-4ubuntu0.1_amd64.deb"
+    "wget_1.21.4-1ubuntu4.1_amd64.deb"
+)
 
 mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$LOCAL_DIR/tools" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
@@ -262,9 +281,9 @@ deploy_binaries_from_dir() {
         [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir/backhaul" "$LOCAL_DIR/packages/" 2>/dev/null
     fi
 
-    # پکیج‌های DEB
+    # استقرار پکیج‌های DEB
     if compgen -G "$src_dir/*.deb" > /dev/null; then
-        dpkg -i "$src_dir"/*.deb >/dev/null 2>&1 || true
+        dpkg -i --force-confdef --force-confold "$src_dir"/*.deb >/dev/null 2>&1 || true
         [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir"/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
     fi
     return 0
@@ -315,10 +334,10 @@ show_ota_update_hub() {
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Update Master Core Dashboard (Main Script Only)${NC}${main_sub_badge}"
 
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─[ BINARY PACKAGES & CORES ]${NC}"
+        echo -e "  ${DIM}├─[ BINARY PACKAGES & PREREQUISITES ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch Binary Packages from Official GitHub Archive${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch Binary Packages from Iranian Mirror${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch All Prerequisites & Packages from Official GitHub${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch All Prerequisites & Packages from Iranian Mirror${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
         echo -e "  ${DIM}│${NC}"
@@ -434,21 +453,20 @@ show_ota_update_hub() {
                     pkg_url="$MIRROR_PACKAGES"
                 fi
 
-                echo -e "\n  ${DIM}┌─[ FETCHING PACKAGES FROM ${target_name} ]${NC}"
+                echo -e "\n  ${DIM}┌─[ FETCHING PREREQUISITES & PACKAGES FROM ${target_name} ]${NC}"
                 mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
-                bins=("rathole" "bh" "paqet" "gost" "haproxy")
                 CB="?t=$(date +%s)"
                 
-                total_bins=${#bins[@]}
+                total_pkgs=${#ALL_PACKAGES[@]}
                 current=0
                 width=30
 
-                for b in "${bins[@]}"; do
+                for item in "${ALL_PACKAGES[@]}"; do
                     ((current++))
-                    t_out="$LOCAL_DIR/packages/$b"
+                    t_out="$LOCAL_DIR/packages/$item"
                     dl_ok=false
                     
-                    percent=$(( current * 100 / total_bins ))
+                    percent=$(( current * 100 / total_pkgs ))
                     filled=$(( percent * width / 100 ))
                     empty=$(( width - filled ))
                     
@@ -456,51 +474,44 @@ show_ota_update_hub() {
                     bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
 
                     if command -v curl >/dev/null 2>&1; then
-                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
+                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$pkg_url/$item$CB" 2>/dev/null && dl_ok=true
                     elif command -v wget >/dev/null 2>&1; then
-                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
+                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$pkg_url/$item$CB" 2>/dev/null && dl_ok=true
                     fi
+
+                    # نمایش نام خلاصه شده در صورت طولانی بودن فایل‌های deb
+                    display_name="$item"
+                    if [[ "$item" == *.deb ]]; then
+                        display_name=$(echo "$item" | cut -d'_' -f1)".deb"
+                    fi
+
+                    pad_len=$(( 26 - ${#display_name} ))
+                    [ "$pad_len" -lt 0 ] && pad_len=0
+                    padding=$(printf '%*s' "$pad_len" "")
 
                     if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
-                        chmod +x "$t_out"
-                        if [ "$b" == "haproxy" ]; then
-                            install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
-                            ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
-                        elif [ "$b" == "bh" ]; then
-                            install -m 0755 "$t_out" /usr/local/bin/bh 2>/dev/null
-                            ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
+                        if [[ "$item" == *.deb ]]; then
+                            dpkg -i --force-confdef --force-confold "$t_out" >/dev/null 2>&1 || true
                         else
-                            install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
+                            chmod +x "$t_out"
+                            if [ "$item" == "haproxy" ]; then
+                                install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
+                                ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
+                            elif [ "$item" == "bh" ]; then
+                                install -m 0755 "$t_out" /usr/local/bin/bh 2>/dev/null
+                                ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
+                            else
+                                install -m 0755 "$t_out" "/usr/local/bin/$item" 2>/dev/null
+                            fi
                         fi
 
-                        b_ver=""
-                        case "$b" in
-                            rathole)  b_ver=$("$t_out" --version 2>/dev/null | awk '{print $2}' | tr -d 'v') ;;
-                            bh)       b_ver=$("$t_out" -v 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
-                            paqet)    b_ver=$("$t_out" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
-                            gost)     b_ver=$("$t_out" -V 2>/dev/null | awk '{print $2}' | tr -d 'v') ;;
-                            haproxy)  b_ver=$(haproxy -v 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1) ;;
-                        esac
-                        [ -z "$b_ver" ] && b_ver="Core"
-
-                        ver_str=" (v${b_ver})"
-                        plain_len=$(( ${#b} + ${#ver_str} ))
-                        pad_len=$(( 26 - plain_len ))
-                        [ "$pad_len" -lt 0 ] && pad_len=0
-                        padding=$(printf '%*s' "$pad_len" "")
-
-                        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
+                        printf "  ${G}✔${NC} ${W}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$display_name" "$padding" "$bar_f" "$bar_e" "$percent"
                     else
-                        ver_str=" (FAILED)"
-                        plain_len=$(( ${#b} + ${#ver_str} ))
-                        pad_len=$(( 26 - plain_len ))
-                        [ "$pad_len" -lt 0 ] && pad_len=0
-                        padding=$(printf '%*s' "$pad_len" "")
-
-                        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
+                        printf "  ${R}✖${NC} ${R}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$display_name" "$padding" "$bar_f" "$bar_e" "$percent"
                     fi
                 done
-                echo -e "\n  ${G}● Binary packages and core engines deployed successfully.${NC}"
+
+                echo -e "\n  ${G}● All prerequisite packages and cores deployed successfully.${NC}"
                 echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
                 ;;
 
@@ -554,24 +565,31 @@ show_ota_update_hub() {
                             kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
-                            pkg_root="$(find "$t_dir" -maxdepth 3 -type d -iname "packages" | head -n 1)"
+                            # فال‌بک هوشمند: در صورتی که main.sh در زیپ نبود
+                            echo -e "  ${Y}● No main.sh found in archive. Scanning for packages, scripts and binaries...${NC}"
+                            
+                            deployed_anything=false
 
-                            if [ -z "$pkg_root" ]; then
-                                for b in rathole bh backhaul paqet gost frpc frps haproxy; do
-                                    if [ -n "$(find "$t_dir" -maxdepth 3 -type f -name "$b" | head -n 1)" ]; then
-                                        pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name "$b" -exec dirname {} \; | head -n 1)"
-                                        break
-                                    fi
-                                done
-                            fi
-                            if [ -z "$pkg_root" ] && [ -n "$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' | head -n 1)" ]; then
-                                pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' -exec dirname {} \; | head -n 1)"
-                            fi
+                            # 1. جستجوی پوشه packages یا هر پوشه‌ای که باینری/deb دارد
+                            while IFS= read -r dir_cand; do
+                                if deploy_binaries_from_dir "$dir_cand"; then
+                                    deployed_anything=true
+                                fi
+                            done < <(find "$t_dir" -type d)
 
-                            if [ -n "$pkg_root" ] && deploy_binaries_from_dir "$pkg_root"; then
-                                echo -e "  ${G}✔ No main.sh found, but binary cores were detected and deployed successfully!${NC}"
+                            # 2. کپی هر اسکریپت شلی که احتمالاً در زیپ وجود دارد به دایرکتوری اصلی
+                            while IFS= read -r sh_cand; do
+                                bname=$(basename "$sh_cand" .sh)
+                                cp -f "$sh_cand" "$LOCAL_DIR/${bname}.sh" 2>/dev/null
+                                chmod +x "$LOCAL_DIR/${bname}.sh" 2>/dev/null
+                                deploy_cached_module "$bname" 2>/dev/null || true
+                                deployed_anything=true
+                            done < <(find "$t_dir" -type f -name "*.sh")
+
+                            if [ "$deployed_anything" = true ]; then
+                                echo -e "  ${G}✔ Fallback success: All packages, .deb files, and scripts from archive deployed successfully!${NC}"
                             else
-                                echo -e "  ${R}✖ Error: Neither main.sh nor recognizable binary packages found inside the ZIP archive!${NC}"
+                                echo -e "  ${R}✖ Error: No valid scripts, binaries, or debian packages found inside the ZIP!${NC}"
                             fi
                         fi
                         rm -rf "$t_dir"

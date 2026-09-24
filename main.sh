@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="9.0.0"
+MODULE_VERSION="9.0.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -34,7 +34,6 @@ declare -A MOD_MAP=(
 
 ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mweb" "mstats" "mhealer" "minterface" "mbbr" "mdiag" "mshield" "linktest")
 
-# پکیج‌ها و باینری‌های پوشه packages
 ALL_PACKAGES=(
     "bh"
     "rathole"
@@ -362,7 +361,7 @@ show_ota_update_hub() {
                     sync_name="IRANIAN MIRROR (PARSPACK)"
                 fi
 
-                echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${sync_name} ]${NC}"
+                echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${sync_name} ]${NC}\n"
 
                 total_mods=${#ALL_MODULES[@]}
                 current=0
@@ -403,7 +402,7 @@ show_ota_update_hub() {
                 done
                 
                 > "$UPDATE_FILE"
-                echo -e "\n  ${G}● Script sync finished. Press Enter to reload core...${NC}"
+                echo -e "\n\n  ${G}● Script sync finished. Press Enter to reload core...${NC}\n"
                 read dummy
                 kill "$WATCHER_PID" 2>/dev/null
                 exec "$MTUNNEL_PATH"
@@ -411,7 +410,7 @@ show_ota_update_hub() {
 
             3)
                 clear
-                echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}"
+                echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}\n"
                 width=30
                 bar_full=$(printf "%${width}s" "" | tr ' ' '#')
 
@@ -427,7 +426,7 @@ show_ota_update_hub() {
                     padding=$(printf '%*s' "$pad_len" "")
 
                     printf "  ${G}✔${NC} ${W}main${NC}${Y}%s${NC}%s ${W}[%s] 100%%${NC}\n" "$ver_str" "$padding" "$bar_full"
-                    echo -e "\n  ${G}● Master Core successfully updated! Reloading...${NC}"
+                    echo -e "\n\n  ${G}● Master Core successfully updated! Reloading...${NC}\n"
                     sleep 1.5
                     kill "$WATCHER_PID" 2>/dev/null
                     exec "$MTUNNEL_PATH"
@@ -440,7 +439,7 @@ show_ota_update_hub() {
                     bar_empty=$(printf "%${width}s" "" | tr ' ' '-')
 
                     printf "  ${R}✖${NC} ${R}main%s${NC}%s ${W}[${DIM}%s${W}]   0%%${NC}\n" "$ver_str" "$padding" "$bar_empty"
-                    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+                    echo -ne "\n\n  ${DIM}Press Enter to return...${NC}\n"; read dummy
                 fi
                 ;;
 
@@ -453,7 +452,7 @@ show_ota_update_hub() {
                     pkg_url="$MIRROR_PACKAGES"
                 fi
 
-                echo -e "\n  ${DIM}┌─[ FETCHING PREREQUISITES & PACKAGES FROM ${target_name} ]${NC}"
+                echo -e "\n  ${DIM}┌─[ FETCHING PREREQUISITES & PACKAGES FROM ${target_name} ]${NC}\n"
                 mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
                 CB="?t=$(date +%s)"
                 
@@ -479,7 +478,6 @@ show_ota_update_hub() {
                         wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$pkg_url/$item$CB" 2>/dev/null && dl_ok=true
                     fi
 
-                    # نمایش نام خلاصه شده در صورت طولانی بودن فایل‌های deb
                     display_name="$item"
                     if [[ "$item" == *.deb ]]; then
                         display_name=$(echo "$item" | cut -d'_' -f1)".deb"
@@ -511,13 +509,13 @@ show_ota_update_hub() {
                     fi
                 done
 
-                echo -e "\n  ${G}● All prerequisite packages and cores deployed successfully.${NC}"
-                echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+                echo -e "\n\n  ${G}● All prerequisite packages and cores deployed successfully.${NC}\n"
+                echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy
                 ;;
 
             6)
                 clear
-                echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}"
+                echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}\n"
                 echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read custom_url
                 custom_url=$(echo "$custom_url" | tr -d '\r ')
                 [ -z "$custom_url" ] && continue
@@ -560,24 +558,21 @@ show_ota_update_hub() {
                                 deploy_binaries_from_dir "$LOCAL_DIR/packages"
                             fi
 
-                            echo -e "  ${G}✔ Archive fully extracted, modules and binary cores deployed!${NC}"
+                            echo -e "\n  ${G}✔ Archive fully extracted, modules and binary cores deployed!${NC}\n"
                             sleep 1.5
                             kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
-                            # فال‌بک هوشمند: در صورتی که main.sh در زیپ نبود
-                            echo -e "  ${Y}● No main.sh found in archive. Scanning for packages, scripts and binaries...${NC}"
+                            echo -e "\n  ${Y}● No main.sh found in archive. Scanning for packages, scripts and binaries...${NC}\n"
                             
                             deployed_anything=false
 
-                            # 1. جستجوی پوشه packages یا هر پوشه‌ای که باینری/deb دارد
                             while IFS= read -r dir_cand; do
                                 if deploy_binaries_from_dir "$dir_cand"; then
                                     deployed_anything=true
                                 fi
                             done < <(find "$t_dir" -type d)
 
-                            # 2. کپی هر اسکریپت شلی که احتمالاً در زیپ وجود دارد به دایرکتوری اصلی
                             while IFS= read -r sh_cand; do
                                 bname=$(basename "$sh_cand" .sh)
                                 cp -f "$sh_cand" "$LOCAL_DIR/${bname}.sh" 2>/dev/null
@@ -587,28 +582,28 @@ show_ota_update_hub() {
                             done < <(find "$t_dir" -type f -name "*.sh")
 
                             if [ "$deployed_anything" = true ]; then
-                                echo -e "  ${G}✔ Fallback success: All packages, .deb files, and scripts from archive deployed successfully!${NC}"
+                                echo -e "\n  ${G}✔ Fallback success: All packages, .deb files, and scripts from archive deployed successfully!${NC}\n"
                             else
-                                echo -e "  ${R}✖ Error: No valid scripts, binaries, or debian packages found inside the ZIP!${NC}"
+                                echo -e "\n  ${R}✖ Error: No valid scripts, binaries, or debian packages found inside the ZIP!${NC}\n"
                             fi
                         fi
                         rm -rf "$t_dir"
                     elif grep -q "#!/bin/bash" "$tmp_dl"; then
-                        echo -e "\n  ${DIM}Select Module Target to overwrite:${NC}"
+                        echo -e "\n  ${DIM}Select Module Target to overwrite:${NC}\n"
                         i=1
                         for m in "${ALL_MODULES[@]}"; do
                             printf "  ${DIM}%2d)${NC} %-12s " "$i" "$m"
                             ((i % 3 == 0)) && echo ""
                             ((i++))
                         done
-                        echo -ne "\n  ${C}Enter number: ${NC}"; read m_num
+                        echo -ne "\n\n  ${C}Enter number: ${NC}"; read m_num
                         chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                         if [ -n "$chosen_mod" ]; then
                             dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
                             mkdir -p "$(dirname "$dest")" 2>/dev/null
                             cat "$tmp_dl" > "$dest"
                             deploy_cached_module "$chosen_mod"
-                            echo -e "  ${G}✔ Successfully applied to ${chosen_mod}!${NC}"
+                            echo -e "\n  ${G}✔ Successfully applied to ${chosen_mod}!${NC}\n"
                             if [ "$chosen_mod" = "main" ]; then
                                 sleep 1.5
                                 kill "$WATCHER_PID" 2>/dev/null
@@ -616,25 +611,25 @@ show_ota_update_hub() {
                             fi
                         fi
                     else
-                        echo -e "  ${R}✖ Downloaded file is neither a valid ZIP nor a bash script!${NC}"
+                        echo -e "\n  ${R}✖ Downloaded file is neither a valid ZIP nor a bash script!${NC}\n"
                     fi
                 else
-                    echo -e "  ${R}✖ Download failed! Check URL.${NC}"
+                    echo -e "\n  ${R}✖ Download failed! Check URL.${NC}\n"
                 fi
                 rm -f "$tmp_dl"; sleep 2
                 ;;
 
             7)
                 clear
-                echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}"
-                echo -e "  ${DIM}Select target module to edit:${NC}"
+                echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n"
+                echo -e "  ${DIM}Select target module to edit:${NC}\n"
                 i=1
                 for m in "${ALL_MODULES[@]}"; do
                     printf "  ${DIM}%2d)${NC} %-12s " "$i" "$m"
                     ((i % 3 == 0)) && echo ""
                     ((i++))
                 done
-                echo -ne "\n  ${C}Enter number: ${NC}"; read m_num
+                echo -ne "\n\n  ${C}Enter number: ${NC}"; read m_num
                 chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                 if [ -n "$chosen_mod" ]; then
                     dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
@@ -644,7 +639,7 @@ show_ota_update_hub() {
                     > "$temp_paste_file"
 
                     if command -v nano >/dev/null 2>&1; then
-                        echo -e "  ${DIM}● Opening clean editor... Paste your raw code, save (Ctrl+O, Enter) and exit (Ctrl+X).${NC}"
+                        echo -e "\n  ${DIM}● Opening clean editor... Paste your raw code, save (Ctrl+O, Enter) and exit (Ctrl+X).${NC}\n"
                         sleep 1.5
                         nano "$temp_paste_file"
                     elif command -v vi >/dev/null 2>&1; then
@@ -672,16 +667,16 @@ show_ota_update_hub() {
                             rm -f "$temp_paste_file"
 
                             deploy_cached_module "$chosen_mod"
-                            echo -e "  ${G}✔ Module ${chosen_mod} (v${new_ver}) successfully applied! Rebooting core...${NC}"
+                            echo -e "\n  ${G}✔ Module ${chosen_mod} (v${new_ver}) successfully applied! Rebooting core...${NC}\n"
                             sleep 1.5
                             kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
-                            echo -e "  ${Y}● Manual update cancelled by user.${NC}"
+                            echo -e "\n  ${Y}● Manual update cancelled by user.${NC}\n"
                             rm -f "$temp_paste_file"
                         fi
                     else
-                        echo -e "  ${R}✖ Invalid format (Missing #!/bin/bash) or empty paste!${NC}"
+                        echo -e "\n  ${R}✖ Invalid format (Missing #!/bin/bash) or empty paste!${NC}\n"
                         rm -f "$temp_paste_file"
                     fi
                     sleep 2
@@ -696,7 +691,7 @@ show_ota_update_hub() {
 run_iperf3() {
     clear
     if ! command -v iperf3 >/dev/null 2>&1; then
-        echo -e "\n  ${DIM}┌─[ IPERF3 PACKAGE INSTALLER ]${NC}"
+        echo -e "\n  ${DIM}┌─[ IPERF3 PACKAGE INSTALLER ]${NC}\n"
         killall -9 apt-get apt dpkg 2>/dev/null || true
         rm -f /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock 2>/dev/null || true
         dpkg --configure -a >/dev/null 2>&1 || true
@@ -710,9 +705,9 @@ run_iperf3() {
         wait "$pid" 2>/dev/null
 
         if command -v iperf3 >/dev/null 2>&1; then
-            echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}"
+            echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}\n"
         else
-            echo -e "\n  ${R}✘ Direct install attempt...${NC}"
+            echo -e "\n  ${R}✘ Direct install attempt...${NC}\n"
             apt-get install -y iperf3 >/dev/null 2>&1
         fi
         sleep 1
@@ -745,7 +740,7 @@ run_iperf3() {
             1)
                 echo -e "\n  ${G}● iPerf3 Server listening on port 5201 (Press Ctrl+C to stop)...${NC}\n"
                 iperf3 -s -p 5201
-                echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+                echo -ne "\n  ${DIM}Press Enter to return...${NC}\n"; read dummy ;;
             2)
                 echo -ne "\n  ${C}●${NC} ${W}Enter Target Server IP / Tunnel IP: ${NC}"; read t_ip
                 t_ip=$(echo "$t_ip" | tr -d '\r ' )
@@ -754,7 +749,7 @@ run_iperf3() {
                 t_sec=${t_sec:-10}
                 echo -e "\n  ${Y}● Running Benchmark against $t_ip (10s)...${NC}\n"
                 iperf3 -c "$t_ip" -p 5201 -t "$t_sec"
-                echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+                echo -ne "\n  ${DIM}Press Enter to return...${NC}\n"; read dummy ;;
             0) break ;;
         esac
     done
@@ -928,46 +923,110 @@ while true; do
         10) run_mod "mbbr" ;;
         11) show_ota_update_hub ;;
         12)
-            echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
-            (
-                current_exec_dir="$(pwd)"
-                script_dir="$(dirname "$(readlink -f "$0" 2>/dev/null)")"
+            clear
+            echo -e "\n  ${DIM}┌─[ OFFLINE LOCAL DEPLOY ENGINE ]${NC}\n"
+            echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read local_input
+            local_input=$(echo "$local_input" | tr -d '\r ')
+            [ -z "$local_input" ] && local_input="$(pwd)"
 
-                # همگام‌سازی از دایرکتوری جاری در صورتی که خارج از /root/mtunnel اجرا شده باشد
-                for src_cand in "$current_exec_dir" "$script_dir"; do
-                    if [ "$src_cand" != "$LOCAL_DIR" ] && [ -f "$src_cand/main.sh" ]; then
-                        cp -rf "$src_cand"/* "$LOCAL_DIR/" 2>/dev/null
-                        break
+            if [ ! -e "$local_input" ]; then
+                echo -e "\n  ${R}✖ Path not found: ${local_input}${NC}\n"
+                sleep 2
+                continue
+            fi
+
+            clear
+            echo -e "\n  ${DIM}┌─[ DEPLOYING FROM LOCAL SOURCE ]${NC}\n"
+
+            work_dir="$local_input"
+            is_temp_archive=false
+
+            if [ -f "$local_input" ]; then
+                work_dir="$(mktemp -d /tmp/mtunnel-local-deploy.XXXXXX)"
+                is_temp_archive=true
+                if [[ "$local_input" == *.zip ]]; then
+                    if ! command -v unzip >/dev/null 2>&1; then
+                        DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1
+                        DEBIAN_FRONTEND=noninteractive apt-get install -y -q unzip >/dev/null 2>&1
                     fi
-                done
+                    unzip -q -o "$local_input" -d "$work_dir" 2>/dev/null
+                elif [[ "$local_input" == *.tar.gz || "$local_input" == *.tgz ]]; then
+                    tar -xzf "$local_input" -C "$work_dir" 2>/dev/null
+                fi
+            fi
 
-                # استقرار ماژول‌های متنی با پشتیبانی از fallback مسیر جاری
-                for mod in "${ALL_MODULES[@]}"; do
-                    rel_path="${MOD_MAP[$mod]}"
-                    if [ ! -s "$LOCAL_DIR/$rel_path" ]; then
-                        if [ -s "$current_exec_dir/$rel_path" ]; then
-                            mkdir -p "$(dirname "$LOCAL_DIR/$rel_path")" 2>/dev/null
-                            cp -f "$current_exec_dir/$rel_path" "$LOCAL_DIR/$rel_path" 2>/dev/null
-                        elif [ -s "$script_dir/$rel_path" ]; then
-                            mkdir -p "$(dirname "$LOCAL_DIR/$rel_path")" 2>/dev/null
-                            cp -f "$script_dir/$rel_path" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            # 1. استقرار اسکریپت‌ها با تطبیق نقشه ماژول‌ها
+            while IFS= read -r sh_file; do
+                bname=$(basename "$sh_file" .sh)
+                dest_rel="${MOD_MAP[$bname]:-${bname}.sh}"
+                mkdir -p "$(dirname "$LOCAL_DIR/$dest_rel")" 2>/dev/null
+                cp -f "$sh_file" "$LOCAL_DIR/$dest_rel" 2>/dev/null
+                chmod +x "$LOCAL_DIR/$dest_rel" 2>/dev/null
+                deploy_cached_module "$bname" 2>/dev/null || true
+            done < <(find "$work_dir" -type f -name "*.sh")
+
+            # 2. جستجوی فایل‌های باینری و بسته‌های دبیان
+            matched_items=()
+            for item in "${ALL_PACKAGES[@]}"; do
+                if [ -n "$(find "$work_dir" -type f -name "$item" | head -n 1)" ]; then
+                    matched_items+=("$item")
+                fi
+            done
+
+            total_local=${#matched_items[@]}
+            if [ "$total_local" -gt 0 ]; then
+                current=0
+                width=30
+
+                for item in "${matched_items[@]}"; do
+                    ((current++))
+                    f_found="$(find "$work_dir" -type f -name "$item" | head -n 1)"
+
+                    percent=$(( current * 100 / total_local ))
+                    filled=$(( percent * width / 100 ))
+                    empty=$(( width - filled ))
+
+                    bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
+                    bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
+
+                    display_name="$item"
+                    if [[ "$item" == *.deb ]]; then
+                        display_name=$(echo "$item" | cut -d'_' -f1)".deb"
+                    fi
+
+                    pad_len=$(( 26 - ${#display_name} ))
+                    [ "$pad_len" -lt 0 ] && pad_len=0
+                    padding=$(printf '%*s' "$pad_len" "")
+
+                    if [[ "$item" == *.deb ]]; then
+                        cp -f "$f_found" "$LOCAL_DIR/packages/" 2>/dev/null
+                        dpkg -i --force-confdef --force-confold "$f_found" >/dev/null 2>&1 || true
+                    else
+                        cp -f "$f_found" "$LOCAL_DIR/packages/" 2>/dev/null
+                        chmod +x "$f_found" 2>/dev/null
+                        if [ "$item" == "haproxy" ]; then
+                            install -m 0755 "$f_found" /usr/sbin/haproxy 2>/dev/null
+                            ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
+                        elif [ "$item" == "bh" ]; then
+                            install -m 0755 "$f_found" /usr/local/bin/bh 2>/dev/null
+                            ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
+                        else
+                            install -m 0755 "$f_found" "/usr/local/bin/$item" 2>/dev/null
                         fi
                     fi
-                    if [ -s "$LOCAL_DIR/$rel_path" ]; then
-                        deploy_cached_module "$mod" >/dev/null 2>&1
-                    fi
-                done
 
-                # استقرار پکیج‌ها و هسته‌ها از تمام مسیرهای در دسترس
-                for p_dir in "$current_exec_dir/packages" "$script_dir/packages" "$LOCAL_DIR/packages" "./packages"; do
-                    if [ -d "$p_dir" ]; then
-                        deploy_binaries_from_dir "$p_dir" >/dev/null 2>&1
-                        break
-                    fi
+                    printf "  ${G}✔${NC} ${W}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$display_name" "$padding" "$bar_f" "$bar_e" "$percent"
                 done
-            ) &
-            pid=$!; draw_progress_bar "$pid" "Deploying Modules & Packages"; wait "$pid"
-            echo -e "  ${G}● Local deployment and binary sync completed successfully.${NC}"; sleep 2 ;;
+                echo -e "\n\n  ${G}● All local packages, binaries and scripts deployed successfully.${NC}\n"
+            else
+                while IFS= read -r dir_cand; do
+                    deploy_binaries_from_dir "$dir_cand" >/dev/null 2>&1 || true
+                done < <(find "$work_dir" -type d)
+                echo -e "\n\n  ${G}● Offline scan finished and binary packages linked.${NC}\n"
+            fi
+
+            [ "$is_temp_archive" = true ] && rm -rf "$work_dir"
+            echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy ;;
 
         13)
             clear
@@ -1000,7 +1059,7 @@ while true; do
                 systemctl daemon-reload 2>/dev/null || true
 
                 # حذف تمام پوشه‌های کانفیگ
-                rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /etc/mhealer /etc/minterface /etc/mdiag /etc/linktest /etc/mbbr /root/mtunnel /tmp/custom-unzip.* 2>/dev/null || true
+                rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /etc/mhealer /etc/minterface /etc/mdiag /etc/linktest /etc/mbbr /root/mtunnel /tmp/custom-unzip.* /tmp/mtunnel-local-deploy.* 2>/dev/null || true
 
                 # حذف فایل‌های اجرایی اسکریپتی (شامل main و بدون mstat زائد)
                 rm -f /usr/bin/mtunnel /usr/bin/main /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest

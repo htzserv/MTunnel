@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.4.3 ---
+# --- MDesign Master Core | Central Dashboard v8.4.5 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.4.4"
+MODULE_VERSION="8.4.5"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -336,12 +336,13 @@ show_ota_update_hub() {
         case $ota_opt in
             1|2)
                 s_url="$REPO_SCRIPTS"
-                [ "$ota_opt" == "2" ] && s_url="$MIRROR_SCRIPTS"
+                sync_name="OFFICIAL GITHUB"
+                if [ "$ota_opt" == "2" ]; then
+                    s_url="$MIRROR_SCRIPTS"
+                    sync_name="IRANIAN MIRROR (PARSPACK)"
+                fi
 
-                clear; echo ""
-                echo -e "  ${B}╭──────────────────────────────────────────────────────────────╮${NC}"
-                echo -e "  ${B}│${NC} ${W}MDesign Ecosystem Central Updater${NC}                           ${B}│${NC}"
-                echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}\n"
+                echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${sync_name} ]${NC}"
 
                 total_mods=${#ALL_MODULES[@]}
                 current=0
@@ -389,18 +390,35 @@ show_ota_update_hub() {
                 ;;
 
             3)
-                clear; echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}"
-                printf "  ${C}→${NC} %-22s " "main (main.sh)"
+                echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}"
+                width=30
+                bar_full=$(printf "%${width}s" "" | tr ' ' '#')
+
                 if download_file_to_cache "main" "$REPO_SCRIPTS"; then
                     deploy_cached_module "main"
                     m_new_v=$(grep -m1 '^MODULE_VERSION=' "$LOCAL_DIR/main.sh" 2>/dev/null | cut -d'"' -f2)
-                    printf "${G}[✔ UPGRADED: v%s]${NC}\n" "${m_new_v:-OK}"
+                    m_new_v="${m_new_v:-OK}"
+                    
+                    ver_str=" (v${m_new_v})"
+                    plain_len=$(( 4 + ${#ver_str} ))
+                    pad_len=$(( 26 - plain_len ))
+                    [ "$pad_len" -lt 0 ] && pad_len=0
+                    padding=$(printf '%*s' "$pad_len" "")
+
+                    printf "  ${G}✔${NC} ${W}main${NC}${Y}%s${NC}%s ${W}[%s] 100%%${NC}\n" "$ver_str" "$padding" "$bar_full"
                     echo -e "\n  ${G}● Master Core successfully updated! Reloading...${NC}"
                     sleep 1.5
                     kill "$WATCHER_PID" 2>/dev/null
                     exec "$MTUNNEL_PATH"
                 else
-                    printf "${R}[✖ FAILED]${NC}\n"
+                    ver_str=" (FAILED)"
+                    plain_len=$(( 4 + ${#ver_str} ))
+                    pad_len=$(( 26 - plain_len ))
+                    [ "$pad_len" -lt 0 ] && pad_len=0
+                    padding=$(printf '%*s' "$pad_len" "")
+                    bar_empty=$(printf "%${width}s" "" | tr ' ' '-')
+
+                    printf "  ${R}✖${NC} ${R}main%s${NC}%s ${W}[${DIM}%s${W}]   0%%${NC}\n" "$ver_str" "$padding" "$bar_empty"
                     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
                 fi
                 ;;
@@ -413,15 +431,27 @@ show_ota_update_hub() {
                     pkg_url="$MIRROR_PACKAGES"
                 fi
 
-                echo -e "\n  ${DIM}┌─[ ${target_name} PACKAGES & CORES ]${NC}"
+                echo -e "\n  ${DIM}┌─[ FETCHING PACKAGES FROM ${target_name} ]${NC}"
                 mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
                 bins=("rathole" "bh" "paqet" "gost" "haproxy")
                 CB="?t=$(date +%s)"
+                
+                total_bins=${#bins[@]}
+                current=0
+                width=30
 
                 for b in "${bins[@]}"; do
-                    printf "  ${C}→${NC} Downloading %-15s " "$b"
+                    ((current++))
                     t_out="$LOCAL_DIR/packages/$b"
                     dl_ok=false
+                    
+                    percent=$(( current * 100 / total_bins ))
+                    filled=$(( percent * width / 100 ))
+                    empty=$(( width - filled ))
+                    
+                    bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
+                    bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
+
                     if command -v curl >/dev/null 2>&1; then
                         curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
                     elif command -v wget >/dev/null 2>&1; then
@@ -439,12 +469,25 @@ show_ota_update_hub() {
                         else
                             install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
                         fi
-                        printf "${G}[✔ INSTALLED]${NC}\n"
+
+                        plain_len=${#b}
+                        pad_len=$(( 26 - plain_len ))
+                        [ "$pad_len" -lt 0 ] && pad_len=0
+                        padding=$(printf '%*s' "$pad_len" "")
+
+                        printf "  ${G}✔${NC} ${W}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$padding" "$bar_f" "$bar_e" "$percent"
                     else
-                        printf "${R}[✖ FAILED]${NC}\n"
+                        ver_str=" (FAILED)"
+                        plain_len=$(( ${#b} + ${#ver_str} ))
+                        pad_len=$(( 26 - plain_len ))
+                        [ "$pad_len" -lt 0 ] && pad_len=0
+                        padding=$(printf '%*s' "$pad_len" "")
+
+                        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$b" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     fi
                 done
-                echo -e "  ${G}● Binary packages and core engines deployed successfully.${NC}"; sleep 1.5
+                echo -e "\n  ${G}● Binary packages and core engines deployed successfully.${NC}"
+                echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
                 ;;
 
             6)
@@ -456,11 +499,16 @@ show_ota_update_hub() {
                 tmp_dl="$SECURE_TMP/.custom_download.$$"
                 rm -f "$tmp_dl"
 
-                if command -v curl >/dev/null 2>&1; then
-                    curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 10 -o "$tmp_dl" "$custom_url" 2>/dev/null
-                elif command -v wget >/dev/null 2>&1; then
-                    wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=10 -O "$tmp_dl" "$custom_url" 2>/dev/null
-                fi
+                (
+                    if command -v curl >/dev/null 2>&1; then
+                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 10 -o "$tmp_dl" "$custom_url" 2>/dev/null
+                    elif command -v wget >/dev/null 2>&1; then
+                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=10 -O "$tmp_dl" "$custom_url" 2>/dev/null
+                    fi
+                ) &
+                pid=$!
+                draw_progress_bar "$pid" "Downloading Custom Resource"
+                wait "$pid" 2>/dev/null
 
                 if [ -s "$tmp_dl" ]; then
                     if ! command -v unzip >/dev/null 2>&1; then
@@ -495,7 +543,7 @@ show_ota_update_hub() {
                             kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
-                            # main.sh پیدا نشد؛ شاید این یک زیپ فقط-پکیج (فقط هسته‌های باینری) باشد
+                            # main.sh پیدا نشد؛ بررسی پکیج‌های باینری
                             pkg_root="$(find "$t_dir" -maxdepth 3 -type d -iname "packages" | head -n 1)"
 
                             if [ -z "$pkg_root" ]; then
@@ -507,7 +555,7 @@ show_ota_update_hub() {
                                 done
                             fi
                             if [ -z "$pkg_root" ] && [ -n "$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' | head -n 1)" ]; then
-                                pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' -exec dirname {} \; | head -n 1)"
+                                pkg_root="$(find "$t_dir" -maxdepth 3 -type f -name '*.deb' | head -n 1)"
                             fi
 
                             if [ -n "$pkg_root" ] && deploy_binaries_from_dir "$pkg_root"; then

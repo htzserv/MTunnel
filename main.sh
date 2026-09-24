@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v8.4.0 ---
+# --- MDesign Master Core | Central Dashboard v8.4.3 ---
 # [Features: Signal-Interrupted Instant Refresh | Original Colors | Unblocked Typing]
 
-MODULE_VERSION="8.4.1"
+MODULE_VERSION="8.4.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -46,7 +46,6 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# فاصله‌ی زمانی بین هر دور چک خودکار آپدیت (ثانیه)
 UPDATE_CHECK_INTERVAL=30
 
 # --- PARALLEL BACKGROUND CHECKER (WORKER) ---
@@ -216,16 +215,59 @@ deploy_cached_module() {
 
     [ -s "$target_file" ] || return 1
     sed -i 's/\r$//' "$target_file" 2>/dev/null || true
-    if ! same_file "$target_file" "/usr/bin/$mod"; then
-        install -m 0755 "$target_file" "/usr/bin/$mod" || return 1
-    else
-        chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
-    fi
+
     if [ "$mod" = "main" ]; then
         if ! same_file "$target_file" "$MTUNNEL_PATH"; then
-            install -m 0755 "$target_file" "$MTUNNEL_PATH" 2>/dev/null || true
+            install -m 0755 "$target_file" "$MTUNNEL_PATH" 2>/dev/null || return 1
+        fi
+        ln -sf "$MTUNNEL_PATH" /usr/bin/main 2>/dev/null
+    else
+        if ! same_file "$target_file" "/usr/bin/$mod"; then
+            install -m 0755 "$target_file" "/usr/bin/$mod" || return 1
+        else
+            chmod 0755 "/usr/bin/$mod" 2>/dev/null || true
         fi
     fi
+}
+
+deploy_binaries_from_dir() {
+    local src_dir="$1"
+    [ ! -d "$src_dir" ] && return 1
+
+    mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy "$LOCAL_DIR/packages" 2>/dev/null
+
+    # HAProxy
+    if [ -f "$src_dir/haproxy" ]; then
+        install -m 0755 "$src_dir/haproxy" /usr/sbin/haproxy 2>/dev/null
+        ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
+        [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir/haproxy" "$LOCAL_DIR/packages/" 2>/dev/null
+    fi
+
+    # Rathole, Paqet, Gost, FRPC, FRPS
+    for b in rathole paqet gost frpc frps; do
+        if [ -f "$src_dir/$b" ]; then
+            install -m 0755 "$src_dir/$b" "/usr/local/bin/$b" 2>/dev/null
+            [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir/$b" "$LOCAL_DIR/packages/" 2>/dev/null
+        fi
+    done
+
+    # Backhaul / bh
+    if [ -f "$src_dir/bh" ]; then
+        install -m 0755 "$src_dir/bh" /usr/local/bin/bh 2>/dev/null
+        ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
+        [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir/bh" "$LOCAL_DIR/packages/" 2>/dev/null
+    elif [ -f "$src_dir/backhaul" ]; then
+        install -m 0755 "$src_dir/backhaul" /usr/local/bin/backhaul 2>/dev/null
+        ln -sf /usr/local/bin/backhaul /usr/local/bin/bh 2>/dev/null
+        [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir/backhaul" "$LOCAL_DIR/packages/" 2>/dev/null
+    fi
+
+    # پکیج‌های DEB
+    if compgen -G "$src_dir/*.deb" > /dev/null; then
+        dpkg -i "$src_dir"/*.deb >/dev/null 2>&1 || true
+        [ "$src_dir" != "$LOCAL_DIR/packages" ] && cp -f "$src_dir"/*.deb "$LOCAL_DIR/packages/" 2>/dev/null
+    fi
+    return 0
 }
 
 ensure_module() {
@@ -342,6 +384,7 @@ show_ota_update_hub() {
                 > "$UPDATE_FILE"
                 echo -e "\n  ${G}● Script sync finished. Press Enter to reload core...${NC}"
                 read dummy
+                kill "$WATCHER_PID" 2>/dev/null
                 exec "$MTUNNEL_PATH"
                 ;;
 
@@ -354,6 +397,7 @@ show_ota_update_hub() {
                     printf "${G}[✔ UPGRADED: v%s]${NC}\n" "${m_new_v:-OK}"
                     echo -e "\n  ${G}● Master Core successfully updated! Reloading...${NC}"
                     sleep 1.5
+                    kill "$WATCHER_PID" 2>/dev/null
                     exec "$MTUNNEL_PATH"
                 else
                     printf "${R}[✖ FAILED]${NC}\n"
@@ -361,38 +405,15 @@ show_ota_update_hub() {
                 fi
                 ;;
 
-            4)
-                echo -e "\n  ${DIM}┌─[ GITHUB ASSETS DOWNLOADER (DIRECT) ]${NC}"
-                mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
-                bins=("rathole" "bh" "paqet" "gost" "haproxy")
-                CB="?t=$(date +%s)"
-                # آدرس مستقیم پوشه پکیج‌ها در گیت‌هاب
-                GITHUB_PACKAGES="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
+            4|5)
+                target_name="OFFICIAL GITHUB"
+                pkg_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/packages"
+                if [ "$ota_opt" == "5" ]; then
+                    target_name="PARSPACK IRANIAN MIRROR"
+                    pkg_url="$MIRROR_PACKAGES"
+                fi
 
-                for b in "${bins[@]}"; do
-                    printf "  ${C}→${NC} Downloading %-15s " "$b"
-                    t_out="$LOCAL_DIR/packages/$b"
-                    dl_ok=false
-                    if command -v curl >/dev/null 2>&1; then
-                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$GITHUB_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
-                    elif command -v wget >/dev/null 2>&1; then
-                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$GITHUB_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
-                    fi
-
-                    if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
-                        chmod +x "$t_out"
-                        [ "$b" == "haproxy" ] && install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
-                        [ "$b" != "haproxy" ] && install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
-                        printf "${G}[✔ INSTALLED]${NC}\n"
-                    else
-                        printf "${R}[✖ FAILED]${NC}\n"
-                    fi
-                done
-                echo -e "  ${G}● Official binary packages deployed.${NC}"; sleep 1.5
-                ;;
-
-            5)
-                echo -e "\n  ${DIM}┌─[ PARSPACK IRANIAN MIRROR PACKAGES ]${NC}"
+                echo -e "\n  ${DIM}┌─[ ${target_name} PACKAGES & CORES ]${NC}"
                 mkdir -p "$LOCAL_DIR/packages" /usr/local/bin /usr/sbin 2>/dev/null
                 bins=("rathole" "bh" "paqet" "gost" "haproxy")
                 CB="?t=$(date +%s)"
@@ -402,21 +423,28 @@ show_ota_update_hub() {
                     t_out="$LOCAL_DIR/packages/$b"
                     dl_ok=false
                     if command -v curl >/dev/null 2>&1; then
-                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$MIRROR_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
+                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
                     elif command -v wget >/dev/null 2>&1; then
-                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$MIRROR_PACKAGES/$b$CB" 2>/dev/null && dl_ok=true
+                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=8 -O "$t_out" "$pkg_url/$b$CB" 2>/dev/null && dl_ok=true
                     fi
 
                     if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
                         chmod +x "$t_out"
-                        [ "$b" == "haproxy" ] && install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
-                        [ "$b" != "haproxy" ] && install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
+                        if [ "$b" == "haproxy" ]; then
+                            install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
+                            ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
+                        elif [ "$b" == "bh" ]; then
+                            install -m 0755 "$t_out" /usr/local/bin/bh 2>/dev/null
+                            ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
+                        else
+                            install -m 0755 "$t_out" "/usr/local/bin/$b" 2>/dev/null
+                        fi
                         printf "${G}[✔ INSTALLED]${NC}\n"
                     else
                         printf "${R}[✖ FAILED]${NC}\n"
                     fi
                 done
-                echo -e "  ${G}● Iranian mirror packages deployed.${NC}"; sleep 1.5
+                echo -e "  ${G}● Binary packages and core engines deployed successfully.${NC}"; sleep 1.5
                 ;;
 
             6)
@@ -435,14 +463,39 @@ show_ota_update_hub() {
                 fi
 
                 if [ -s "$tmp_dl" ]; then
+                    if ! command -v unzip >/dev/null 2>&1; then
+                        DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1
+                        DEBIAN_FRONTEND=noninteractive apt-get install -y -q unzip >/dev/null 2>&1
+                    fi
+
                     if command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_dl" >/dev/null 2>&1; then
                         t_dir="$(mktemp -d /tmp/custom-unzip.XXXXXX)"
                         unzip -q -o "$tmp_dl" -d "$t_dir" 2>/dev/null
+                        
                         r_root="$(find "$t_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
+                        
                         if [ -n "$r_root" ] && [ -d "$r_root" ]; then
+                            # انتقال تمام فایل‌ها به مسیر اصلی پروژه
                             cp -rf "$r_root"/* "$LOCAL_DIR/" 2>/dev/null
+                            
+                            # استقرار ماژول‌های متنی
                             for m in "${ALL_MODULES[@]}"; do deploy_cached_module "$m" 2>/dev/null; done
-                            echo -e "  ${G}✔ Archive fully extracted and deployed!${NC}"
+                            
+                            # استقرار تمامی هسته‌ها و باینری‌ها
+                            if [ -d "$r_root/packages" ]; then
+                                deploy_binaries_from_dir "$r_root/packages"
+                            elif [ -d "$t_dir/packages" ]; then
+                                deploy_binaries_from_dir "$t_dir/packages"
+                            elif [ -d "$LOCAL_DIR/packages" ]; then
+                                deploy_binaries_from_dir "$LOCAL_DIR/packages"
+                            fi
+
+                            echo -e "  ${G}✔ Archive fully extracted, modules and binary cores deployed!${NC}"
+                            sleep 1.5
+                            kill "$WATCHER_PID" 2>/dev/null
+                            exec "$MTUNNEL_PATH"
+                        else
+                            echo -e "  ${R}✖ Error: Valid main.sh not found inside the ZIP archive!${NC}"
                         fi
                         rm -rf "$t_dir"
                     elif grep -q "#!/bin/bash" "$tmp_dl"; then
@@ -457,13 +510,18 @@ show_ota_update_hub() {
                         chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
                         if [ -n "$chosen_mod" ]; then
                             dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
+                            mkdir -p "$(dirname "$dest")" 2>/dev/null
                             cat "$tmp_dl" > "$dest"
                             deploy_cached_module "$chosen_mod"
                             echo -e "  ${G}✔ Successfully applied to ${chosen_mod}!${NC}"
                             if [ "$chosen_mod" = "main" ]; then
-                                sleep 1.5; exec "$MTUNNEL_PATH"
+                                sleep 1.5
+                                kill "$WATCHER_PID" 2>/dev/null
+                                exec "$MTUNNEL_PATH"
                             fi
                         fi
+                    else
+                        echo -e "  ${R}✖ Downloaded file is neither a valid ZIP nor a bash script!${NC}"
                     fi
                 else
                     echo -e "  ${R}✖ Download failed! Check URL.${NC}"
@@ -520,6 +578,7 @@ show_ota_update_hub() {
                             deploy_cached_module "$chosen_mod"
                             echo -e "  ${G}✔ Module ${chosen_mod} (v${new_ver}) successfully applied! Rebooting core...${NC}"
                             sleep 1.5
+                            kill "$WATCHER_PID" 2>/dev/null
                             exec "$MTUNNEL_PATH"
                         else
                             echo -e "  ${Y}● Manual update cancelled by user.${NC}"
@@ -773,39 +832,94 @@ while true; do
         10) run_mod "mbbr" ;;
         11) show_ota_update_hub ;;
         12)
-           echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
-           (
-               for mod in "${ALL_MODULES[@]}"; do
-                   rel_path="${MOD_MAP[$mod]}"
-                   if [ -s "$LOCAL_DIR/$rel_path" ]; then deploy_cached_module "$mod" >/dev/null 2>&1; fi
-               done
-               local_pkg_dir="$LOCAL_DIR/packages"
-               [ ! -d "$local_pkg_dir" ] && [ -d "./packages" ] && local_pkg_dir="./packages"
-               if [ -d "$local_pkg_dir" ]; then
-                   mkdir -p /usr/local/bin /usr/sbin /etc/haproxy /var/lib/haproxy 2>/dev/null
-                   [ -f "$local_pkg_dir/haproxy" ] && cp -f "$local_pkg_dir/haproxy" /usr/sbin/haproxy && chmod +x /usr/sbin/haproxy
-                   for b in bh backhaul rathole paqet gost frpc frps; do
-                       if [ -f "$local_pkg_dir/$b" ]; then cp -f "$local_pkg_dir/$b" /usr/local/bin/$b; chmod +x "/usr/local/bin/$b"; fi
-                   done
-                   if ls "$local_pkg_dir"/*.deb >/dev/null 2>&1; then dpkg -i "$LOCAL_DIR/packages"/*.deb >/dev/null 2>&1 || true; fi
-               fi
-           ) &
-           pid=$!; draw_progress_bar "$pid" "Deploying Modules & Packages"; wait "$pid"
-           echo -e "  ${G}● Local deployment and binary sync completed successfully.${NC}"; sleep 2 ;;
+            echo -e "\n  ${M}● Offline Local Deploy Engine (Scripts & Packages)${NC}"
+            (
+                current_exec_dir="$(pwd)"
+                script_dir="$(dirname "$(readlink -f "$0" 2>/dev/null)")"
+
+                # همگام‌سازی از دایرکتوری جاری در صورتی که خارج از /root/mtunnel اجرا شده باشد
+                for src_cand in "$current_exec_dir" "$script_dir"; do
+                    if [ "$src_cand" != "$LOCAL_DIR" ] && [ -f "$src_cand/main.sh" ]; then
+                        cp -rf "$src_cand"/* "$LOCAL_DIR/" 2>/dev/null
+                        break
+                    fi
+                done
+
+                # استقرار ماژول‌های متنی با پشتیبانی از fallback مسیر جاری
+                for mod in "${ALL_MODULES[@]}"; do
+                    rel_path="${MOD_MAP[$mod]}"
+                    if [ ! -s "$LOCAL_DIR/$rel_path" ]; then
+                        if [ -s "$current_exec_dir/$rel_path" ]; then
+                            mkdir -p "$(dirname "$LOCAL_DIR/$rel_path")" 2>/dev/null
+                            cp -f "$current_exec_dir/$rel_path" "$LOCAL_DIR/$rel_path" 2>/dev/null
+                        elif [ -s "$script_dir/$rel_path" ]; then
+                            mkdir -p "$(dirname "$LOCAL_DIR/$rel_path")" 2>/dev/null
+                            cp -f "$script_dir/$rel_path" "$LOCAL_DIR/$rel_path" 2>/dev/null
+                        fi
+                    fi
+                    if [ -s "$LOCAL_DIR/$rel_path" ]; then
+                        deploy_cached_module "$mod" >/dev/null 2>&1
+                    fi
+                done
+
+                # استقرار پکیج‌ها و هسته‌ها از تمام مسیرهای در دسترس
+                for p_dir in "$current_exec_dir/packages" "$script_dir/packages" "$LOCAL_DIR/packages" "./packages"; do
+                    if [ -d "$p_dir" ]; then
+                        deploy_binaries_from_dir "$p_dir" >/dev/null 2>&1
+                        break
+                    fi
+                done
+            ) &
+            pid=$!; draw_progress_bar "$pid" "Deploying Modules & Packages"; wait "$pid"
+            echo -e "  ${G}● Local deployment and binary sync completed successfully.${NC}"; sleep 2 ;;
+
         13)
             clear
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe${NC}                                      ${R}│${NC}"
+            echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"
             echo -e "  ${R}╰────────────────────────────────────────────────────────────╯${NC}\n"
+            echo -e "  ${Y}⚠ Warning: This will stop and remove all tunnels, services,${NC}"
+            echo -e "  ${Y}  binary cores (rathole, backhaul, paqet, gost), and configs!${NC}\n"
             echo -ne "  ${R}Type WIPE-MTUNNEL to continue: ${NC}"; read del_confirm
             del_confirm="${del_confirm//[$' \r\n']/}"
             if [[ "$del_confirm" == "WIPE-MTUNNEL" ]]; then
-                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* 2>/dev/null || true
-                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* 2>/dev/null || true
-                rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel
-                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mstat /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
-                echo -e "\n  ${G}✓ MTunnel wipe completed.${NC}\n"; exit 0
+                echo -e "\n  ${C}● Terminating services and wiping files...${NC}"
+                
+                # توقف و غیرفعال‌سازی سرویس‌ها
+                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* gost@* 2>/dev/null || true
+                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* gost@* 2>/dev/null || true
+                
+                # حذف Unit فایل‌های سرویس‌ها
+                rm -f /etc/systemd/system/mgre.service \
+                      /etc/systemd/system/mxlan.service \
+                      /etc/systemd/system/mporter.service \
+                      /etc/systemd/system/mporter-watchdog.service \
+                      /etc/systemd/system/mweb.service \
+                      /etc/systemd/system/mhealer.service \
+                      /etc/systemd/system/mshield.service \
+                      /etc/systemd/system/mbackhaul@.service \
+                      /etc/systemd/system/mrathole@.service \
+                      /etc/systemd/system/mpaqet@.service \
+                      /etc/systemd/system/gost@.service 2>/dev/null || true
+                systemctl daemon-reload 2>/dev/null || true
+
+                # حذف تمام پوشه‌های کانفیگ
+                rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /etc/mhealer /etc/minterface /etc/mdiag /etc/linktest /etc/mbbr /root/mtunnel /tmp/custom-unzip.* 2>/dev/null || true
+
+                # حذف فایل‌های اجرایی اسکریپتی (شامل main و بدون mstat زائد)
+                rm -f /usr/bin/mtunnel /usr/bin/main /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
+
+                # حذف باینری‌ها و هسته‌های کامپایل‌شده
+                rm -f /usr/local/bin/rathole /usr/local/bin/bh /usr/local/bin/backhaul /usr/local/bin/paqet /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps /usr/local/bin/haproxy /usr/sbin/haproxy
+
+                kill "$WATCHER_PID" 2>/dev/null
+                echo -e "\n  ${G}✓ MTunnel ecosystem completely wiped from this system.${NC}\n"; exit 0
+            else
+                echo -e "\n  ${Y}● Wipe cancelled.${NC}"; sleep 1.5
             fi ;;
-        0) clear; exit 0 ;;
+
+        0) 
+            kill "$WATCHER_PID" 2>/dev/null
+            clear; exit 0 ;;
     esac
 done

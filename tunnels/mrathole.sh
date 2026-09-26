@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.0 ---
-# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Collision Check | Secret Editor]
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.2 ---
+# [Features: Full Uninstaller | Signal-Safe Menu | Universal Download | Port Collision Check | Secret Editor | Port Editor]
 
-MODULE_VERSION="3.5.1"
+MODULE_VERSION="3.5.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -16,6 +16,19 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
+
+ensure_dependencies() {
+    local missing=()
+    command -v crontab >/dev/null 2>&1 || missing+=("cron")
+    command -v curl >/dev/null 2>&1 || missing+=("curl")
+    if [ ${#missing[@]} -gt 0 ]; then
+        apt-get update -y -q >/dev/null 2>&1
+        apt-get install -y -q "${missing[@]}" >/dev/null 2>&1
+        systemctl enable cron >/dev/null 2>&1
+        systemctl start cron >/dev/null 2>&1
+    fi
+}
+ensure_dependencies
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
@@ -509,7 +522,7 @@ get_peer_ping() {
     fi
     
     if command -v ss >/dev/null 2>&1; then
-        local tcp_rtt=$(ss -nti | grep -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
+        local tcp_rtt=$(ss -nti 2>/dev/null | grep -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
         if [ -n "$tcp_rtt" ]; then
             local rounded_rtt=$(echo "$tcp_rtt" | awk '{print int($1+0.5)}')
             echo "${rounded_rtt}ms*"
@@ -791,15 +804,21 @@ manage_cron() {
         echo "systemctl restart mrathole@${t_name}" >> "$cron_script"
         chmod +x "$cron_script"
         
-        local cron_tmp="$SECURE_TMP/crontab.$$"
-        crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
-        echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
-        crontab "$cron_tmp"; rm -f "$cron_tmp"
-        echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
+        if command -v crontab >/dev/null 2>&1; then
+            local cron_tmp="$SECURE_TMP/crontab.$$"
+            crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
+            echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
+            crontab "$cron_tmp"; rm -f "$cron_tmp"
+            echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
+        else
+            echo -e "  ${R}✖ Crontab utility is missing on this system.${NC}"; sleep 2
+        fi
     elif [[ "$cr_opt" == "2" ]]; then
-        local cron_tmp="$SECURE_TMP/crontab.$$"
-        crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
-        crontab "$cron_tmp"; rm -f "$cron_tmp"
+        if command -v crontab >/dev/null 2>&1; then
+            local cron_tmp="$SECURE_TMP/crontab.$$"
+            crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
+            crontab "$cron_tmp"; rm -f "$cron_tmp"
+        fi
         rm -f "$cron_script"
         echo -e "  ${G}✔ Cronjob removed.${NC}"; sleep 1.5
     fi
@@ -829,9 +848,11 @@ uninstall_mrathole() {
     killall -9 rathole 2>/dev/null
 
     echo -e "  ${DIM}● [2/5] Purging scheduled auto-restart cronjobs...${NC}"
-    local cron_tmp="$SECURE_TMP/crontab.$$"
-    crontab -l 2>/dev/null | grep -v "mrathole@" > "$cron_tmp"
-    crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+    if command -v crontab >/dev/null 2>&1; then
+        local cron_tmp="$SECURE_TMP/crontab.$$"
+        crontab -l 2>/dev/null | grep -v "mrathole@" > "$cron_tmp"
+        crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+    fi
 
     echo -e "  ${DIM}● [3/5] Removing systemd unit templates...${NC}"
     rm -f /etc/systemd/system/mrathole@.service
@@ -889,21 +910,22 @@ render_mrathole_menu() {
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit TCP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit UDP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Auth Token (Secret)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Edit Tunnel Link Port${NC} ${DIM}(Connection Port)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -991,23 +1013,27 @@ EOF
                for d in "${tunnels[@]}"; do
                    t_name=$(basename "$d")
                    systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
-                   cron_tmp="$SECURE_TMP/crontab.$$"
-                   crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
-                   crontab "$cron_tmp"; rm -f "$cron_tmp"
+                   if command -v crontab >/dev/null 2>&1; then
+                       cron_tmp="$SECURE_TMP/crontab.$$"
+                       crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
+                       crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+                   fi
                    rm -rf "$d"
                done
                echo -e "  ${G}All Tunnels Purged!${NC}"; sleep 1.5
            elif [[ -n "${tunnels[$del_idx]}" ]]; then
                t_name=$(basename "${tunnels[$del_idx]}")
                systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
-               cron_tmp="$SECURE_TMP/crontab.$$"
-               crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
-               crontab "$cron_tmp"; rm -f "$cron_tmp"
+               if command -v crontab >/dev/null 2>&1; then
+                   cron_tmp="$SECURE_TMP/crontab.$$"
+                   crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
+                   crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+               fi
                rm -rf "${tunnels[$del_idx]}"
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
 
-        3|4|5|6|7|11|12)
+        3|4|5|6|7|8|12|13)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""
@@ -1048,8 +1074,27 @@ EOF
                fi
                TOKEN="$n_tok"
                echo -e "  ${G}✔ Auth Token updated.${NC}"
-               
+
            elif [[ "$opt" == "7" ]]; then
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Enter New Link Port [Current: ${Y}${LINK_PORT}${W}]: ${NC}"; read n_port
+                   n_port=$(echo "$n_port" | tr -dc '0-9')
+                   if [ -z "$n_port" ]; then
+                       echo -e "  ${Y}● No changes made.${NC}"; break
+                   fi
+                   if [ "$n_port" -lt 1 ] || [ "$n_port" -gt 65535 ]; then
+                       echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"; continue
+                   fi
+                   if [ "$n_port" != "$LINK_PORT" ] && ss -tuln 2>/dev/null | grep -qE ":${n_port}\s"; then
+                       echo -e "  ${R}Error: Port ${n_port} is already in use!${NC}"; continue
+                   fi
+                   LINK_PORT="$n_port"
+                   echo -e "  ${G}✔ Link Port updated to ${n_port}.${NC}"
+                   break
+               done
+               [ -z "$n_port" ] && continue
+               
+           elif [[ "$opt" == "8" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Tunnel Name (Current: ${Y}${t_name}${W}): ${NC}"; read new_name
                new_name=$(echo "$new_name" | tr -dc 'a-zA-Z0-9_-')
                if [ -n "$new_name" ]; then
@@ -1059,7 +1104,7 @@ EOF
                    
                    systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
                    
-                   if crontab -l 2>/dev/null | grep -q "mrathole@${t_name}"; then
+                   if command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -q "mrathole@${t_name}"; then
                        cron_tmp="$SECURE_TMP/crontab.$$"
                        crontab -l | grep -v "mrathole@${t_name}" > "$cron_tmp"
                        crontab "$cron_tmp"; rm -f "$cron_tmp"
@@ -1075,10 +1120,10 @@ EOF
                    echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
                fi
                
-           elif [[ "$opt" == "11" ]]; then
+           elif [[ "$opt" == "12" ]]; then
                manage_cron "$t_name"; continue
                
-           elif [[ "$opt" == "12" ]]; then
+           elif [[ "$opt" == "13" ]]; then
                true
            fi
            
@@ -1100,17 +1145,17 @@ EOF
            fi
            ;;
 
-        8) show_live_radar ;;
-        9) show_tunnel_registry ;;
-        10) 
+        9) show_live_radar ;;
+        10) show_tunnel_registry ;;
+        11) 
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            journalctl -u mrathole@$t_name -n 50 -f; continue
            ;;
            
-        13) menu_install_core ;;
-        14) self_update_module ;;
-        15) uninstall_mrathole ;;
+        14) menu_install_core ;;
+        15) self_update_module ;;
+        16) uninstall_mrathole ;;
         0) break ;;
     esac
 done

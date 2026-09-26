@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.5.2 ---
-# [Features: Smart Clean Install | Full Uninstaller | Signal-Safe Menu | UDP Switch | Port Guard | Port Editor]
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.5.3 ---
+# [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="2.5.2"
+MODULE_VERSION="2.5.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -39,6 +39,28 @@ is_valid_host() {
     local host=$1
     if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]] || [[ "$host" =~ ^([a-fA-F0-9:]+)$ ]]; then return 0; fi
     return 1
+}
+
+validate_bh_ports() {
+    local p_str="$1"
+    local check_listen="$2"
+    [ -z "$p_str" ] && return 1
+    
+    IFS=',' read -ra P_ARR <<< "$p_str"
+    for p_raw in "${P_ARR[@]}"; do
+        local p_bind=$(echo "$p_raw" | cut -d'=' -f1 | tr -dc '0-9')
+        if [ -z "$p_bind" ] || [ "$p_bind" -lt 1 ] || [ "$p_bind" -gt 65535 ]; then
+            echo -e "  ${R}Error: Port ${p_bind} is out of valid range (1-65535)!${NC}"
+            return 1
+        fi
+        if [ "$check_listen" == "1" ]; then
+            if ss -tuln 2>/dev/null | grep -qE ":${p_bind}\s"; then
+                echo -e "  ${R}Error: Port ${p_bind} is already in use by another service!${NC}"
+                return 1
+            fi
+        fi
+    done
+    return 0
 }
 
 MAIN_PID=$$
@@ -203,6 +225,10 @@ self_update_module() {
             rm -f "$tmp_file"
             echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
             sleep 1.5
+            
+            # رفع باگ ۱: متوقف‌کردن صریح پروسه پس‌زمینه قبل از exec برای جلوگیری از نشت پردازش
+            kill "$WATCHER_PID" 2>/dev/null
+            rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null
             exec "$INSTALL_PATH" "$@"
         else
             echo -e "  ${Y}● Update cancelled by user.${NC}"
@@ -790,7 +816,7 @@ draw_header() {
             local p_val=$(cat "$ping_cache" 2>/dev/null)
             if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
                 local p_int=$(echo "$p_val" | tr -dc '0-9')
-                if [ -z "$p_int" ]; then p_int=0; fi
+                [ -z "$p_int" ] && p_int=0
                 if [ "$p_int" -lt 90 ]; then g_color="${G}"
                 elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
                 else g_color="${R}"
@@ -820,9 +846,10 @@ draw_header() {
         g_color="${DIM}"; g_text="Waiting"
     fi
 
+    # رفع ایراد ۳: محاسبه دقیق طول متن خالص و پدینگ هدر
     local title=" MBackhaul Engine v${MODULE_VERSION} "
-    local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
-    local pad_len=$(( 126 - ${#full_str} ))
+    local plain_content=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
+    local pad_len=$(( 124 - ${#plain_content} ))
     [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
 
@@ -1197,14 +1224,11 @@ while true; do
                enable_udp=$(echo "$enable_udp" | tr -d '\r ')
                [[ "${enable_udp,,}" =~ ^(n|no)$ ]] && u_udp="false" || u_udp="true"
 
+               # رفع باگ ۲: اعتبارسنجی دقیق پورت‌های فوروارد سرور ایران
                while true; do
                    echo -ne "  ${C}●${NC} ${W}Forward Ports (e.g. 443=127.0.0.1:443): ${NC}"; read fwd_ports
                    fwd_ports=$(echo "$fwd_ports" | tr -d '\r')
-                   if [ -z "$fwd_ports" ]; then
-                       echo -e "  ${R}Error: IRAN Server MUST have at least one forwarded port!${NC}"
-                   else
-                       break
-                   fi
+                   validate_bh_ports "$fwd_ports" "1" && break
                done
            fi
            
@@ -1268,12 +1292,15 @@ while true; do
                
            elif [[ "$opt" == "4" ]]; then
                if [ "$ROLE" == "1" ]; then
-                   echo -ne "  ${C}●${NC} ${W}New Port Mappings (e.g. 443=127.0.0.1:443) [Current: ${PORTS:-None}]: ${NC}"; read n_ports
-                   n_ports=$(echo "$n_ports" | tr -d '\r')
-                   if [ -z "$n_ports" ]; then
-                       echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
-                   fi
-                   PORTS="$n_ports"
+                   while true; do
+                       echo -ne "  ${C}●${NC} ${W}New Port Mappings (e.g. 443=127.0.0.1:443) [Current: ${PORTS:-None}]: ${NC}"; read n_ports
+                       n_ports=$(echo "$n_ports" | tr -d '\r')
+                       if [ -z "$n_ports" ]; then
+                           echo -e "  ${Y}● No changes made.${NC}"; break
+                       fi
+                       validate_bh_ports "$n_ports" "1" && { PORTS="$n_ports"; break; }
+                   done
+                   [ -z "$n_ports" ] && continue
                else
                    echo -e "  ${Y}● Client role doesn't use port mappings.${NC}"; sleep 1.5; continue
                fi

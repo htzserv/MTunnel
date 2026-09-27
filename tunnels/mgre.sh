@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.7.8 ---
-# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Master Token Mesh | Advanced OTA]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.7.9 ---
+# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Integer Ping | Advanced OTA]
 
-MODULE_VERSION="5.7.8"
+MODULE_VERSION="5.7.9"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -120,7 +120,10 @@ check_ping_bg() {
         avg="---"
         if echo "$res" | grep -q "min/avg/max"; then
             avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            [ -n "$avg" ] && avg="${avg}ms"
+            if [ -n "$avg" ]; then
+                avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                avg="${avg}ms"
+            fi
         fi
         echo "${T_NAME}|${avg}|${loss}" >> "$SECURE_TMP/.mgre_stats_cache.tmp"
     done
@@ -647,7 +650,8 @@ show_mgre_monitor() {
         ping_res=$(timeout 2 ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         if echo "$ping_res" | grep -q "time="; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
-            lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+            lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
+            lat_raw="${lat_int}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
@@ -659,7 +663,8 @@ show_mgre_monitor() {
             ping_res=$(timeout 2 ping -c 1 -W 1 "$tip" 2>/dev/null)
             if echo "$ping_res" | grep -q "time="; then
                 lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
-                lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+                lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
+                lat_raw="${lat_int}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
             printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
@@ -914,7 +919,8 @@ while true; do
                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
                    if echo "$ping_res" | grep -q "time="; then
                        lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
+                       lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
+                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat_int}ms${NC}"
                    else
                        echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
                    fi

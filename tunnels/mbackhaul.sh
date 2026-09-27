@@ -2,7 +2,7 @@
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v2.6.1 ---
 # [Features: Tri-Tunnel Dynamic Header | Zero-Lag Stats Cache | Full Deployment Wizard | Zero ANSI Leaks]
 
-MODULE_VERSION="2.6.1"
+MODULE_VERSION="2.6.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbackhaul"
@@ -84,10 +84,12 @@ read_with_refresh() {
     while true; do
         if [ "$NEED_REFRESH" = true ]; then
             NEED_REFRESH=false
-            if [ -n "$redraw_func" ]; then
-                "$redraw_func"
+            if [ -z "$buffer" ]; then
+                if [ -n "$redraw_func" ]; then
+                    "$redraw_func"
+                fi
+                echo -ne "$prompt$buffer"
             fi
-            echo -ne "$prompt$buffer"
         fi
 
         IFS= read -rsn1 -t 0.3 char

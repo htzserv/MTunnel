@@ -2,7 +2,7 @@
 # --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.2.0 ---
 # [Features: Tri-Tunnel Dynamic Header | Zero-Lag Stats Cache | Full Deployment Wizard | Zero ANSI Leaks]
 
-MODULE_VERSION="8.2.0"
+MODULE_VERSION="8.2.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -48,10 +48,12 @@ read_with_refresh() {
     while true; do
         if [ "$NEED_REFRESH" = true ]; then
             NEED_REFRESH=false
-            if [ -n "$redraw_func" ]; then
-                "$redraw_func"
+            if [ -z "$buffer" ]; then
+                if [ -n "$redraw_func" ]; then
+                    "$redraw_func"
+                fi
+                echo -ne "$prompt$buffer"
             fi
-            echo -ne "$prompt$buffer"
         fi
 
         IFS= read -rsn1 -t 0.3 char
@@ -866,7 +868,7 @@ show_live_radar() {
 
 select_tunnel() {
     local configs=("$CONF_DIR"/*.yaml)
-    [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
+    [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; }
     
     echo -e "\n  ${B}╭────────────────── Select Target Tunnel ────────────────────╮${NC}"
     local i

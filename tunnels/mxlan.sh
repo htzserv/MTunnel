@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.5.6 ---
-# [Features: Refined Spacing | Async Background Checker | Minimal Badges]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.7.1 ---
+# [Features: Pure Suffix Display | Clean Details Page | Pixel-Aligned Header]
 
-MODULE_VERSION="1.6.5"
+MODULE_VERSION="1.7.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -11,7 +11,6 @@ SERVICE_FILE="/etc/systemd/system/mxlan.service"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-# 1. Block Path Conflicts Automatically
 [ -f "/usr/local/bin/mxlan" ] && rm -f "/usr/local/bin/mxlan" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
@@ -22,20 +21,12 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
-is_valid_host() {
-    local host=$1
-    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]]; then return 0; fi
-    return 1
-}
-
 MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-# فاصله‌ی چک خودکار آپدیت در پس‌زمینه (ثانیه) - پیشنهاد حداقل 20-30 ثانیه
 UPDATE_CHECK_INTERVAL=30
 
-# --- Character-by-character read که رفرش زنده رو بدون پاک شدن تایپ کاربر مدیریت می‌کنه ---
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -81,7 +72,6 @@ read_with_refresh() {
     eval "$__resultvar=\"\$buffer\""
 }
 
-# --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mxlan.sh${cb}"
@@ -107,41 +97,35 @@ update_watcher_loop() {
 }
 update_watcher_loop &
 WATCHER_PID=$!
-# ---------------------------------------
 
-# --- LIVE PING (Header) | Async Background Checker | Refresh every 5s ---
 PING_CHECK_INTERVAL=5
 check_ping_bg() {
-    local total_lat="0" lat_count="0"
-    local total_loss="0" loss_count="0"
+    local count=0
+    > "$SECURE_TMP/.mxlan_stats_cache.tmp"
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; VX_NAME=""; CORE_SUBNET=""; VNI_ID=""; source "$conf" 2>/dev/null
         [ -z "$VX_NAME" ] && continue
-        ip link show "$VX_NAME" >/dev/null 2>&1 || continue
+        
+        ((count++))
+        [ "$count" -gt 3 ] && break
+
         local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
-        local res=$(timeout 6 ping -c 10 -i 0.2 -W 1 "$tip" 2>/dev/null)
+        local res=$(timeout 2 ping -c 3 -i 0.2 -W 1 "$tip" 2>/dev/null)
         local loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)')
-        if [ -n "$loss" ]; then
-            total_loss=$((total_loss + loss))
-            loss_count=$((loss_count + 1))
-        fi
+        [ -z "$loss" ] && loss="100"
+        
+        local avg="---"
         if echo "$res" | grep -q "min/avg/max"; then
-            local avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            if [ -n "$avg" ]; then
-                total_lat=$(awk "BEGIN{print $total_lat + $avg}")
-                lat_count=$((lat_count + 1))
-            fi
+            avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
+            [ -n "$avg" ] && avg="${avg}ms"
         fi
+        echo "${VX_NAME}|${avg}|${loss}" >> "$SECURE_TMP/.mxlan_stats_cache.tmp"
     done
-
-    local out_lat="N/A" out_loss="N/A"
-    [ "$lat_count" -gt 0 ] && out_lat=$(awk "BEGIN{printf \"%.1fms\", $total_lat/$lat_count}")
-    [ "$loss_count" -gt 0 ] && out_loss=$(awk "BEGIN{printf \"%.0f\", $total_loss/$loss_count}")
-
-    echo "${out_lat}|${out_loss}" > "$SECURE_TMP/.mxlan_live_ping" 2>/dev/null
+    mv -f "$SECURE_TMP/.mxlan_stats_cache.tmp" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null
 }
+
 ping_watcher_loop() {
     while true; do
         check_ping_bg
@@ -151,14 +135,12 @@ ping_watcher_loop() {
 }
 ping_watcher_loop &
 PING_WATCHER_PID=$!
-# -------------------------------------------------------------------------
 
 trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
 
 self_update_module() {
     local rel_path="tunnels/mxlan.sh"
     local cb="?t=$(date +%s)"
-    
     local remote_v="Unknown"
     [ -f "$SECURE_TMP/.mxlan_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mxlan_remote_ver" | tr -d '\r\n ')
 
@@ -250,6 +232,38 @@ get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+get_pure_vx_name() {
+    local full_name="$1"
+    local pure="${full_name#vx_}"
+    echo "${pure:-$full_name}"
+}
+
+get_iface_uptime() {
+    local iface="$1"
+    if [ ! -d "/sys/class/net/$iface" ] || [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" == "down" ]; then
+        echo "DOWN"
+        return
+    fi
+    local sys_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    local if_sec=$(ip -s -d link show "$iface" 2>/dev/null | grep -oP 'trans_start \K[0-9]+')
+    local delta=0
+    if [ -n "$if_sec" ] && [ "$if_sec" -gt 0 ]; then
+        delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
+        [ "$delta" -lt 0 ] && delta=0
+    else
+        local created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
+        local now=$(date +%s)
+        delta=$(( now - created ))
+        [ "$delta" -lt 0 ] && delta=0
+    fi
+    local d=$(( delta / 86400 ))
+    local h=$(( (delta % 86400) / 3600 ))
+    local m=$(( (delta % 3600) / 60 ))
+    if [ "$d" -gt 0 ]; then printf "%dd %02dh" "$d" "$h"
+    elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
+    else printf "%dm" "$m"; fi
 }
 
 merge_ports() {
@@ -407,54 +421,218 @@ apply_fabric() {
 
 apply_all_fabrics() { for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_fabric "$conf"; done; }
 
-draw_mxlan_header() {
-    local s_ip=$(get_local_ip); local active_fabrics=0; local total_vips=0
-    for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; LB_MODE="0"; source "$conf" 2>/dev/null
-        if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" != "down" ]; then ((active_fabrics++)); fi
-        total_vips=$((total_vips + MAX_IPS))
+select_fabric_interactive() {
+    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
+    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return 1; fi
+    echo -e "\n  ${B}╭────────────────── Select Target Fabric ───────────────────╮${NC}"
+    for i in "${!configs[@]}"; do
+        local conf_name=$(basename "${configs[$i]}" .conf)
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
     done
-    
-    local ip_fwd=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)
-    local fwd_val=$([ "$ip_fwd" == "1" ] && echo "ON" || echo "OFF")
-    local fwd_color="${R}"; [ "$ip_fwd" == "1" ] && fwd_color="${G}"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo -ne "  ${C}●${NC} ${W}Select Fabric Index or 'q': ${NC}"; read t_idx
+    [[ "$t_idx" == "q" || -z "$t_idx" || -z "${configs[$t_idx]}" ]] && return 1
+    SELECTED_CONF="${configs[$t_idx]}"
+    return 0
+}
 
-    local live_ping="N/A" live_loss="N/A"
-    if [ -f "$SECURE_TMP/.mxlan_live_ping" ]; then
-        local cache_val=$(cat "$SECURE_TMP/.mxlan_live_ping" 2>/dev/null)
-        if [[ "$cache_val" == *"|"* ]]; then
-            live_ping="${cache_val%%|*}"
-            live_loss="${cache_val##*|}"
+action_edit_public_ips() {
+    select_fabric_interactive || return
+    source "$SELECTED_CONF" 2>/dev/null
+    echo -e "\n  ${DIM}┌─[ EDIT PUBLIC IPs: ${W}${VX_NAME}${DIM} ]${NC}"
+    echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Enter to Skip): ${NC}"; read new_local
+    echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Enter to Skip): ${NC}"; read new_remote
+    new_local=$(echo "$new_local" | tr -dc '0-9.')
+    new_remote=$(echo "$new_remote" | tr -dc '0-9.')
+    [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$SELECTED_CONF"
+    [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$SELECTED_CONF"
+    apply_fabric "$SELECTED_CONF"
+    echo -e "  ${G}● Public IPs updated and applied.${NC}"; sleep 1.5
+}
+
+action_edit_vni() {
+    select_fabric_interactive || return
+    source "$SELECTED_CONF" 2>/dev/null
+    echo -e "\n  ${DIM}┌─[ EDIT VNI NETWORK ID: ${W}${VX_NAME}${DIM} ]${NC}"
+    echo -ne "  ${C}●${NC} ${W}New VNI ID (1-16777215) [Enter to Skip]: ${NC}"; read new_vni
+    new_vni=$(echo "$new_vni" | tr -dc '0-9')
+    if [ -n "$new_vni" ]; then
+        if grep -q "VNI_ID=$new_vni$" "$CONF_DIR"/*.conf 2>/dev/null; then
+            echo -e "  ${R}✖ VNI [${new_vni}] is already in use!${NC}"; sleep 1.5; return
         fi
+        local hash_c=$(echo -n "vni_${new_vni}" | sha256sum)
+        local class_selector=$(( new_vni % 3 ))
+        if [ "$class_selector" == "1" ]; then local c1="10"; local c2=$(( (0x${hash_c:2:2} % 254) + 1 )); local c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+        elif [ "$class_selector" == "2" ]; then local c1="172"; local c2=$(( (0x${hash_c:2:2} % 16) + 16 )); local c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
+        else local c1="192"; local c2="168"; local c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
+        local new_core_sub="${c1}.${c2}.${c3}"
+        sed -i "s/^VNI_ID=.*/VNI_ID=$new_vni/" "$SELECTED_CONF"
+        sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$SELECTED_CONF"
+        apply_fabric "$SELECTED_CONF"
+        echo -e "  ${G}● VNI updated. Subnet: ${new_core_sub}.x${NC}"; sleep 1.5
     fi
-    [ -z "$live_ping" ] && live_ping="N/A"
-    [ -z "$live_loss" ] && live_loss="N/A"
-    local ping_color="${DIM}"; [ "$live_ping" != "N/A" ] && ping_color="${G}"
-    local loss_color="${DIM}"; local loss_disp="N/A"
-    if [ "$live_loss" != "N/A" ]; then
-        loss_disp="${live_loss}%"
-        if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_color="${G}"
-        elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_color="${Y}"
-        else loss_color="${R}"; fi
+}
+
+action_edit_core_subnet() {
+    select_fabric_interactive || return
+    source "$SELECTED_CONF" 2>/dev/null
+    echo -e "\n  ${DIM}┌─[ EDIT CORE SUBNET: ${W}${VX_NAME}${DIM} ]${NC}"
+    echo -ne "  ${C}●${NC} ${W}New Core Subnet Base [${Y}${CORE_SUBNET}${W}] (e.g. 10.88.5): ${NC}"; read new_sub
+    new_sub=$(echo "$new_sub" | tr -dc '0-9.')
+    if [ -n "$new_sub" ]; then
+        sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$SELECTED_CONF"
+        apply_fabric "$SELECTED_CONF"
+        echo -e "  ${G}● Core subnet updated.${NC}"; sleep 1.5
     fi
+}
+
+action_edit_port_forward() {
+    select_fabric_interactive || return
+    source "$SELECTED_CONF" 2>/dev/null
+    if [ "$TYPE" != "1" ]; then echo -e "  ${Y}● Port forwarding is only available on IRAN nodes.${NC}"; sleep 1.5; return; fi
     
+    while true; do
+        echo -e "\n  ${DIM}┌─[ PORT FORWARDING & LOAD BALANCER: ${W}${VX_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo "${G}ON${NC}" || echo "${DIM}OFF${NC}")"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back to Main Menu${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"; read pf_opt
+
+        case $pf_opt in
+            1)
+                echo -ne "  ${C}●${NC} ${W}Add TCP Ports: ${NC}"; read add_tcp
+                echo -ne "  ${C}●${NC} ${W}Add UDP Ports: ${NC}"; read add_udp
+                add_tcp=$(echo "$add_tcp" | tr -dc '0-9,'); add_udp=$(echo "$add_udp" | tr -dc '0-9,')
+                local m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp"); local m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
+                grep -v "^FWD_TCP=" "$SELECTED_CONF" | grep -v "^FWD_UDP=" > "${SELECTED_CONF}.tmp"
+                echo "FWD_TCP=$m_tcp" >> "${SELECTED_CONF}.tmp"; echo "FWD_UDP=$m_udp" >> "${SELECTED_CONF}.tmp"
+                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"; FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                apply_fabric "$SELECTED_CONF"; echo -e "  ${G}● Ports added.${NC}"; sleep 1.5 ;;
+            2)
+                echo -ne "  ${C}●${NC} ${W}Remove TCP Ports: ${NC}"; read rm_tcp
+                echo -ne "  ${C}●${NC} ${W}Remove UDP Ports: ${NC}"; read rm_udp
+                rm_tcp=$(echo "$rm_tcp" | tr -dc '0-9,'); rm_udp=$(echo "$rm_udp" | tr -dc '0-9,')
+                local m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp"); local m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
+                grep -v "^FWD_TCP=" "$SELECTED_CONF" | grep -v "^FWD_UDP=" > "${SELECTED_CONF}.tmp"
+                echo "FWD_TCP=$m_tcp" >> "${SELECTED_CONF}.tmp"; echo "FWD_UDP=$m_udp" >> "${SELECTED_CONF}.tmp"
+                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"; FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                apply_fabric "$SELECTED_CONF"; echo -e "  ${G}● Ports removed.${NC}"; sleep 1.5 ;;
+            3)
+                echo -ne "  ${C}●${NC} ${W}New TCP Ports: ${NC}"; read new_tcp
+                echo -ne "  ${C}●${NC} ${W}New UDP Ports: ${NC}"; read new_udp
+                new_tcp=$(echo "$new_tcp" | tr -dc '0-9,'); new_udp=$(echo "$new_udp" | tr -dc '0-9,')
+                grep -v "^FWD_TCP=" "$SELECTED_CONF" | grep -v "^FWD_UDP=" > "${SELECTED_CONF}.tmp"
+                echo "FWD_TCP=$new_tcp" >> "${SELECTED_CONF}.tmp"; echo "FWD_UDP=$new_udp" >> "${SELECTED_CONF}.tmp"
+                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"; FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
+                apply_fabric "$SELECTED_CONF"; echo -e "  ${G}● Ports replaced.${NC}"; sleep 1.5 ;;
+            4)
+                local new_lb="1"; [ "$LB_MODE" == "1" ] && new_lb="0"
+                sed -i "s/^LB_MODE=.*/LB_MODE=$new_lb/" "$SELECTED_CONF"; LB_MODE="$new_lb"
+                apply_fabric "$SELECTED_CONF"; echo -e "  ${G}● Load Balancer toggled.${NC}"; sleep 1.5 ;;
+            0) break ;;
+        esac
+    done
+}
+
+action_rename_interface() {
+    select_fabric_interactive || return
+    source "$SELECTED_CONF" 2>/dev/null
+    echo -e "\n  ${DIM}┌─[ RENAME FABRIC: ${W}${VX_NAME}${DIM} ]${NC}"
+    echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}${VX_NAME#vx_}${W}, Max 4-5 chars): ${NC}"; read new_suffix
+    new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
+    if [ -n "$new_suffix" ]; then
+        local new_vx_name="vx_${new_suffix}"
+        local new_br_name="br_${new_suffix}"
+        
+        if [ -f "$CONF_DIR/${new_vx_name}.conf" ]; then echo -e "  ${R}● Error: Fabric already exists!${NC}"; sleep 1.5; return; fi
+        
+        clean_fwd_rules "$VX_NAME"
+        ip link del "$VX_NAME" >/dev/null 2>&1
+        ip link del "$BR_NAME" >/dev/null 2>&1
+        
+        sed -i "s/^VX_NAME=.*/VX_NAME=$new_vx_name/" "$SELECTED_CONF"
+        sed -i "s/^BR_NAME=.*/BR_NAME=$new_br_name/" "$SELECTED_CONF"
+        mv "$SELECTED_CONF" "$CONF_DIR/${new_vx_name}.conf"
+        apply_fabric "$CONF_DIR/${new_vx_name}.conf"
+        echo -e "  ${G}● Fabric renamed to: ${new_vx_name}${NC}"; sleep 1.5
+    fi
+}
+
+draw_mxlan_header() {
+    local s_ip=$(get_local_ip)
+    local active_fabrics=0
+    for conf in "$CONF_DIR"/*.conf; do
+        [ ! -f "$conf" ] && continue
+        VX_NAME=""; source "$conf" 2>/dev/null
+        if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" != "down" ]; then
+            ((active_fabrics++))
+        fi
+    done
+
     clear; echo ""
-    local str1=" MXLAN Layer-2 Edge v${MODULE_VERSION} "
-    local str2=" IP: $s_ip "
-    local str3=" FABRICS: $active_fabrics "
-    local str4=" V-IPS: $total_vips "
-    local str5=" FWD: $fwd_val "
-    local str6=" PING: $live_ping "
-    local str7=" LOSS: $loss_disp "
-    
-    local raw_len=$(( ${#str1} + 1 + ${#str2} + 1 + ${#str3} + 1 + ${#str4} + 1 + ${#str5} + 1 + ${#str6} + 1 + ${#str7} ))
-    local box_width=$raw_len
-    [ "$box_width" -lt 92 ] && box_width=92
-    local pad_len=$(( box_width - raw_len )); local padding=$(printf '%*s' "$pad_len" "")
-    local border=$(printf '─%.0s' $(seq 1 "$box_width"))
-    
+    local border="────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC}${W} ${s_ip} ${NC}${B}│${NC}${DIM} FABRICS:${NC}${M} ${active_fabrics} ${NC}${B}│${NC}${DIM} V-IPS:${NC}${Y} ${total_vips} ${NC}${B}│${NC}${DIM} FWD:${NC}${fwd_color} ${fwd_val} ${NC}${B}│${NC}${DIM} PING:${NC}${ping_color} ${live_ping} ${NC}${B}│${NC}${DIM} LOSS:${NC}${loss_color} ${loss_disp} ${NC}${padding}${B}│${NC}"
+    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
+        "MXLAN Layer-2 Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics"
+    echo -e "  ${B}├${border}┤${NC}"
+
+    local shown=0
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
+        [ -z "$VX_NAME" ] && continue
+        ((shown++))
+        [ "$shown" -gt 3 ] && break
+
+        local pure_name=$(get_pure_vx_name "$VX_NAME")
+        [ ${#pure_name} -gt 5 ] && pure_name="${pure_name:0:5}"
+
+        local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
+        local main_vip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
+        local extra_vip=""
+        [ "$MAX_IPS" -gt 0 ] 2>/dev/null && extra_vip="(+${MAX_IPS})"
+        local disp_v="${main_vip}${extra_vip}"
+
+        local live_ping="---" live_loss="---"
+        if [ -f "$SECURE_TMP/.mxlan_stats_cache" ]; then
+            local cached_entry=$(grep "^${VX_NAME}|" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null | head -n1)
+            if [ -n "$cached_entry" ]; then
+                live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
+                live_loss="$(echo "$cached_entry" | cut -d'|' -f3)%"
+            fi
+        fi
+
+        local fwd_str="OFF"
+        if [ "$TYPE" == "1" ]; then
+            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
+            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:5}"
+            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:5}"
+            fi
+        else
+            fwd_str="GATEWAY"
+        fi
+
+        local if_uptime=$(get_iface_uptime "$VX_NAME")
+        local stat_icon="●"; local stat_col="${G}"
+        if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+
+        local fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
+        local loss_col="${G}"; [[ "$live_loss" != "0%" && "$live_loss" != "---" ]] && loss_col="${R}"
+
+        printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${C}%-14s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-7s${NC} %b%-4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-7s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-7s%b ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$disp_v" "$live_ping" "$loss_col" "$live_loss" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
+    done
+
+    if [ "$shown" -eq 0 ]; then
+        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active fabrics configured on this host."
+    fi
     echo -e "  ${B}╰${border}╯${NC}"
 }
 
@@ -517,6 +695,7 @@ show_mxlan_monitor() {
 }
 
 show_fabric_details() {
+    clear
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return; fi
 
@@ -527,7 +706,6 @@ show_fabric_details() {
         local lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         local tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         local t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
-        local s_key="${SYNC_KEY:-[ NOT SET ]}"
         
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         local left_p="▼ Fabric: $VX_NAME"; local right_p="Role: $t_role"
@@ -565,177 +743,6 @@ show_fabric_details() {
     echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
-edit_fabric() {
-    local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-    if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return; fi
-    
-    echo -e "\n  ${B}╭────────────────── Select Fabric to Edit ───────────────────╮${NC}"
-    for i in "${!configs[@]}"; do
-        local conf_name=$(basename "${configs[$i]}" .conf)
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$conf_name"
-    done
-    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-    echo -ne "  ${C}●${NC} ${W}Select Fabric Index or 'q': ${NC}"; read t_idx
-    [[ "$t_idx" == "q" || -z "$t_idx" ]] && return
-    
-    if [[ -n "${configs[$t_idx]}" ]]; then
-        local sel_conf="${configs[$t_idx]}"; TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$sel_conf" 2>/dev/null
-        
-        echo -e "\n  ${DIM}┌─[ ADVANCED EDIT: ${W}${VX_NAME}${DIM} ]${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Edit VNI Network ID (Current: ${VNI_ID})${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Edit Core Subnet (Current: ${CORE_SUBNET}.x)${NC}"
-        if [ "$TYPE" == "1" ]; then
-            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Port Forwarding & Load Balancer${NC}"
-        fi
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Rename Fabric Interface (Current: ${VX_NAME})${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-        echo -ne "  ${C}Select ❯❯ ${NC}"; read e_opt
-
-        case $e_opt in
-            1)
-                echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}] (Enter to Skip): ${NC}"; read new_local
-                echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}] (Enter to Skip): ${NC}"; read new_remote
-                
-                new_local=$(echo "$new_local" | tr -dc '0-9.')
-                new_remote=$(echo "$new_remote" | tr -dc '0-9.')
-                
-                [ -n "$new_local" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_local/" "$sel_conf"
-                [ -n "$new_remote" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_remote/" "$sel_conf"
-                ;;
-            2)
-                echo -ne "  ${C}●${NC} ${W}New VNI ID (1-16777215) [Enter to Skip]: ${NC}"; read new_vni
-                new_vni=$(echo "$new_vni" | tr -dc '0-9')
-                if [ -n "$new_vni" ]; then
-                    if grep -q "VNI_ID=$new_vni$" "$CONF_DIR"/*.conf 2>/dev/null; then
-                        echo -e "  ${R}✖ VNI [${new_vni}] is already in use!${NC}"; sleep 1.5; return
-                    fi
-                    
-                    local hash_c=$(echo -n "vni_${new_vni}" | sha256sum)
-                    local class_selector=$(( new_vni % 3 ))
-                    
-                    if [ "$class_selector" == "1" ]; then local c1="10"; local c2=$(( (0x${hash_c:2:2} % 254) + 1 )); local c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-                    elif [ "$class_selector" == "2" ]; then local c1="172"; local c2=$(( (0x${hash_c:2:2} % 16) + 16 )); local c3=$(( (0x${hash_c:4:2} % 254) + 1 ))
-                    else local c1="192"; local c2="168"; local c3=$(( (0x${hash_c:4:2} % 254) + 1 )); fi
-                    
-                    local new_core_sub="${c1}.${c2}.${c3}"
-                    
-                    sed -i "s/^VNI_ID=.*/VNI_ID=$new_vni/" "$sel_conf"
-                    sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$sel_conf"
-                    echo -e "  ${G}● VNI updated. Subnet automatically changed to ${new_core_sub}.x${NC}"
-                fi
-                ;;
-            3)
-                echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.88.5) [Enter to Skip]: ${NC}"; read new_sub
-                new_sub=$(echo "$new_sub" | tr -dc '0-9.')
-                if [ -n "$new_sub" ]; then
-                    sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$sel_conf"
-                fi
-                ;;
-            4)
-                if [ "$TYPE" != "1" ]; then return; fi
-                while true; do
-                    echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
-                    echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
-                    echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
-                    echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo "${G}ON${NC}" || echo "${DIM}OFF${NC}")"
-                    echo -e "  ${DIM}│${NC}"
-                    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
-                    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
-                    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
-                    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer${NC}"
-                    echo -e "  ${DIM}│${NC}"
-                    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
-                    echo -ne "  ${C}Select ❯❯ ${NC}"; read pf_opt
-
-                    case $pf_opt in
-                        1)
-                            echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read add_tcp
-                            echo -ne "  ${C}●${NC} ${W}Add UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read add_udp
-                            add_tcp=$(echo "$add_tcp" | tr -dc '0-9,')
-                            add_udp=$(echo "$add_udp" | tr -dc '0-9,')
-                            local m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp")
-                            local m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
-                            grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" > "${sel_conf}.tmp"
-                            echo "FWD_TCP=$m_tcp" >> "${sel_conf}.tmp"
-                            echo "FWD_UDP=$m_udp" >> "${sel_conf}.tmp"
-                            mv "${sel_conf}.tmp" "$sel_conf"
-                            FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
-                            apply_fabric "$sel_conf"
-                            echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
-                            ;;
-                        2)
-                            echo -ne "  ${C}●${NC} ${W}Remove TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read rm_tcp
-                            echo -ne "  ${C}●${NC} ${W}Remove UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read rm_udp
-                            rm_tcp=$(echo "$rm_tcp" | tr -dc '0-9,')
-                            rm_udp=$(echo "$rm_udp" | tr -dc '0-9,')
-                            local m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp")
-                            local m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
-                            grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" > "${sel_conf}.tmp"
-                            echo "FWD_TCP=$m_tcp" >> "${sel_conf}.tmp"
-                            echo "FWD_UDP=$m_udp" >> "${sel_conf}.tmp"
-                            mv "${sel_conf}.tmp" "$sel_conf"
-                            FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
-                            apply_fabric "$sel_conf"
-                            echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
-                            ;;
-                        3)
-                            echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read new_tcp
-                            echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read new_udp
-                            new_tcp=$(echo "$new_tcp" | tr -dc '0-9,')
-                            new_udp=$(echo "$new_udp" | tr -dc '0-9,')
-                            grep -v "^FWD_TCP=" "$sel_conf" | grep -v "^FWD_UDP=" > "${sel_conf}.tmp"
-                            echo "FWD_TCP=$new_tcp" >> "${sel_conf}.tmp"
-                            echo "FWD_UDP=$new_udp" >> "${sel_conf}.tmp"
-                            mv "${sel_conf}.tmp" "$sel_conf"
-                            FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
-                            apply_fabric "$sel_conf"
-                            echo -e "  ${G}● Ports replaced. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
-                            ;;
-                        4)
-                            local new_lb="1"; [ "$LB_MODE" == "1" ] && new_lb="0"
-                            sed -i "s/^LB_MODE=.*/LB_MODE=$new_lb/" "$sel_conf"
-                            LB_MODE="$new_lb"
-                            apply_fabric "$sel_conf"
-                            echo -e "  ${G}● Load Balancer set to $([ "$new_lb" == "1" ] && echo ON || echo OFF).${NC}"; sleep 1.5
-                            ;;
-                        0) break ;;
-                    esac
-                done
-                return
-                ;;
-            5)
-                echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}${VX_NAME#vx_}${W}, Max 4-5 chars): ${NC}"; read new_suffix
-                new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
-                if [ -n "$new_suffix" ]; then
-                    local new_vx_name="vx_${new_suffix}"
-                    local new_br_name="br_${new_suffix}"
-                    
-                    if [ -f "$CONF_DIR/${new_vx_name}.conf" ]; then echo -e "  ${R}● Error: Fabric [${new_vx_name}] already exists!${NC}"; sleep 1.5; return; fi
-                    
-                    clean_fwd_rules "$VX_NAME"
-                    ip link del "$VX_NAME" >/dev/null 2>&1
-                    ip link del "$BR_NAME" >/dev/null 2>&1
-                    
-                    sed -i "s/^VX_NAME=.*/VX_NAME=$new_vx_name/" "$sel_conf"
-                    sed -i "s/^BR_NAME=.*/BR_NAME=$new_br_name/" "$sel_conf"
-                    mv "$sel_conf" "$CONF_DIR/${new_vx_name}.conf"
-                    sel_conf="$CONF_DIR/${new_vx_name}.conf"
-                    VX_NAME="$new_vx_name"
-                    BR_NAME="$new_br_name"
-                    echo -e "  ${G}● Fabric successfully renamed to: ${new_vx_name}${NC}"
-                fi
-                ;;
-            *) return ;;
-        esac
-
-        apply_fabric "$sel_conf"
-        echo -e "  ${G}● Fabric [${VX_NAME}] updated and applied successfully!${NC}"; sleep 1.5
-    fi
-}
-
 setup_service() {
     cat <<EOF > "$SERVICE_FILE"
 [Unit]
@@ -763,27 +770,30 @@ render_mxlan_menu() {
     fi
 
     draw_mxlan_header
-    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "\n  ${DIM}┌─[ PROVISION & MANAGE ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (VNI Mesh)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Advanced Edit Fabric (IPs / VNI / NAT / Rename)${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}├─[ FLAT CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}View Fabric Configurations & Details${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit VNI Network ID${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Override Core Subnet Base${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Rename Fabric Interface${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}├─[ MONITORING & SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Live Detailed Monitor (Full Screen)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}View Fabric Config Registry${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Hub${NC}\n"
 }
+
+[ ! -f "$SERVICE_FILE" ] && setup_service
 
 while true; do
     render_mxlan_menu
@@ -851,71 +861,7 @@ while true; do
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
                echo -e "  ${G}● Fabric [${vx_name}] deployed (Subnet: ${core_sub}.x)${NC}"
-               
-               remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
-               
-               echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read run_initial_ping
-               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
-                   echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
-                   echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
-                   ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
-                   if echo "$ping_res" | grep -q "time="; then
-                       lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Latency: ${Y}${lat}ms${NC}"
-                   else
-                       echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Host Unreachable."
-                   fi
-               fi
-               
-               echo -ne "\n  ${C}●${NC} ${W}Setup Virtual IPs now? (y/n): ${NC}"; read setup_vip
-               setup_vip=$(echo "$setup_vip" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$setup_vip" == "y" || "$setup_vip" == "yes" ]]; then
-                   while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ "$n" == "q" ]] && break; [[ -n "$n" ]] && break; done
-                   if [[ "$n" != "q" ]]; then
-                       while true; do 
-                           echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; [[ "$k" == "q" ]] && break
-                           k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break
-                       done
-                       if [[ "$k" != "q" ]]; then
-                           sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$conf_path"
-                           sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$conf_path"
-                           apply_fabric "$conf_path"
-                           echo -e "  ${G}● Virtual IPs applied.${NC}"
-                       fi
-                   fi
-               fi
-
-               if [ "$s_type" == "1" ]; then
-                   echo -ne "\n  ${C}●${NC} ${W}Setup Port Forwarding? (y/n): ${NC}"; read setup_pf
-                   setup_pf=$(echo "$setup_pf" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                   if [[ "$setup_pf" == "y" || "$setup_pf" == "yes" ]]; then
-                       echo -ne "  ${C}●${NC} ${Y}NAT TCP Ports: ${NC}"; read fwd_tcp
-                       echo -ne "  ${C}●${NC} ${C}NAT UDP Ports: ${NC}"; read fwd_udp
-                       fwd_tcp=$(echo "$fwd_tcp" | tr -dc '0-9,')
-                       fwd_udp=$(echo "$fwd_udp" | tr -dc '0-9,')
-                       
-                       local run_lb="0"
-                       if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
-                           echo -ne "  ${C}●${NC} ${W}Load Balance across all Virtual IPs? (y/n): ${NC}"; read ask_lb
-                           ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                           [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]] && run_lb="1"
-                       fi
-                       
-                       grep -v "^FWD_TCP=" "$conf_path" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${conf_path}.tmp"
-                       echo "FWD_TCP=$fwd_tcp" >> "${conf_path}.tmp"
-                       echo "FWD_UDP=$fwd_udp" >> "${conf_path}.tmp"
-                       echo "LB_MODE=$run_lb" >> "${conf_path}.tmp"
-                       mv "${conf_path}.tmp" "$conf_path"
-                       
-                       apply_fabric "$conf_path"
-                       echo -e "  ${G}● Port Forwarding applied.${NC}"
-                   fi
-               fi
-               
-               sleep 2
-           else
-               echo -e "\n  ${R}● FATAL ERROR: Creation rejected!${NC}"; rm -f "$conf_path"; sleep 3.5
+               sleep 1.5
            fi ;;
         2)
            configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
@@ -950,38 +896,33 @@ while true; do
                echo -e "  ${G}● Fabric [${VX_NAME}] destroyed.${NC}"; sleep 1.5
            fi ;;
         3)
-           configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
-           [ ${#configs[@]} -eq 0 ] && echo -e "\n  ${R}● No fabrics configured yet!${NC}" && sleep 1.5 && continue
-           echo -e "\n  ${B}╭────────────────── Select Fabric for vIPs ──────────────────╮${NC}"
-           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+           select_fabric_interactive || continue
+           source "$SELECTED_CONF" 2>/dev/null
+           echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+           while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
+           [[ "$vip_action" == "q" ]] && continue
            
-           while true; do echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx; [[ "$t_idx" == "q" ]] && break 2; [[ -n "$t_idx" ]] && break; done
-           
-           if [[ -n "${configs[$t_idx]}" ]]; then
-               sel_conf="${configs[$t_idx]}"; source "$sel_conf" 2>/dev/null
-               echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-               while true; do echo -ne "  ${C}●${NC} ${W}Select Action: ${NC}"; read vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
-               [[ "$vip_action" == "q" ]] && continue
-               
-               if [[ "$vip_action" == "1" ]]; then
-                   while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ -n "$n" ]] && break; done
-                   [[ "$n" == "q" ]] && continue
-                   while true; do 
-                       echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break
-                   done
-                   [[ "$k" == "q" ]] && continue
-                   sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$sel_conf"; apply_fabric "$sel_conf"; echo -e "  ${G}● IPs synchronized.${NC}"; sleep 1.5
-               elif [[ "$vip_action" == "2" ]]; then
-                   if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
-                   echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${VX_NAME}]? (y/n): ${NC}"; read confirm_vip
-                   if [[ "$confirm_vip" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$sel_conf"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$sel_conf"; apply_fabric "$sel_conf"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
-               fi
+           if [[ "$vip_action" == "1" ]]; then
+               while true; do echo -ne "  ${C}●${NC} ${W}Virtual IPs Count: ${NC}"; read n; [[ -n "$n" ]] && break; done
+               [[ "$n" == "q" ]] && continue
+               while true; do 
+                   echo -ne "  ${C}●${NC} ${W}Sync Key: ${NC}"; read k; k=$(echo "$k" | tr -dc 'a-zA-Z0-9_-'); [[ -n "$k" ]] && break
+               done
+               [[ "$k" == "q" ]] && continue
+               sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$SELECTED_CONF"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$SELECTED_CONF"; apply_fabric "$SELECTED_CONF"; echo -e "  ${G}● IPs synchronized.${NC}"; sleep 1.5
+           elif [[ "$vip_action" == "2" ]]; then
+               if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
+               echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${VX_NAME}]? (y/n): ${NC}"; read confirm_vip
+               if [[ "$confirm_vip" == "y" ]]; then sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$SELECTED_CONF"; sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$SELECTED_CONF"; apply_fabric "$SELECTED_CONF"; echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5; fi
            fi ;;
-        4) edit_fabric ;; 
-        5) while true; do draw_mxlan_header; show_mxlan_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
-        6) show_fabric_details ;; 
-        7) self_update_module ;; 
+        4) action_edit_public_ips ;;
+        5) action_edit_vni ;;
+        6) action_edit_core_subnet ;;
+        7) action_edit_port_forward ;;
+        8) action_rename_interface ;;
+        9) while true; do draw_mxlan_header; show_mxlan_monitor; read -t 2 -n 1 -s b_opt; [[ "$b_opt" == "q" ]] && break; done ;;
+        10) show_fabric_details ;; 
+        11) self_update_module ;; 
         0) break ;;
     esac
 done

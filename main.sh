@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v9.3.2 ---
-# [Features: Expanded Header | Individual Section Dividers | Stable Menu Engine]
+# --- MDesign Master Core | Central Dashboard v9.3.3 ---
+# [Features: Fixed Syntax Error | Balanced Case Blocks | Expanded 106-Col Header]
 
-MODULE_VERSION="9.6.0"
+MODULE_VERSION="9.6.5"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -131,7 +131,6 @@ update_watcher_loop() {
 update_watcher_loop &
 WATCHER_PID=$!
 
-# --- BACKGROUND MONITOR FOR DYNAMIC TRI-TUNNEL DASHBOARD ---
 collect_active_tunnels_stats() {
     local tmp_target="$SECURE_TMP/.main_tun_stats.tmp"
     > "$tmp_target"
@@ -791,8 +790,8 @@ show_ota_update_hub() {
                     local filled=$(( percent * width / 100 ))
                     local empty=$(( width - filled ))
                     
-                    local bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
-                    local bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
+                    bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
+                    bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
 
                     if command -v curl >/dev/null 2>&1; then
                         curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 8 -o "$t_out" "$pkg_url/$item$CB" 2>/dev/null && dl_ok=true
@@ -1142,7 +1141,6 @@ draw_main_header() {
 
             local proto_box="[${t_proto}]"
 
-            # ردیف تانل با خطوط جداکننده مجزا میان نام، پیر، vIP و سایر مشخصات
             printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}%-7s${NC} ${B}│${NC}  ${DIM}Peer:${NC} ${Y}%-15s${NC} ${B}│${NC}  ${DIM}vIP:%b%-4s%b  ${B}│${NC}  ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b  ${B}│${NC}  ${DIM}Up:${NC}${W}%-6s${NC}  ${B}│${NC}  ${DIM}FWD:${NC}%b%-4s%b  ${B}│${NC}\n" \
                 "$stat_col" "$stat_icon" "$NC" "$t_name" "$proto_box" "$t_remote" "$vip_col" "$t_vip" "$NC" "$t_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$t_fwd" "$NC"
         done < "$SECURE_TMP/.main_tun_stats"
@@ -1182,7 +1180,12 @@ show_tunnel_hub() {
         read_with_refresh "  ${C}TUNNEL ❯❯ ${NC}" t_opt render_tunnel_menu
         t_opt=$(echo "$t_opt" | tr -d '\r ')
         case $t_opt in
-            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mrathole" ;; 4) run_mod "mbackhaul" ;; 5) run_mod "mpaqet" ;; 0) break ;;
+            1) run_mod "mgre" ;; 
+            2) run_mod "mxlan" ;; 
+            3) run_mod "mrathole" ;; 
+            4) run_mod "mbackhaul" ;; 
+            5) run_mod "mpaqet" ;; 
+            0) break ;;
         esac
     done
 }
@@ -1299,8 +1302,8 @@ while true; do
             clear
             echo -e "\n  ${DIM}┌─[ DEPLOYING FROM LOCAL SOURCE ]${NC}\n"
 
-            local work_dir="$local_input"
-            local is_temp_archive=false
+            work_dir="$local_input"
+            is_temp_archive=false
 
             if [ -f "$local_input" ]; then
                 work_dir="$(mktemp -d /tmp/mtunnel-local-deploy.XXXXXX)"
@@ -1317,38 +1320,37 @@ while true; do
             fi
 
             while IFS= read -r sh_file; do
-                local bname=$(basename "$sh_file" .sh)
-                local dest_rel="${MOD_MAP[$bname]:-${bname}.sh}"
+                bname=$(basename "$sh_file" .sh)
+                dest_rel="${MOD_MAP[$bname]:-${bname}.sh}"
                 mkdir -p "$(dirname "$LOCAL_DIR/$dest_rel")" 2>/dev/null
                 cp -f "$sh_file" "$LOCAL_DIR/$dest_rel" 2>/dev/null
                 chmod +x "$LOCAL_DIR/$dest_rel" 2>/dev/null
                 deploy_cached_module "$bname" 2>/dev/null || true
             done < <(find "$work_dir" -type f -name "*.sh")
 
-            local matched_items=()
+            matched_items=()
             for item in "${ALL_PACKAGES[@]}"; do
                 if [ -n "$(find "$work_dir" -type f -name "$item" | head -n 1)" ]; then
                     matched_items+=("$item")
                 fi
             done
 
-            local total_local=${#matched_items[@]}
+            total_local=${#matched_items[@]}
             if [ "$total_local" -gt 0 ]; then
-                local current=0
-                local width=30
+                current=0
+                width=30
 
                 for item in "${matched_items[@]}"; do
                     ((current++))
-                    local f_found="$(find "$work_dir" -type f -name "$item" | head -n 1)"
+                    f_found="$(find "$work_dir" -type f -name "$item" | head -n 1)"
 
-                    local percent=$(( current * 100 / total_local ))
-                    local filled=$(( percent * width / 100 ))
-                    local empty=$(( width - filled ))
+                    percent=$(( current * 100 / total_local ))
+                    filled=$(( percent * width / 100 ))
+                    empty=$(( width - filled ))
 
-                    local bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
-                    local bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
+                    bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
+                    bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
 
-                    local item_name="" item_ver=""
                     if [[ "$item" == *.deb ]]; then
                         item_name=$(echo "$item" | cut -d'_' -f1)
                         item_ver=$(echo "$item" | cut -d'_' -f2 | cut -d'-' -f1)
@@ -1357,11 +1359,11 @@ while true; do
                         item_ver="${BIN_VERSIONS[$item]:-Core}"
                     fi
 
-                    local ver_str=" (v${item_ver})"
-                    local plain_len=$(( ${#item_name} + ${#ver_str} ))
-                    local pad_len=$(( 26 - plain_len ))
+                    ver_str=" (v${item_ver})"
+                    plain_len=$(( ${#item_name} + ${#ver_str} ))
+                    pad_len=$(( 26 - plain_len ))
                     [ "$pad_len" -lt 0 ] && pad_len=0
-                    local padding=$(printf '%*s' "$pad_len" "")
+                    padding=$(printf '%*s' "$pad_len" "")
 
                     if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
                         if [[ "$item" == *.deb ]]; then
@@ -1381,559 +1383,11 @@ while true; do
 
                         printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     else
-                        local ver_str=" (FAILED)"
-                        local plain_len=$(( ${#item_name} + ${#ver_str} ))
-                        local pad_len=$(( 26 - plain_len ))
+                        ver_str=" (FAILED)"
+                        plain_len=$(( ${#item_name} + ${#ver_str} ))
+                        pad_len=$(( 26 - plain_len ))
                         [ "$pad_len" -lt 0 ] && pad_len=0
-                        local padding=$(printf '%*s' "$pad_len" "")
-
-                        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
-                    fi
-                done
-
-                echo -e "\n\n  ${G}● All prerequisite packages and cores deployed successfully.${NC}\n"
-                echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy
-                ;;
-
-            8)
-                clear
-                echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}\n"
-                echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read custom_url
-                custom_url=$(echo "$custom_url" | tr -d '\r ')
-                [ -z "$custom_url" ] && continue
-
-                local tmp_dl="$SECURE_TMP/.custom_download.$$"
-                rm -f "$tmp_dl"
-
-                (
-                    if command -v curl >/dev/null 2>&1; then
-                        curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 10 -o "$tmp_dl" "$custom_url" 2>/dev/null
-                    elif command -v wget >/dev/null 2>&1; then
-                        wget -q --no-check-certificate --header="Cache-Control: no-cache" --timeout=10 -O "$tmp_dl" "$custom_url" 2>/dev/null
-                    fi
-                ) &
-                local pid=$!
-                draw_progress_bar "$pid" "Downloading Custom Resource"
-                wait "$pid" 2>/dev/null
-
-                if [ -s "$tmp_dl" ]; then
-                    if ! command -v unzip >/dev/null 2>&1; then
-                        DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1
-                        DEBIAN_FRONTEND=noninteractive apt-get install -y -q unzip >/dev/null 2>&1
-                    fi
-
-                    if command -v unzip >/dev/null 2>&1 && unzip -t "$tmp_dl" >/dev/null 2>&1; then
-                        local t_dir="$(mktemp -d /tmp/custom-unzip.XXXXXX)"
-                        unzip -q -o "$tmp_dl" -d "$t_dir" 2>/dev/null
-                        
-                        local r_root="$(find "$t_dir" -type f -name "main.sh" -exec dirname {} \; | head -n 1)"
-                        
-                        if [ -n "$r_root" ] && [ -d "$r_root" ]; then
-                            cp -rf "$r_root"/* "$LOCAL_DIR/" 2>/dev/null
-                            for m in "${ALL_MODULES[@]}"; do deploy_cached_module "$m" 2>/dev/null; done
-                            
-                            if [ -d "$r_root/packages" ]; then
-                                deploy_binaries_from_dir "$r_root/packages"
-                            elif [ -d "$t_dir/packages" ]; then
-                                deploy_binaries_from_dir "$t_dir/packages"
-                            elif [ -d "$LOCAL_DIR/packages" ]; then
-                                deploy_binaries_from_dir "$LOCAL_DIR/packages"
-                            fi
-
-                            echo -e "\n  ${G}✔ Archive fully extracted, modules and binary cores deployed!${NC}\n"
-                            sleep 1.5
-                            kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
-                            exec "$MTUNNEL_PATH"
-                        else
-                            echo -e "\n  ${Y}● No main.sh found in archive. Scanning for packages, scripts and binaries...${NC}\n"
-                            
-                            local deployed_anything=false
-
-                            while IFS= read -r dir_cand; do
-                                if deploy_binaries_from_dir "$dir_cand"; then
-                                    deployed_anything=true
-                                fi
-                            done < <(find "$t_dir" -type d)
-
-                            while IFS= read -r sh_cand; do
-                                local bname=$(basename "$sh_cand" .sh)
-                                cp -f "$sh_cand" "$LOCAL_DIR/${bname}.sh" 2>/dev/null
-                                chmod +x "$LOCAL_DIR/${bname}.sh" 2>/dev/null
-                                deploy_cached_module "$bname" 2>/dev/null || true
-                                deployed_anything=true
-                            done < <(find "$t_dir" -type f -name "*.sh")
-
-                            if [ "$deployed_anything" = true ]; then
-                                echo -e "\n  ${G}✔ Fallback success: All packages, .deb files, and scripts from archive deployed successfully!${NC}\n"
-                            else
-                                echo -e "\n  ${R}✖ Error: No valid scripts, binaries, or debian packages found inside the ZIP!${NC}\n"
-                            fi
-                        fi
-                        rm -rf "$t_dir"
-                    elif grep -q "#!/bin/bash" "$tmp_dl"; then
-                        clear
-                        echo -e "\n  ${DIM}┌─[ SELECT MODULE TARGET TO OVERWRITE ]${NC}\n  ${DIM}│${NC}"
-                        local idx=1
-                        local tot_m=${#ALL_MODULES[@]}
-                        for m in "${ALL_MODULES[@]}"; do
-                            local branch="├─"
-                            [ "$idx" -eq "$tot_m" ] && branch="└─"
-                            echo -e "  ${DIM}${branch}${NC} ${W}${idx}${NC} ${DIM}❯${NC} ${C}${m}${NC}"
-                            ((idx++))
-                        done
-                        echo -ne "\n  ${C}OVERWRITE ❯❯ ${NC}"; read m_num
-                        local chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
-                        if [ -n "$chosen_mod" ]; then
-                            local dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
-                            mkdir -p "$(dirname "$dest")" 2>/dev/null
-                            cat "$tmp_dl" > "$dest"
-                            deploy_cached_module "$chosen_mod"
-                            echo -e "\n  ${G}✔ Successfully applied to ${chosen_mod}!${NC}\n"
-                            if [ "$chosen_mod" = "main" ]; then
-                                sleep 1.5
-                                kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
-                                exec "$MTUNNEL_PATH"
-                            fi
-                        fi
-                    else
-                        echo -e "\n  ${R}✖ Downloaded file is neither a valid ZIP nor a bash script!${NC}\n"
-                    fi
-                else
-                    echo -e "\n  ${R}✖ Download failed! Check URL.${NC}\n"
-                fi
-                rm -f "$tmp_dl"; sleep 2
-                ;;
-
-            9)
-                clear
-                echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n  ${DIM}│${NC}"
-                local idx=1
-                local tot_m=${#ALL_MODULES[@]}
-                for m in "${ALL_MODULES[@]}"; do
-                    local branch="├─"
-                    [ "$idx" -eq "$tot_m" ] && branch="└─"
-                    echo -e "  ${DIM}${branch}${NC} ${W}${idx}${NC} ${DIM}❯${NC} ${C}${m}${NC}"
-                    ((idx++))
-                done
-                echo -ne "\n  ${C}EDITOR ❯❯ ${NC}"; read m_num
-                local chosen_mod="${ALL_MODULES[$((m_num - 1))]}"
-                if [ -n "$chosen_mod" ]; then
-                    local dest="$LOCAL_DIR/${MOD_MAP[$chosen_mod]}"
-                    mkdir -p "$(dirname "$dest")" 2>/dev/null
-
-                    local temp_paste_file="$SECURE_TMP/.manual_paste.$$"
-                    > "$temp_paste_file"
-
-                    if command -v nano >/dev/null 2>&1; then
-                        echo -e "\n  ${DIM}● Opening clean editor... Paste your raw code, save (Ctrl+O, Enter) and exit (Ctrl+X).${NC}\n"
-                        sleep 1.5
-                        nano "$temp_paste_file"
-                    elif command -v vi >/dev/null 2>&1; then
-                        vi "$temp_paste_file"
-                    fi
-
-                    if [ -s "$temp_paste_file" ] && grep -q "#!/bin/bash" "$temp_paste_file"; then
-                        local new_ver=$(grep -m1 '^MODULE_VERSION=' "$temp_paste_file" | cut -d'"' -f2)
-                        [ -z "$new_ver" ] && new_ver="Unknown"
-
-                        local current_v="Unknown"
-                        [ -f "$dest" ] && current_v=$(grep -m1 '^MODULE_VERSION=' "$dest" 2>/dev/null | cut -d'"' -f2)
-                        [ -z "$current_v" ] && current_v="Unknown"
-
-                        clear
-                        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${DIM}│${NC}"
-                        echo -e "  ${DIM}├─${NC} ${W}Target Module   :${NC} ${C}${chosen_mod}${NC}"
-                        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v}${NC}"
-                        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-                        echo -e "  ${DIM}│${NC}"
-                        echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read confirm
-
-                        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
-                            sed -i 's/\r$//' "$temp_paste_file" 2>/dev/null
-                            chmod +x "$temp_paste_file"
-                            cat "$temp_paste_file" > "$dest"
-                            rm -f "$temp_paste_file"
-
-                            deploy_cached_module "$chosen_mod"
-                            echo -e "\n  ${G}✔ Module ${chosen_mod} (v${new_ver}) successfully applied! Rebooting core...${NC}\n"
-                            sleep 1.5
-                            kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
-                            exec "$MTUNNEL_PATH"
-                        else
-                            echo -e "\n  ${Y}● Manual update cancelled by user.${NC}\n"
-                            rm -f "$temp_paste_file"
-                        fi
-                    else
-                        echo -e "\n  ${R}✖ Invalid format (Missing #!/bin/bash) or empty paste!${NC}\n"
-                        rm -f "$temp_paste_file"
-                    fi
-                    sleep 2
-                fi
-                ;;
-
-            0) break ;;
-        esac
-    done
-}
-
-run_iperf3() {
-    clear
-    if ! command -v iperf3 >/dev/null 2>&1; then
-        echo -e "\n  ${DIM}┌─[ IPERF3 PACKAGE INSTALLER ]${NC}\n"
-        killall -9 apt-get apt dpkg 2>/dev/null || true
-        rm -f /var/lib/dpkg/lock-frontend /var/lib/apt/lists/lock /var/cache/apt/archives/lock /var/lib/dpkg/lock 2>/dev/null || true
-        dpkg --configure -a >/dev/null 2>&1 || true
-
-        (
-            DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1
-            DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::ForceIPv4=true -y -q iperf3 >/dev/null 2>&1
-        ) &
-        local pid=$!
-        draw_progress_bar "$pid" "Installing iPerf3 Benchmark"
-        wait "$pid" 2>/dev/null
-
-        if command -v iperf3 >/dev/null 2>&1; then
-            echo -e "\n  ${G}✔ iPerf3 installed successfully.${NC}\n"
-        else
-            echo -e "\n  ${R}✘ Direct install attempt...${NC}\n"
-            apt-get install -y iperf3 >/dev/null 2>&1
-        fi
-        sleep 1
-    fi
-
-    render_iperf_menu() {
-        clear; echo ""
-        local s_ip=$(get_local_ip)
-        local str1=" iPerf3 Network Bandwidth Benchmark "
-        local raw_len=$(( ${#str1} ))
-        local pad_len=$(( 92 - raw_len - 38 )); [ "$pad_len" -lt 0 ] && pad_len=0
-        local padding=$(printf '%*s' "$pad_len" "")
-
-        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        echo -e "  ${B}│${NC}${W}${str1}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${DIM}│ Port:${NC} ${C}5201 TCP/UDP${NC} ${padding}${B}│${NC}"
-        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
-
-        echo -e "\n  ${DIM}┌─[ BENCHMARK MODE ]${NC}\n  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run as Server (Listener Mode)${NC} ${DIM}(Wait for peer connections)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Client (Sender Mode)${NC}   ${DIM}(Push bandwidth stream to server)${NC}"
-        echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
-    }
-
-    while true; do
-        render_iperf_menu
-        read_with_refresh "  ${C}iPerf3 ❯❯ ${NC}" i_opt render_iperf_menu
-        i_opt=$(echo "$i_opt" | tr -d '\r ' )
-
-        case $i_opt in
-            1)
-                echo -e "\n  ${G}● iPerf3 Server listening on port 5201 (Press Ctrl+C to stop)...${NC}\n"
-                iperf3 -s -p 5201
-                echo -ne "\n  ${DIM}Press Enter to return...${NC}\n"; read dummy ;;
-            2)
-                echo -ne "\n  ${C}●${NC} ${W}Enter Target Server IP / Tunnel IP: ${NC}"; read t_ip
-                t_ip=$(echo "$t_ip" | tr -d '\r ' )
-                [ -z "$t_ip" ] && continue
-                echo -ne "  ${C}●${NC} ${W}Test Duration in Seconds [Default 10]: ${NC}"; read t_sec
-                t_sec=${t_sec:-10}
-                echo -e "\n  ${Y}● Running Benchmark against $t_ip (10s)...${NC}\n"
-                iperf3 -c "$t_ip" -p 5201 -t "$t_sec"
-                echo -ne "\n  ${DIM}Press Enter to return...${NC}\n"; read dummy ;;
-            0) break ;;
-        esac
-    done
-}
-
-draw_main_header() {
-    local s_ip=$(get_local_ip)
-
-    local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
-    local bbr_stat="${DIM}○ OFF${NC}"
-    [ "$bbr_cc" == "bbr" ] && bbr_stat="${G}● ON${NC}"
-
-    local web_stat="${DIM}○ OFFLINE${NC}"
-    if systemctl is-active --quiet mweb.service 2>/dev/null; then
-        local w_port="1000"
-        [ -f "/etc/mweb/web.conf" ] && w_port=$(grep "WEB_PORT" /etc/mweb/web.conf | cut -d= -f2 | tr -d ' ' | tr -d '\r')
-        web_stat="${G}● PORT ${w_port}${NC}"
-    fi
-
-    clear; echo ""
-    local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
-    echo -e "  ${B}╭${border}╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v${MODULE_VERSION}${NC}   ${B}│${NC}   ${DIM}Local:${NC} ${W}%-15s${NC}   ${B}│${NC}   ${DIM}Web:${NC} ${web_stat}    ${B}│${NC}   ${DIM}BBR:${NC} ${bbr_stat}     ${B}│${NC}" | sed "s/%-15s/$(printf '%-15s' "$s_ip")/"
-    echo -e "  ${B}├${border}┤${NC}"
-
-    local shown=0
-    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
-        while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
-            [ -z "$t_proto" ] && continue
-            ((shown++))
-            [ "$shown" -gt 3 ] && break
-
-            [ ${#t_name} -gt 5 ] && t_name="${t_name:0:5}"
-            [ ${#t_remote} -gt 15 ] && t_remote="${t_remote:0:15}"
-
-            local if_uptime=$(get_iface_uptime_pure "$t_dev")
-            local stat_icon="●"; local stat_col="${G}"
-            if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-
-            local fwd_col="${DIM}"; [ "$t_fwd" != "OFF" ] && fwd_col="${C}"
-            local vip_col="${DIM}"; [ "$t_vip" != "OFF" ] && vip_col="${G}"
-
-            local loss_col="${DIM}"; local loss_disp="---"
-            if [ "$t_loss" != "---" ] && [ -n "$t_loss" ]; then
-                loss_disp="${t_loss}%"
-                if [ "$t_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
-                elif [ "$t_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
-                else loss_col="${R}"; fi
-            fi
-
-            local proto_box="[${t_proto}]"
-
-            # ردیف تانل با خطوط جداکننده مجزا میان نام، پیر، vIP و سایر مشخصات
-            printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}%-7s${NC} ${B}│${NC}  ${DIM}Peer:${NC} ${Y}%-15s${NC} ${B}│${NC}  ${DIM}vIP:%b%-4s%b  ${B}│${NC}  ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b  ${B}│${NC}  ${DIM}Up:${NC}${W}%-6s${NC}  ${B}│${NC}  ${DIM}FWD:${NC}%b%-4s%b  ${B}│${NC}\n" \
-                "$stat_col" "$stat_icon" "$NC" "$t_name" "$proto_box" "$t_remote" "$vip_col" "$t_vip" "$NC" "$t_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$t_fwd" "$NC"
-        done < "$SECURE_TMP/.main_tun_stats"
-    fi
-
-    if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-102s${NC}  ${B}│${NC}\n" "● No active tunnels or fabrics deployed across the ecosystem."
-    fi
-    echo -e "  ${B}╰${border}╯${NC}"
-}
-
-show_tunnel_hub() {
-    render_tunnel_menu() {
-        local badge_mgre="" badge_mxlan="" badge_mrathole="" badge_mbackhaul="" badge_mpaqet=""
-        if [ -f "$UPDATE_FILE" ]; then
-            grep -q "^mgre:" "$UPDATE_FILE" && badge_mgre=" ${Y}(Update Available: v$(grep "^mgre:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mxlan:" "$UPDATE_FILE" && badge_mxlan=" ${Y}(Update Available: v$(grep "^mxlan:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mrathole:" "$UPDATE_FILE" && badge_mrathole=" ${Y}(Update Available: v$(grep "^mrathole:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mbackhaul:" "$UPDATE_FILE" && badge_mbackhaul=" ${Y}(Update Available: v$(grep "^mbackhaul:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mpaqet:" "$UPDATE_FILE" && badge_mpaqet=" ${Y}(Update Available: v$(grep "^mpaqet:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-        fi
-
-        draw_main_header
-        echo -e "\n  ${DIM}┌─[ PRIMARY INFRASTRUCTURE HUB ]${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}${badge_mgre}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}${badge_mxlan}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC}${badge_mrathole}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Free Multiplexer (MBackhaul)${NC}${badge_mbackhaul}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel (MPaqet)${NC}${badge_mpaqet}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
-    }
-
-    while true; do
-        render_tunnel_menu
-        read_with_refresh "  ${C}TUNNEL ❯❯ ${NC}" t_opt render_tunnel_menu
-        t_opt=$(echo "$t_opt" | tr -d '\r ')
-        case $t_opt in
-            1) run_mod "mgre" ;; 2) run_mod "mxlan" ;; 3) run_mod "mrathole" ;; 4) run_mod "mbackhaul" ;; 5) run_mod "mpaqet" ;; 0) break ;;
-        esac
-    done
-}
-
-render_main_menu() {
-    local badge_hub="" badge_porter="" badge_main="" badge_bbr="" badge_diag="" badge_shield="" badge_link="" badge_stats="" badge_healer="" badge_iface=""
-
-    if [ -f "$UPDATE_FILE" ]; then
-        local tun_updates=""
-        grep -q "^mgre:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(MGRE)${NC}"
-        grep -q "^mxlan:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(MXLAN)${NC}"
-        grep -q "^mrathole:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Rathole)${NC}"
-        grep -q "^mbackhaul:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Backhaul)${NC}"
-        grep -q "^mpaqet:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Paqet)${NC}"
-
-        if [ -n "$tun_updates" ]; then
-            badge_hub=" ${Y}(Update Available)${NC}${tun_updates}"
-        fi
-
-        if grep -q "^mporter:" "$UPDATE_FILE"; then
-            local p_ver=$(grep "^mporter:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_porter=" ${Y}(Update Available: v${p_ver})${NC}"
-        fi
-        if grep -q "^main:" "$UPDATE_FILE"; then
-            local m_ver=$(grep "^main:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_main=" ${Y}(Update Available: v${m_ver})${NC}"
-        fi
-        if grep -q "^mbbr:" "$UPDATE_FILE"; then
-            local b_ver=$(grep "^mbbr:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_bbr=" ${Y}(Update Available: v${b_ver})${NC}"
-        fi
-        if grep -q "^mdiag:" "$UPDATE_FILE"; then
-            local d_ver=$(grep "^mdiag:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_diag=" ${Y}(Update Available: v${d_ver})${NC}"
-        fi
-        if grep -q "^mshield:" "$UPDATE_FILE"; then
-            local s_ver=$(grep "^mshield:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_shield=" ${Y}(Update Available: v${s_ver})${NC}"
-        fi
-        if grep -q "^linktest:" "$UPDATE_FILE"; then
-            local l_ver=$(grep "^linktest:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_link=" ${Y}(Update Available: v${l_ver})${NC}"
-        fi
-        if grep -q "^mstats:" "$UPDATE_FILE"; then
-            local st_ver=$(grep "^mstats:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_stats=" ${Y}(Update Available: v${st_ver})${NC}"
-        fi
-        if grep -q "^mhealer:" "$UPDATE_FILE"; then
-            local h_ver=$(grep "^mhealer:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_healer=" ${Y}(Update Available: v${h_ver})${NC}"
-        fi
-        if grep -q "^minterface:" "$UPDATE_FILE"; then
-            local if_ver=$(grep "^minterface:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_iface=" ${Y}(Update Available: v${if_ver})${NC}"
-        fi
-    fi
-
-    draw_main_header; echo ""
-    echo -e "  ${DIM}┌─[ CORE NETWORK & ROUTING ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub (GRE / VXLAN / Rat / BH / Paqet)${NC}${badge_hub}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC}${badge_porter}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}${badge_iface}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SECURITY, DIAGNOSTICS & BENCHMARK ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Stealth Anti-Probing & Anti-RST Shield${NC}${badge_shield}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${B}Bandwidth Radar & Web UI${NC}${badge_stats}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}${badge_healer}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Network Diagnostics & Tests${NC}${badge_diag}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Two-Way Link & Port Filter Scanner (LinkTest)${NC}${badge_link}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}iPerf3 Bandwidth Benchmark${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}${badge_bbr}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC} ${DIM}❯${NC} ${G}Unified Multi-Tier OTA Update Hub${NC}${badge_main}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC} ${DIM}❯${NC} ${M}Offline Local Deploy (Packages & Modules)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
-}
-
-while true; do
-    render_main_menu
-    read_with_refresh "  ${C}CORE ❯❯ ${NC}" opt render_main_menu
-    opt=$(echo "$opt" | tr -d '\r ')
-
-    case $opt in
-        1) show_tunnel_hub ;;
-        2) run_mod "mporter" ;;
-        3) run_mod "minterface" ;;
-        4) run_mod "mshield" ;;
-        5) run_mod "mstats" ;;
-        6) run_mod "mhealer" ;;
-        7) run_mod "mdiag" ;;
-        8) run_mod "linktest" ;;
-        9) run_iperf3 ;;
-        10) run_mod "mbbr" ;;
-        11) show_ota_update_hub ;;
-        12)
-            clear
-            echo -e "\n  ${DIM}┌─[ OFFLINE LOCAL DEPLOY ENGINE ]${NC}\n"
-            echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read local_input
-            local_input=$(echo "$local_input" | tr -d '\r ')
-            [ -z "$local_input" ] && local_input="$(pwd)"
-
-            if [ ! -e "$local_input" ]; then
-                echo -e "\n  ${R}✖ Path not found: ${local_input}${NC}\n"
-                sleep 2
-                continue
-            fi
-
-            clear
-            echo -e "\n  ${DIM}┌─[ DEPLOYING FROM LOCAL SOURCE ]${NC}\n"
-
-            local work_dir="$local_input"
-            local is_temp_archive=false
-
-            if [ -f "$local_input" ]; then
-                work_dir="$(mktemp -d /tmp/mtunnel-local-deploy.XXXXXX)"
-                is_temp_archive=true
-                if [[ "$local_input" == *.zip ]]; then
-                    if ! command -v unzip >/dev/null 2>&1; then
-                        DEBIAN_FRONTEND=noninteractive apt-get update -y -q >/dev/null 2>&1
-                        DEBIAN_FRONTEND=noninteractive apt-get install -y -q unzip >/dev/null 2>&1
-                    fi
-                    unzip -q -o "$local_input" -d "$work_dir" 2>/dev/null
-                elif [[ "$local_input" == *.tar.gz || "$local_input" == *.tgz ]]; then
-                    tar -xzf "$local_input" -C "$work_dir" 2>/dev/null
-                fi
-            fi
-
-            while IFS= read -r sh_file; do
-                local bname=$(basename "$sh_file" .sh)
-                local dest_rel="${MOD_MAP[$bname]:-${bname}.sh}"
-                mkdir -p "$(dirname "$LOCAL_DIR/$dest_rel")" 2>/dev/null
-                cp -f "$sh_file" "$LOCAL_DIR/$dest_rel" 2>/dev/null
-                chmod +x "$LOCAL_DIR/$dest_rel" 2>/dev/null
-                deploy_cached_module "$bname" 2>/dev/null || true
-            done < <(find "$work_dir" -type f -name "*.sh")
-
-            local matched_items=()
-            for item in "${ALL_PACKAGES[@]}"; do
-                if [ -n "$(find "$work_dir" -type f -name "$item" | head -n 1)" ]; then
-                    matched_items+=("$item")
-                fi
-            done
-
-            local total_local=${#matched_items[@]}
-            if [ "$total_local" -gt 0 ]; then
-                local current=0
-                local width=30
-
-                for item in "${matched_items[@]}"; do
-                    ((current++))
-                    local f_found="$(find "$work_dir" -type f -name "$item" | head -n 1)"
-
-                    local percent=$(( current * 100 / total_local ))
-                    local filled=$(( percent * width / 100 ))
-                    local empty=$(( width - filled ))
-
-                    local bar_f=$(printf "%${filled}s" "" | tr ' ' '#')
-                    local bar_e=$(printf "%${empty}s" "" | tr ' ' '-')
-
-                    local item_name="" item_ver=""
-                    if [[ "$item" == *.deb ]]; then
-                        item_name=$(echo "$item" | cut -d'_' -f1)
-                        item_ver=$(echo "$item" | cut -d'_' -f2 | cut -d'-' -f1)
-                    else
-                        item_name="$item"
-                        item_ver="${BIN_VERSIONS[$item]:-Core}"
-                    fi
-
-                    local ver_str=" (v${item_ver})"
-                    local plain_len=$(( ${#item_name} + ${#ver_str} ))
-                    local pad_len=$(( 26 - plain_len ))
-                    [ "$pad_len" -lt 0 ] && pad_len=0
-                    local padding=$(printf '%*s' "$pad_len" "")
-
-                    if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
-                        if [[ "$item" == *.deb ]]; then
-                            dpkg -i --force-confdef --force-confold "$t_out" >/dev/null 2>&1 || true
-                        else
-                            chmod +x "$t_out"
-                            if [ "$item" == "haproxy" ]; then
-                                install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
-                                ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
-                            elif [ "$item" == "bh" ]; then
-                                install -m 0755 "$t_out" /usr/local/bin/bh 2>/dev/null
-                                ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
-                            else
-                                install -m 0755 "$t_out" "/usr/local/bin/$item" 2>/dev/null
-                            fi
-                        fi
-
-                        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
-                    else
-                        local ver_str=" (FAILED)"
-                        local plain_len=$(( ${#item_name} + ${#ver_str} ))
-                        local pad_len=$(( 26 - plain_len ))
-                        [ "$pad_len" -lt 0 ] && pad_len=0
-                        local padding=$(printf '%*s' "$pad_len" "")
+                        padding=$(printf '%*s' "$pad_len" "")
 
                         printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$item_name" "$ver_str" "$padding" "$bar_f" "$bar_e" "$percent"
                     fi
@@ -1947,7 +1401,8 @@ while true; do
             fi
 
             [ "$is_temp_archive" = true ] && rm -rf "$work_dir"
-            echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy ;;
+            echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read dummy
+            ;;
 
         13)
             clear
@@ -1987,10 +1442,12 @@ while true; do
                 echo -e "\n  ${G}✓ MTunnel ecosystem completely wiped from this system.${NC}\n"; exit 0
             else
                 echo -e "\n  ${Y}● Wipe cancelled.${NC}"; sleep 1.5
-            fi ;;
+            fi
+            ;;
 
         0) 
             kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
-            clear; exit 0 ;;
+            clear; exit 0
+            ;;
     esac
 done

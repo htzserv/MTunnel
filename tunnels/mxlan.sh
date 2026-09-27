@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.3 ---
-# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh Engine | Clean Lookbehind-Free Core | Advanced OTA]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.4 ---
+# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh | Integer Ping | Advanced OTA]
 
-MODULE_VERSION="1.8.3"
+MODULE_VERSION="1.8.4"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -121,7 +121,10 @@ check_ping_bg() {
         avg="---"
         if echo "$res" | grep -q "min/avg/max"; then
             avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            [ -n "$avg" ] && avg="${avg}ms"
+            if [ -n "$avg" ]; then
+                avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                avg="${avg}ms"
+            fi
         fi
         echo "${VX_NAME}|${avg}|${loss}" >> "$SECURE_TMP/.mxlan_stats_cache.tmp"
     done
@@ -324,7 +327,7 @@ apply_fabric() {
     
     clean_fwd_rules "$VX_NAME"
 
-    # Multi-IP dynamic interface lookup (Clean and safe without PCRE variable lookbehind)
+    # Multi-IP dynamic interface lookup
     local eth_iface=""
     if [ -n "$LOCAL_PUB" ]; then
         eth_iface=$(ip -o -4 addr show 2>/dev/null | awk -v target="$LOCAL_PUB" '$4 ~ "^"target"(/|$)" {print $2; exit}')
@@ -613,7 +616,8 @@ show_mxlan_monitor() {
         ping_res=$(timeout 2 ping -c 1 -W 1 "$main_tip" 2>/dev/null)
         if echo "$ping_res" | grep -q "time="; then
             lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
-            lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+            lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
+            lat_raw="${lat_int}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
 
         m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
@@ -625,7 +629,8 @@ show_mxlan_monitor() {
             ping_res=$(timeout 2 ping -c 1 -W 1 "$tip" 2>/dev/null)
             if echo "$ping_res" | grep -q "time="; then
                 lat=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+')
-                lat_raw="${lat}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
+                lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
+                lat_raw="${lat_int}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
             printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
@@ -778,7 +783,6 @@ while true; do
            u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-')
            tun_secret=${u_key:-$s_key}
 
-           # Calculate deterministic VNI and Subnet from Master Token
            hash_c=$(echo -n "core_${tun_secret}" | sha256sum)
            vni_id=$(( 16#${hash_c:0:6} ))
            [ "$vni_id" -eq 0 ] && vni_id=1
@@ -812,7 +816,8 @@ while true; do
                    ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
                    if echo "$ping_res" | grep -q "time="; then
                        lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat}ms${NC}"
+                       lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
+                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat_int}ms${NC}"
                    else
                        echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
                    fi

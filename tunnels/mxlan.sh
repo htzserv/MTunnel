@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.2 ---
-# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh Engine | Full LB | Advanced OTA]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.3 ---
+# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh Engine | Clean Lookbehind-Free Core | Advanced OTA]
 
-MODULE_VERSION="1.8.2"
+MODULE_VERSION="1.8.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -324,10 +324,10 @@ apply_fabric() {
     
     clean_fwd_rules "$VX_NAME"
 
-    # Multi-IP dynamic interface lookup
+    # Multi-IP dynamic interface lookup (Clean and safe without PCRE variable lookbehind)
     local eth_iface=""
     if [ -n "$LOCAL_PUB" ]; then
-        eth_iface=$(ip -4 addr show 2>/dev/null | grep -B2 -w "$LOCAL_PUB" | grep -oP '(?<=^\d+:\s)[^:@]+' | head -n 1)
+        eth_iface=$(ip -o -4 addr show 2>/dev/null | awk -v target="$LOCAL_PUB" '$4 ~ "^"target"(/|$)" {print $2; exit}')
     fi
     [ -z "$eth_iface" ] && eth_iface=$(ip route get "$REMOTE_PUB" 2>/dev/null | awk '{print $5}' | head -n 1)
     [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $5}' | head -n 1)
@@ -737,6 +737,7 @@ while true; do
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1)
+           clear
            echo -e "\n  ${DIM}┌─[ VXLAN DEPLOYMENT ]${NC}"
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read -r s_type; [[ "$s_type" == "q" ]] && break; [[ "$s_type" == "1" || "$s_type" == "2" ]] && break; done
            [[ "$s_type" == "q" ]] && continue

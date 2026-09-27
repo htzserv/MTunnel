@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.7.9 ---
-# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Integer Ping | Advanced OTA]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.0 ---
+# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Integer Ping | MPorter Launcher | Advanced OTA]
 
-MODULE_VERSION="5.7.9"
+MODULE_VERSION="5.8.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -804,21 +804,22 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Setup New Tunnel (IPv4 / IP6GRE)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Delete Tunnels (Specific / ALL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}MPorter Port Forwarder / Manager${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ FLAT CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Master Token & Secret Key${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Override Core Subnet Base${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}Edit Master Token & Secret Key${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Override Core Subnet Base${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}View Tunnel Config Registry${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}View Tunnel Config Registry${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1023,6 +1024,17 @@ while true; do
            fi ;;
 
         4)
+           if command -v mporter >/dev/null 2>&1; then
+               mporter
+           elif [ -x "/usr/bin/mporter" ]; then
+               /usr/bin/mporter
+           elif [ -f "/root/mtunnel/mporter.sh" ]; then
+               bash /root/mtunnel/mporter.sh
+           else
+               echo -e "\n  ${R}✖ MPorter script not found on system!${NC}"; sleep 1.5
+           fi ;;
+
+        5)
            select_tunnel_interactive || continue
            LOCAL_PUB=""; REMOTE_PUB=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}]: ${NC}"; read -r new_local
@@ -1034,7 +1046,7 @@ while true; do
            apply_tunnel "$SELECTED_CONF"
            echo -e "  ${G}● Public IPs updated and applied.${NC}"; sleep 1.5 ;;
 
-        5)
+        6)
            select_tunnel_interactive || continue
            TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates Network): ${NC}"; read -r new_tok
@@ -1061,7 +1073,7 @@ while true; do
                echo -e "  ${G}● Token updated. Key: ${new_tun_id}, Subnet: ${new_core_sub}.x${NC}"; sleep 1.8
            fi ;;
 
-        6)
+        7)
            select_tunnel_interactive || continue
            CORE_SUBNET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.76.5) [Current: ${Y}${CORE_SUBNET}${W}]: ${NC}"; read -r new_sub
@@ -1072,11 +1084,11 @@ while true; do
                echo -e "  ${G}● Subnet base updated to ${new_sub}.x${NC}"; sleep 1.5
            fi ;;
 
-        7)
+        8)
            select_tunnel_interactive || continue
            manage_port_forwarding "$SELECTED_CONF" ;;
 
-        8)
+        9)
            select_tunnel_interactive || continue
            T_NAME=""; TUN_PROTO=""; TYPE=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Interface Suffix (Current: ${Y}${T_NAME#gre*}${W}): ${NC}"; read -r new_suffix
@@ -1099,7 +1111,7 @@ while true; do
                echo -e "  ${G}● Tunnel renamed to: ${new_t_name}${NC}"; sleep 1.5
            fi ;;
 
-        9)
+        10)
            while true; do
                draw_mgre_header
                show_mgre_monitor
@@ -1107,9 +1119,9 @@ while true; do
                [[ "$b_opt" == "q" || "$b_opt" == "Q" ]] && break
            done ;;
 
-        10) show_tunnel_details ;;
-        11) self_update_module ;;
-        12) uninstall_mgre ;;
+        11) show_tunnel_details ;;
+        12) self_update_module ;;
+        13) uninstall_mgre ;;
         0) break ;;
     esac
 done

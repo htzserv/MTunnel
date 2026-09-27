@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.7.0 ---
-# [Features: Flat Action Menu | Dynamic Tri-Tunnel Header Dashboard]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.7.1 ---
+# [Features: Pure Suffix Display | Clean Details Page | Pixel-Aligned Header]
 
-MODULE_VERSION="5.7.0"
+MODULE_VERSION="5.7.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -98,7 +98,6 @@ update_watcher_loop() {
 update_watcher_loop &
 WATCHER_PID=$!
 
-# --- LIVE PING PER TUNNEL (Async Header Engine) ---
 PING_CHECK_INTERVAL=5
 check_ping_bg() {
     local count=0
@@ -141,7 +140,6 @@ trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
 self_update_module() {
     local rel_path="tunnels/mgre.sh"
     local cb="?t=$(date +%s)"
-    
     local remote_v="Unknown"
     [ -f "$SECURE_TMP/.mgre_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mgre_remote_ver" | tr -d '\r\n ')
 
@@ -235,6 +233,16 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+get_pure_tun_name() {
+    local full_name="$1"
+    local pure="$full_name"
+    pure="${pure#gre6ir}"
+    pure="${pure#gre6kh}"
+    pure="${pure#greir}"
+    pure="${pure#grekh}"
+    echo "${pure:-$full_name}"
+}
+
 get_iface_uptime() {
     local iface="$1"
     if [ ! -d "/sys/class/net/$iface" ] || [ "$(cat /sys/class/net/$iface/operstate 2>/dev/null)" == "down" ]; then
@@ -243,13 +251,14 @@ get_iface_uptime() {
     fi
     local sys_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
     local if_sec=$(ip -s -d link show "$iface" 2>/dev/null | grep -oP 'trans_start \K[0-9]+')
+    local delta=0
     if [ -n "$if_sec" ] && [ "$if_sec" -gt 0 ]; then
-        local delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
+        delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
         [ "$delta" -lt 0 ] && delta=0
     else
         local created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
         local now=$(date +%s)
-        local delta=$(( now - created ))
+        delta=$(( now - created ))
         [ "$delta" -lt 0 ] && delta=0
     fi
     local d=$(( delta / 86400 ))
@@ -429,7 +438,6 @@ select_tunnel_interactive() {
     return 0
 }
 
-# --- DIRECT ACTIONS EXTRACTED TO MAIN ---
 action_edit_public_ips() {
     select_tunnel_interactive || return
     source "$SELECTED_CONF" 2>/dev/null
@@ -579,16 +587,26 @@ draw_mgre_header() {
     clear; echo ""
     local border="────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}MGRE Modular Core v%-7s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" "$MODULE_VERSION" "$s_ip" "$active_tunnels"
+    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
+        "MGRE Modular Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels"
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; REMOTE_PUB=""; T_NAME=""; FWD_TCP=""; FWD_UDP=""; source "$conf" 2>/dev/null
+        TYPE=""; REMOTE_PUB=""; T_NAME=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         ((shown++))
         [ "$shown" -gt 3 ] && break
+
+        local pure_name=$(get_pure_tun_name "$T_NAME")
+        [ ${#pure_name} -gt 5 ] && pure_name="${pure_name:0:5}"
+
+        local c_sub="${CORE_SUBNET}"
+        local main_vip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
+        local extra_vip=""
+        [ "$MAX_IPS" -gt 0 ] 2>/dev/null && extra_vip="(+${MAX_IPS})"
+        local disp_v="${main_vip}${extra_vip}"
 
         local live_ping="---" live_loss="---"
         if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
@@ -602,8 +620,8 @@ draw_mgre_header() {
         local fwd_str="OFF"
         if [ "$TYPE" == "1" ]; then
             if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
-            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:6}"
-            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:6}"
+            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:5}"
+            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:5}"
             fi
         else
             fwd_str="GATEWAY"
@@ -616,8 +634,8 @@ draw_mgre_header() {
         local fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
         local loss_col="${G}"; [[ "$live_loss" != "0%" && "$live_loss" != "---" ]] && loss_col="${R}"
 
-        printf "  ${B}│${NC} %b%s%b ${W}%-8s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-7s${NC} ${loss_col}%-4s${NC} ${B}│${NC} ${DIM}Up:${NC} ${W}%-8s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-7s%b ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$T_NAME" "$REMOTE_PUB" "$live_ping" "$live_loss" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC"
+        printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${C}%-14s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-7s${NC} %b%-4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-7s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-7s%b ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$disp_v" "$live_ping" "$loss_col" "$live_loss" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC"
     done
 
     if [ "$shown" -eq 0 ]; then
@@ -687,6 +705,7 @@ show_mgre_monitor() {
 }
 
 show_tunnel_details() {
+    clear
     local configs=($(ls "$CONF_DIR"/*.conf 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; fi
 
@@ -717,8 +736,8 @@ show_tunnel_details() {
         echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${SYNC_KEY}${NC}${sp2} ${DIM}Generated Network Key:${NC} ${Y}${t_id}${NC} ${B}│${NC}"
         
         local l3="Public IPs   : ${LOCAL_PUB} -> ${REMOTE_PUB}"
-        local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
+        local pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp2=$(printf '%*s' "$pad3" "")
+        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp2} ${B}│${NC}"
         
         if [ "$TYPE" == "1" ]; then
             local lb_txt=$([ "$LB_MODE" == "1" ] && echo "Active (All vIPs)" || echo "Direct (Core IP)")

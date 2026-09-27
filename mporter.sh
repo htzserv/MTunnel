@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.19 ---
-# [Features: Fixed Global Scope Variables | Async OTA Badge | Stable Logic]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.21 ---
+# [Features: Robust Multi-Mirror Gost Downloader | Resilient Engine Deployment | Auto-Fix apt & libs]
 
-MODULE_VERSION="8.3.19"
+MODULE_VERSION="8.3.21"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -14,13 +14,25 @@ IPT_CONF="$IPT_DIR/rules.sh"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost "$OBFS_DIR" "$IPT_DIR" /usr/sbin /usr/local/sbin /usr/local/bin 2>/dev/null
+mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost "$OBFS_DIR" "$IPT_DIR" /usr/sbin /usr/local/sbin /usr/local/bin "$SECURE_TMP" 2>/dev/null
 touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
 
 if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
+
+ensure_jq() {
+    if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+        return 0
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -o Acquire::ForceIPv4=true -y -q jq libjq1 libonig5 >/dev/null 2>&1
+    if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
 
 # --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
@@ -45,12 +57,10 @@ check_update_bg &
 self_update_module() {
     local rel_path="mporter.sh"
     local cb="?t=$(date +%s)"
-    
     local remote_v="Unknown"
     [ -f "$SECURE_TMP/.mporter_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mporter_remote_ver" | tr -d '\r\n ')
 
     clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (Script Only) ]${NC}"
-    
     if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
         echo -e "  ${DIM}├─${NC} ${Y}Update Available: v${MODULE_VERSION} ➔ v${remote_v}${NC}"
     else
@@ -91,9 +101,8 @@ self_update_module() {
         esac
 
         echo -e "\n  ${C}⟳${NC} ${W}Downloading MPorter Update...${NC}"
-        
         if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
+            curl -fsSL --connect-timeout 8 --max-time 45 -o "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
         elif command -v wget >/dev/null 2>&1; then
             wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null && dl_success=true
         fi
@@ -113,12 +122,9 @@ self_update_module() {
         if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
             sed -i 's/\r$//' "$tmp_file" 2>/dev/null
             chmod +x "$tmp_file"
-            
             cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
             [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
-            
             cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
-            
             rm -f "$tmp_file"
             echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
             sleep 1.5
@@ -142,15 +148,18 @@ get_local_ip() {
 
 draw_progress_bar() {
     local pid=$1; local text=$2; local width=28; local progress=0
-    local ticks=0; local max_ticks=480
+    local ticks=0; local max_ticks=240
     tput civis 2>/dev/null || true
     
     while kill -0 "$pid" 2>/dev/null; do
-        ((progress++)); [ "$progress" -gt 95 ] && progress=95
-        local filled=$(( progress * width / 100 )); local empty=$(( width - filled ))
-        local bar=$(printf "%${filled}s" "" | tr ' ' '#'); local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+        ((progress++))
+        [ "$progress" -gt 95 ] && progress=95
+        local filled=$(( progress * width / 100 ))
+        local empty=$(( width - filled ))
+        local bar=$(printf "%${filled}s" "" | tr ' ' '#')
+        local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
         printf "\r  ${C}⟳${NC} ${W}%-26s${NC} ${B}[${G}%s${DIM}%s${B}]${NC} ${C}%3d%%${NC}" "$text" "$bar" "$empty_bar" "$progress"
-        sleep 0.25
+        sleep 0.15
         ((ticks++))
         
         if [ "$ticks" -gt "$max_ticks" ]; then
@@ -170,9 +179,12 @@ purge_ip_core() {
     local target_ip=$(echo "$1" | tr -dc '0-9.')
     if [[ ! "$target_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return; fi
     
+    ensure_jq >/dev/null 2>&1
     local t_ports=""
     [ -f "$H_CONF" ] && t_ports+=$(grep "$target_ip:" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP 'tcp://:\K[0-9]+' | xargs)
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+        t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP 'tcp://:\K[0-9]+' | xargs)
+    fi
     [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "MPORTER_NAT_$target_ip" "$IPT_CONF" 2>/dev/null | grep "PREROUTING" | grep -oP -- '--dport \K[0-9]+' | xargs)
     
     t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
@@ -185,8 +197,8 @@ purge_ip_core() {
         sed -i "/server srv_$p /d" "$H_CONF" 2>/dev/null
         sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
         
-        if command -v jq >/dev/null 2>&1; then 
-            jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+        if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+            jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json 2>/dev/null && mv /tmp/g.json "$G_CONF" 2>/dev/null
         fi
         
         if [ -f "$OBFS_DIR/nat.sh" ]; then 
@@ -221,7 +233,7 @@ if [[ "$1" == "--cleanup-orphans" ]]; then
     h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null | sort -u)
     g_ips=""
     ipt_ips=""
-    if command -v jq >/dev/null 2>&1 && [ -f "$G_CONF" ]; then
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
         g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)
     fi
     [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
@@ -292,6 +304,46 @@ EOF_SRV
     systemctl daemon-reload; systemctl enable mporter-obfs >/dev/null 2>&1; systemctl restart mporter-obfs >/dev/null 2>&1
 }
 
+download_gost_binary() {
+    local target_bin="/usr/local/bin/gost"
+    if [ -s "$target_bin" ] && "$target_bin" -V >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    local mirrors=(
+        "https://c107328.parspack.net/c107328/MTunnel/gost-linux-amd64-2.11.5.gz"
+        "https://ghproxy.net/https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+        "https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+    )
+    
+    local gz_tmp="/tmp/gost_dl.$$.gz"
+    local raw_tmp="/tmp/gost_dl.$$"
+    rm -f "$gz_tmp" "$raw_tmp"
+    
+    for url in "${mirrors[@]}"; do
+        if command -v curl >/dev/null 2>&1; then
+            curl -fkSL --connect-timeout 5 --max-time 25 -o "$gz_tmp" "$url" 2>/dev/null
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --no-check-certificate --timeout=15 --tries=1 -O "$gz_tmp" "$url" 2>/dev/null
+        fi
+        
+        if [ -s "$gz_tmp" ]; then
+            # بررسی اینکه آیا فایل واقعا gzip است یا خیر
+            if gzip -t "$gz_tmp" >/dev/null 2>&1; then
+                gzip -df "$gz_tmp" -c > "$raw_tmp" 2>/dev/null
+                if [ -s "$raw_tmp" ]; then
+                    mv "$raw_tmp" "$target_bin"
+                    chmod +x "$target_bin"
+                    rm -f "$gz_tmp" "$raw_tmp"
+                    return 0
+                fi
+            fi
+        fi
+        rm -f "$gz_tmp" "$raw_tmp"
+    done
+    return 1
+}
+
 install_core_engines() {
     clear; echo ""
     echo -e "  ${DIM}┌─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
@@ -311,11 +363,15 @@ install_core_engines() {
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf 2>/dev/null; echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
         sysctl -p >/dev/null 2>&1
+        
+        # آزاد کردن قفل پکیج‌منیجر
         killall -9 apt-get apt dpkg 2>/dev/null || true
         rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
-        timeout 45 apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
-        timeout 60 apt-get install -o Acquire::ForceIPv4=true -y -q jq curl wget >/dev/null 2>&1 || true
+        
+        # آپدیت سریع مخازن و پکیج‌های پایه‌ای
+        timeout 25 apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive timeout 35 apt-get install -o Acquire::ForceIPv4=true -y -q jq libjq1 libonig5 curl wget gzip iptables >/dev/null 2>&1 || true
     ) &
     draw_progress_bar $! "Resolving Dependencies"
 
@@ -323,7 +379,9 @@ install_core_engines() {
         (
             mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
             touch /var/lib/haproxy/stats 2>/dev/null
-            timeout 60 apt-get install -o Acquire::ForceIPv4=true -y --no-install-recommends liblua5.4-0 haproxy >/dev/null 2>&1 || true
+            # حذف قفل‌های احتمالی و نصب مستقل HAProxy
+            DEBIAN_FRONTEND=noninteractive timeout 40 apt-get install -o Acquire::ForceIPv4=true -y haproxy >/dev/null 2>&1 || true
+            
             if [ ! -s "$H_CONF" ]; then
                 cat <<'EOF_HAP' > "$H_CONF"
 global
@@ -352,26 +410,11 @@ EOF_HAP
 
     if [[ "$eng_opt" == "4" || "$eng_opt" == "2" ]]; then
         (
-            if [ ! -f /usr/local/bin/gost ]; then
-                local G_URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
-                local G_PROXY="https://ghproxy.net/"
-                local dl_ok=false
-                if command -v curl >/dev/null 2>&1; then
-                    curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && curl -fsSL --connect-timeout 10 --max-time 60 -o "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
-                elif command -v wget >/dev/null 2>&1; then
-                    wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "$G_URL" 2>/dev/null && dl_ok=true
-                    [ "$dl_ok" = false ] && wget -q --timeout=15 --tries=2 -O "/tmp/gost.gz" "${G_PROXY}${G_URL}" 2>/dev/null && dl_ok=true
-                fi
-                
-                if [ -s "/tmp/gost.gz" ]; then
-                    gzip -d "/tmp/gost.gz"
-                    mv "/tmp/gost" /usr/local/bin/gost 2>/dev/null
-                    chmod +x /usr/local/bin/gost
-                fi
-            fi
+            download_gost_binary
             mkdir -p /etc/gost 2>/dev/null
-            if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
+            if [ ! -f "$G_CONF" ] || ! jq . "$G_CONF" >/dev/null 2>&1; then 
+                echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
+            fi
             cat <<EOF_GST > /etc/systemd/system/gost.service
 [Unit]
 Description=GO Simple Tunnel (MPorter Core)
@@ -461,12 +504,16 @@ get_stats() {
     
     local h_ports=0; local g_ports=0; local ipt_ports=0; local ext_ports_count=0
     if [ -f "$H_CONF" ]; then h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null); ((h_ports--)); [ "$h_ports" -lt 0 ] && h_ports=0; fi
-    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0; fi
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0
+    fi
     if [ -f "$IPT_CONF" ]; then ipt_ports=$(grep -c "PREROUTING" "$IPT_CONF" 2>/dev/null); fi
     
     local h_ips=""; local g_ips=""; local ipt_ips=""; local ext_ips=""
     [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    fi
     [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
 
     shopt -s nullglob
@@ -507,11 +554,13 @@ draw_header() {
     echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
-    echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"
+    echo -e "  ${B}├──────────────┬──────────┼────────────────────────────┼──────────────────────┬────────────────────────────┤${NC}"
     
     local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
     [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|HAP"}')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|GST"}')
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|GST"}')
+    fi
     [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' | sort | uniq -c | awk '{print $2 "|" $1 "|IPT"}')
 
     shopt -s nullglob
@@ -596,7 +645,14 @@ smart_map() {
     fwd_engine=$(echo "$fwd_engine" | tr -dc '1-3')
     
     if [ -z "$fwd_engine" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
-    if [ "$fwd_engine" == "2" ] && ! command -v jq >/dev/null 2>&1; then echo -e "  ${R}● Gost requires 'jq'. Run Installer (1) first.${NC}"; sleep 2; return; fi
+    
+    if [ "$fwd_engine" == "2" ]; then
+        if ! ensure_jq; then
+            echo -e "  ${R}● Gost requires 'jq' and its dependencies. Auto-repair failed! Run Installer (1) first.${NC}"
+            sleep 2
+            return
+        fi
+    fi
 
     local active_ifs=()
     shopt -s nullglob
@@ -697,7 +753,7 @@ smart_map() {
         local skip_reason=""
         if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then skip_reason="OS/System"
         elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then skip_reason="HAProxy"
-        elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
+        elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
             if jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then skip_reason="Gost"; fi
         elif grep -q -- "--dport $p " "$IPT_CONF" 2>/dev/null; then skip_reason="KernelNAT"
         fi
@@ -715,7 +771,7 @@ smart_map() {
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "HAProxy" "$target_ip"
         
         elif [ "$fwd_engine" == "2" ]; then
-            jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
+            jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json 2>/dev/null && mv /tmp/gconfig.json "$G_CONF" 2>/dev/null
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${M}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "Gost" "$target_ip"
             
         elif [ "$fwd_engine" == "3" ]; then
@@ -795,7 +851,9 @@ edit_mapping() {
     echo -e "\n  ${DIM}┌─[ EDIT FORWARDING MAPPINGS ]${NC}"
     local h_map=""; local g_map=""; local ipt_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    fi
     
     [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null)
     
@@ -816,7 +874,9 @@ edit_mapping() {
         draw_header
         local t_ports=""
         [ -f "$H_CONF" ] && t_ports+=$(grep "$target_ip:" "$H_CONF" 2>/dev/null | awk '{print $2}' | cut -d'_' -f2 | xargs)
-        [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP 'tcp://:\K[0-9]+' | xargs)
+        if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+            t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP 'tcp://:\K[0-9]+' | xargs)
+        fi
         
         [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "MPORTER_NAT_$target_ip" "$IPT_CONF" 2>/dev/null | grep "PREROUTING" | grep -oP -- '--dport \K[0-9]+' | xargs)
         
@@ -849,6 +909,10 @@ edit_mapping() {
                 echo -ne "  ${C}Select Engine ❯❯ ${NC}"; read e_opt
                 e_opt=$(echo "$e_opt" | tr -dc '1-3')
                 
+                if [ "$e_opt" == "2" ]; then
+                    ensure_jq >/dev/null 2>&1
+                fi
+
                 for p in $clean_ports; do
                     if ss -tuln 2>/dev/null | awk '{print $5}' | grep -qE ":$p$"; then continue; fi
                     if [ "$e_opt" == "1" ]; then
@@ -857,7 +921,7 @@ edit_mapping() {
                             echo -e "\nfrontend ft_$p\n    bind *:$p\n    default_backend bk_$p\nbackend bk_$p\n    server srv_$p $target_ip:$p check inter 5000" >> "$H_CONF"
                         ) 200>/var/lock/mporter_haproxy.lock
                     elif [ "$e_opt" == "2" ]; then 
-                        jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json && mv /tmp/gconfig.json "$G_CONF"
+                        jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json 2>/dev/null && mv /tmp/gconfig.json "$G_CONF" 2>/dev/null
                     elif [ "$e_opt" == "3" ]; then
                         echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$target_ip\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
                         echo "iptables -t nat -A POSTROUTING -d $target_ip -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$target_ip\" -j MASQUERADE" >> "$IPT_CONF"
@@ -890,8 +954,8 @@ edit_mapping() {
                     sed -i "/server srv_$p /d" "$H_CONF" 2>/dev/null
                     sed -i "/server srv_${p}_[0-9]\+ /d" "$H_CONF" 2>/dev/null
                     
-                    if command -v jq >/dev/null 2>&1; then 
-                        jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF" 2>/dev/null
+                    if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+                        jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json 2>/dev/null && mv /tmp/g.json "$G_CONF" 2>/dev/null
                     fi
                     if [ -f "$IPT_CONF" ]; then
                         sed -i "/--dport $p .*MPORTER_NAT_$target_ip/d" "$IPT_CONF" 2>/dev/null
@@ -944,7 +1008,7 @@ edit_mapping() {
                     mkdir -p "$OBFS_DIR"
 
                     for p in $t_ports; do
-                        if command -v jq >/dev/null 2>&1 && jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then continue; fi
+                        if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1 && jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then continue; fi
                         
                         local obfs_lport=$((30000 + p)); [ "$obfs_lport" -gt 65535 ] && obfs_lport=$(( p + 10000 ))
                         echo "iptables -t nat -A OUTPUT -d $target_ip -p tcp --dport $p -m comment --comment \"MPORTER_OBFS\" -j REDIRECT --to-ports $obfs_lport" >> "$OBFS_DIR/nat.sh"
@@ -969,8 +1033,8 @@ edit_mapping() {
                 if [ -f "$H_CONF" ]; then sed -i "s/ $target_ip:/ $new_ip:/g" "$H_CONF"; fi
                 if [ -f "$IPT_CONF" ]; then sed -i "s/$target_ip/$new_ip/g" "$IPT_CONF"; fi
                 
-                if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1; then
-                    jq --arg old "/$target_ip:" --arg new "/$new_ip:" '.ServeNodes = [.ServeNodes[]? | sub($old; $new)]' "$G_CONF" > /tmp/g.json && mv /tmp/g.json "$G_CONF"
+                if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+                    jq --arg old "/$target_ip:" --arg new "/$new_ip:" '.ServeNodes = [.ServeNodes[]? | sub($old; $new)]' "$G_CONF" > /tmp/g.json 2>/dev/null && mv /tmp/g.json "$G_CONF" 2>/dev/null
                 fi
                 
                 if [ -f "$OBFS_DIR/nat.sh" ]; then sed -i "s/\b${target_ip}\b/${new_ip}/g" "$OBFS_DIR/nat.sh"; fi
@@ -998,7 +1062,9 @@ show_table() {
     local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
     
     [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {ip=$3; sub(/:.*/, "", ip); print port "|" ip "|HAP"}')
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1|\2|GST/g')
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1|\2|GST/g')
+    fi
     [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- '--dport \K[0-9]+.*MPORTER_NAT_[0-9\.]+' | awk '{print $1 "|" $NF "|IPT"}' | sed 's/MPORTER_NAT_//g')
     
     shopt -s nullglob
@@ -1075,7 +1141,9 @@ purge_menu() {
     
     local h_map=""; local g_map=""; local ipt_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
-    [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    fi
     [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
     
     local all_ips=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | sort -u)

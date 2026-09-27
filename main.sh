@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v9.3.3 ---
+# --- MDesign Master Core | Central Dashboard v9.6.6 ---
 # [Features: Fixed Syntax Error | Balanced Case Blocks | Expanded 106-Col Header]
 
-MODULE_VERSION="9.6.5"
+MODULE_VERSION="9.6.6"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -1108,10 +1108,13 @@ draw_main_header() {
         web_stat="${G}● PORT ${w_port}${NC}"
     fi
 
+    local porter_stat="${DIM}○ OFF${NC}"
+    systemctl is-active --quiet mporter.service 2>/dev/null && porter_stat="${G}● ON${NC}"
+
     clear; echo ""
     local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v${MODULE_VERSION}${NC}   ${B}│${NC}   ${DIM}Local:${NC} ${W}%-15s${NC}   ${B}│${NC}   ${DIM}Web:${NC} ${web_stat}    ${B}│${NC}   ${DIM}BBR:${NC} ${bbr_stat}     ${B}│${NC}" | sed "s/%-15s/$(printf '%-15s' "$s_ip")/"
+    echo -e "  ${B}│${NC} ${W}MDesign Master Core v${MODULE_VERSION}${NC}   ${B}│${NC}   ${DIM}Local:${NC} ${W}%-15s${NC}   ${B}│${NC}   ${DIM}Web:${NC} ${web_stat}    ${B}│${NC}   ${DIM}Porter:${NC} ${porter_stat}   ${B}│${NC}   ${DIM}BBR:${NC} ${bbr_stat}     ${B}│${NC}" | sed "s/%-15s/$(printf '%-15s' "$s_ip")/"
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
@@ -1365,19 +1368,20 @@ while true; do
                     [ "$pad_len" -lt 0 ] && pad_len=0
                     padding=$(printf '%*s' "$pad_len" "")
 
-                    if [ "$dl_ok" = true ] && [ -s "$t_out" ]; then
+                    if [ -n "$f_found" ] && [ -s "$f_found" ]; then
+                        cp -f "$f_found" "$LOCAL_DIR/packages/" 2>/dev/null
                         if [[ "$item" == *.deb ]]; then
-                            dpkg -i --force-confdef --force-confold "$t_out" >/dev/null 2>&1 || true
+                            dpkg -i --force-confdef --force-confold "$f_found" >/dev/null 2>&1 || true
                         else
-                            chmod +x "$t_out"
+                            chmod +x "$f_found" 2>/dev/null
                             if [ "$item" == "haproxy" ]; then
-                                install -m 0755 "$t_out" /usr/sbin/haproxy 2>/dev/null
+                                install -m 0755 "$f_found" /usr/sbin/haproxy 2>/dev/null
                                 ln -sf /usr/sbin/haproxy /usr/local/bin/haproxy 2>/dev/null
                             elif [ "$item" == "bh" ]; then
-                                install -m 0755 "$t_out" /usr/local/bin/bh 2>/dev/null
+                                install -m 0755 "$f_found" /usr/local/bin/bh 2>/dev/null
                                 ln -sf /usr/local/bin/bh /usr/local/bin/backhaul 2>/dev/null
                             else
-                                install -m 0755 "$t_out" "/usr/local/bin/$item" 2>/dev/null
+                                install -m 0755 "$f_found" "/usr/local/bin/$item" 2>/dev/null
                             fi
                         fi
 

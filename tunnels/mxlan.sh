@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.4 ---
-# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh | Integer Ping | Advanced OTA]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.5 ---
+# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh | Integer Ping | MPorter Launcher | Advanced OTA]
 
-MODULE_VERSION="1.8.4"
+MODULE_VERSION="1.8.5"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -717,21 +717,22 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (Token Mesh)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Delete Fabrics (Specific / ALL)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}MPorter Port Forwarder / Manager${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ FLAT CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit Master Token (Regenerates VNI & Subnet)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Override Core Subnet Base${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Rename Fabric Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${M}Edit Master Token (Regenerates VNI & Subnet)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Override Core Subnet Base${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Rename Fabric Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}View Fabric Config Registry${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}View Fabric Config Registry${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -918,6 +919,17 @@ while true; do
            fi ;;
 
         4)
+           if command -v mporter >/dev/null 2>&1; then
+               mporter
+           elif [ -x "/usr/bin/mporter" ]; then
+               /usr/bin/mporter
+           elif [ -f "/root/mtunnel/mporter.sh" ]; then
+               bash /root/mtunnel/mporter.sh
+           else
+               echo -e "\n  ${R}✖ MPorter script not found on system!${NC}"; sleep 1.5
+           fi ;;
+
+        5)
            select_fabric_interactive || continue
            LOCAL_PUB=""; REMOTE_PUB=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Local Public IP [Current: ${Y}${LOCAL_PUB}${W}, Enter to skip]: ${NC}"; read -r new_lip
@@ -929,7 +941,7 @@ while true; do
            apply_fabric "$SELECTED_CONF"
            echo -e "  ${G}● Public IPs updated and applied.${NC}"; sleep 1.5 ;;
 
-        5)
+        6)
            select_fabric_interactive || continue
            TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates VNI & Subnet): ${NC}"; read -r new_tok
@@ -958,7 +970,7 @@ while true; do
                echo -e "  ${G}● Token updated. VNI: ${new_vni}, Subnet: ${new_core_sub}.x${NC}"; sleep 1.8
            fi ;;
 
-        6)
+        7)
            select_fabric_interactive || continue
            CORE_SUBNET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.88.5) [Current: ${Y}${CORE_SUBNET}${W}, Enter to skip]: ${NC}"; read -r new_sub
@@ -969,7 +981,7 @@ while true; do
                echo -e "  ${G}● Subnet base updated to ${new_sub}.x${NC}"; sleep 1.5
            fi ;;
 
-        7)
+        8)
            select_fabric_interactive || continue
            while true; do
                TYPE=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
@@ -1027,7 +1039,7 @@ while true; do
                esac
            done ;;
 
-        8)
+        9)
            select_fabric_interactive || continue
            VX_NAME=""; BR_NAME=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}$(get_pure_vx_name "$VX_NAME")${W}, Max 4-5 chars): ${NC}"; read -r new_suffix
@@ -1048,16 +1060,16 @@ while true; do
                echo -e "  ${G}● Fabric successfully renamed to: ${new_vx_name}${NC}"; sleep 1.5
            fi ;;
 
-        9) show_fabric_details ;;
-        10)
+        10) show_fabric_details ;;
+        11)
            while true; do
                draw_mxlan_header
                show_mxlan_monitor
                read -t 2 -n 1 -s b_opt
                [[ "$b_opt" == "q" || "$b_opt" == "Q" ]] && break
            done ;;
-        11) self_update_module ;;
-        12) uninstall_mxlan ;;
+        12) self_update_module ;;
+        13) uninstall_mxlan ;;
         0) break ;;
     esac
 done

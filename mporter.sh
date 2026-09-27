@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.3.21 ---
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.4.0 ---
 # [Features: Robust Multi-Mirror Gost Downloader | Resilient Engine Deployment | Auto-Fix apt & libs]
 
-MODULE_VERSION="8.3.21"
+MODULE_VERSION="8.4.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -147,24 +147,32 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    local pid=$1; local text=$2; local width=28; local progress=0
-    local ticks=0; local max_ticks=240
+    # $1=pid  $2=label  $3=timeout in seconds (default 40)
+    local pid=$1; local text=$2; local width=28
+    local timeout_s=${3:-40}
+    local start_ts=$(date +%s)
     tput civis 2>/dev/null || true
-    
+
     while kill -0 "$pid" 2>/dev/null; do
-        ((progress++))
+        local elapsed=$(( $(date +%s) - start_ts ))
+        # پیشرفت متناسب با کل زمان مجاز محاسبه می‌شود تا نوار زود به ۹۵٪
+        # نرسد و برای مدت طولانی همان‌جا معلق نماند.
+        local progress=$(( elapsed * 95 / timeout_s ))
+        [ "$progress" -lt 1 ] && progress=1
         [ "$progress" -gt 95 ] && progress=95
         local filled=$(( progress * width / 100 ))
         local empty=$(( width - filled ))
         local bar=$(printf "%${filled}s" "" | tr ' ' '#')
         local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
         printf "\r  ${C}⟳${NC} ${W}%-26s${NC} ${B}[${G}%s${DIM}%s${B}]${NC} ${C}%3d%%${NC}" "$text" "$bar" "$empty_bar" "$progress"
-        sleep 0.15
-        ((ticks++))
-        
-        if [ "$ticks" -gt "$max_ticks" ]; then
+        sleep 0.2
+
+        if [ "$elapsed" -ge "$timeout_s" ]; then
+            # هم پروسه‌ی اصلی و هم زیرپروسه‌های آن (apt-get/curl/wget) کشته می‌شوند
+            # تا هیچ پروسه‌ی یتیمی قفل dpkg یا سوکت شبکه را نگه ندارد.
+            pkill -9 -P "$pid" 2>/dev/null || true
             kill -9 "$pid" 2>/dev/null || true
-            printf "\r  ${R}✖${NC} ${W}%-26s${NC} ${R}[ TIMEOUT KILLED ]${NC}           \n" "$text"
+            printf "\r  ${R}✖${NC} ${W}%-26s${NC} ${R}[ TIMEOUT AFTER %ds ]${NC}      \n" "$text" "$timeout_s"
             tput cnorm 2>/dev/null || true
             return 1
         fi
@@ -373,7 +381,7 @@ install_core_engines() {
         timeout 25 apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
         DEBIAN_FRONTEND=noninteractive timeout 35 apt-get install -o Acquire::ForceIPv4=true -y -q jq libjq1 libonig5 curl wget gzip iptables >/dev/null 2>&1 || true
     ) &
-    draw_progress_bar $! "Resolving Dependencies"
+    draw_progress_bar $! "Resolving Dependencies" 90
 
     if [[ "$eng_opt" == "4" || "$eng_opt" == "1" ]]; then
         (
@@ -405,7 +413,7 @@ EOF_HAP
             systemctl enable haproxy >/dev/null 2>&1
             systemctl restart haproxy >/dev/null 2>&1 || true
         ) &
-        draw_progress_bar $! "Deploying HAProxy Engine"
+        draw_progress_bar $! "Deploying HAProxy Engine" 70
     fi
 
     if [[ "$eng_opt" == "4" || "$eng_opt" == "2" ]]; then
@@ -433,7 +441,7 @@ EOF_GST
             systemctl enable gost >/dev/null 2>&1
             systemctl restart gost >/dev/null 2>&1 || true
         ) &
-        draw_progress_bar $! "Deploying Gost Engine"
+        draw_progress_bar $! "Deploying Gost Engine" 100
     fi
 
     if [[ "$eng_opt" == "4" || "$eng_opt" == "3" ]]; then
@@ -442,7 +450,7 @@ EOF_GST
             touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
             build_iptables_runner
         ) &
-        draw_progress_bar $! "Deploying Kernel NAT Engine"
+        draw_progress_bar $! "Deploying Kernel NAT Engine" 25
     fi
 
     echo -e "  ${DIM}└──────────────────────────────────────────────────────────┘${NC}\n"

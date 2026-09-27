@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v9.6.6 ---
+# --- MDesign Master Core | Central Dashboard v9.3.3 ---
 # [Features: Fixed Syntax Error | Balanced Case Blocks | Expanded 106-Col Header]
 
-MODULE_VERSION="9.6.6"
+MODULE_VERSION="9.6.7"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -1098,23 +1098,29 @@ draw_main_header() {
     local s_ip=$(get_local_ip)
 
     local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
-    local bbr_stat="${DIM}○ OFF${NC}"
-    [ "$bbr_cc" == "bbr" ] && bbr_stat="${G}● ON${NC}"
 
-    local web_stat="${DIM}○ OFFLINE${NC}"
+    local web_col="${DIM}" web_icon="○" web_text="OFFLINE"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then
         local w_port="1000"
         [ -f "/etc/mweb/web.conf" ] && w_port=$(grep "WEB_PORT" /etc/mweb/web.conf | cut -d= -f2 | tr -d ' ' | tr -d '\r')
-        web_stat="${G}● PORT ${w_port}${NC}"
+        web_col="${G}"; web_icon="●"; web_text="PORT ${w_port}"
     fi
 
-    local porter_stat="${DIM}○ OFF${NC}"
-    systemctl is-active --quiet mporter.service 2>/dev/null && porter_stat="${G}● ON${NC}"
+    local porter_col="${DIM}" porter_icon="○" porter_text="OFF"
+    systemctl is-active --quiet mporter.service 2>/dev/null && { porter_col="${G}"; porter_icon="●"; porter_text="ON"; }
 
+    local bbr_col="${DIM}" bbr_icon="○" bbr_text="OFF"
+    [ "$bbr_cc" == "bbr" ] && { bbr_col="${G}"; bbr_icon="●"; bbr_text="ON"; }
+
+    # NOTE: printf's %-Ns width here is measured in bytes, not display columns,
+    # so it must never be applied directly to a string containing a multi-byte
+    # glyph (●/○) or it silently under-pads. The icon (always exactly 1 column)
+    # is printed on its own via %s; only the plain-ASCII status text is padded.
     clear; echo ""
-    local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
+    local border="─────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MDesign Master Core v${MODULE_VERSION}${NC}   ${B}│${NC}   ${DIM}Local:${NC} ${W}%-15s${NC}   ${B}│${NC}   ${DIM}Web:${NC} ${web_stat}    ${B}│${NC}   ${DIM}Porter:${NC} ${porter_stat}   ${B}│${NC}   ${DIM}BBR:${NC} ${bbr_stat}     ${B}│${NC}" | sed "s/%-15s/$(printf '%-15s' "$s_ip")/"
+    printf "  ${B}│${NC} ${W}MDesign Master Core v${MODULE_VERSION}${NC}  ${B}│${NC}  ${DIM}Local:${NC} ${W}%-15s${NC}  ${B}│${NC}  ${DIM}Web:${NC} %b%s %-10s${NC}  ${B}│${NC}  ${DIM}Porter:${NC} %b%s %-3s${NC}  ${B}│${NC}  ${DIM}BBR:${NC} %b%s %-3s${NC}    ${B}│${NC}\n" \
+        "$s_ip" "$web_col" "$web_icon" "$web_text" "$porter_col" "$porter_icon" "$porter_text" "$bbr_col" "$bbr_icon" "$bbr_text"
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
@@ -1144,13 +1150,13 @@ draw_main_header() {
 
             local proto_box="[${t_proto}]"
 
-            printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}%-7s${NC} ${B}│${NC}  ${DIM}Peer:${NC} ${Y}%-15s${NC} ${B}│${NC}  ${DIM}vIP:%b%-4s%b  ${B}│${NC}  ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b  ${B}│${NC}  ${DIM}Up:${NC}${W}%-6s${NC}  ${B}│${NC}  ${DIM}FWD:${NC}%b%-4s%b  ${B}│${NC}\n" \
+            printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}%-7s${NC} ${B}│${NC}  ${DIM}Peer:${NC} ${Y}%-15s${NC} ${B}│${NC}  ${DIM}vIP:%b%-4s%b  ${B}│${NC}  ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b  ${B}│${NC}  ${DIM}Up:${NC}${W}%-6s${NC}  ${B}│${NC}  ${DIM}FWD:${NC}%b%-4s%b             ${B}│${NC}\n" \
                 "$stat_col" "$stat_icon" "$NC" "$t_name" "$proto_box" "$t_remote" "$vip_col" "$t_vip" "$NC" "$t_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$t_fwd" "$NC"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-102s${NC}  ${B}│${NC}\n" "● No active tunnels or fabrics deployed across the ecosystem."
+        printf "  ${B}│${NC}  ${DIM}● %-107s${NC}  ${B}│${NC}\n" "No active tunnels or fabrics deployed across the ecosystem."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }

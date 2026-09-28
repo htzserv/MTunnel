@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.6 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.7 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="5.8.6"
+MODULE_VERSION="5.8.7"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -182,6 +182,7 @@ get_iface_uptime() {
 draw_mgre_header() {
     local s_ip active_tunnels=0 conf
     s_ip=$(get_local_ip)
+    s_ip="${s_ip:0:24}"
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
         T_NAME=""; source "$conf" 2>/dev/null
@@ -193,13 +194,14 @@ draw_mgre_header() {
     clear; echo ""
     local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-31s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-24s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC}%-21s ${B}│${NC}\n" \
+    printf "  ${B}│${NC} ${W}%-31.31s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-24.24s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3.3s${NC}%-17.17s ${B}│${NC}\n" \
         "MGRE Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels" ""
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
     local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
-    local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp raw_peer pad_peer sp_peer
+    local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp
+    local len_name len_rem pad_peer sp_peer
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; REMOTE_PUB=""; T_NAME=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; source "$conf" 2>/dev/null
@@ -208,11 +210,12 @@ draw_mgre_header() {
         [ "$shown" -gt 3 ] && break
 
         pure_name=$(get_pure_tun_name "$T_NAME")
-        [ ${#pure_name} -gt 7 ] && pure_name="${pure_name:0:7}"
-        [ ${#REMOTE_PUB} -gt 15 ] && REMOTE_PUB="${REMOTE_PUB:0:15}"
+        pure_name="${pure_name:0:7}"
+        REMOTE_PUB="${REMOTE_PUB:0:15}"
 
-        raw_peer="${pure_name} ➔ ${REMOTE_PUB}"
-        pad_peer=$(( 31 - ${#raw_peer} ))
+        len_name=${#pure_name}
+        len_rem=${#REMOTE_PUB}
+        pad_peer=$(( 27 - (len_name + len_rem) ))
         [ "$pad_peer" -lt 0 ] && pad_peer=0
         sp_peer=$(printf '%*s' "$pad_peer" "")
 
@@ -221,7 +224,7 @@ draw_mgre_header() {
             vip_stat="+${MAX_IPS}"
             vip_col="${G}"
         fi
-        [ ${#vip_stat} -gt 5 ] && vip_stat="${vip_stat:0:5}"
+        vip_stat="${vip_stat:0:5}"
 
         live_ping="---"
         if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
@@ -231,7 +234,7 @@ draw_mgre_header() {
                 live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
             fi
         fi
-        [ ${#live_ping} -gt 4 ] && live_ping="${live_ping:0:4}"
+        live_ping="${live_ping:0:4}"
 
         loss_disp="---"; loss_col="${DIM}"
         if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
@@ -240,7 +243,7 @@ draw_mgre_header() {
             elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
             else loss_col="${R}"; fi
         fi
-        [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
+        loss_disp="${loss_disp:0:4}"
 
         fwd_str="OFF"
         if [ "$TYPE" == "1" ]; then
@@ -251,24 +254,25 @@ draw_mgre_header() {
         else
             fwd_str="GW"
         fi
-        [ ${#fwd_str} -gt 5 ] && fwd_str="${fwd_str:0:5}"
+        fwd_str="${fwd_str:0:5}"
 
         tun_uptime=$(get_iface_uptime "$T_NAME")
         stat_icon="●"; stat_col="${G}"
         if [ "$tun_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-        [ ${#tun_uptime} -gt 6 ] && tun_uptime="${tun_uptime:0:6}"
+        tun_uptime="${tun_uptime:0:6}"
 
         fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
 
         sec_disp="${TUN_SECRET:0:5}"
         [ -z "$sec_disp" ] && sec_disp="---"
+        sec_disp="${sec_disp:0:5}"
 
-        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5s${NC} ${B}│${NC}\n" \
+        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
             "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
     done
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-102s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
+        printf "  ${B}│${NC}  ${DIM}%-102.102s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }
@@ -532,10 +536,10 @@ select_tunnel_interactive() {
         return 0
     fi
 
-    echo -e "\n  ${B}╭────────────────── Select Target Tunnel ───────────────────╮${NC}"
+    echo -e "\n  ${B}╭───────────────── Select Target Tunnel ────────────────────╮${NC}"
     local i
     for i in "${!configs[@]}"; do
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$((i+1))" "$(basename "${configs[$i]}" .conf)"
+        printf "  ${B}│${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${B}│${NC}\n" "$((i+1))" "$(basename "${configs[$i]}" .conf)"
     done
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Tunnel [1-${#configs[@]}] or 'q': ${NC}"; read -r t_idx
@@ -652,7 +656,7 @@ show_mgre_monitor() {
 
         title_txt="${T_NAME} [${proto_lbl}]"
         raw_l1=" ▼ ${title_txt} | PUB: ${LOCAL_PUB} -> ${REMOTE_PUB}"
-        pad1=$(( 90 - ${#raw_l1} )); [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
+        pad1=$(( 92 - ${#raw_l1} )); [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
         eval_l1=$(printf " %b▼ %s%b ${DIM}| PUB: ${W}%s ${DIM}→${W} %s${NC}" "${title_color}" "${title_txt}" "${NC}" "${LOCAL_PUB}" "${REMOTE_PUB}")
         
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -663,14 +667,14 @@ show_mgre_monitor() {
             disp_udp="${FWD_UDP:-0}"; [ ${#disp_udp} -gt 30 ] && disp_udp="${disp_udp:0:27}..."
             lb_txt="OFF"; [ "$LB_MODE" == "1" ] && lb_txt="ON"
             raw_l2="   ↳ NAT: T:[${disp_tcp}] U:[${disp_udp}] LB:[${lb_txt}]"
-            pad2=$(( 90 - ${#raw_l2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
+            pad2=$(( 92 - ${#raw_l2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
             lb_stat=$([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")
             eval_l2="   ${DIM}↳ NAT:${NC} ${Y}T:[${disp_tcp}]${NC} ${C}U:[${disp_udp}]${NC} ${DIM}LB:[${lb_stat}${DIM}]${NC}"
             echo -e "  ${B}│${NC}${eval_l2}${sp2}${B}│${NC}"
         fi
 
         echo -e "  ${B}├────────────────────┬────────────────────┬────────────────────┬──────────────┬──────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
+        printf "  ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-12.12s${NC} ${B}│${NC} ${DIM}%-12.12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
         echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
 
         c_sub="${CORE_SUBNET}"
@@ -685,7 +689,8 @@ show_mgre_monitor() {
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
         
         m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
-        printf "  ${B}│${NC} ${W}%s %-15s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${m_icon}" "Core IP" "$main_lip" "$main_tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
+        main_lip="${main_lip:0:18}"; main_tip="${main_tip:0:18}"
+        printf "  ${B}│${NC} ${W}%s %-15.15s${NC} ${B}│${NC} ${W}%-18.18s${NC} ${B}│${NC} ${W}%-18.18s${NC} ${B}│${NC} %b%-12.12s%b ${B}│${NC} %b%s %-10.10s%b ${B}│${NC}\n" "${m_icon}" "Core IP" "$main_lip" "$main_tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         
         total_v=${#v_ips[@]}
         for ((idx=0; idx<total_v; idx++)); do
@@ -697,7 +702,8 @@ show_mgre_monitor() {
                 lat_raw="${lat_int}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
-            printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
+            lip="${lip:0:18}"; tip="${tip:0:18}"
+            printf "  ${B}│${NC} ${DIM}%s %-12.12s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} %b%-12.12s%b ${B}│${NC} %b%s %-10.10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         done
         echo -e "  ${B}╰────────────────────┴────────────────────┴────────────────────┴──────────────┴──────────────╯${NC}\n"
     done
@@ -723,22 +729,23 @@ show_tunnel_details() {
         proto_lbl="IPv4 GRE"; [[ "$TUN_PROTO" == "6to4" ]] && proto_lbl="6to4 IP6GRE"
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        left_p="▼ Tunnel: $T_NAME"; right_p="Role: $t_role"
+        left_p="▼ Tunnel: ${T_NAME:0:25}"; right_p="Role: $t_role"
         pad=$(( 90 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
         echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
         echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
         
-        l1="Master Token : ${t_sec}"; r1="Protocol: ${proto_lbl}"
+        l1="Master Token : ${t_sec:0:25}"; r1="Protocol: ${proto_lbl}"
         pad1=$(( 90 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}Master Token :${NC} ${W}${t_sec}${NC}${sp1}${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${M}Master Token :${NC} ${W}${t_sec:0:25}${NC}${sp1}${DIM}Protocol:${NC} ${W}${proto_lbl}${NC} ${B}│${NC}"
         
-        l2="vIP Sync Key : ${SYNC_KEY:-Same As Token}"; r2="Network Key ID: ${t_id}"
+        local sync_disp="${SYNC_KEY:-Same As Token}"; sync_disp="${sync_disp:0:25}"
+        l2="vIP Sync Key : ${sync_disp}"; r2="Network Key ID: ${t_id:0:15}"
         pad2=$(( 90 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${SYNC_KEY:-Same As Token}${NC}${sp2}${DIM}Network Key ID:${NC} ${Y}${t_id}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${sync_disp}${NC}${sp2}${DIM}Network Key ID:${NC} ${Y}${t_id:0:15}${NC} ${B}│${NC}"
         
-        l3="Public IPs   : ${LOCAL_PUB} -> ${REMOTE_PUB}"
+        l3="Public IPs   : ${LOCAL_PUB:0:16} -> ${REMOTE_PUB:0:16}"
         pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB:0:16}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB:0:16}${NC}${sp3} ${B}│${NC}"
 
         l4="Core Subnet  : ${c_sub}.x (${lip} -> ${tip})"
         pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; sp4=$(printf '%*s' "$pad4" "")
@@ -746,9 +753,10 @@ show_tunnel_details() {
         
         if [ "$TYPE" == "1" ]; then
             lb_txt=$([ "$LB_MODE" == "1" ] && echo "Active (All vIPs)" || echo "Direct (Core IP)")
-            l5="NAT FWD TCP  : ${FWD_TCP:-None}"; r5="Load Balancer: ${lb_txt}"
+            local fwd_disp="${FWD_TCP:-None}"; [ ${#fwd_disp} -gt 25 ] && fwd_disp="${fwd_disp:0:22}..."
+            l5="NAT FWD TCP  : ${fwd_disp}"; r5="Load Balancer: ${lb_txt}"
             pad5=$(( 90 - ${#l5} - ${#r5} )); [ "$pad5" -lt 0 ] && pad5=0; sp5=$(printf '%*s' "$pad5" "")
-            echo -e "  ${B}│${NC} ${Y}NAT FWD TCP  :${NC} ${W}${FWD_TCP:-None}${NC}${sp5}${C}Load Balancer:${NC} ${W}${lb_txt}${NC} ${B}│${NC}"
+            echo -e "  ${B}│${NC} ${Y}NAT FWD TCP  :${NC} ${W}${fwd_disp}${NC}${sp5}${C}Load Balancer:${NC} ${W}${lb_txt}${NC} ${B}│${NC}"
         fi
         
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯\n"
@@ -1007,7 +1015,7 @@ while true; do
            configs=("$CONF_DIR"/*.conf)
            [ ! -e "${configs[0]}" ] && echo -e "\n  ${R}● No active tunnels to remove!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Erase ──────────────────╮${NC}"
-           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
+           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read -r del_idx
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue

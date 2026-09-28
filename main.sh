@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v9.3.3 ---
-# [Features: Fixed Syntax Error | Balanced Case Blocks | Expanded 106-Col Header]
+# --- MDesign Master Core | Central Dashboard v9.7 ---
+# [Features: Symmetric Telemetry Header | Integer Ping | Fixed-Width Columns | Pinned 117-Col Layout]
 
-MODULE_VERSION="9.6.7"
+MODULE_VERSION="9.7"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -158,7 +158,10 @@ collect_active_tunnels_stats() {
         local avg="---"
         if echo "$ping_res" | grep -q "min/avg/max"; then
             avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            [ -n "$avg" ] && avg="${avg}ms"
+            if [ -n "$avg" ]; then
+                avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                avg="${avg}ms"
+            fi
         fi
 
         local fwd_str="OFF"
@@ -197,7 +200,10 @@ collect_active_tunnels_stats() {
             local avg="---"
             if echo "$ping_res" | grep -q "min/avg/max"; then
                 avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                [ -n "$avg" ] && avg="${avg}ms"
+                if [ -n "$avg" ]; then
+                    avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                    avg="${avg}ms"
+                fi
             fi
 
             local fwd_str="OFF"
@@ -237,7 +243,10 @@ collect_active_tunnels_stats() {
                 [ -z "$loss" ] && loss="100"
                 if echo "$ping_res" | grep -q "min/avg/max"; then
                     avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    [ -n "$avg" ] && avg="${avg}ms"
+                    if [ -n "$avg" ]; then
+                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                        avg="${avg}ms"
+                    fi
                 fi
             fi
 
@@ -273,7 +282,10 @@ collect_active_tunnels_stats() {
                 [ -z "$loss" ] && loss="100"
                 if echo "$ping_res" | grep -q "min/avg/max"; then
                     avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    [ -n "$avg" ] && avg="${avg}ms"
+                    if [ -n "$avg" ]; then
+                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                        avg="${avg}ms"
+                    fi
                 fi
             fi
 
@@ -310,7 +322,10 @@ collect_active_tunnels_stats() {
                 [ -z "$loss" ] && loss="100"
                 if echo "$ping_res" | grep -q "min/avg/max"; then
                     avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    [ -n "$avg" ] && avg="${avg}ms"
+                    if [ -n "$avg" ]; then
+                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
+                        avg="${avg}ms"
+                    fi
                 fi
             fi
 
@@ -1096,6 +1111,7 @@ run_iperf3() {
 
 draw_main_header() {
     local s_ip=$(get_local_ip)
+    s_ip="${s_ip:0:16}"
 
     local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
 
@@ -1112,15 +1128,17 @@ draw_main_header() {
     local bbr_col="${DIM}" bbr_icon="○" bbr_text="OFF"
     [ "$bbr_cc" == "bbr" ] && { bbr_col="${G}"; bbr_icon="●"; bbr_text="ON"; }
 
-    # NOTE: printf's %-Ns width here is measured in bytes, not display columns,
-    # so it must never be applied directly to a string containing a multi-byte
-    # glyph (●/○) or it silently under-pads. The icon (always exactly 1 column)
-    # is printed on its own via %s; only the plain-ASCII status text is padded.
     clear; echo ""
-    local border="─────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+    local border
+    printf -v border '%*s' 117 ''
+    border="${border// /─}"
+
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}MDesign Master Core v${MODULE_VERSION}${NC}  ${B}│${NC}  ${DIM}Local:${NC} ${W}%-15s${NC}  ${B}│${NC}  ${DIM}Web:${NC} %b%s %-10s${NC}  ${B}│${NC}  ${DIM}Porter:${NC} %b%s %-3s${NC}  ${B}│${NC}  ${DIM}BBR:${NC} %b%s %-3s${NC}    ${B}│${NC}\n" \
-        "$s_ip" "$web_col" "$web_icon" "$web_text" "$porter_col" "$porter_icon" "$porter_text" "$bbr_col" "$bbr_icon" "$bbr_text"
+    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-16.16s${NC} ${B}│${NC} ${DIM}Web:${NC} %b%s%b %-12.12s ${B}│${NC} ${DIM}Porter:${NC} %b%s%b %-6.6s ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-9.9s ${B}│${NC}\n" \
+        "MDesign Master Core v${MODULE_VERSION}" "$s_ip" \
+        "$web_col" "$web_icon" "$NC" "$web_text" \
+        "$porter_col" "$porter_icon" "$NC" "$porter_text" \
+        "$bbr_col" "$bbr_icon" "$NC" "$bbr_text"
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
@@ -1130,15 +1148,34 @@ draw_main_header() {
             ((shown++))
             [ "$shown" -gt 3 ] && break
 
-            [ ${#t_name} -gt 5 ] && t_name="${t_name:0:5}"
-            [ ${#t_remote} -gt 15 ] && t_remote="${t_remote:0:15}"
+            local pure_name=$(echo "$t_name" | tr -d ' ')
+            [ ${#pure_name} -gt 8 ] && pure_name="${pure_name:0:8}"
+            local name_tag="${pure_name} [${t_proto}]"
+            [ ${#name_tag} -gt 17 ] && name_tag="${name_tag:0:17}"
+
+            [ ${#t_remote} -gt 16 ] && t_remote="${t_remote:0:16}"
 
             local if_uptime=$(get_iface_uptime_pure "$t_dev")
             local stat_icon="●"; local stat_col="${G}"
             if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+            [ ${#if_uptime} -gt 10 ] && if_uptime="${if_uptime:0:10}"
 
             local fwd_col="${DIM}"; [ "$t_fwd" != "OFF" ] && fwd_col="${C}"
+            local fwd_str="${t_fwd:0:9}"
+
             local vip_col="${DIM}"; [ "$t_vip" != "OFF" ] && vip_col="${G}"
+            local vip_stat="${t_vip:0:5}"
+
+            local live_ping="---"
+            if [ -n "$t_ping" ] && [ "$t_ping" != "---" ]; then
+                local num_p="${t_ping%ms}"
+                if [[ "$num_p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                    live_ping=$(awk -v v="$num_p" 'BEGIN {printf "%.0fms", v}')
+                else
+                    live_ping="$t_ping"
+                fi
+            fi
+            [ ${#live_ping} -gt 5 ] && live_ping="${live_ping:0:5}"
 
             local loss_col="${DIM}"; local loss_disp="---"
             if [ "$t_loss" != "---" ] && [ -n "$t_loss" ]; then
@@ -1147,16 +1184,15 @@ draw_main_header() {
                 elif [ "$t_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
                 else loss_col="${R}"; fi
             fi
+            [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
 
-            local proto_box="[${t_proto}]"
-
-            printf "  ${B}│${NC} %b%s%b ${W}%-5s${NC} ${DIM}%-7s${NC} ${B}│${NC}  ${DIM}Peer:${NC} ${Y}%-15s${NC} ${B}│${NC}  ${DIM}vIP:%b%-4s%b  ${B}│${NC}  ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b  ${B}│${NC}  ${DIM}Up:${NC}${W}%-6s${NC}  ${B}│${NC}  ${DIM}FWD:${NC}%b%-4s%b             ${B}│${NC}\n" \
-                "$stat_col" "$stat_icon" "$NC" "$t_name" "$proto_box" "$t_remote" "$vip_col" "$t_vip" "$NC" "$t_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$t_fwd" "$NC"
+            printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-16.16s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${B}│${NC}\n" \
+                "$stat_col" "$stat_icon" "$NC" "$name_tag" "$t_remote" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}● %-107s${NC}  ${B}│${NC}\n" "No active tunnels or fabrics deployed across the ecosystem."
+        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\n" "No active tunnels or fabrics deployed across the ecosystem."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }

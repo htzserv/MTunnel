@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.1 ---
-# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Integer Ping | Pinned Header | MPorter Launcher]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.2 ---
+# [Features: Tri-Tunnel Dynamic Header | Safe Signal Trap | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="5.8.1"
+MODULE_VERSION="5.8.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -15,6 +15,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
+rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
@@ -25,7 +26,7 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 
-UPDATE_CHECK_INTERVAL=30
+UPDATE_CHECK_INTERVAL=60
 PING_CHECK_INTERVAL=5
 
 read_with_refresh() {
@@ -35,15 +36,18 @@ read_with_refresh() {
     local buffer=""
     local char rc
 
+    touch "$SECURE_TMP/.mgre_in_menu"
     echo -ne "$prompt"
 
     while true; do
         if [ "$NEED_REFRESH" = true ]; then
             NEED_REFRESH=false
-            if [ -n "$redraw_func" ]; then
-                "$redraw_func"
+            if [ -z "$buffer" ]; then
+                if [ -n "$redraw_func" ]; then
+                    "$redraw_func"
+                fi
+                echo -ne "$prompt$buffer"
             fi
-            echo -ne "$prompt$buffer"
         fi
 
         IFS= read -rsn1 -t 0.3 char
@@ -51,6 +55,11 @@ read_with_refresh() {
 
         if [ $rc -ne 0 ]; then
             continue
+        fi
+
+        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
+            echo ""
+            break
         fi
 
         if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
@@ -65,6 +74,7 @@ read_with_refresh() {
         echo -ne "$char"
     done
 
+    rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null
     eval "$__resultvar=\"\$buffer\""
 }
 
@@ -88,7 +98,9 @@ check_update_bg() {
 update_watcher_loop() {
     while true; do
         check_update_bg
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        if [ -f "$SECURE_TMP/.mgre_in_menu" ]; then
+            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
@@ -128,14 +140,16 @@ check_ping_bg() {
 ping_watcher_loop() {
     while true; do
         check_ping_bg
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        if [ -f "$SECURE_TMP/.mgre_in_menu" ]; then
+            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        fi
         sleep "$PING_CHECK_INTERVAL"
     done
 }
 ping_watcher_loop &
 PING_WATCHER_PID=$!
 
-trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
+trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null' EXIT
 
 get_local_ip() {
     local ip
@@ -344,6 +358,7 @@ self_update_module() {
             sleep 1.5
             
             kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null
+            rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null
             exec "$INSTALL_PATH" "$@"
         else
             echo -e "  ${Y}● Update cancelled.${NC}"
@@ -512,16 +527,31 @@ select_tunnel_interactive() {
     draw_mgre_header
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; }
+
+    if [ ${#configs[@]} -eq 1 ]; then
+        SELECTED_CONF="${configs[0]}"
+        return 0
+    fi
+
     echo -e "\n  ${B}╭────────────────── Select Target Tunnel ───────────────────╮${NC}"
     local i
     for i in "${!configs[@]}"; do
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$((i+1))" "$(basename "${configs[$i]}" .conf)"
     done
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
-    echo -ne "  ${C}●${NC} ${W}Select Tunnel Index or 'q': ${NC}"; read -r t_idx
-    [[ "$t_idx" == "q" || -z "$t_idx" || -z "${configs[$t_idx]}" ]] && return 1
-    SELECTED_CONF="${configs[$t_idx]}"
-    return 0
+    echo -ne "  ${C}●${NC} ${W}Select Tunnel [1-${#configs[@]}] or 'q': ${NC}"; read -r t_idx
+    t_idx=$(echo "$t_idx" | tr -d '\r ')
+    [[ "$t_idx" == "q" || -z "$t_idx" ]] && return 1
+
+    local idx_zero=$((t_idx - 1))
+    if [[ "$t_idx" =~ ^[0-9]+$ ]] && [ -n "${configs[$idx_zero]}" ]; then
+        SELECTED_CONF="${configs[$idx_zero]}"
+        return 0
+    elif [ -n "${configs[$t_idx]}" ]; then
+        SELECTED_CONF="${configs[$t_idx]}"
+        return 0
+    fi
+    return 1
 }
 
 manage_port_forwarding() {
@@ -1066,7 +1096,7 @@ while true; do
                else c1="192"; c2="168"; c3=$(( (16#${hash_c:10:2} % 254) + 1 )); fi
                new_core_sub="${c1}.${c2}.${c3}"
                
-               if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
+               if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$new_core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
                    echo -e "  ${R}● Collision detected with an existing tunnel! Please use a different Token.${NC}"; sleep 2; continue
                fi
                

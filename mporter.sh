@@ -1,11 +1,12 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.4.0 ---
-# [Features: Robust Multi-Mirror Gost Downloader | Resilient Engine Deployment | Auto-Fix apt & libs]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.4.1 ---
+# [Features: Master Systemd Service Integration | Multi-Mirror Gost | Resilient Engine Deployment]
 
-MODULE_VERSION="8.4.0"
+MODULE_VERSION="8.4.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
+SERVICE_FILE="/etc/systemd/system/mporter.service"
 H_CONF="/etc/haproxy/haproxy.cfg"
 G_CONF="/etc/gost/config.json"
 OBFS_DIR="/etc/mporter/obfs_rules"
@@ -21,6 +22,36 @@ if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
+
+setup_mporter_service() {
+    local tmp_srv="$SECURE_TMP/mporter_tpl.service"
+    cat <<'EOF_SRV' > "$tmp_srv"
+[Unit]
+Description=MPorter Port Forwarding Master Service
+After=network.target haproxy.service gost.service mporter-iptables.service
+Wants=haproxy.service gost.service mporter-iptables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target
+EOF_SRV
+    if ! cmp -s "$tmp_srv" "$SERVICE_FILE" 2>/dev/null; then
+        mv -f "$tmp_srv" "$SERVICE_FILE"
+        systemctl daemon-reload >/dev/null 2>&1
+        systemctl enable mporter.service >/dev/null 2>&1
+    else
+        rm -f "$tmp_srv"
+    fi
+
+    if systemctl is-active --quiet haproxy 2>/dev/null || systemctl is-active --quiet gost 2>/dev/null || systemctl is-active --quiet mporter-iptables 2>/dev/null; then
+        systemctl start mporter.service >/dev/null 2>&1
+    fi
+}
+setup_mporter_service
 
 ensure_jq() {
     if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
@@ -147,7 +178,6 @@ get_local_ip() {
 }
 
 draw_progress_bar() {
-    # $1=pid  $2=label  $3=timeout in seconds (default 40)
     local pid=$1; local text=$2; local width=28
     local timeout_s=${3:-40}
     local start_ts=$(date +%s)
@@ -155,8 +185,6 @@ draw_progress_bar() {
 
     while kill -0 "$pid" 2>/dev/null; do
         local elapsed=$(( $(date +%s) - start_ts ))
-        # پیشرفت متناسب با کل زمان مجاز محاسبه می‌شود تا نوار زود به ۹۵٪
-        # نرسد و برای مدت طولانی همان‌جا معلق نماند.
         local progress=$(( elapsed * 95 / timeout_s ))
         [ "$progress" -lt 1 ] && progress=1
         [ "$progress" -gt 95 ] && progress=95
@@ -168,8 +196,6 @@ draw_progress_bar() {
         sleep 0.2
 
         if [ "$elapsed" -ge "$timeout_s" ]; then
-            # هم پروسه‌ی اصلی و هم زیرپروسه‌های آن (apt-get/curl/wget) کشته می‌شوند
-            # تا هیچ پروسه‌ی یتیمی قفل dpkg یا سوکت شبکه را نگه ندارد.
             pkill -9 -P "$pid" 2>/dev/null || true
             kill -9 "$pid" 2>/dev/null || true
             printf "\r  ${R}✖${NC} ${W}%-26s${NC} ${R}[ TIMEOUT AFTER %ds ]${NC}      \n" "$text" "$timeout_s"
@@ -233,6 +259,7 @@ purge_ip_core() {
 if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
     purge_ip_core "$2"
     systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+    setup_mporter_service
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
     exit 0
 fi
@@ -258,6 +285,7 @@ if [[ "$1" == "--cleanup-orphans" ]]; then
         if [ "$found" = false ]; then purge_ip_core "$ip"; fi
     done
     systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+    setup_mporter_service
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
     exit 0
 fi
@@ -283,6 +311,7 @@ ExecStart=/usr/local/bin/mporter-iptables.sh
 WantedBy=multi-user.target
 EOF_SRV_IPT
     systemctl daemon-reload; systemctl enable mporter-iptables >/dev/null 2>&1; systemctl restart mporter-iptables >/dev/null 2>&1
+    setup_mporter_service
 }
 
 build_obfs_runner() {
@@ -310,6 +339,7 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF_SRV
     systemctl daemon-reload; systemctl enable mporter-obfs >/dev/null 2>&1; systemctl restart mporter-obfs >/dev/null 2>&1
+    setup_mporter_service
 }
 
 download_gost_binary() {
@@ -336,7 +366,6 @@ download_gost_binary() {
         fi
         
         if [ -s "$gz_tmp" ]; then
-            # بررسی اینکه آیا فایل واقعا gzip است یا خیر
             if gzip -t "$gz_tmp" >/dev/null 2>&1; then
                 gzip -df "$gz_tmp" -c > "$raw_tmp" 2>/dev/null
                 if [ -s "$raw_tmp" ]; then
@@ -372,12 +401,10 @@ install_core_engines() {
         sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf 2>/dev/null; echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
         sysctl -p >/dev/null 2>&1
         
-        # آزاد کردن قفل پکیج‌منیجر
         killall -9 apt-get apt dpkg 2>/dev/null || true
         rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock* /var/cache/apt/archives/lock >/dev/null 2>&1
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
         
-        # آپدیت سریع مخازن و پکیج‌های پایه‌ای
         timeout 25 apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
         DEBIAN_FRONTEND=noninteractive timeout 35 apt-get install -o Acquire::ForceIPv4=true -y -q jq libjq1 libonig5 curl wget gzip iptables >/dev/null 2>&1 || true
     ) &
@@ -387,7 +414,6 @@ install_core_engines() {
         (
             mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
             touch /var/lib/haproxy/stats 2>/dev/null
-            # حذف قفل‌های احتمالی و نصب مستقل HAProxy
             DEBIAN_FRONTEND=noninteractive timeout 40 apt-get install -o Acquire::ForceIPv4=true -y haproxy >/dev/null 2>&1 || true
             
             if [ ! -s "$H_CONF" ]; then
@@ -453,6 +479,7 @@ EOF_GST
         draw_progress_bar $! "Deploying Kernel NAT Engine" 25
     fi
 
+    setup_mporter_service
     echo -e "  ${DIM}└──────────────────────────────────────────────────────────┘${NC}\n"
     sleep 1
 }
@@ -796,6 +823,7 @@ smart_map() {
     [ "$fwd_engine" == "1" ] && systemctl restart haproxy 2>/dev/null
     [ "$fwd_engine" == "2" ] && systemctl restart gost 2>/dev/null
     [ "$fwd_engine" == "3" ] && systemctl restart mporter-iptables 2>/dev/null
+    setup_mporter_service
 
     if [ "$fwd_engine" == "1" ] || [ "$fwd_engine" == "3" ]; then
         echo -ne "\n  ${C}●${NC} ${W}Enable Strict OBFS Stealth for these ports? (y/n): ${NC}"; read enable_obfs
@@ -948,6 +976,7 @@ edit_mapping() {
                 [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null
                 [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
                 [ "$e_opt" == "3" ] && systemctl restart mporter-iptables 2>/dev/null
+                setup_mporter_service
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
             2)
@@ -975,6 +1004,7 @@ edit_mapping() {
                 done
                 sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                setup_mporter_service
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports removed securely!${NC}"; sleep 1.5 ;;
             3)
@@ -1049,6 +1079,7 @@ edit_mapping() {
                 if [ -f "$OBFS_DIR/gost.sh" ]; then sed -i "s/\b${target_ip}\b/${new_ip}/g" "$OBFS_DIR/gost.sh"; fi
                 
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                setup_mporter_service
                 [ -f "$OBFS_DIR/nat.sh" ] && build_obfs_runner
                 
                 echo -e "  ${G}● IP Successfully Migrated!${NC}"; sleep 1.5
@@ -1193,6 +1224,7 @@ purge_menu() {
             if [[ "$conf" == "y" ]]; then
                 for ip in ${iface_ips[$selected_ifc_info]}; do purge_ip_core "$ip"; done
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                setup_mporter_service
                 [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
                 echo -e "  ${G}● Interface $t_name purged successfully!${NC}"; sleep 1.5
             fi ;;
@@ -1220,6 +1252,7 @@ purge_menu() {
             
             purge_ip_core "$target_ip"
             systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+            setup_mporter_service
             [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
             echo -e "  ${G}● IP $target_ip purged successfully!${NC}"; sleep 1.5 ;;
         3) 
@@ -1232,6 +1265,7 @@ purge_menu() {
                 > "$IPT_CONF"
                 rm -rf "$OBFS_DIR"
                 systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                setup_mporter_service
                 build_obfs_runner
                 echo -e "  ${G}● All global mappings wiped. Core configs preserved.${NC}"; sleep 1.5
             fi ;;
@@ -1296,10 +1330,10 @@ manual_restart() {
     r_opt=$(echo "$r_opt" | tr -dc '0-4')
     echo ""
     case $r_opt in
-        1) systemctl restart haproxy 2>/dev/null; echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
-        2) systemctl restart gost 2>/dev/null; echo -e "  ${G}● Gost restarted successfully.${NC}" ;;
-        3) systemctl restart mporter-iptables 2>/dev/null; echo -e "  ${G}● Kernel NAT restarted successfully.${NC}" ;;
-        4) systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null; echo -e "  ${G}● All engines restarted successfully.${NC}" ;;
+        1) systemctl restart haproxy 2>/dev/null; setup_mporter_service; echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
+        2) systemctl restart gost 2>/dev/null; setup_mporter_service; echo -e "  ${G}● Gost restarted successfully.${NC}" ;;
+        3) systemctl restart mporter-iptables 2>/dev/null; setup_mporter_service; echo -e "  ${G}● Kernel NAT restarted successfully.${NC}" ;;
+        4) systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null; setup_mporter_service; echo -e "  ${G}● All engines restarted successfully.${NC}" ;;
         0) return ;; *) echo -e "  ${R}● Invalid selection!${NC}" ;;
     esac
     sleep 1.5
@@ -1346,7 +1380,8 @@ while true; do
                systemctl stop mporter-obfs 2>/dev/null; systemctl disable mporter-obfs 2>/dev/null
                systemctl stop mporter-iptables 2>/dev/null; systemctl disable mporter-iptables 2>/dev/null
                systemctl stop mporter-watchdog 2>/dev/null; systemctl disable mporter-watchdog 2>/dev/null
-               rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service "$OBFS_DIR" "$IPT_DIR" /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service /etc/systemd/system/mporter-watchdog.service
+               systemctl stop mporter.service 2>/dev/null; systemctl disable mporter.service 2>/dev/null
+               rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service "$OBFS_DIR" "$IPT_DIR" /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service /etc/systemd/system/mporter-watchdog.service /etc/systemd/system/mporter.service
                apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
                iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
                iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done

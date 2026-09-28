@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.5 ---
-# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh | Integer Ping | MPorter Launcher | Advanced OTA]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.7 ---
+# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.8.5"
+MODULE_VERSION="1.8.7"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -143,6 +143,127 @@ PING_WATCHER_PID=$!
 
 trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
 
+get_local_ip() {
+    local ip
+    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
+    echo "${ip:-Unknown}"
+}
+
+get_pure_vx_name() {
+    local pure="${1#vx_}"
+    echo "${pure:-$1}"
+}
+
+get_iface_uptime() {
+    local iface="$1"
+    if [ ! -d "/sys/class/net/$iface" ] || [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" == "down" ]; then
+        echo "DOWN"
+        return
+    fi
+    local sys_uptime if_sec delta d h m
+    sys_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    if_sec=$(ip -s -d link show "$iface" 2>/dev/null | grep -oP 'trans_start \K[0-9]+')
+    delta=0
+    if [ -n "$if_sec" ] && [ "$if_sec" -gt 0 ]; then
+        delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
+        [ "$delta" -lt 0 ] && delta=0
+    else
+        local created now
+        created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
+        now=$(date +%s)
+        delta=$(( now - created ))
+        [ "$delta" -lt 0 ] && delta=0
+    fi
+    d=$(( delta / 86400 )); h=$(( (delta % 86400) / 3600 )); m=$(( (delta % 3600) / 60 ))
+    if [ "$d" -gt 0 ]; then printf "%dd %02dh" "$d" "$h"
+    elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
+    else printf "%dm" "$m"; fi
+}
+
+draw_mxlan_header() {
+    local s_ip active_fabrics=0 conf
+    s_ip=$(get_local_ip)
+    for conf in "$CONF_DIR"/*.conf; do
+        [ ! -f "$conf" ] && continue
+        VX_NAME=""; source "$conf" 2>/dev/null
+        if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat "/sys/class/net/$VX_NAME/operstate" 2>/dev/null)" != "down" ]; then
+            ((active_fabrics++))
+        fi
+    done
+
+    clear; echo ""
+    local border="────────────────────────────────────────────────────────────────────────────────────────────"
+    echo -e "  ${B}╭${border}╮${NC}"
+    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
+        "MXLAN Layer-2 Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics"
+    echo -e "  ${B}├${border}┤${NC}"
+
+    local shown=0
+    local TYPE REMOTE_PUB VX_NAME BR_NAME CORE_SUBNET VNI_ID FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
+    local live_ping live_loss cached_entry loss_disp loss_col fwd_str if_uptime stat_icon stat_col fwd_col sec_disp
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; source "$conf" 2>/dev/null
+        [ -z "$VX_NAME" ] && continue
+        ((shown++))
+        [ "$shown" -gt 3 ] && break
+
+        pure_name=$(get_pure_vx_name "$VX_NAME")
+        [ ${#pure_name} -gt 4 ] && pure_name="${pure_name:0:4}"
+
+        vip_stat="OFF"; vip_col="${DIM}"
+        if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
+            vip_stat="+${MAX_IPS}"
+            vip_col="${G}"
+        fi
+
+        live_ping="---"; live_loss="---"
+        if [ -f "$SECURE_TMP/.mxlan_stats_cache" ]; then
+            cached_entry=$(grep "^${VX_NAME}|" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null | head -n1)
+            if [ -n "$cached_entry" ]; then
+                live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
+                live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
+            fi
+        fi
+
+        loss_disp="---"; loss_col="${DIM}"
+        if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
+            loss_disp="${live_loss}%"
+            if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
+            elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
+            else loss_col="${R}"; fi
+        fi
+
+        fwd_str="OFF"
+        if [ "$TYPE" == "1" ]; then
+            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
+            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:4}"
+            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:4}"
+            fi
+        else
+            fwd_str="GW"
+        fi
+
+        if_uptime=$(get_iface_uptime "$VX_NAME")
+        stat_icon="●"; stat_col="${G}"
+        if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+
+        fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
+
+        sec_disp="${TUN_SECRET:0:8}"
+        [ -z "$sec_disp" ] && sec_disp="---"
+
+        printf "  ${B}│${NC} %b%s%b ${W}%-4s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${DIM}vIP:%b%-4s%b ${B}│${NC} ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-4s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-8s${NC} ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+    done
+
+    if [ "$shown" -eq 0 ]; then
+        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active fabrics configured on this host."
+    fi
+    echo -e "  ${B}╰${border}╯${NC}"
+}
+
 self_update_module() {
     local rel_path="tunnels/mxlan.sh"
     local cb="?t=$(date +%s)"
@@ -159,7 +280,8 @@ self_update_module() {
         fi
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
+    draw_mxlan_header
+    echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -238,44 +360,6 @@ self_update_module() {
     fi
 }
 
-get_local_ip() {
-    local ip
-    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
-    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
-    echo "${ip:-Unknown}"
-}
-
-get_pure_vx_name() {
-    local pure="${1#vx_}"
-    echo "${pure:-$1}"
-}
-
-get_iface_uptime() {
-    local iface="$1"
-    if [ ! -d "/sys/class/net/$iface" ] || [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" == "down" ]; then
-        echo "DOWN"
-        return
-    fi
-    local sys_uptime if_sec delta d h m
-    sys_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
-    if_sec=$(ip -s -d link show "$iface" 2>/dev/null | grep -oP 'trans_start \K[0-9]+')
-    delta=0
-    if [ -n "$if_sec" ] && [ "$if_sec" -gt 0 ]; then
-        delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
-        [ "$delta" -lt 0 ] && delta=0
-    else
-        local created now
-        created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
-        now=$(date +%s)
-        delta=$(( now - created ))
-        [ "$delta" -lt 0 ] && delta=0
-    fi
-    d=$(( delta / 86400 )); h=$(( (delta % 86400) / 3600 )); m=$(( (delta % 3600) / 60 ))
-    if [ "$d" -gt 0 ]; then printf "%dd %02dh" "$d" "$h"
-    elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
-    else printf "%dm" "$m"; fi
-}
-
 clean_fwd_rules() {
     local t="$1"
     local r
@@ -327,7 +411,6 @@ apply_fabric() {
     
     clean_fwd_rules "$VX_NAME"
 
-    # Multi-IP dynamic interface lookup
     local eth_iface=""
     if [ -n "$LOCAL_PUB" ]; then
         eth_iface=$(ip -o -4 addr show 2>/dev/null | awk -v target="$LOCAL_PUB" '$4 ~ "^"target"(/|$)" {print $2; exit}')
@@ -438,6 +521,7 @@ apply_all_fabrics() {
 }
 
 select_fabric_interactive() {
+    draw_mxlan_header
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return 1; }
     echo -e "\n  ${B}╭────────────────── Select Target Fabric ───────────────────╮${NC}"
@@ -452,88 +536,8 @@ select_fabric_interactive() {
     return 0
 }
 
-draw_mxlan_header() {
-    local s_ip active_fabrics=0 conf
-    s_ip=$(get_local_ip)
-    for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue
-        VX_NAME=""; source "$conf" 2>/dev/null
-        if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat "/sys/class/net/$VX_NAME/operstate" 2>/dev/null)" != "down" ]; then
-            ((active_fabrics++))
-        fi
-    done
-
-    clear; echo ""
-    local border="────────────────────────────────────────────────────────────────────────────────────────────"
-    echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
-        "MXLAN Layer-2 Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics"
-    echo -e "  ${B}├${border}┤${NC}"
-
-    local shown=0
-    local TYPE REMOTE_PUB VX_NAME BR_NAME CORE_SUBNET VNI_ID FWD_TCP FWD_UDP MAX_IPS pure_name vip_stat vip_col
-    local live_ping live_loss cached_entry loss_disp loss_col fwd_str if_uptime stat_icon stat_col fwd_col
-    for conf in "$CONF_DIR"/*.conf; do
-        [ -f "$conf" ] || continue
-        TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
-        [ -z "$VX_NAME" ] && continue
-        ((shown++))
-        [ "$shown" -gt 3 ] && break
-
-        pure_name=$(get_pure_vx_name "$VX_NAME")
-        [ ${#pure_name} -gt 4 ] && pure_name="${pure_name:0:4}"
-
-        vip_stat="OFF"; vip_col="${DIM}"
-        if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
-            vip_stat="+${MAX_IPS}"
-            vip_col="${G}"
-        fi
-
-        live_ping="---"; live_loss="---"
-        if [ -f "$SECURE_TMP/.mxlan_stats_cache" ]; then
-            cached_entry=$(grep "^${VX_NAME}|" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null | head -n1)
-            if [ -n "$cached_entry" ]; then
-                live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
-                live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
-            fi
-        fi
-
-        loss_disp="---"; loss_col="${DIM}"
-        if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
-            loss_disp="${live_loss}%"
-            if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
-            elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
-            else loss_col="${R}"; fi
-        fi
-
-        fwd_str="OFF"
-        if [ "$TYPE" == "1" ]; then
-            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
-            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:4}"
-            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:4}"
-            fi
-        else
-            fwd_str="GW"
-        fi
-
-        if_uptime=$(get_iface_uptime "$VX_NAME")
-        stat_icon="●"; stat_col="${G}"
-        if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-
-        fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
-
-        printf "  ${B}│${NC} %b%s%b ${W}%-4s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${DIM}vIP:%b%-4s%b ${B}│${NC} ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-4s%b ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
-    done
-
-    if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active fabrics configured on this host."
-    fi
-    echo -e "  ${B}╰${border}╯${NC}"
-}
-
 show_fabric_details() {
-    clear
+    draw_mxlan_header
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return; }
 
@@ -640,7 +644,7 @@ show_mxlan_monitor() {
 }
 
 uninstall_mxlan() {
-    clear
+    draw_mxlan_header
     echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MXLAN${NC}                     ${R}│${NC}"
     echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
@@ -743,7 +747,7 @@ while true; do
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1)
-           clear
+           draw_mxlan_header
            echo -e "\n  ${DIM}┌─[ VXLAN DEPLOYMENT ]${NC}"
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read -r s_type; [[ "$s_type" == "q" ]] && break; [[ "$s_type" == "1" || "$s_type" == "2" ]] && break; done
            [[ "$s_type" == "q" ]] && continue
@@ -869,6 +873,7 @@ while true; do
            fi ;;
 
         2)
+           draw_mxlan_header
            configs=("$CONF_DIR"/*.conf)
            [ ! -e "${configs[0]}" ] && echo -e "\n  ${R}● No active fabrics to remove!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Fabric to Erase ──────────────────╮${NC}"
@@ -894,6 +899,7 @@ while true; do
 
         3)
            select_fabric_interactive || continue
+           draw_mxlan_header
            VX_NAME=""; MAX_IPS="0"; TUN_SECRET=""; VNI_ID=""; source "$SELECTED_CONF" 2>/dev/null
            echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
            while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read -r vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
@@ -931,6 +937,7 @@ while true; do
 
         5)
            select_fabric_interactive || continue
+           draw_mxlan_header
            LOCAL_PUB=""; REMOTE_PUB=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Local Public IP [Current: ${Y}${LOCAL_PUB}${W}, Enter to skip]: ${NC}"; read -r new_lip
            echo -ne "  ${C}●${NC} ${W}New Remote Public IP [Current: ${Y}${REMOTE_PUB}${W}, Enter to skip]: ${NC}"; read -r new_rip
@@ -943,6 +950,7 @@ while true; do
 
         6)
            select_fabric_interactive || continue
+           draw_mxlan_header
            TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates VNI & Subnet): ${NC}"; read -r new_tok
            new_tok=$(echo "$new_tok" | tr -dc 'a-zA-Z0-9_=-')
@@ -972,6 +980,7 @@ while true; do
 
         7)
            select_fabric_interactive || continue
+           draw_mxlan_header
            CORE_SUBNET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.88.5) [Current: ${Y}${CORE_SUBNET}${W}, Enter to skip]: ${NC}"; read -r new_sub
            new_sub=$(echo "$new_sub" | tr -dc '0-9.')
@@ -984,6 +993,7 @@ while true; do
         8)
            select_fabric_interactive || continue
            while true; do
+               draw_mxlan_header
                TYPE=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
                if [ "$TYPE" != "1" ]; then
                    echo -e "\n  ${Y}● Port Forwarding & Load Balancer is only available on IRAN role!${NC}"; sleep 2; break
@@ -1041,6 +1051,7 @@ while true; do
 
         9)
            select_fabric_interactive || continue
+           draw_mxlan_header
            VX_NAME=""; BR_NAME=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}$(get_pure_vx_name "$VX_NAME")${W}, Max 4-5 chars): ${NC}"; read -r new_suffix
            new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')

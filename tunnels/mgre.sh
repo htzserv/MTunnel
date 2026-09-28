@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.2 ---
-# [Features: Tri-Tunnel Dynamic Header | Safe Signal Trap | Integer Ping | Pinned Header | MPorter Launcher]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.6 ---
+# [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="5.8.2"
+MODULE_VERSION="5.8.6"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -15,16 +15,11 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
-rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
-
-MAIN_PID=$$
-NEED_REFRESH=false
-trap 'NEED_REFRESH=true' SIGUSR1
 
 UPDATE_CHECK_INTERVAL=60
 PING_CHECK_INTERVAL=5
@@ -35,22 +30,23 @@ read_with_refresh() {
     local redraw_func="$3"
     local buffer=""
     local char rc
+    local last_refresh
+    last_refresh=$(date +%s)
 
-    touch "$SECURE_TMP/.mgre_in_menu"
     echo -ne "$prompt"
 
     while true; do
-        if [ "$NEED_REFRESH" = true ]; then
-            NEED_REFRESH=false
-            if [ -z "$buffer" ]; then
-                if [ -n "$redraw_func" ]; then
-                    "$redraw_func"
-                fi
+        local now
+        now=$(date +%s)
+        if [ $((now - last_refresh)) -ge "$PING_CHECK_INTERVAL" ]; then
+            last_refresh=$now
+            if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
+                "$redraw_func"
                 echo -ne "$prompt$buffer"
             fi
         fi
 
-        IFS= read -rsn1 -t 0.3 char
+        IFS= read -rsn1 -t 0.2 char
         rc=$?
 
         if [ $rc -ne 0 ]; then
@@ -74,7 +70,6 @@ read_with_refresh() {
         echo -ne "$char"
     done
 
-    rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null
     eval "$__resultvar=\"\$buffer\""
 }
 
@@ -98,9 +93,6 @@ check_update_bg() {
 update_watcher_loop() {
     while true; do
         check_update_bg
-        if [ -f "$SECURE_TMP/.mgre_in_menu" ]; then
-            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
-        fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
@@ -140,16 +132,13 @@ check_ping_bg() {
 ping_watcher_loop() {
     while true; do
         check_ping_bg
-        if [ -f "$SECURE_TMP/.mgre_in_menu" ]; then
-            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
-        fi
         sleep "$PING_CHECK_INTERVAL"
     done
 }
 ping_watcher_loop &
 PING_WATCHER_PID=$!
 
-trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null' EXIT
+trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
 
 get_local_ip() {
     local ip
@@ -202,15 +191,15 @@ draw_mgre_header() {
     done
 
     clear; echo ""
-    local border="────────────────────────────────────────────────────────────────────────────────────────────"
+    local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
-        "MGRE Modular Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels"
+    printf "  ${B}│${NC} ${W}%-31s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-24s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC}%-21s ${B}│${NC}\n" \
+        "MGRE Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels" ""
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
     local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
-    local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp
+    local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp raw_peer pad_peer sp_peer
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; REMOTE_PUB=""; T_NAME=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; source "$conf" 2>/dev/null
@@ -219,15 +208,22 @@ draw_mgre_header() {
         [ "$shown" -gt 3 ] && break
 
         pure_name=$(get_pure_tun_name "$T_NAME")
-        [ ${#pure_name} -gt 4 ] && pure_name="${pure_name:0:4}"
+        [ ${#pure_name} -gt 7 ] && pure_name="${pure_name:0:7}"
+        [ ${#REMOTE_PUB} -gt 15 ] && REMOTE_PUB="${REMOTE_PUB:0:15}"
+
+        raw_peer="${pure_name} ➔ ${REMOTE_PUB}"
+        pad_peer=$(( 31 - ${#raw_peer} ))
+        [ "$pad_peer" -lt 0 ] && pad_peer=0
+        sp_peer=$(printf '%*s' "$pad_peer" "")
 
         vip_stat="OFF"; vip_col="${DIM}"
         if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
             vip_stat="+${MAX_IPS}"
             vip_col="${G}"
         fi
+        [ ${#vip_stat} -gt 5 ] && vip_stat="${vip_stat:0:5}"
 
-        live_ping="---"; live_loss="---"
+        live_ping="---"
         if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
             cached_entry=$(grep "^${T_NAME}|" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null | head -n1)
             if [ -n "$cached_entry" ]; then
@@ -235,6 +231,7 @@ draw_mgre_header() {
                 live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
             fi
         fi
+        [ ${#live_ping} -gt 4 ] && live_ping="${live_ping:0:4}"
 
         loss_disp="---"; loss_col="${DIM}"
         if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
@@ -243,32 +240,35 @@ draw_mgre_header() {
             elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
             else loss_col="${R}"; fi
         fi
+        [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
 
         fwd_str="OFF"
         if [ "$TYPE" == "1" ]; then
             if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
-            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:4}"
-            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:4}"
+            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:2}"
+            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:2}"
             fi
         else
             fwd_str="GW"
         fi
+        [ ${#fwd_str} -gt 5 ] && fwd_str="${fwd_str:0:5}"
 
         tun_uptime=$(get_iface_uptime "$T_NAME")
         stat_icon="●"; stat_col="${G}"
         if [ "$tun_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+        [ ${#tun_uptime} -gt 6 ] && tun_uptime="${tun_uptime:0:6}"
 
         fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
 
-        sec_disp="${TUN_SECRET:0:8}"
+        sec_disp="${TUN_SECRET:0:5}"
         [ -z "$sec_disp" ] && sec_disp="---"
 
-        printf "  ${B}│${NC} %b%s%b ${W}%-4s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${DIM}vIP:%b%-4s%b ${B}│${NC} ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-4s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-8s${NC} ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5s${NC} ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
     done
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
+        printf "  ${B}│${NC}  ${DIM}%-102s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }
@@ -358,7 +358,6 @@ self_update_module() {
             sleep 1.5
             
             kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null
-            rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null
             exec "$INSTALL_PATH" "$@"
         else
             echo -e "  ${Y}● Update cancelled.${NC}"
@@ -1096,7 +1095,7 @@ while true; do
                else c1="192"; c2="168"; c3=$(( (16#${hash_c:10:2} % 254) + 1 )); fi
                new_core_sub="${c1}.${c2}.${c3}"
                
-               if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$new_core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
+               if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
                    echo -e "  ${R}● Collision detected with an existing tunnel! Please use a different Token.${NC}"; sleep 2; continue
                fi
                

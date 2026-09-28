@@ -184,7 +184,7 @@ get_iface_uptime() {
 draw_mxlan_header() {
     local s_ip active_fabrics=0 conf
     s_ip=$(get_local_ip)
-    s_ip="${s_ip:0:24}"
+    s_ip="${s_ip:0:25}"
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
         VX_NAME=""; source "$conf" 2>/dev/null
@@ -194,9 +194,12 @@ draw_mxlan_header() {
     done
 
     clear; echo ""
-    local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
+    local border
+    printf -v border '%*s' 117 ''
+    border="${border// /─}"
+
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-31.31s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-24.24s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3.3s${NC}%-17.17s ${B}│${NC}\n" \
+    printf "  ${B}│${NC} ${W}%-34.34s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-25.25s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3.3s${NC}%-24.24s ${B}│${NC}\n" \
         "MXLAN Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics" ""
     echo -e "  ${B}├${border}┤${NC}"
 
@@ -212,12 +215,12 @@ draw_mxlan_header() {
         [ "$shown" -gt 3 ] && break
 
         pure_name=$(get_pure_vx_name "$VX_NAME")
-        pure_name="${pure_name:0:7}"
-        REMOTE_PUB="${REMOTE_PUB:0:15}"
+        pure_name="${pure_name:0:10}"
+        REMOTE_PUB="${REMOTE_PUB:0:18}"
 
         len_name=${#pure_name}
         len_rem=${#REMOTE_PUB}
-        pad_peer=$(( 27 - (len_name + len_rem) ))
+        pad_peer=$(( 38 - (len_name + len_rem) ))
         [ "$pad_peer" -lt 0 ] && pad_peer=0
         sp_peer=$(printf '%*s' "$pad_peer" "")
 
@@ -274,7 +277,7 @@ draw_mxlan_header() {
     done
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-102.102s${NC}  ${B}│${NC}\n" "● No active fabrics configured on this host."
+        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\n" "No active fabrics configured on this host."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }
@@ -764,7 +767,7 @@ while true; do
     read_with_refresh "  ${M}MXLAN ❯❯ ${NC}" opt render_mxlan_menu
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
-        1)
+        1) 
            draw_mxlan_header
            echo -e "\n  ${DIM}┌─[ VXLAN DEPLOYMENT ]${NC}"
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read -r s_type; [[ "$s_type" == "q" ]] && break; [[ "$s_type" == "1" || "$s_type" == "2" ]] && break; done

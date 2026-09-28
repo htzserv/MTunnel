@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.7 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.8 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="5.8.7"
+MODULE_VERSION="5.8.8"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -182,7 +182,7 @@ get_iface_uptime() {
 draw_mgre_header() {
     local s_ip active_tunnels=0 conf
     s_ip=$(get_local_ip)
-    s_ip="${s_ip:0:24}"
+    s_ip="${s_ip:0:25}"
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
         T_NAME=""; source "$conf" 2>/dev/null
@@ -192,9 +192,12 @@ draw_mgre_header() {
     done
 
     clear; echo ""
-    local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
+    local border
+    printf -v border '%*s' 117 ''
+    border="${border// /─}"
+
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-31.31s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-24.24s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3.3s${NC}%-17.17s ${B}│${NC}\n" \
+    printf "  ${B}│${NC} ${W}%-34.34s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-25.25s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3.3s${NC}%-24.24s ${B}│${NC}\n" \
         "MGRE Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels" ""
     echo -e "  ${B}├${border}┤${NC}"
 
@@ -210,12 +213,12 @@ draw_mgre_header() {
         [ "$shown" -gt 3 ] && break
 
         pure_name=$(get_pure_tun_name "$T_NAME")
-        pure_name="${pure_name:0:7}"
-        REMOTE_PUB="${REMOTE_PUB:0:15}"
+        pure_name="${pure_name:0:10}"
+        REMOTE_PUB="${REMOTE_PUB:0:18}"
 
         len_name=${#pure_name}
         len_rem=${#REMOTE_PUB}
-        pad_peer=$(( 27 - (len_name + len_rem) ))
+        pad_peer=$(( 38 - (len_name + len_rem) ))
         [ "$pad_peer" -lt 0 ] && pad_peer=0
         sp_peer=$(printf '%*s' "$pad_peer" "")
 
@@ -272,7 +275,7 @@ draw_mgre_header() {
     done
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-102.102s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
+        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\n" "No active tunnels configured on this host."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.7 ---
-# [Features: Pure Suffix | Dynamic Multi-IP | Master Token Mesh | Integer Ping | Pinned Header | MPorter Launcher]
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v1.8.8 ---
+# [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.8.7"
+MODULE_VERSION="1.8.8"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -184,6 +184,7 @@ get_iface_uptime() {
 draw_mxlan_header() {
     local s_ip active_fabrics=0 conf
     s_ip=$(get_local_ip)
+    s_ip="${s_ip:0:24}"
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
         VX_NAME=""; source "$conf" 2>/dev/null
@@ -193,15 +194,16 @@ draw_mxlan_header() {
     done
 
     clear; echo ""
-    local border="────────────────────────────────────────────────────────────────────────────────────────────"
+    local border="──────────────────────────────────────────────────────────────────────────────────────────────────────────"
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
-        "MXLAN Layer-2 Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics"
+    printf "  ${B}│${NC} ${W}%-31.31s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-24.24s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3.3s${NC}%-17.17s ${B}│${NC}\n" \
+        "MXLAN Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics" ""
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
     local TYPE REMOTE_PUB VX_NAME BR_NAME CORE_SUBNET VNI_ID FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
     local live_ping live_loss cached_entry loss_disp loss_col fwd_str if_uptime stat_icon stat_col fwd_col sec_disp
+    local len_name len_rem pad_peer sp_peer
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; source "$conf" 2>/dev/null
@@ -210,15 +212,23 @@ draw_mxlan_header() {
         [ "$shown" -gt 3 ] && break
 
         pure_name=$(get_pure_vx_name "$VX_NAME")
-        [ ${#pure_name} -gt 4 ] && pure_name="${pure_name:0:4}"
+        pure_name="${pure_name:0:7}"
+        REMOTE_PUB="${REMOTE_PUB:0:15}"
+
+        len_name=${#pure_name}
+        len_rem=${#REMOTE_PUB}
+        pad_peer=$(( 27 - (len_name + len_rem) ))
+        [ "$pad_peer" -lt 0 ] && pad_peer=0
+        sp_peer=$(printf '%*s' "$pad_peer" "")
 
         vip_stat="OFF"; vip_col="${DIM}"
         if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
             vip_stat="+${MAX_IPS}"
             vip_col="${G}"
         fi
+        vip_stat="${vip_stat:0:5}"
 
-        live_ping="---"; live_loss="---"
+        live_ping="---"
         if [ -f "$SECURE_TMP/.mxlan_stats_cache" ]; then
             cached_entry=$(grep "^${VX_NAME}|" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null | head -n1)
             if [ -n "$cached_entry" ]; then
@@ -226,6 +236,7 @@ draw_mxlan_header() {
                 live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
             fi
         fi
+        live_ping="${live_ping:0:4}"
 
         loss_disp="---"; loss_col="${DIM}"
         if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
@@ -234,32 +245,36 @@ draw_mxlan_header() {
             elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
             else loss_col="${R}"; fi
         fi
+        loss_disp="${loss_disp:0:4}"
 
         fwd_str="OFF"
         if [ "$TYPE" == "1" ]; then
             if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
-            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:4}"
-            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:4}"
+            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:2}"
+            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:2}"
             fi
         else
             fwd_str="GW"
         fi
+        fwd_str="${fwd_str:0:5}"
 
         if_uptime=$(get_iface_uptime "$VX_NAME")
         stat_icon="●"; stat_col="${G}"
         if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+        if_uptime="${if_uptime:0:6}"
 
         fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
 
-        sec_disp="${TUN_SECRET:0:8}"
+        sec_disp="${TUN_SECRET:0:5}"
         [ -z "$sec_disp" ] && sec_disp="---"
+        sec_disp="${sec_disp:0:5}"
 
-        printf "  ${B}│${NC} %b%s%b ${W}%-4s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${DIM}vIP:%b%-4s%b ${B}│${NC} ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-4s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-8s${NC} ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
     done
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active fabrics configured on this host."
+        printf "  ${B}│${NC}  ${DIM}%-102.102s${NC}  ${B}│${NC}\n" "● No active fabrics configured on this host."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }
@@ -527,7 +542,7 @@ select_fabric_interactive() {
     echo -e "\n  ${B}╭────────────────── Select Target Fabric ───────────────────╮${NC}"
     local i
     for i in "${!configs[@]}"; do
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"
+        printf "  ${B}│${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"
     done
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Fabric Index or 'q': ${NC}"; read -r t_idx
@@ -553,22 +568,23 @@ show_fabric_details() {
         t_sec="${TUN_SECRET:-[ NOT SET ]}"
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-        left_p="▼ Fabric: ${VX_NAME} (${BR_NAME})"; right_p="Role: $t_role"
+        left_p="▼ Fabric: ${VX_NAME:0:20} (${BR_NAME:0:20})"; right_p="Role: $t_role"
         pad=$(( 90 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
         echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
         echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
 
-        l1="Master Token : ${t_sec}"; r1="Network VNI : ${VNI_ID}"
+        l1="Master Token : ${t_sec:0:25}"; r1="Network VNI : ${VNI_ID:0:15}"
         pad1=$(( 90 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}Master Token :${NC} ${W}${t_sec}${NC}${sp1}${DIM}Network VNI :${NC} ${Y}${VNI_ID}${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${M}Master Token :${NC} ${W}${t_sec:0:25}${NC}${sp1}${DIM}Network VNI :${NC} ${Y}${VNI_ID:0:15}${NC} ${B}│${NC}"
 
-        l2="vIP Sync Key : ${SYNC_KEY:-Same As Token}"; r2="Virtual IPs : ${MAX_IPS} active"
+        local sync_disp="${SYNC_KEY:-Same As Token}"; sync_disp="${sync_disp:0:25}"
+        l2="vIP Sync Key : ${sync_disp}"; r2="Virtual IPs : ${MAX_IPS} active"
         pad2=$(( 90 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${SYNC_KEY:-Same As Token}${NC}${sp2}${DIM}Virtual IPs :${NC} ${G}${MAX_IPS} active${NC} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${sync_disp}${NC}${sp2}${DIM}Virtual IPs :${NC} ${G}${MAX_IPS} active${NC} ${B}│${NC}"
 
-        l3="Public IPs   : ${LOCAL_PUB} -> ${REMOTE_PUB}"
+        l3="Public IPs   : ${LOCAL_PUB:0:16} -> ${REMOTE_PUB:0:16}"
         pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB}${NC}${sp3} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB:0:16}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB:0:16}${NC}${sp3} ${B}│${NC}"
 
         l4="Core Subnet  : ${c_sub}.x (${lip} -> ${tip})"
         pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; sp4=$(printf '%*s' "$pad4" "")
@@ -610,7 +626,7 @@ show_mxlan_monitor() {
         fi
 
         echo -e "  ${B}├────────────────────┬────────────────────┬────────────────────┬──────────────┬──────────────┤${NC}"
-        printf "  ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
+        printf "  ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-12.12s${NC} ${B}│${NC} ${DIM}%-12.12s${NC} ${B}│${NC}\n" "TYPE" "LOCAL IP" "TARGET IP" "LATENCY" "STATUS"
         echo -e "  ${B}├────────────────────┼────────────────────┼────────────────────┼──────────────┼──────────────┤${NC}"
 
         c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
@@ -625,7 +641,8 @@ show_mxlan_monitor() {
         else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
 
         m_icon="├─"; [ ${#v_ips[@]} -eq 0 ] && m_icon="└─"
-        printf "  ${B}│${NC} ${W}%s %-15s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} ${W}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${m_icon}" "Bridge IP" "$main_lip" "$main_tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
+        main_lip="${main_lip:0:18}"; main_tip="${main_tip:0:18}"
+        printf "  ${B}│${NC} ${W}%s %-15.15s${NC} ${B}│${NC} ${W}%-18.18s${NC} ${B}│${NC} ${W}%-18.18s${NC} ${B}│${NC} %b%-12.12s%b ${B}│${NC} %b%s %-10.10s%b ${B}│${NC}\n" "${m_icon}" "Bridge IP" "$main_lip" "$main_tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
 
         total_v=${#v_ips[@]}
         for ((idx=0; idx<total_v; idx++)); do
@@ -637,7 +654,8 @@ show_mxlan_monitor() {
                 lat_raw="${lat_int}ms"; lat_color="${Y}"; stat_icon="●"; stat_text="ONLINE"; stat_color="${G}"
             else lat_raw="---"; lat_color="${DIM}"; stat_icon="○"; stat_text="OFFLINE"; stat_color="${R}"; fi
             v_icon="│  ├─"; [ $idx -eq $((total_v - 1)) ] && v_icon="│  └─"
-            printf "  ${B}│${NC} ${DIM}%s %-12s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} %b%-12s%b ${B}│${NC} %b%s %-10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
+            lip="${lip:0:18}"; tip="${tip:0:18}"
+            printf "  ${B}│${NC} ${DIM}%s %-12.12s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} ${DIM}%-18.18s${NC} ${B}│${NC} %b%-12.12s%b ${B}│${NC} %b%s %-10.10s%b ${B}│${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         done
         echo -e "  ${B}╰────────────────────┴────────────────────┴────────────────────┴──────────────┴──────────────╯${NC}\n"
     done
@@ -877,7 +895,7 @@ while true; do
            configs=("$CONF_DIR"/*.conf)
            [ ! -e "${configs[0]}" ] && echo -e "\n  ${R}● No active fabrics to remove!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Fabric to Erase ──────────────────╮${NC}"
-           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
+           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .conf)"; done
            echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter Index, 'all', or 'q': ${NC}"; read -r del_idx
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue

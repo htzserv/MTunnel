@@ -1123,7 +1123,12 @@ draw_main_header() {
     fi
 
     local porter_col="${DIM}" porter_icon="○" porter_text="OFF"
-    systemctl is-active --quiet mporter.service 2>/dev/null && { porter_col="${G}"; porter_icon="●"; porter_text="ON"; }
+    if systemctl is-active --quiet mporter.service 2>/dev/null || \
+       systemctl is-active --quiet haproxy 2>/dev/null || \
+       systemctl is-active --quiet gost 2>/dev/null || \
+       systemctl is-active --quiet mporter-iptables 2>/dev/null; then
+        porter_col="${G}"; porter_icon="●"; porter_text="ON"
+    fi
 
     local bbr_col="${DIM}" bbr_icon="○" bbr_text="OFF"
     [ "$bbr_cc" == "bbr" ] && { bbr_col="${G}"; bbr_icon="●"; bbr_text="ON"; }

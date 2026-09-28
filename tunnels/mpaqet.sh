@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.1.0 ---
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.2.0 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="8.1.0"
+MODULE_VERSION="8.2.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -924,20 +924,21 @@ render_mpaqet_menu() {
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit MTU Size${NC} ${DIM}(1000-1500)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Edit Connection Count${NC} ${DIM}(conn: 1-32)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${M}Edit Encryption${NC} ${DIM}(aes-128-gcm, aes-256, none)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Edit Forwarded Ports${NC} ${DIM}(Client Only)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Live Traffic & Bandwidth Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${G}Live Traffic & Bandwidth Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1191,7 +1192,7 @@ EOF
                echo -e "  ${G}● Purged!${NC}"; sleep 1.5
            fi ;;
 
-        4|5|6|7|8|9)
+        4|5|6|7|8|9|10)
            select_tunnel || continue
            sel_cfg="$SELECTED_TUN"
            old_tname=$(basename "$sel_cfg" .yaml)
@@ -1262,6 +1263,85 @@ EOF
                fi
 
            elif [[ "$opt" == "9" ]]; then
+               local is_client=false
+               if grep -qi 'role: *"client"' "$sel_cfg"; then
+                   is_client=true
+               fi
+
+               if [ "$is_client" != true ]; then
+                   echo -e "  ${R}✖ Error: Forwarded ports can only be configured on Client tunnels!${NC}"
+                   sleep 2; continue
+               fi
+
+               local meta_file="$CONF_DIR/${old_tname}.meta"
+               local curr_ports=""
+               [ -f "$meta_file" ] && curr_ports=$(grep -m1 "^TCP_PORTS=" "$meta_file" | cut -d'=' -f2 | tr -d '"')
+               if [ -z "$curr_ports" ]; then
+                   curr_ports=$(grep "listen:" "$sel_cfg" | awk -F':' '{print $NF}' | tr -d '"' | tr '\n' ',' | sed 's/,$//')
+               fi
+
+               local t_tun_port=""
+               [ -f "$meta_file" ] && t_tun_port=$(grep -m1 "^TUN_PORT=" "$meta_file" | cut -d'=' -f2 | tr -d '"')
+
+               echo -ne "  ${C}●${NC} ${W}New Forward Ports [Current: ${Y}${curr_ports}${W}] (e.g. 443,8080): ${NC}"; read n_ports
+               n_ports=$(echo "$n_ports" | tr -dc '0-9,')
+               if [ -z "$n_ports" ]; then
+                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
+               fi
+
+               if [ -n "$t_tun_port" ] && echo ",$n_ports," | grep -q ",$t_tun_port,"; then
+                   echo -e "  ${R}✖ Loop Error: Forward port cannot match Tunnel port ($t_tun_port)!${NC}"
+                   sleep 2; continue
+               fi
+
+               local tmp_yaml="$SECURE_TMP/${old_tname}.yaml.tmp"
+               local new_meta_ports=""
+               
+               {
+                   sed -n '1,/^forward:/p' "$sel_cfg"
+                   IFS=',' read -ra P_ARR <<< "$n_ports"
+                   for p_raw in "${P_ARR[@]}"; do
+                       p_clean=$(echo "$p_raw" | tr -dc '0-9')
+                       if [ -n "$p_clean" ] && [ "$p_clean" -le 65535 ]; then
+                           echo "  - listen: \"0.0.0.0:$p_clean\""
+                           echo "    target: \"127.0.0.1:$p_clean\""
+                           echo "    protocol: \"tcp\""
+                           new_meta_ports="${new_meta_ports}${p_clean},"
+                       fi
+                   done
+                   sed -n '/^network:/,$p' "$sel_cfg"
+               } > "$tmp_yaml"
+
+               if [ -z "$new_meta_ports" ]; then
+                   echo -e "  ${R}✖ Invalid port list! Must specify at least one valid port.${NC}"
+                   rm -f "$tmp_yaml"; sleep 2; continue
+               fi
+
+               if [ -s "$tmp_yaml" ] && grep -q "role:" "$tmp_yaml"; then
+                   clean_paqet_counters "$old_tname"
+                   mv -f "$tmp_yaml" "$sel_cfg"
+
+                   new_meta_ports="${new_meta_ports%,}"
+                   IFS=',' read -ra NP_ARR <<< "$new_meta_ports"
+                   for p_clean in "${NP_ARR[@]}"; do
+                       setup_paqet_counters "$old_tname" "$p_clean"
+                   done
+
+                   if [ -f "$meta_file" ]; then
+                       if grep -q "^TCP_PORTS=" "$meta_file"; then
+                           sed -i "s|^TCP_PORTS=.*|TCP_PORTS=$new_meta_ports|" "$meta_file"
+                       else
+                           echo "TCP_PORTS=$new_meta_ports" >> "$meta_file"
+                       fi
+                   fi
+                   echo -e "  ${G}✔ Forwarded ports updated successfully.${NC}"
+               else
+                   rm -f "$tmp_yaml"
+                   echo -e "  ${R}✖ Failed to update YAML configuration.${NC}"
+                   sleep 2; continue
+               fi
+
+           elif [[ "$opt" == "10" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix (Current: ${Y}${old_tname#pq_}${W}): ${NC}"; read new_suffix
                new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
                if [ -n "$new_suffix" ]; then
@@ -1307,17 +1387,17 @@ EOF
            fi
            ;;
 
-        10) show_live_radar ;;
-        11) show_tunnel_registry ;;
-        12) 
+        11) show_live_radar ;;
+        12) show_tunnel_registry ;;
+        13) 
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN" .yaml)
            journalctl -u "mpaqet@${t_name}" -n 50 -f; continue
            ;;
-        13) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
-        14) menu_install_core ;;
-        15) self_update_module ;;
-        16) uninstall_mpaqet ;;
+        14) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
+        15) menu_install_core ;;
+        16) self_update_module ;;
+        17) uninstall_mpaqet ;;
         0) break ;;
     esac
 done

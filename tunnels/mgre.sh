@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.0 ---
-# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Integer Ping | MPorter Launcher | Advanced OTA]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.1 ---
+# [Features: Tri-Tunnel Dynamic Header | Flat Configuration | Full LB Engine | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="5.8.0"
+MODULE_VERSION="5.8.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -51,11 +51,6 @@ read_with_refresh() {
 
         if [ $rc -ne 0 ]; then
             continue
-        fi
-
-        if [[ -z "$char" ]]; then
-            echo ""
-            break
         fi
 
         if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
@@ -142,6 +137,128 @@ PING_WATCHER_PID=$!
 
 trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null' EXIT
 
+get_local_ip() {
+    local ip
+    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
+    echo "${ip:-Unknown}"
+}
+
+get_pure_tun_name() {
+    local pure="$1"
+    pure="${pure#gre6ir}"; pure="${pure#gre6kh}"; pure="${pure#greir}"; pure="${pure#grekh}"
+    echo "${pure:-$1}"
+}
+
+get_iface_uptime() {
+    local iface="$1"
+    if [ ! -d "/sys/class/net/$iface" ] || [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" == "down" ]; then
+        echo "DOWN"
+        return
+    fi
+    local sys_uptime if_sec delta d h m
+    sys_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+    if_sec=$(ip -s -d link show "$iface" 2>/dev/null | grep -oP 'trans_start \K[0-9]+')
+    delta=0
+    if [ -n "$if_sec" ] && [ "$if_sec" -gt 0 ]; then
+        delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
+        [ "$delta" -lt 0 ] && delta=0
+    else
+        local created now
+        created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
+        now=$(date +%s)
+        delta=$(( now - created ))
+        [ "$delta" -lt 0 ] && delta=0
+    fi
+    d=$(( delta / 86400 )); h=$(( (delta % 86400) / 3600 )); m=$(( (delta % 3600) / 60 ))
+    if [ "$d" -gt 0 ]; then printf "%dd %02dh" "$d" "$h"
+    elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
+    else printf "%dm" "$m"; fi
+}
+
+draw_mgre_header() {
+    local s_ip active_tunnels=0 conf
+    s_ip=$(get_local_ip)
+    for conf in "$CONF_DIR"/*.conf; do
+        [ ! -f "$conf" ] && continue
+        T_NAME=""; source "$conf" 2>/dev/null
+        if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat "/sys/class/net/$T_NAME/operstate" 2>/dev/null)" != "down" ]; then
+            ((active_tunnels++))
+        fi
+    done
+
+    clear; echo ""
+    local border="────────────────────────────────────────────────────────────────────────────────────────────"
+    echo -e "  ${B}╭${border}╮${NC}"
+    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
+        "MGRE Modular Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels"
+    echo -e "  ${B}├${border}┤${NC}"
+
+    local shown=0
+    local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
+    local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        TYPE=""; REMOTE_PUB=""; T_NAME=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; source "$conf" 2>/dev/null
+        [ -z "$T_NAME" ] && continue
+        ((shown++))
+        [ "$shown" -gt 3 ] && break
+
+        pure_name=$(get_pure_tun_name "$T_NAME")
+        [ ${#pure_name} -gt 4 ] && pure_name="${pure_name:0:4}"
+
+        vip_stat="OFF"; vip_col="${DIM}"
+        if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
+            vip_stat="+${MAX_IPS}"
+            vip_col="${G}"
+        fi
+
+        live_ping="---"; live_loss="---"
+        if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
+            cached_entry=$(grep "^${T_NAME}|" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null | head -n1)
+            if [ -n "$cached_entry" ]; then
+                live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
+                live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
+            fi
+        fi
+
+        loss_disp="---"; loss_col="${DIM}"
+        if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
+            loss_disp="${live_loss}%"
+            if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
+            elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
+            else loss_col="${R}"; fi
+        fi
+
+        fwd_str="OFF"
+        if [ "$TYPE" == "1" ]; then
+            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
+            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:4}"
+            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:4}"
+            fi
+        else
+            fwd_str="GW"
+        fi
+
+        tun_uptime=$(get_iface_uptime "$T_NAME")
+        stat_icon="●"; stat_col="${G}"
+        if [ "$tun_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+
+        fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
+
+        sec_disp="${TUN_SECRET:0:8}"
+        [ -z "$sec_disp" ] && sec_disp="---"
+
+        printf "  ${B}│${NC} %b%s%b ${W}%-4s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${DIM}vIP:%b%-4s%b ${B}│${NC} ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-4s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-8s${NC} ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+    done
+
+    if [ "$shown" -eq 0 ]; then
+        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
+    fi
+    echo -e "  ${B}╰${border}╯${NC}"
+}
+
 self_update_module() {
     local rel_path="tunnels/mgre.sh"
     local cb="?t=$(date +%s)"
@@ -158,7 +275,8 @@ self_update_module() {
         fi
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MGRE Engine) ]${NC}"
+    draw_mgre_header
+    echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MGRE Engine) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -235,45 +353,6 @@ self_update_module() {
         echo -e "  ${R}✖ Update failed. Invalid format or network error.${NC}"
         rm -f "$tmp_file"; sleep 2
     fi
-}
-
-get_local_ip() {
-    local ip
-    ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
-    [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
-    echo "${ip:-Unknown}"
-}
-
-get_pure_tun_name() {
-    local pure="$1"
-    pure="${pure#gre6ir}"; pure="${pure#gre6kh}"; pure="${pure#greir}"; pure="${pure#grekh}"
-    echo "${pure:-$1}"
-}
-
-get_iface_uptime() {
-    local iface="$1"
-    if [ ! -d "/sys/class/net/$iface" ] || [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" == "down" ]; then
-        echo "DOWN"
-        return
-    fi
-    local sys_uptime if_sec delta d h m
-    sys_uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)
-    if_sec=$(ip -s -d link show "$iface" 2>/dev/null | grep -oP 'trans_start \K[0-9]+')
-    delta=0
-    if [ -n "$if_sec" ] && [ "$if_sec" -gt 0 ]; then
-        delta=$(( (sys_uptime * 100 - if_sec) / 100 ))
-        [ "$delta" -lt 0 ] && delta=0
-    else
-        local created now
-        created=$(stat -c %Y "/sys/class/net/$iface" 2>/dev/null)
-        now=$(date +%s)
-        delta=$(( now - created ))
-        [ "$delta" -lt 0 ] && delta=0
-    fi
-    d=$(( delta / 86400 )); h=$(( (delta % 86400) / 3600 )); m=$(( (delta % 3600) / 60 ))
-    if [ "$d" -gt 0 ]; then printf "%dd %02dh" "$d" "$h"
-    elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
-    else printf "%dm" "$m"; fi
 }
 
 merge_ports() {
@@ -430,6 +509,7 @@ apply_all_tunnels() {
 }
 
 select_tunnel_interactive() {
+    draw_mgre_header
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; }
     echo -e "\n  ${B}╭────────────────── Select Target Tunnel ───────────────────╮${NC}"
@@ -442,86 +522,6 @@ select_tunnel_interactive() {
     [[ "$t_idx" == "q" || -z "$t_idx" || -z "${configs[$t_idx]}" ]] && return 1
     SELECTED_CONF="${configs[$t_idx]}"
     return 0
-}
-
-draw_mgre_header() {
-    local s_ip active_tunnels=0 conf
-    s_ip=$(get_local_ip)
-    for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue
-        T_NAME=""; source "$conf" 2>/dev/null
-        if ip link show "$T_NAME" >/dev/null 2>&1 && [ "$(cat "/sys/class/net/$T_NAME/operstate" 2>/dev/null)" != "down" ]; then
-            ((active_tunnels++))
-        fi
-    done
-
-    clear; echo ""
-    local border="────────────────────────────────────────────────────────────────────────────────────────────"
-    echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-22s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-15s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3s${NC} ${DIM}(Max 3 Shown)${NC}      ${B}│${NC}\n" \
-        "MGRE Modular Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels"
-    echo -e "  ${B}├${border}┤${NC}"
-
-    local shown=0
-    local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS pure_name vip_stat vip_col
-    local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col
-    for conf in "$CONF_DIR"/*.conf; do
-        [ -f "$conf" ] || continue
-        TYPE=""; REMOTE_PUB=""; T_NAME=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
-        [ -z "$T_NAME" ] && continue
-        ((shown++))
-        [ "$shown" -gt 3 ] && break
-
-        pure_name=$(get_pure_tun_name "$T_NAME")
-        [ ${#pure_name} -gt 4 ] && pure_name="${pure_name:0:4}"
-
-        vip_stat="OFF"; vip_col="${DIM}"
-        if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
-            vip_stat="+${MAX_IPS}"
-            vip_col="${G}"
-        fi
-
-        live_ping="---"; live_loss="---"
-        if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
-            cached_entry=$(grep "^${T_NAME}|" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null | head -n1)
-            if [ -n "$cached_entry" ]; then
-                live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
-                live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
-            fi
-        fi
-
-        loss_disp="---"; loss_col="${DIM}"
-        if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
-            loss_disp="${live_loss}%"
-            if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
-            elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
-            else loss_col="${R}"; fi
-        fi
-
-        fwd_str="OFF"
-        if [ "$TYPE" == "1" ]; then
-            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
-            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:4}"
-            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:4}"
-            fi
-        else
-            fwd_str="GW"
-        fi
-
-        tun_uptime=$(get_iface_uptime "$T_NAME")
-        stat_icon="●"; stat_col="${G}"
-        if [ "$tun_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-
-        fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
-
-        printf "  ${B}│${NC} %b%s%b ${W}%-4s${NC} ${DIM}➔${NC} ${Y}%-15s${NC} ${DIM}vIP:%b%-4s%b ${B}│${NC} ${DIM}P:${NC}${Y}%-6s${NC} ${DIM}L:${NC}%b%-4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-4s%b ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC"
-    done
-
-    if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}%-88s${NC}  ${B}│${NC}\n" "● No active tunnels configured on this host."
-    fi
-    echo -e "  ${B}╰${border}╯${NC}"
 }
 
 manage_port_forwarding() {
@@ -537,6 +537,7 @@ manage_port_forwarding() {
 
     local pf_opt add_tcp add_udp m_tcp m_udp rm_tcp rm_udp new_tcp new_udp new_lb
     while true; do
+        draw_mgre_header
         echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${T_NAME}${DIM} ]${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
@@ -674,7 +675,7 @@ show_mgre_monitor() {
 }
 
 show_tunnel_details() {
-    clear
+    draw_mgre_header
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; }
 
@@ -727,7 +728,7 @@ show_tunnel_details() {
 }
 
 uninstall_mgre() {
-    clear
+    draw_mgre_header
     echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MGRE${NC}                      ${R}│${NC}"
     echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
@@ -830,7 +831,7 @@ while true; do
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1) 
-           clear
+           draw_mgre_header
            echo -e "\n  ${DIM}┌─[ TUNNEL PROTOCOL ]${NC}"
            echo -e "  ${DIM}│${NC}"
            echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}"
@@ -973,6 +974,7 @@ while true; do
            fi ;;
 
         2)
+           draw_mgre_header
            configs=("$CONF_DIR"/*.conf)
            [ ! -e "${configs[0]}" ] && echo -e "\n  ${R}● No active tunnels to remove!${NC}" && sleep 1.5 && continue
            echo -e "\n  ${B}╭────────────────── Select Tunnel to Erase ──────────────────╮${NC}"
@@ -998,6 +1000,7 @@ while true; do
 
         3)
            select_tunnel_interactive || continue
+           draw_mgre_header
            T_NAME=""; MAX_IPS="0"; TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
            while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read -r vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
@@ -1036,6 +1039,7 @@ while true; do
 
         5)
            select_tunnel_interactive || continue
+           draw_mgre_header
            LOCAL_PUB=""; REMOTE_PUB=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Local Public IP [${Y}${LOCAL_PUB}${W}]: ${NC}"; read -r new_local
            echo -ne "  ${C}●${NC} ${W}New Remote Public IP [${Y}${REMOTE_PUB}${W}]: ${NC}"; read -r new_remote
@@ -1048,6 +1052,7 @@ while true; do
 
         6)
            select_tunnel_interactive || continue
+           draw_mgre_header
            TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates Network): ${NC}"; read -r new_tok
            new_tok=$(echo "$new_tok" | tr -dc 'a-zA-Z0-9_=-')
@@ -1061,7 +1066,7 @@ while true; do
                else c1="192"; c2="168"; c3=$(( (16#${hash_c:10:2} % 254) + 1 )); fi
                new_core_sub="${c1}.${c2}.${c3}"
                
-               if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$new_core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
+               if grep -q "TUN_ID=$new_tun_id$" "$CONF_DIR"/*.conf 2>/dev/null || grep -q "CORE_SUBNET=$core_sub$" "$CONF_DIR"/*.conf 2>/dev/null; then
                    echo -e "  ${R}● Collision detected with an existing tunnel! Please use a different Token.${NC}"; sleep 2; continue
                fi
                
@@ -1075,6 +1080,7 @@ while true; do
 
         7)
            select_tunnel_interactive || continue
+           draw_mgre_header
            CORE_SUBNET=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.76.5) [Current: ${Y}${CORE_SUBNET}${W}]: ${NC}"; read -r new_sub
            new_sub=$(echo "$new_sub" | tr -dc '0-9.')
@@ -1090,6 +1096,7 @@ while true; do
 
         9)
            select_tunnel_interactive || continue
+           draw_mgre_header
            T_NAME=""; TUN_PROTO=""; TYPE=""; source "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Interface Suffix (Current: ${Y}${T_NAME#gre*}${W}): ${NC}"; read -r new_suffix
            new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')

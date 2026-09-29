@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.2.0 ---
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.3.1 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="8.2.0"
+MODULE_VERSION="8.3.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -21,6 +21,10 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     cp -f "$0" "$INSTALL_PATH" 2>/dev/null
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
+
+is_newer_version() {   # is_newer_version REMOTE LOCAL -> true only if REMOTE > LOCAL
+    [ -n "$1" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]
+}
 
 is_valid_host() {
     local host=$1
@@ -119,7 +123,7 @@ self_update_module() {
     [ -f "$SECURE_TMP/.mpaqet_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mpaqet_remote_ver" | tr -d '\r\n ')
 
     local gh_text="${C}Official GitHub Server${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+    if [ "$remote_v" != "Unknown" ] && is_newer_version "$remote_v" "$MODULE_VERSION"; then
         gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
     else
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
@@ -414,10 +418,11 @@ setup_paqet_counters() {
 clean_paqet_counters() {
     local name="$1"
     local chain rulenum
+    rm -f "$SECURE_TMP/.mpaqet_link_${name}" "$SECURE_TMP/.mpaqet_peer_${name}" 2>/dev/null
     for chain in INPUT OUTPUT; do
         while read -r rulenum; do
             [ -n "$rulenum" ] && iptables -t mangle -D "$chain" "$rulenum" 2>/dev/null
-        done < <(iptables -t mangle -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MPAQET_(RX|TX|RST)_${name}( |\*/)" | awk '{print $1}' | tac)
+        done < <(iptables -t mangle -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MPAQET_(RX|TX|RST|PEER|LINK)_${name}( |\*/)" | awk '{print $1}' | tac)
     done
     for chain in PREROUTING OUTPUT; do
         while read -r rulenum; do
@@ -429,6 +434,25 @@ clean_paqet_counters() {
 zero_paqet_counters() {
     iptables -Z -t mangle 2>/dev/null || true
     iptables -Z -t raw 2>/dev/null || true
+}
+
+# Extra iptables rules used only for detection (never drop or alter traffic):
+#   server: xt_recent list of sources hitting the tunnel port  -> client IP
+#   client: counter of packets coming from the server port      -> link liveness
+setup_paqet_probe() {
+    local name="$1" meta="$CONF_DIR/${name}.meta" role port
+    [ -f "$meta" ] || return 0
+    role=$(grep -m1 '^ROLE=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
+    port=$(grep -m1 '^TUN_PORT=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    if [ "$role" = "1" ]; then
+        iptables -t mangle -C INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1 || \
+        iptables -t mangle -A INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1
+    else
+        iptables -t mangle -C INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
+        iptables -t mangle -A INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
+    fi
+    return 0
 }
 
 if [[ "$1" == "--apply" ]]; then
@@ -449,6 +473,7 @@ if [[ "$1" == "--apply" ]]; then
                 done
             fi
         fi
+        setup_paqet_probe "$t_name"
     done
     exit 0
 fi
@@ -463,22 +488,332 @@ get_paqet_tx() {
     echo "${tx:-0}"
 }
 
-check_paqet_connection() {
+# ================================================================
+# KCP PROFILE ENGINE - official Paqet core, no custom binary, no python
+# ================================================================
+KCP_PROFILE="FAST"
+KCP_MODE="fast"
+KCP_CONN=2
+KCP_MTU=1350
+KCP_RCVWND=1024
+KCP_SNDWND=1024
+KCP_SMUXBUF=4194304
+KCP_STREAMBUF=2097152
+KCP_PCAP_SOCKBUF=8388608
+KCP_TCPBUF=8192
+KCP_UDPBUF=4096
+KCP_NODELAY=1
+KCP_WDELAY=false
+KCP_ACKNODELAY=true
+KCP_INTERVAL=20
+KCP_RESEND=2
+KCP_NOCONGESTION=1
+
+# Presets. MTU is deliberately the same (1350) in every preset: raising it together
+# with everything else makes it impossible to tell which change broke a link.
+# Ladder: NORMAL -> FAST (2 conn) -> FAST2 (4 conn, 2048 windows) -> FAST3 (same as FAST2,
+# faster timers + bigger buffers). FAST2 vs FAST3 therefore differ only by KCP timers/buffers.
+profile_defaults() {
+    local profile="${1^^}" role="${2:-client}"
+    KCP_PROFILE="$profile"
+    KCP_MTU=1350
+    case "$profile" in
+        NORMAL)
+            KCP_MODE=normal; KCP_CONN=1; KCP_RCVWND=512; KCP_SNDWND=512
+            [ "$role" = "server" ] && { KCP_RCVWND=1024; KCP_SNDWND=1024; }
+            KCP_SMUXBUF=4194304; KCP_STREAMBUF=2097152; KCP_PCAP_SOCKBUF=8388608; KCP_TCPBUF=8192; KCP_UDPBUF=4096 ;;
+        FAST)
+            KCP_MODE=fast; KCP_CONN=2; KCP_RCVWND=1024; KCP_SNDWND=1024
+            KCP_SMUXBUF=4194304; KCP_STREAMBUF=2097152; KCP_PCAP_SOCKBUF=8388608; KCP_TCPBUF=8192; KCP_UDPBUF=4096 ;;
+        FAST2)
+            KCP_MODE=fast2; KCP_CONN=4; KCP_RCVWND=2048; KCP_SNDWND=2048
+            KCP_SMUXBUF=8388608; KCP_STREAMBUF=4194304; KCP_PCAP_SOCKBUF=16777216; KCP_TCPBUF=16384; KCP_UDPBUF=8192 ;;
+        FAST3)
+            KCP_MODE=fast3; KCP_CONN=4; KCP_RCVWND=2048; KCP_SNDWND=2048
+            KCP_SMUXBUF=16777216; KCP_STREAMBUF=8388608; KCP_PCAP_SOCKBUF=33554432; KCP_TCPBUF=32768; KCP_UDPBUF=16384 ;;
+        MANUAL|CUSTOM) return 0 ;;
+        *) profile_defaults FAST "$role"; return 0 ;;
+    esac
+}
+
+get_yaml_value() {
+    local key="$1" file="$2"
+    awk -v k="$key" '$1 == k":" {gsub(/"/,"",$2); print $2; exit}' "$file" 2>/dev/null
+}
+
+get_tunnel_profile() {
+    local t_name="$1" meta="$CONF_DIR/${t_name}.meta" yaml="$CONF_DIR/${t_name}.yaml" p mode
+    [ -f "$meta" ] && p=$(grep -m1 '^PROFILE=' "$meta" | cut -d'=' -f2 | tr -d '\r" ')
+    if [ -z "$p" ] && [ -f "$yaml" ]; then
+        mode=$(get_yaml_value mode "$yaml")
+        case "$mode" in normal) p=NORMAL;; fast) p=FAST;; fast2) p=FAST2;; fast3) p=FAST3;; manual) p=MANUAL;; *) p=CUSTOM;; esac
+    fi
+    echo "${p:-CUSTOM}"
+}
+
+set_meta_profile() {
+    local t_name="$1" profile="$2" meta="$CONF_DIR/${t_name}.meta"
+    [ ! -f "$meta" ] && return 0
+    if grep -q '^PROFILE=' "$meta"; then sed -i "s/^PROFILE=.*/PROFILE=$profile/" "$meta"; else echo "PROFILE=$profile" >> "$meta"; fi
+}
+
+# A hand edit (MTU / conn) of a preset makes it a custom profile, so the label never lies.
+mark_profile_custom() {
     local t_name="$1"
-    local known_active="$2"
+    case "$(get_tunnel_profile "$t_name")" in NORMAL|FAST|FAST2|FAST3) set_meta_profile "$t_name" CUSTOM ;; esac
+}
+
+ask_int() {   # ask_int VAR "label" default min max
+    local __v="$1" label="$2" def="$3" min="$4" max="$5" ans
+    while true; do
+        read -rp "  ${label} [${def}] (${min}-${max}): " ans || return 1
+        ans="${ans:-$def}"
+        if [[ "$ans" =~ ^[0-9]+$ ]] && [ "$ans" -ge "$min" ] && [ "$ans" -le "$max" ]; then
+            printf -v "$__v" '%s' "$ans"; return 0
+        fi
+        echo -e "  ${R}✖ Enter a whole number between ${min} and ${max}.${NC}"
+    done
+}
+
+ask_bool() {  # ask_bool VAR "label" default(true|false)
+    local __v="$1" label="$2" def="$3" ans
+    while true; do
+        read -rp "  ${label} [${def}] (true/false): " ans || return 1
+        ans="${ans:-$def}"; ans="${ans,,}"
+        if [ "$ans" = "true" ] || [ "$ans" = "false" ]; then printf -v "$__v" '%s' "$ans"; return 0; fi
+        echo -e "  ${R}✖ Type true or false.${NC}"
+    done
+}
+
+choose_kcp_profile() {
+    local role="$1" current="${2:-FAST}" choice
+    clear
+    echo -e "\n  ${B}╭──────────────────────── KCP PROFILE ────────────────────────╮${NC}"
+    echo -e "  ${B}│${NC} ${W}Each profile writes real Paqet YAML settings (MTU fixed 1350)${NC} ${B}│${NC}"
+    echo -e "  ${B}├─────────────────────────────────────────────────────────────┤${NC}"
+    echo -e "  ${B}│${NC} ${G}1${NC}) NORMAL  1 conn  / window  512-1024 / slow timers          ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${C}2${NC}) FAST    2 conn  / window 1024       / balanced            ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${Y}3${NC}) FAST2   4 conn  / window 2048       / fast timers         ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${M}4${NC}) FAST3   4 conn  / window 2048       / fastest + big bufs  ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}5${NC}) MANUAL  every KCP value by hand (validated)               ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${DIM}Current: ${current}${NC}"
+    echo -e "  ${B}╰─────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${DIM}Apply the SAME profile on both servers (Iran + Kharej).${NC}"
+    echo -ne "  ${C}Profile ❯❯ ${NC}"; read choice
+    case "$choice" in
+        1) profile_defaults NORMAL "$role";;
+        2) profile_defaults FAST "$role";;
+        3) profile_defaults FAST2 "$role";;
+        4) profile_defaults FAST3 "$role";;
+        5)
+            profile_defaults CUSTOM "$role"; KCP_PROFILE=MANUAL; KCP_MODE=manual
+            ask_int  KCP_NODELAY      "nodelay (0=off 1=on)"        1        0 1 || return 1
+            ask_bool KCP_WDELAY       "wdelay"                       false      || return 1
+            ask_bool KCP_ACKNODELAY   "acknodelay"                   true       || return 1
+            ask_int  KCP_INTERVAL     "interval ms"                  20       10 5000 || return 1
+            ask_int  KCP_RESEND       "resend"                       2         0 2 || return 1
+            ask_int  KCP_NOCONGESTION "nocongestion (0=off 1=on)"    1         0 1 || return 1
+            ask_int  KCP_MTU          "MTU"                          1350     50 1500 || return 1
+            ask_int  KCP_RCVWND       "Receive window"               2048    128 32768 || return 1
+            ask_int  KCP_SNDWND       "Send window"                  2048    128 32768 || return 1
+            ask_int  KCP_CONN         "Connections"                  2         1 32 || return 1
+            ask_int  KCP_SMUXBUF      "SMUX buffer"                  4194304 65536 134217728 || return 1
+            ask_int  KCP_STREAMBUF    "Stream buffer"                2097152 65536 134217728 || return 1
+            ask_int  KCP_PCAP_SOCKBUF "PCAP sockbuf"                 8388608 65536 268435456 || return 1
+            ask_int  KCP_TCPBUF       "TCP buffer"                   8192     1024 1048576 || return 1
+            ask_int  KCP_UDPBUF       "UDP buffer"                   4096     1024 1048576 || return 1
+            ;;
+        *) return 1;;
+    esac
+    return 0
+}
+
+# Rewrites conn/tcpbuf/udpbuf, network.pcap.sockbuf and the whole kcp: block from the KCP_* globals.
+# Pure awk (no python). Unknown keys inside kcp:/pcap: (dshard, pshard, smuxkalive ...) are kept.
+# The result is read back and verified; on any failure the original file is left untouched and 1 is returned.
+write_kcp_settings() {
+    local yaml="$1" key="$2" block="$3"
+    local tmp="${yaml}.kcp.new" bak="$SECURE_TMP/$(basename "$yaml").bak"
+
+    if [ ! -f "$yaml" ] || [ -z "$key" ] || [ -z "$block" ]; then
+        echo -e "  ${R}✖ Config, key or cipher not found - nothing was changed.${NC}"; return 1
+    fi
+    cp -f "$yaml" "$bak" 2>/dev/null
+
+    awk -v mode="$KCP_MODE" -v conn="$KCP_CONN" -v mtu="$KCP_MTU" -v rcv="$KCP_RCVWND" -v snd="$KCP_SNDWND" \
+        -v smux="$KCP_SMUXBUF" -v stream="$KCP_STREAMBUF" -v pcap="$KCP_PCAP_SOCKBUF" \
+        -v tcpbuf="$KCP_TCPBUF" -v udpbuf="$KCP_UDPBUF" -v nodelay="$KCP_NODELAY" -v wdelay="$KCP_WDELAY" \
+        -v ack="$KCP_ACKNODELAY" -v interval="$KCP_INTERVAL" -v resend="$KCP_RESEND" -v nc="$KCP_NOCONGESTION" \
+        -v key="$key" -v block="$block" '
+    BEGIN {
+        n = split("key mode block mtu rcvwnd sndwnd smuxbuf streambuf nodelay wdelay acknodelay interval resend nocongestion", m, " ")
+        for (i = 1; i <= n; i++) managed[m[i]] = 1
+        sec = ""; in_drop = 0
+    }
+    function emit_network() {
+        print "  pcap:"; print "    sockbuf: " pcap
+        printf "%s", pcap_extra
+    }
+    function emit_transport() {
+        print "  conn: " conn; print "  tcpbuf: " tcpbuf; print "  udpbuf: " udpbuf
+        print "  kcp:"
+        print "    key: \"" key "\""; print "    mode: \"" mode "\""; print "    block: \"" block "\""
+        print "    mtu: " mtu; print "    rcvwnd: " rcv; print "    sndwnd: " snd
+        print "    smuxbuf: " smux; print "    streambuf: " stream
+        if (mode == "manual") {
+            print "    nodelay: " nodelay; print "    wdelay: " wdelay; print "    acknodelay: " ack
+            print "    interval: " interval; print "    resend: " resend; print "    nocongestion: " nc
+        }
+        printf "%s", kcp_extra
+    }
+    function leave_section() {
+        if (sec == "network") emit_network()
+        else if (sec == "transport") emit_transport()
+        sec = ""; in_drop = 0
+    }
+    {
+        line = $0
+        if (line ~ /^[A-Za-z_]/) {
+            leave_section()
+            name = line; sub(/:.*/, "", name)
+            if (name == "network" || name == "transport") { sec = name; seen[name] = 1 }
+            print line; next
+        }
+        if (sec == "network" || sec == "transport") {
+            if (line ~ /^  [A-Za-z_]/) {
+                child = line; sub(/^  /, "", child); sub(/:.*/, "", child)
+                if (sec == "network" && child == "pcap") { in_drop = 1; drop_child = child; next }
+                if (sec == "transport" && (child == "conn" || child == "tcpbuf" || child == "udpbuf" || child == "kcp")) { in_drop = 1; drop_child = child; next }
+                in_drop = 0; print line; next
+            }
+            if (in_drop) {
+                if (line ~ /^    [A-Za-z_]/) {
+                    ck = line; sub(/^    /, "", ck); sub(/:.*/, "", ck)
+                    if (sec == "network" && drop_child == "pcap") {
+                        if (ck != "sockbuf") pcap_extra = pcap_extra line "\n"
+                    } else if (sec == "transport" && drop_child == "kcp") {
+                        if (!(ck in managed)) kcp_extra = kcp_extra line "\n"
+                    }
+                }
+                next
+            }
+        }
+        print line
+    }
+    END {
+        leave_section()
+        if (!seen["network"] || !seen["transport"]) exit 2
+    }' "$yaml" > "$tmp" 2>/dev/null
+    local rc=$?
+
+    local ok=1
+    [ "$rc" -eq 0 ] && [ -s "$tmp" ] && grep -q '^role:' "$tmp" || ok=0
+    if [ "$ok" -eq 1 ]; then
+        [ "$(get_yaml_value mode "$tmp")"    = "$KCP_MODE" ]        || ok=0
+        [ "$(get_yaml_value conn "$tmp")"    = "$KCP_CONN" ]        || ok=0
+        [ "$(get_yaml_value mtu "$tmp")"     = "$KCP_MTU" ]         || ok=0
+        [ "$(get_yaml_value rcvwnd "$tmp")"  = "$KCP_RCVWND" ]      || ok=0
+        [ "$(get_yaml_value sndwnd "$tmp")"  = "$KCP_SNDWND" ]      || ok=0
+        [ "$(get_yaml_value sockbuf "$tmp")" = "$KCP_PCAP_SOCKBUF" ] || ok=0
+        [ "$(get_yaml_value key "$tmp")"     = "$key" ]             || ok=0
+        [ "$(get_yaml_value block "$tmp")"   = "$block" ]           || ok=0
+        if [ "$KCP_MODE" = "manual" ]; then
+            [ "$(get_yaml_value interval "$tmp")" = "$KCP_INTERVAL" ] || ok=0
+            [ "$(get_yaml_value nodelay "$tmp")"  = "$KCP_NODELAY" ]  || ok=0
+        elif grep -qE '^    (nodelay|interval|resend|nocongestion|wdelay|acknodelay):' "$tmp"; then
+            ok=0
+        fi
+    fi
+
+    if [ "$ok" -ne 1 ]; then
+        rm -f "$tmp"
+        echo -e "  ${R}✖ Could not write the profile safely - config left unchanged (backup: $bak).${NC}"
+        return 1
+    fi
+    mv -f "$tmp" "$yaml"
+    return 0
+}
+
+
+# ================================================================
+# CONNECTION / PEER DETECTION
+# paqet talks through raw sockets, so the kernel has no TCP session and `ss ... ESTAB`
+# is always empty. Liveness is measured from iptables packet counters instead:
+#   server -> packets arriving on the tunnel port (MPAQET_RX_<name>)
+#   client -> packets arriving FROM the server port (MPAQET_LINK_<name>, created by setup_paqet_probe)
+# ONLINE means that counter grew since the previous sample.
+# ================================================================
+get_link_pkts() {
+    local name="$1" role="$2" tag out
+    if [ "$role" = "1" ]; then tag="MPAQET_RX_${name} */"; else tag="MPAQET_LINK_${name} */"; fi
+    out=$(iptables -t mangle -L INPUT -v -n -x 2>/dev/null | grep -F "$tag")
+    if [ -z "$out" ]; then
+        [ "$role" != "1" ] && setup_paqet_probe "$name"
+        echo 0; return 0
+    fi
+    echo "$out" | awk '{s+=$1} END {print s+0}'
+}
+
+# Fallback only (first sample / counters were zeroed): last connection event in the service log.
+log_link_verdict() {
+    local last
+    last=$(journalctl -u "mpaqet@${1}" -n 200 --no-pager 2>/dev/null | grep -Ei 'established|connection lost|retrying|failed to connect|connection closed|broken pipe' | tail -n 1)
+    echo "$last" | grep -qi 'established' && echo "ONLINE"
+    return 0
+}
+
+# Client IP as seen by the server: the xt_recent list filled by the MPAQET_PEER rule.
+# The busiest source in the last interval wins (scanner noise sends few packets); the list is
+# cleared after each read and the last answer is cached.
+get_server_peer_ip() {
+    local name="$1" dir="${XT_RECENT_DIR:-/proc/net/xt_recent}" f cache best
+    f="$dir/mpq_${name}"; cache="$SECURE_TMP/.mpaqet_peer_${name}"
+    [ -e "$f" ] || setup_paqet_probe "$name"
+    if [ -r "$f" ]; then
+        best=$(awk '
+            { ip = ""; p = 0; ls = 0
+              for (i = 1; i <= NF; i++) {
+                  if ($i ~ /^src=/) ip = substr($i, 5)
+                  if ($i == "oldest_pkt:") p = i
+                  if ($i == "last_seen:") ls = $(i + 1)
+              }
+              if (ip == "" || p == 0) next
+              n = NF - (p + 1)
+              if (n > bn || (n == bn && ls + 0 > bl + 0)) { bn = n; bl = ls; bip = ip }
+            }
+            END { if (bip != "") print bip }' "$f" 2>/dev/null)
+        if [[ "$best" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+            echo "$best" > "$cache"
+            echo / > "$f" 2>/dev/null
+        fi
+    fi
+    [ -s "$cache" ] && cat "$cache"
+    return 0
+}
+
+check_paqet_connection() {
+    local t_name="$1" known_active="${2:-0}"
     local meta="$CONF_DIR/${t_name}.meta"
     [ ! -f "$meta" ] && { echo "OFFLINE"; return; }
-    
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mpaqet@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
-    local ROLE=$(grep -m1 "^ROLE=" "$meta" | cut -d'=' -f2 | tr -d '"')
-    local TUN_PORT=$(grep -m1 "^TUN_PORT=" "$meta" | cut -d'=' -f2 | tr -d '"')
-    
-    if [ "$ROLE" == "1" ]; then
-        if ss -tn src ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
-    else
-        if ss -tn dst ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "CONNECTING"; fi
+    local ROLE idle sf now cur p_pk="" p_ts="" p_v="" age verdict
+    ROLE=$(grep -m1 '^ROLE=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
+    idle="CONNECTING"; [ "$ROLE" = "1" ] && idle="WAITING"
+    sf="$SECURE_TMP/.mpaqet_link_${t_name}"
+    now=$(date +%s); cur=$(get_link_pkts "$t_name" "$ROLE")
+    [ -f "$sf" ] && read -r p_pk p_ts p_v < "$sf"
+
+    if [[ "$p_pk" =~ ^[0-9]+$ && "$p_ts" =~ ^[0-9]+$ ]]; then
+        age=$((now - p_ts))
+        if [ "$age" -lt 3 ] && [ -n "$p_v" ]; then echo "$p_v"; return; fi
+        if [ "$age" -le 180 ] && [ "$cur" -ge "$p_pk" ]; then
+            if [ "$cur" -gt "$p_pk" ]; then verdict="ONLINE"; else verdict="$idle"; fi
+            echo "$cur $now $verdict" > "$sf"; echo "$verdict"; return
+        fi
     fi
+    verdict=$(log_link_verdict "$t_name"); verdict="${verdict:-$idle}"
+    echo "$cur $now $verdict" > "$sf"; echo "$verdict"
 }
 
 get_peer_ping() {
@@ -577,9 +912,9 @@ draw_header() {
                 peer_ip="$tmp_remote"
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-                if [ -n "$conn" ]; then
-                    peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+                local srv_peer=$(get_server_peer_ip "$(basename "$conf" .meta)")
+                if [ -n "$srv_peer" ]; then
+                    peer_ip="$srv_peer"
                     break
                 fi
             fi
@@ -626,6 +961,7 @@ draw_header() {
         fi
     else
         g_color="${DIM}"; g_text="Waiting"
+        [ "$online_tunnels" -gt 0 ] && g_text="N/A"
     fi
 
     local title=" MPaqet Engine v${MODULE_VERSION} "
@@ -716,7 +1052,7 @@ show_tunnel_registry() {
         local mtu=$(grep "mtu:" "$yaml_f" | awk '{print $2}')
         local conn_c=$(grep "conn:" "$yaml_f" | head -1 | awk '{print $2}')
         
-        local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
+        local role_text=$([ "$ROLE" == "1" ] && echo "KHAREJ (Server)" || echo "IRAN (Client)")
         local ping_val="N/A"
         local connected_peer=""
 
@@ -724,13 +1060,12 @@ show_tunnel_registry() {
             ping_val=$(get_peer_ping "$REMOTE_IP" "$TUN_PORT")
             connected_peer="$REMOTE_IP"
         elif [ "$ROLE" == "1" ]; then
-            local est_conn=$(ss -tn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-            if [ -n "$est_conn" ]; then
-                local p_ip=$(echo "$est_conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+            local p_ip=$(get_server_peer_ip "$t_name")
+            if [ -n "$p_ip" ]; then
                 ping_val=$(get_peer_ping "$p_ip" "$TUN_PORT")
                 connected_peer="$p_ip"
             else
-                ping_val="Waiting"
+                ping_val="N/A"
             fi
         fi
 
@@ -905,7 +1240,7 @@ render_mpaqet_menu() {
     badge=""
     if [ -f "$SECURE_TMP/.mpaqet_remote_ver" ]; then
         rv=$(cat "$SECURE_TMP/.mpaqet_remote_ver" | tr -d '\r\n ')
-        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+        if [ "$rv" != "Unknown" ] && is_newer_version "$rv" "$MODULE_VERSION"; then
             badge=" ${Y}(Update Available: v${rv})${NC}"
         fi
     fi
@@ -920,7 +1255,7 @@ render_mpaqet_menu() {
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Secret Key${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Edit KCP Mode${NC} ${DIM}(normal, fast, fast2, fast3)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}KCP Profile${NC} ${DIM}(normal / fast / fast2 / fast3 / manual)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit MTU Size${NC} ${DIM}(1000-1500)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Edit Connection Count${NC} ${DIM}(conn: 1-32)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${M}Edit Encryption${NC} ${DIM}(aes-128-gcm, aes-256, none)${NC}"
@@ -996,6 +1331,9 @@ while true; do
            echo -ne "  ${C}● Secret Key [Default ${s_key}]: ${NC}"; read u_key
            u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-')
            key=${u_key:-$s_key}
+
+           choose_kcp_profile "server" "FAST" || continue
+           profile_name="$KCP_PROFILE"
            
            > "$CONF_DIR/${t_name}.yaml.tmp"
            cat <<'EOF' > "$CONF_DIR/${t_name}.yaml.tmp"
@@ -1027,8 +1365,12 @@ EOF
                -e "s|%KEY%|${key}|g" \
                "$CONF_DIR/${t_name}.yaml.tmp" > "$CONF_DIR/${t_name}.yaml"
            rm -f "$CONF_DIR/${t_name}.yaml.tmp"
+           if ! write_kcp_settings "$CONF_DIR/${t_name}.yaml" "$key" "aes-128-gcm"; then
+               clean_paqet_counters "$t_name"; rm -f "$CONF_DIR/${t_name}.yaml"
+               echo -e "  ${R}✖ Tunnel was NOT created (profile could not be written).${NC}"; sleep 2; continue
+           fi
            
-           echo -e "ROLE=1\nTUN_PORT=$t_port\nREMOTE_IP=0.0.0.0\nTCP_PORTS=" > "$CONF_DIR/${t_name}.meta"
+           echo -e "ROLE=1\nTUN_PORT=$t_port\nREMOTE_IP=0.0.0.0\nTCP_PORTS=\nPROFILE=$profile_name" > "$CONF_DIR/${t_name}.meta"
            
            setup_paqet_counters "$t_name" "$t_port"
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
@@ -1103,6 +1445,9 @@ EOF
                echo -e "  ${R}✖ Loop Error: Forward port cannot match Tunnel port ($r_port)!${NC}"; sleep 2; continue
            fi
            
+           choose_kcp_profile "client" "FAST" || continue
+           profile_name="$KCP_PROFILE"
+           
            > "$CONF_DIR/${t_name}.yaml.tmp"
            cat <<'EOF' > "$CONF_DIR/${t_name}.yaml.tmp"
 role: "client"
@@ -1151,8 +1496,12 @@ EOF
                -e "s|%KEY%|${key}|g" \
                "$CONF_DIR/${t_name}.yaml.tmp" > "$CONF_DIR/${t_name}.yaml"
            rm -f "$CONF_DIR/${t_name}.yaml.tmp"
+           if ! write_kcp_settings "$CONF_DIR/${t_name}.yaml" "$key" "aes-128-gcm"; then
+               clean_paqet_counters "$t_name"; rm -f "$CONF_DIR/${t_name}.yaml"
+               echo -e "  ${R}✖ Tunnel was NOT created (profile could not be written).${NC}"; sleep 2; continue
+           fi
 
-           echo -e "ROLE=2\nTUN_PORT=$r_port\nREMOTE_IP=$r_ip\nTCP_PORTS=${meta_ports%,}" > "$CONF_DIR/${t_name}.meta"
+           echo -e "ROLE=2\nTUN_PORT=$r_port\nREMOTE_IP=$r_ip\nTCP_PORTS=${meta_ports%,}\nPROFILE=$profile_name" > "$CONF_DIR/${t_name}.meta"
 
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
            systemctl restart "mpaqet@${t_name}"
@@ -1209,17 +1558,18 @@ EOF
                fi
 
            elif [[ "$opt" == "5" ]]; then
-               curr_mode=$(grep "mode:" "$sel_cfg" | awk -F'"' '{print $2}')
-               echo -ne "  ${C}●${NC} ${W}New KCP Mode [normal|fast|fast2|fast3] [Current: ${Y}${curr_mode}${W}]: ${NC}"; read n_m
-               n_m=$(echo "$n_m" | tr -dc 'a-zA-Z0-9')
-               if [ -z "$n_m" ]; then
-                   echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
-               fi
-               if [[ "$n_m" =~ ^(normal|fast|fast2|fast3)$ ]]; then
-                   sed -i "s|mode:.*|mode: \"$n_m\"|" "$sel_cfg"
-                   echo -e "  ${G}✔ KCP Mode updated.${NC}"
+               curr_profile=$(get_tunnel_profile "$old_tname")
+               role_name="client"
+               [ "$(grep -m1 '^ROLE=' "$CONF_DIR/${old_tname}.meta" | cut -d'=' -f2)" = "1" ] && role_name="server"
+               if choose_kcp_profile "$role_name" "$curr_profile"; then
+                   if ! write_kcp_settings "$sel_cfg" "$(get_yaml_value key "$sel_cfg")" "$(get_yaml_value block "$sel_cfg")"; then
+                       sleep 2; continue
+                   fi
+                   set_meta_profile "$old_tname" "$KCP_PROFILE"
+                   echo -e "  ${G}✔ ${KCP_PROFILE} profile applied and verified in YAML. Apply the same profile on the other server.${NC}"
                else
-                   echo -e "  ${R}✖ Invalid Mode!${NC}"; sleep 1.5; continue
+                   echo -e "  ${Y}● Profile change cancelled.${NC}"
+                   continue
                fi
 
            elif [[ "$opt" == "6" ]]; then
@@ -1233,6 +1583,7 @@ EOF
                    echo -e "  ${R}✖ MTU must be between 1000 and 1500!${NC}"; sleep 1.5; continue
                fi
                sed -i "s|mtu:.*|mtu: $n_mtu|" "$sel_cfg"
+               mark_profile_custom "$old_tname"
                echo -e "  ${G}✔ MTU updated.${NC}"
 
            elif [[ "$opt" == "7" ]]; then
@@ -1246,6 +1597,7 @@ EOF
                    echo -e "  ${R}✖ Connections must be between 1 and 32!${NC}"; sleep 1.5; continue
                fi
                sed -i "s|conn:.*|conn: $n_c|" "$sel_cfg"
+               mark_profile_custom "$old_tname"
                echo -e "  ${G}✔ Connection count updated.${NC}"
 
            elif [[ "$opt" == "8" ]]; then
@@ -1263,7 +1615,7 @@ EOF
                fi
 
            elif [[ "$opt" == "9" ]]; then
-               local is_client=false
+               is_client=false
                if grep -qi 'role: *"client"' "$sel_cfg"; then
                    is_client=true
                fi
@@ -1273,14 +1625,14 @@ EOF
                    sleep 2; continue
                fi
 
-               local meta_file="$CONF_DIR/${old_tname}.meta"
-               local curr_ports=""
+               meta_file="$CONF_DIR/${old_tname}.meta"
+               curr_ports=""
                [ -f "$meta_file" ] && curr_ports=$(grep -m1 "^TCP_PORTS=" "$meta_file" | cut -d'=' -f2 | tr -d '"')
                if [ -z "$curr_ports" ]; then
                    curr_ports=$(grep "listen:" "$sel_cfg" | awk -F':' '{print $NF}' | tr -d '"' | tr '\n' ',' | sed 's/,$//')
                fi
 
-               local t_tun_port=""
+               t_tun_port=""
                [ -f "$meta_file" ] && t_tun_port=$(grep -m1 "^TUN_PORT=" "$meta_file" | cut -d'=' -f2 | tr -d '"')
 
                echo -ne "  ${C}●${NC} ${W}New Forward Ports [Current: ${Y}${curr_ports}${W}] (e.g. 443,8080): ${NC}"; read n_ports
@@ -1294,8 +1646,8 @@ EOF
                    sleep 2; continue
                fi
 
-               local tmp_yaml="$SECURE_TMP/${old_tname}.yaml.tmp"
-               local new_meta_ports=""
+               tmp_yaml="$SECURE_TMP/${old_tname}.yaml.tmp"
+               new_meta_ports=""
                
                {
                    sed -n '1,/^forward:/p' "$sel_cfg"

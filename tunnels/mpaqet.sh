@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.3.1 ---
+# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v8.3.3 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="8.3.1"
+MODULE_VERSION="8.3.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mpaqet"
@@ -509,31 +509,57 @@ KCP_INTERVAL=20
 KCP_RESEND=2
 KCP_NOCONGESTION=1
 
-# Presets. MTU is deliberately the same (1350) in every preset: raising it together
-# with everything else makes it impossible to tell which change broke a link.
-# Ladder: NORMAL -> FAST (2 conn) -> FAST2 (4 conn, 2048 windows) -> FAST3 (same as FAST2,
-# faster timers + bigger buffers). FAST2 vs FAST3 therefore differ only by KCP timers/buffers.
+cpu_cores() { local n; n=$(nproc 2>/dev/null); [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] || n=1; echo "$n"; }
+cap_at() { local v="$1" m="$2"; [ "$v" -gt "$m" ] && v="$m"; echo "$v"; }
+
+# CPU cost of a raw-packet KCP tunnel is per PACKET, not per megabit, and every extra conn adds a
+# session (timers, buffers, crypto). So the profiles below (a) batch writes/acks (wdelay=true,
+# acknodelay=false => fewer small packets), (b) keep conn close to the CPU core count of THIS machine
+# and (c) never touch the MTU (KCP_MTU empty = keep the tunnel's current MTU, clamped to the NIC).
+# They are written as explicit KCP values (mode "manual"), so every number really takes effect.
+# smuxbuf follows the rule from the paqet tuning guide: >= 2 x streambuf x conn.
 profile_defaults() {
-    local profile="${1^^}" role="${2:-client}"
-    KCP_PROFILE="$profile"
-    KCP_MTU=1350
+    local profile="${1^^}" role="${2:-client}" cores
+    cores=$(cpu_cores)
+    KCP_PROFILE="$profile"; KCP_MTU=""
+    KCP_MODE=manual; KCP_NODELAY=0; KCP_WDELAY=true; KCP_ACKNODELAY=false
+    KCP_INTERVAL=30; KCP_RESEND=2; KCP_NOCONGESTION=1
+    KCP_RCVWND=1024; KCP_SNDWND=1024; KCP_STREAMBUF=2097152
+    KCP_PCAP_SOCKBUF=8388608; KCP_TCPBUF=8192; KCP_UDPBUF=4096
     case "$profile" in
-        NORMAL)
-            KCP_MODE=normal; KCP_CONN=1; KCP_RCVWND=512; KCP_SNDWND=512
-            [ "$role" = "server" ] && { KCP_RCVWND=1024; KCP_SNDWND=1024; }
-            KCP_SMUXBUF=4194304; KCP_STREAMBUF=2097152; KCP_PCAP_SOCKBUF=8388608; KCP_TCPBUF=8192; KCP_UDPBUF=4096 ;;
-        FAST)
-            KCP_MODE=fast; KCP_CONN=2; KCP_RCVWND=1024; KCP_SNDWND=1024
-            KCP_SMUXBUF=4194304; KCP_STREAMBUF=2097152; KCP_PCAP_SOCKBUF=8388608; KCP_TCPBUF=8192; KCP_UDPBUF=4096 ;;
-        FAST2)
-            KCP_MODE=fast2; KCP_CONN=4; KCP_RCVWND=2048; KCP_SNDWND=2048
-            KCP_SMUXBUF=8388608; KCP_STREAMBUF=4194304; KCP_PCAP_SOCKBUF=16777216; KCP_TCPBUF=16384; KCP_UDPBUF=8192 ;;
-        FAST3)
-            KCP_MODE=fast3; KCP_CONN=4; KCP_RCVWND=2048; KCP_SNDWND=2048
-            KCP_SMUXBUF=16777216; KCP_STREAMBUF=8388608; KCP_PCAP_SOCKBUF=33554432; KCP_TCPBUF=32768; KCP_UDPBUF=16384 ;;
-        MANUAL|CUSTOM) return 0 ;;
-        *) profile_defaults FAST "$role"; return 0 ;;
+        ECO)      KCP_CONN=1; KCP_INTERVAL=50 ;;
+        BALANCED) KCP_CONN=$(cap_at "$cores" 2) ;;
+        SPEED)    KCP_CONN=$(cap_at "$cores" 4); KCP_NODELAY=1; KCP_INTERVAL=20
+                  KCP_RCVWND=2048; KCP_SNDWND=2048; KCP_STREAMBUF=4194304; KCP_PCAP_SOCKBUF=16777216; KCP_TCPBUF=16384; KCP_UDPBUF=8192 ;;
+        LATENCY)  KCP_CONN=$(cap_at "$cores" 2); KCP_NODELAY=1; KCP_INTERVAL=10; KCP_WDELAY=false; KCP_ACKNODELAY=true ;;
+        # EXTREME: 300+ Mbit on 4+ cores. conn follows the cores (max 8), windows 4096, and buffers sized as in
+        # the paqet tuning guide (streambuf 8MB, smuxbuf = 2 x stream x conn: 64MB at 4 conn, 128MB at 8).
+        EXTREME)  KCP_CONN=$(cap_at "$cores" 8); [ "$KCP_CONN" -lt 2 ] && KCP_CONN=2
+                  KCP_NODELAY=1; KCP_INTERVAL=20; KCP_RCVWND=4096; KCP_SNDWND=4096
+                  KCP_STREAMBUF=8388608; KCP_PCAP_SOCKBUF=33554432; KCP_TCPBUF=65536; KCP_UDPBUF=16384 ;;
+        # classic paqet built-in modes (only the four kcptun timers change)
+        NORMAL)   KCP_MODE=normal; KCP_CONN=1; KCP_RCVWND=512; KCP_SNDWND=512
+                  [ "$role" = "server" ] && { KCP_RCVWND=1024; KCP_SNDWND=1024; } ;;
+        FAST)     KCP_MODE=fast;  KCP_CONN=$(cap_at "$cores" 2) ;;
+        FAST2)    KCP_MODE=fast2; KCP_CONN=$(cap_at "$cores" 4) ;;
+        FAST3)    KCP_MODE=fast3; KCP_CONN=$(cap_at "$cores" 4); KCP_PCAP_SOCKBUF=16777216 ;;
+        MANUAL|CUSTOM) KCP_MODE=manual; KCP_CONN=$(cap_at "$cores" 2) ;;
+        *) profile_defaults BALANCED "$role"; return 0 ;;
     esac
+    KCP_SMUXBUF=$((KCP_STREAMBUF * 2 * KCP_CONN))
+    return 0
+}
+
+kcp_nic_mtu() {
+    local iface; iface=$(get_yaml_value interface "$1")
+    [ -n "$iface" ] && cat "${SYS_NET_DIR:-/sys/class/net}/$iface/mtu" 2>/dev/null
+}
+# Highest KCP MTU the network interface can carry (NIC MTU minus IP/TCP headers and a safety margin).
+kcp_mtu_cap() {
+    local nic c; nic=$(kcp_nic_mtu "$1")
+    [[ "$nic" =~ ^[0-9]+$ ]] || return 0
+    c=$((nic - 100)); [ "$c" -lt 576 ] && c=576
+    echo "$c"
 }
 
 get_yaml_value() {
@@ -560,7 +586,7 @@ set_meta_profile() {
 # A hand edit (MTU / conn) of a preset makes it a custom profile, so the label never lies.
 mark_profile_custom() {
     local t_name="$1"
-    case "$(get_tunnel_profile "$t_name")" in NORMAL|FAST|FAST2|FAST3) set_meta_profile "$t_name" CUSTOM ;; esac
+    case "$(get_tunnel_profile "$t_name")" in ECO|BALANCED|SPEED|LATENCY|EXTREME|NORMAL|FAST|FAST2|FAST3) set_meta_profile "$t_name" CUSTOM ;; esac
 }
 
 ask_int() {   # ask_int VAR "label" default min max
@@ -586,43 +612,64 @@ ask_bool() {  # ask_bool VAR "label" default(true|false)
 }
 
 choose_kcp_profile() {
-    local role="$1" current="${2:-FAST}" choice
+    local role="$1" current="${2:-BALANCED}" choice sub cores
+    cores=$(cpu_cores)
     clear
     echo -e "\n  ${B}╭──────────────────────── KCP PROFILE ────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}Each profile writes real Paqet YAML settings (MTU fixed 1350)${NC} ${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}CPU-aware presets. MTU is never changed by a profile.${NC}"
     echo -e "  ${B}├─────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "  ${B}│${NC} ${G}1${NC}) NORMAL  1 conn  / window  512-1024 / slow timers          ${B}│${NC}"
-    echo -e "  ${B}│${NC} ${C}2${NC}) FAST    2 conn  / window 1024       / balanced            ${B}│${NC}"
-    echo -e "  ${B}│${NC} ${Y}3${NC}) FAST2   4 conn  / window 2048       / fast timers         ${B}│${NC}"
-    echo -e "  ${B}│${NC} ${M}4${NC}) FAST3   4 conn  / window 2048       / fastest + big bufs  ${B}│${NC}"
-    echo -e "  ${B}│${NC} ${W}5${NC}) MANUAL  every KCP value by hand (validated)               ${B}│${NC}"
-    echo -e "  ${B}│${NC} ${DIM}Current: ${current}${NC}"
+    echo -e "  ${B}│${NC} ${G}1${NC}) ECO         lowest CPU: 1 conn, slow timers, batched"
+    echo -e "  ${B}│${NC} ${C}2${NC}) BALANCED    default: up to 2 conn, batched writes/acks"
+    echo -e "  ${B}│${NC} ${Y}3${NC}) SPEED       up to 4 conn, window 2048, fast timers"
+    echo -e "  ${B}│${NC} ${M}4${NC}) LOW-LATENCY fastest timers, immediate flush (more CPU)"
+    echo -e "  ${B}│${NC} ${W}5${NC}) MANUAL      every KCP value by hand (validated)"
+    echo -e "  ${B}│${NC} ${W}6${NC}) CLASSIC     paqet built-in normal / fast / fast2 / fast3"
+    echo -e "  ${B}│${NC} ${R}7${NC}) EXTREME     300+ Mbit: needs 4+ cores and 2GB+ RAM, window 4096"
+    echo -e "  ${B}│${NC} ${DIM}Current: ${current}   |   CPU cores on this server: ${cores}${NC}"
     echo -e "  ${B}╰─────────────────────────────────────────────────────────────╯${NC}"
-    echo -e "  ${DIM}Apply the SAME profile on both servers (Iran + Kharej).${NC}"
+    echo -e "  ${DIM}Apply the profile on BOTH servers. conn is capped by this server's cores.${NC}"
     echo -ne "  ${C}Profile ❯❯ ${NC}"; read choice
     case "$choice" in
-        1) profile_defaults NORMAL "$role";;
-        2) profile_defaults FAST "$role";;
-        3) profile_defaults FAST2 "$role";;
-        4) profile_defaults FAST3 "$role";;
+        1) profile_defaults ECO "$role";;
+        2) profile_defaults BALANCED "$role";;
+        3) profile_defaults SPEED "$role";;
+        4) profile_defaults LATENCY "$role";;
+        6)
+            echo -ne "  ${C}1) normal  2) fast  3) fast2  4) fast3  ❯❯ ${NC}"; read sub
+            case "$sub" in 1) profile_defaults NORMAL "$role";; 2) profile_defaults FAST "$role";;
+                           3) profile_defaults FAST2 "$role";; 4) profile_defaults FAST3 "$role";; *) return 1;; esac ;;
         5)
-            profile_defaults CUSTOM "$role"; KCP_PROFILE=MANUAL; KCP_MODE=manual
-            ask_int  KCP_NODELAY      "nodelay (0=off 1=on)"        1        0 1 || return 1
-            ask_bool KCP_WDELAY       "wdelay"                       false      || return 1
-            ask_bool KCP_ACKNODELAY   "acknodelay"                   true       || return 1
-            ask_int  KCP_INTERVAL     "interval ms"                  20       10 5000 || return 1
+            profile_defaults MANUAL "$role"
+            ask_int  KCP_NODELAY      "nodelay (0=off 1=on)"        0        0 1 || return 1
+            ask_bool KCP_WDELAY       "wdelay (true = batch writes, less CPU)"   true  || return 1
+            ask_bool KCP_ACKNODELAY   "acknodelay (false = batch acks, less CPU)" false || return 1
+            ask_int  KCP_INTERVAL     "interval ms"                  30       10 5000 || return 1
             ask_int  KCP_RESEND       "resend"                       2         0 2 || return 1
             ask_int  KCP_NOCONGESTION "nocongestion (0=off 1=on)"    1         0 1 || return 1
-            ask_int  KCP_MTU          "MTU"                          1350     50 1500 || return 1
-            ask_int  KCP_RCVWND       "Receive window"               2048    128 32768 || return 1
-            ask_int  KCP_SNDWND       "Send window"                  2048    128 32768 || return 1
-            ask_int  KCP_CONN         "Connections"                  2         1 32 || return 1
-            ask_int  KCP_SMUXBUF      "SMUX buffer"                  4194304 65536 134217728 || return 1
+            local mtu_in
+            read -rp "  MTU (Enter = keep current) (576-1500): " mtu_in || return 1
+            if [ -n "$mtu_in" ]; then
+                if [[ "$mtu_in" =~ ^[0-9]+$ ]] && [ "$mtu_in" -ge 576 ] && [ "$mtu_in" -le 1500 ]; then KCP_MTU="$mtu_in"
+                else echo -e "  ${R}✖ Invalid MTU - keeping the current one.${NC}"; fi
+            fi
+            ask_int  KCP_RCVWND       "Receive window"               1024    128 32768 || return 1
+            ask_int  KCP_SNDWND       "Send window"                  1024    128 32768 || return 1
+            ask_int  KCP_CONN         "Connections (about = CPU cores)" "$KCP_CONN" 1 32 || return 1
             ask_int  KCP_STREAMBUF    "Stream buffer"                2097152 65536 134217728 || return 1
+            KCP_SMUXBUF=$((KCP_STREAMBUF * 2 * KCP_CONN))
+            ask_int  KCP_SMUXBUF      "SMUX buffer (>= 2 x stream x conn)" "$KCP_SMUXBUF" 65536 268435456 || return 1
             ask_int  KCP_PCAP_SOCKBUF "PCAP sockbuf"                 8388608 65536 268435456 || return 1
             ask_int  KCP_TCPBUF       "TCP buffer"                   8192     1024 1048576 || return 1
             ask_int  KCP_UDPBUF       "UDP buffer"                   4096     1024 1048576 || return 1
+            KCP_PROFILE=MANUAL
             ;;
+        7)
+            if [ "$cores" -lt 4 ]; then
+                echo -e "  ${Y}⚠ This server has only ${cores} core(s). EXTREME is meant for 4+ cores; SPEED is safer here.${NC}"
+                local go; read -rp "  Use EXTREME anyway? [y/N]: " go
+                [[ "${go,,}" == "y" ]] || return 1
+            fi
+            profile_defaults EXTREME "$role" ;;
         *) return 1;;
     esac
     return 0
@@ -639,6 +686,16 @@ write_kcp_settings() {
         echo -e "  ${R}✖ Config, key or cipher not found - nothing was changed.${NC}"; return 1
     fi
     cp -f "$yaml" "$bak" 2>/dev/null
+
+    # MTU: a preset never overrides it (empty = keep); anything above the NIC limit is lowered.
+    local cur_mtu cap
+    cur_mtu=$(get_yaml_value mtu "$yaml"); [[ "$cur_mtu" =~ ^[0-9]+$ ]] || cur_mtu=1350
+    [ -z "$KCP_MTU" ] && KCP_MTU="$cur_mtu"
+    cap=$(kcp_mtu_cap "$yaml")
+    if [ -n "$cap" ] && [ "$KCP_MTU" -gt "$cap" ]; then
+        echo -e "  ${Y}⚠ MTU ${KCP_MTU} is above what this interface can send (NIC MTU $(kcp_nic_mtu "$yaml")); using ${cap}.${NC}"
+        KCP_MTU="$cap"
+    fi
 
     awk -v mode="$KCP_MODE" -v conn="$KCP_CONN" -v mtu="$KCP_MTU" -v rcv="$KCP_RCVWND" -v snd="$KCP_SNDWND" \
         -v smux="$KCP_SMUXBUF" -v stream="$KCP_STREAMBUF" -v pcap="$KCP_PCAP_SOCKBUF" \
@@ -791,6 +848,17 @@ get_server_peer_ip() {
     return 0
 }
 
+# Known failure modes are read from the service log of the last 45 seconds:
+#   "send: Message too large"  -> MTU above what the NIC can send  (state MTU-ERR)
+#   5+ other [ERROR] lines     -> streams failing                  (state ERRORS)
+apply_log_health() {
+    local name="$1" v="$2" log mtu_n err_n
+    log=$(journalctl -u "mpaqet@${name}" --since "45 seconds ago" --no-pager 2>/dev/null)
+    mtu_n=$(printf '%s\n' "$log" | grep -c 'Message too large')
+    err_n=$(printf '%s\n' "$log" | grep -c '\[ERROR\]')
+    if [ "$mtu_n" -ge 3 ]; then echo "MTU-ERR"; elif [ "$err_n" -ge 5 ]; then echo "ERRORS"; else echo "$v"; fi
+}
+
 check_paqet_connection() {
     local t_name="$1" known_active="${2:-0}"
     local meta="$CONF_DIR/${t_name}.meta"
@@ -809,10 +877,12 @@ check_paqet_connection() {
         if [ "$age" -lt 3 ] && [ -n "$p_v" ]; then echo "$p_v"; return; fi
         if [ "$age" -le 180 ] && [ "$cur" -ge "$p_pk" ]; then
             if [ "$cur" -gt "$p_pk" ]; then verdict="ONLINE"; else verdict="$idle"; fi
+            verdict=$(apply_log_health "$t_name" "$verdict")
             echo "$cur $now $verdict" > "$sf"; echo "$verdict"; return
         fi
     fi
     verdict=$(log_link_verdict "$t_name"); verdict="${verdict:-$idle}"
+    verdict=$(apply_log_health "$t_name" "$verdict")
     echo "$cur $now $verdict" > "$sf"; echo "$verdict"
 }
 
@@ -854,7 +924,7 @@ get_peer_ping() {
 }
 
 draw_header() {
-    local s_ip=$(get_local_ip); local total_tunnels=0; local online_tunnels=0; local active_t=0
+    local s_ip=$(get_local_ip); local total_tunnels=0; local online_tunnels=0; local active_t=0; local mtu_err_t=0; local err_t=0
     local t_names=() units=()
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
@@ -871,6 +941,8 @@ draw_header() {
                 ((active_t++))
                 local st=$(check_paqet_connection "$t_name" "1")
                 [ "$st" == "ONLINE" ] && ((online_tunnels++))
+                [ "$st" == "MTU-ERR" ] && ((mtu_err_t++))
+                [ "$st" == "ERRORS" ] && ((err_t++))
             fi
             ((i++))
         done
@@ -891,7 +963,11 @@ draw_header() {
 
     local stat_color="${R}"; local stat_icon="○"; local stat_text="STOPPED"
     if [ "$active_t" -gt 0 ]; then
-        if [ "$online_tunnels" -eq "$active_t" ]; then 
+        if [ "$mtu_err_t" -gt 0 ]; then
+            stat_color="${R}"; stat_icon="✖"; stat_text="MTU ERROR"
+        elif [ "$err_t" -gt 0 ]; then
+            stat_color="${R}"; stat_icon="✖"; stat_text="ERRORS"
+        elif [ "$online_tunnels" -eq "$active_t" ]; then 
             stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"
         elif [ "$online_tunnels" -gt 0 ]; then 
             stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL"
@@ -1078,7 +1154,9 @@ show_tunnel_registry() {
         local stat_icon="○"; local stat_text="OFFLINE"; local stat_color="${R}"
         if [ "$st" == "ONLINE" ]; then stat_icon="●"; stat_text="CONNECTED"; stat_color="${G}";
         elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}";
-        elif [ "$st" == "CONNECTING" ]; then stat_icon="◎"; stat_text="CONNECTING..."; stat_color="${Y}"; fi
+        elif [ "$st" == "CONNECTING" ]; then stat_icon="◎"; stat_text="CONNECTING..."; stat_color="${Y}";
+        elif [ "$st" == "MTU-ERR" ]; then stat_icon="✖"; stat_text="MTU ERROR"; stat_color="${R}";
+        elif [ "$st" == "ERRORS" ]; then stat_icon="✖"; stat_text="ERRORS"; stat_color="${R}"; fi
 
         local rx=$(get_paqet_rx "$t_name"); local tx=$(get_paqet_tx "$t_name")
 
@@ -1146,7 +1224,9 @@ show_live_radar() {
             local st_color="${R}"; local st_text="OFFLINE"
             if [ "$st" == "ONLINE" ]; then st_color="${G}"; st_text="ONLINE";
             elif [ "$st" == "WAITING" ]; then st_color="${Y}"; st_text="WAITING";
-            elif [ "$st" == "CONNECTING" ]; then st_color="${Y}"; st_text="CONNECTING"; fi
+            elif [ "$st" == "CONNECTING" ]; then st_color="${Y}"; st_text="CONNECTING";
+            elif [ "$st" == "MTU-ERR" ]; then st_color="${R}"; st_text="MTU ERROR";
+            elif [ "$st" == "ERRORS" ]; then st_color="${R}"; st_text="ERRORS"; fi
 
             local r_new=$(get_paqet_rx "$t_name"); local t_new=$(get_paqet_tx "$t_name")
             local r_prev=${rx_old[$t_name]:-$r_new}; local t_prev=${tx_old[$t_name]:-$t_new}
@@ -1574,13 +1654,17 @@ EOF
 
            elif [[ "$opt" == "6" ]]; then
                curr_mtu=$(grep "mtu:" "$sel_cfg" | awk '{print $2}')
-               echo -ne "  ${C}●${NC} ${W}New MTU Size [1000-1500] [Current: ${Y}${curr_mtu}${W}]: ${NC}"; read n_mtu
+               echo -ne "  ${C}●${NC} ${W}New MTU Size [576-1500] [Current: ${Y}${curr_mtu}${W}]: ${NC}"; read n_mtu
                n_mtu=$(echo "$n_mtu" | tr -dc '0-9')
                if [ -z "$n_mtu" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
                fi
-               if [ "$n_mtu" -lt 1000 ] || [ "$n_mtu" -gt 1500 ]; then 
-                   echo -e "  ${R}✖ MTU must be between 1000 and 1500!${NC}"; sleep 1.5; continue
+               if [ "$n_mtu" -lt 576 ] || [ "$n_mtu" -gt 1500 ]; then 
+                   echo -e "  ${R}✖ MTU must be between 576 and 1500!${NC}"; sleep 1.5; continue
+               fi
+               nic_cap=$(kcp_mtu_cap "$sel_cfg")
+               if [ -n "$nic_cap" ] && [ "$n_mtu" -gt "$nic_cap" ]; then
+                   echo -e "  ${Y}⚠ This interface can only send ${nic_cap}; using ${nic_cap}.${NC}"; n_mtu="$nic_cap"
                fi
                sed -i "s|mtu:.*|mtu: $n_mtu|" "$sel_cfg"
                mark_profile_custom "$old_tname"

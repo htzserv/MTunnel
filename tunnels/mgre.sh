@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.8.8 ---
-# [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v5.9.0 ---
+# [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU (700-1500) | Instant MSS Engine]
 
-MODULE_VERSION="5.8.8"
+MODULE_VERSION="5.9.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -418,7 +418,7 @@ clean_fwd_rules() {
 apply_tunnel() {
     local conf="$1"
     [ ! -s "$conf" ] && return
-    local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6="" FWD_TCP="" FWD_UDP="" LB_MODE="0"
+    local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU=""
     source "$conf" 2>/dev/null
     
     local c_sub="${CORE_SUBNET}"
@@ -431,20 +431,34 @@ apply_tunnel() {
     
     ip tunnel del "$T_NAME" >/dev/null 2>&1; ip tunnel del "sit_$T_NAME" >/dev/null 2>&1
 
+    local eff_mtu="$CUSTOM_MTU"
     if [[ "$TUN_PROTO" == "6to4" ]]; then
+        [ -z "$eff_mtu" ] && eff_mtu=1436
+        [ "$eff_mtu" -lt 1280 ] && eff_mtu=1280
+        local mss_val=$((eff_mtu - 40))
+
         ip tunnel add "sit_$T_NAME" mode sit remote "$REMOTE_PUB" local "$LOCAL_PUB" 2>/dev/null
         ip link set dev "sit_$T_NAME" mtu 1480 2>/dev/null; ip link set "sit_$T_NAME" up 2>/dev/null
         ip -6 addr add "$LOCAL_IP6/64" dev "sit_$T_NAME" 2>/dev/null
         ip -6 tunnel add "$T_NAME" mode ip6gre remote "$REMOTE_IP6" local "$LOCAL_IP6" key "$TUN_ID" 2>/dev/null
-        ip link set dev "$T_NAME" mtu 1436 2>/dev/null; ip link set "$T_NAME" up 2>/dev/null
+        ip link set dev "$T_NAME" mtu "$eff_mtu" 2>/dev/null
+        ip link set "$T_NAME" up 2>/dev/null
         ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss 1396 -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
+        ip link set dev "$T_NAME" mtu "$eff_mtu" 2>/dev/null
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss "$mss_val" -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
     else
-        local mtu_val=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
+        local def_mtu=$([ "$TYPE" == "1" ] && echo "1436" || echo "1476")
+        [ -z "$eff_mtu" ] && eff_mtu="$def_mtu"
+        [ "$eff_mtu" -lt 700 ] && eff_mtu=700
+        [ "$eff_mtu" -gt 1500 ] && eff_mtu=1500
+        local mss_val=$((eff_mtu - 40))
+
         ip tunnel add "$T_NAME" mode gre remote "$REMOTE_PUB" local "$LOCAL_PUB" ttl 255 key "$TUN_ID" 2>/dev/null
-        ip link set "$T_NAME" up 2>/dev/null; ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
-        ip link set dev "$T_NAME" mtu "$mtu_val" 2>/dev/null
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((mtu_val - 40)) -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
+        ip link set dev "$T_NAME" mtu "$eff_mtu" 2>/dev/null
+        ip link set "$T_NAME" up 2>/dev/null
+        ip addr add "$local_tun"/30 dev "$T_NAME" 2>/dev/null
+        ip link set dev "$T_NAME" mtu "$eff_mtu" 2>/dev/null
+        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss "$mss_val" -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
     fi
 
     local all_targets=("$remote_tun")
@@ -718,16 +732,21 @@ show_tunnel_details() {
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; }
 
     echo -e "\n  ${Y}● Deployed Tunnels Registry:${NC}"
-    local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE
-    local c_sub lip tip t_role t_sec t_id proto_lbl lb_txt left_p right_p pad sp l1 r1 pad1 sp1 l2 pad2 sp2 l3 pad3 sp3 l4 pad4 sp4 l5 r5 pad5 sp5
+    local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE CUSTOM_MTU
+    local c_sub lip tip t_role t_sec t_id proto_lbl lb_txt left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 r3 pad3 sp3 l4 pad4 sp4 l5 r5 pad5 sp5
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; CUSTOM_MTU=""; source "$conf" 2>/dev/null
         c_sub="${CORE_SUBNET}"
         lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
         t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
         t_sec="${TUN_SECRET:-[ NOT SET ]}"
         t_id="${TUN_ID:-[ NOT SET ]}"
+
+        local act_mtu=""
+        [ -d "/sys/class/net/$T_NAME" ] && act_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
+        local def_mtu=$([ "$TUN_PROTO" == "6to4" ] && echo "1436" || ([ "$TYPE" == "1" ] && echo "1436" || echo "1476"))
+        local curr_mtu="${act_mtu:-${CUSTOM_MTU:-$def_mtu (Auto)}}"
 
         proto_lbl="IPv4 GRE"; [[ "$TUN_PROTO" == "6to4" ]] && proto_lbl="6to4 IP6GRE"
 
@@ -746,9 +765,9 @@ show_tunnel_details() {
         pad2=$(( 90 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${sync_disp}${NC}${sp2}${DIM}Network Key ID:${NC} ${Y}${t_id:0:15}${NC} ${B}│${NC}"
         
-        l3="Public IPs   : ${LOCAL_PUB:0:16} -> ${REMOTE_PUB:0:16}"
-        pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB:0:16}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB:0:16}${NC}${sp3} ${B}│${NC}"
+        l3="Public IPs   : ${LOCAL_PUB:0:16} -> ${REMOTE_PUB:0:16}"; r3="MTU: ${curr_mtu}"
+        pad3=$(( 90 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; sp3=$(printf '%*s' "$pad3" "")
+        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB:0:16}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB:0:16}${NC}${sp3}${DIM}MTU:${NC} ${G}${curr_mtu}${NC} ${B}│${NC}"
 
         l4="Core Subnet  : ${c_sub}.x (${lip} -> ${tip})"
         pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; sp4=$(printf '%*s' "$pad4" "")
@@ -854,13 +873,14 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Override Core Subnet Base${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Change Tunnel MTU & MSS (700-1500)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}View Tunnel Config Registry${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}View Tunnel Config Registry${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -921,6 +941,25 @@ while true; do
            u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-')
            tun_secret=${u_key:-$s_key}
 
+           # MTU Query during creation
+           def_mtu=$([ "$tun_proto" == "6to4" ] && echo "1436" || ([ "$s_type" == "1" ] && echo "1436" || echo "1476"))
+           min_mtu=$([ "$tun_proto" == "6to4" ] && echo "1280" || echo "700")
+           while true; do
+               echo -ne "  ${C}●${NC} ${W}Tunnel MTU (${min_mtu}-1500) [Default ${def_mtu}]: ${NC}"; read -r custom_mtu_input
+               [[ "$custom_mtu_input" == "q" ]] && break
+               custom_mtu_input=$(echo "$custom_mtu_input" | tr -dc '0-9')
+               if [ -z "$custom_mtu_input" ]; then
+                   cust_mtu=""
+                   break
+               elif [ "$custom_mtu_input" -ge "$min_mtu" ] && [ "$custom_mtu_input" -le 1500 ] 2>/dev/null; then
+                   cust_mtu="$custom_mtu_input"
+                   break
+               else
+                   echo -e "  ${R}✖ Range must be between ${min_mtu} and 1500!${NC}"
+               fi
+           done
+           [[ "$custom_mtu_input" == "q" ]] && continue
+
            local_ip6=""; remote_ip6=""
            if [[ "$tun_proto" == "6to4" ]]; then
                hash_str=$(echo -n "${tun_secret}_MHDesign" | sha256sum)
@@ -944,13 +983,13 @@ while true; do
            fi
            
            conf_path="$CONF_DIR/${t_name}.conf"
-           echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_SECRET=$tun_secret\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0" > "$conf_path"
+           echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=\nTUN_SECRET=$tun_secret\nT_NAME=$t_name\nTUN_ID=$tun_id\nCORE_SUBNET=$core_sub\nTUN_PROTO=$tun_proto\nLOCAL_IP6=$local_ip6\nREMOTE_IP6=$remote_ip6\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0\nCUSTOM_MTU=$cust_mtu" > "$conf_path"
            chmod 600 "$conf_path"
            apply_tunnel "$conf_path"
            
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
-               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x)${NC}"
+               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Subnet: ${core_sub}.x | MTU: ${cust_mtu:-$def_mtu})${NC}"
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
                
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read -r run_initial_ping
@@ -1159,6 +1198,55 @@ while true; do
            fi ;;
 
         10)
+           select_tunnel_interactive || continue
+           draw_mgre_header
+           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           def_mtu=$([ "$TUN_PROTO" == "6to4" ] && echo "1436" || ([ "$TYPE" == "1" ] && echo "1436" || echo "1476"))
+           min_mtu=$([ "$TUN_PROTO" == "6to4" ] && echo "1280" || echo "700")
+
+           act_mtu=""
+           [ -d "/sys/class/net/$T_NAME" ] && act_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
+           cur_mtu="${act_mtu:-${CUSTOM_MTU:-$def_mtu (Auto)}}"
+
+           echo -e "\n  ${DIM}┌─[ MTU & TCP MSS CONFIGURATION: ${W}${T_NAME}${DIM} ]${NC}"
+           echo -e "  ${DIM}│${NC} Current Live MTU : ${Y}${cur_mtu}${NC}"
+           echo -e "  ${DIM}│${NC} Valid Range      : ${W}${min_mtu} - 1500${NC}"
+           echo -e "  ${DIM}│${NC} Profiles         : ${W}1436${NC} (Default IR) | ${W}1360${NC} (Iran Broadband) | ${W}900-1200${NC} (Heavy Fragmentation)"
+           echo -e "  ${DIM}└─${NC}"
+           echo -ne "  ${C}●${NC} ${W}Enter New MTU (${min_mtu}-1500) [Enter for Auto]: ${NC}"; read -r new_mtu
+           new_mtu=$(echo "$new_mtu" | tr -dc '0-9')
+
+           if [ -z "$new_mtu" ]; then
+               grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp"
+               echo "CUSTOM_MTU=" >> "${SELECTED_CONF}.tmp"
+               mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
+               apply_tunnel "$SELECTED_CONF"
+               # Direct force set to ensure instantaneous kernel update
+               ip link set dev "$T_NAME" mtu "$def_mtu" 2>/dev/null
+               echo -e "  ${G}● MTU reset to Auto ($def_mtu). MSS Clamping set to $((def_mtu - 40)).${NC}"; sleep 1.8
+           elif [ "$new_mtu" -ge "$min_mtu" ] && [ "$new_mtu" -le 1500 ] 2>/dev/null; then
+               grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp"
+               echo "CUSTOM_MTU=$new_mtu" >> "${SELECTED_CONF}.tmp"
+               mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
+               
+               # 1. Update live interface immediately
+               ip link set dev "$T_NAME" mtu "$new_mtu" 2>/dev/null
+               
+               # 2. Update MSS clamping rule
+               iptables -t mangle -S FORWARD 2>/dev/null | grep "MGRE_MSS_${T_NAME}\"" | sed 's/^-A /-D /' | while read -r r; do [ -n "$r" ] && iptables -t mangle $r 2>/dev/null; done
+               iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -j TCPMSS --set-mss $((new_mtu - 40)) -m comment --comment "MGRE_MSS_$T_NAME" 2>/dev/null
+               
+               # 3. Synchronize full profile
+               apply_tunnel "$SELECTED_CONF"
+
+               # Check confirmed kernel value
+               confirm_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
+               echo -e "  ${G}✔ MTU successfully locked to ${new_mtu} (Kernel Confirmed: ${confirm_mtu:-$new_mtu} | MSS: $((new_mtu - 40))).${NC}"; sleep 2
+           else
+               echo -e "  ${R}✖ Invalid MTU! Value must be between ${min_mtu} and 1500.${NC}"; sleep 2.5
+           fi ;;
+
+        11)
            while true; do
                draw_mgre_header
                show_mgre_monitor
@@ -1166,9 +1254,9 @@ while true; do
                [[ "$b_opt" == "q" || "$b_opt" == "Q" ]] && break
            done ;;
 
-        11) show_tunnel_details ;;
-        12) self_update_module ;;
-        13) uninstall_mgre ;;
+        12) show_tunnel_details ;;
+        13) self_update_module ;;
+        14) uninstall_mgre ;;
         0) break ;;
     esac
 done

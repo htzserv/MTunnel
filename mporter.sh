@@ -1,21 +1,22 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.4.1 ---
-# [Features: Master Systemd Service Integration | Multi-Mirror Gost | Resilient Engine Deployment]
+# --- MDesign Modular Core (mporter.sh) | MPorter Manager v8.5.0 ---
+# [Features: Master Systemd Service Integration | Multi-Mirror Gost/Realm | Resilient Engine Deployment]
 
-MODULE_VERSION="8.4.1"
+MODULE_VERSION="8.5.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
 SERVICE_FILE="/etc/systemd/system/mporter.service"
 H_CONF="/etc/haproxy/haproxy.cfg"
 G_CONF="/etc/gost/config.json"
+R_CONF="/etc/realm/config.json"
 OBFS_DIR="/etc/mporter/obfs_rules"
 IPT_DIR="/etc/mporter/iptables_core"
 IPT_CONF="$IPT_DIR/rules.sh"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 
-mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost "$OBFS_DIR" "$IPT_DIR" /usr/sbin /usr/local/sbin /usr/local/bin "$SECURE_TMP" 2>/dev/null
+mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost /etc/realm "$OBFS_DIR" "$IPT_DIR" /usr/sbin /usr/local/sbin /usr/local/bin "$SECURE_TMP" 2>/dev/null
 touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
 
 if [ -f "$0" ] && [ "$0" != "$INSTALL_PATH" ]; then
@@ -28,8 +29,8 @@ setup_mporter_service() {
     cat <<'EOF_SRV' > "$tmp_srv"
 [Unit]
 Description=MPorter Port Forwarding Master Service
-After=network.target haproxy.service gost.service mporter-iptables.service
-Wants=haproxy.service gost.service mporter-iptables.service
+After=network.target haproxy.service gost.service realm.service mporter-iptables.service
+Wants=haproxy.service gost.service realm.service mporter-iptables.service
 
 [Service]
 Type=oneshot
@@ -47,7 +48,7 @@ EOF_SRV
         rm -f "$tmp_srv"
     fi
 
-    if systemctl is-active --quiet haproxy 2>/dev/null || systemctl is-active --quiet gost 2>/dev/null || systemctl is-active --quiet mporter-iptables 2>/dev/null; then
+    if systemctl is-active --quiet haproxy 2>/dev/null || systemctl is-active --quiet gost 2>/dev/null || systemctl is-active --quiet realm 2>/dev/null || systemctl is-active --quiet mporter-iptables 2>/dev/null; then
         systemctl start mporter.service >/dev/null 2>&1
     fi
 }
@@ -219,6 +220,9 @@ purge_ip_core() {
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
         t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP 'tcp://:\K[0-9]+' | xargs)
     fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+        t_ports+=" "$(jq -r '.endpoints[]?' "$R_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP '"listen":\s*"0.0.0.0:\K[0-9]+' | xargs)
+    fi
     [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "MPORTER_NAT_$target_ip" "$IPT_CONF" 2>/dev/null | grep "PREROUTING" | grep -oP -- '--dport \K[0-9]+' | xargs)
     
     t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
@@ -233,6 +237,7 @@ purge_ip_core() {
         
         if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
             jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json 2>/dev/null && mv /tmp/g.json "$G_CONF" 2>/dev/null
+            jq --arg p "0.0.0.0:$p" '.endpoints = [.endpoints[]? | select(.listen != $p)]' "$R_CONF" > /tmp/r.json 2>/dev/null && mv /tmp/r.json "$R_CONF" 2>/dev/null
         fi
         
         if [ -f "$OBFS_DIR/nat.sh" ]; then 
@@ -258,7 +263,7 @@ purge_ip_core() {
 
 if [[ "$1" == "--purge-ip" && -n "$2" ]]; then
     purge_ip_core "$2"
-    systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+    systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
     setup_mporter_service
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
     exit 0
@@ -267,13 +272,17 @@ fi
 if [[ "$1" == "--cleanup-orphans" ]]; then
     h_ips=$(grep -oP 'server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null | sort -u)
     g_ips=""
+    r_ips=""
     ipt_ips=""
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
         g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort -u)
     fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+        r_ips=$(jq -r '.endpoints[].remote?' "$R_CONF" 2>/dev/null | cut -d: -f1 | sort -u)
+    fi
     [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
     
-    all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips" | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | sort -u)
+    all_ips=$(echo -e "$h_ips\n$g_ips\n$r_ips\n$ipt_ips" | grep -E '^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)' | sort -u)
     
     for ip in $all_ips; do
         subnet=$(echo "$ip" | cut -d'.' -f1-3)
@@ -284,7 +293,7 @@ if [[ "$1" == "--cleanup-orphans" ]]; then
         
         if [ "$found" = false ]; then purge_ip_core "$ip"; fi
     done
-    systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+    systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
     setup_mporter_service
     [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
     exit 0
@@ -344,9 +353,7 @@ EOF_SRV
 
 download_gost_binary() {
     local target_bin="/usr/local/bin/gost"
-    if [ -s "$target_bin" ] && "$target_bin" -V >/dev/null 2>&1; then
-        return 0
-    fi
+    if [ -s "$target_bin" ] && "$target_bin" -V >/dev/null 2>&1; then return 0; fi
     
     local mirrors=(
         "https://c107328.parspack.net/c107328/MTunnel/gost-linux-amd64-2.11.5.gz"
@@ -381,17 +388,41 @@ download_gost_binary() {
     return 1
 }
 
+download_realm_binary() {
+    local target_bin="/usr/local/bin/realm"
+    if [ -s "$target_bin" ] && "$target_bin" --version >/dev/null 2>&1; then return 0; fi
+    
+    local url="https://c107328.parspack.net/c107328/MTunnel/realm.tar.gz"
+    local dl_tmp="/tmp/realm_dl.tar.gz"
+    
+    if command -v curl >/dev/null 2>&1; then
+        curl -fkSL --connect-timeout 5 --max-time 25 -o "$dl_tmp" "$url" 2>/dev/null
+    else
+        wget -qO "$dl_tmp" "$url" 2>/dev/null
+    fi
+    
+    if [ -s "$dl_tmp" ]; then
+        tar -xzf "$dl_tmp" -C /tmp/ 2>/dev/null
+        mv /tmp/realm "$target_bin" 2>/dev/null
+        chmod +x "$target_bin"
+        rm -f "$dl_tmp"
+        return 0
+    fi
+    return 1
+}
+
 install_core_engines() {
     clear; echo ""
     echo -e "  ${DIM}┌─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Engine Only${NC} ${DIM}(Load Balancer / Stable)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Engine Only${NC} ${DIM}(TLS/WS Obfuscator)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Iptables NAT Engine Only${NC} ${DIM}(Raw Speed)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install ALL Engines (Tri-Core)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Realm Engine Only${NC} ${DIM}(High-Performance / Rust)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Iptables NAT Engine Only${NC} ${DIM}(Raw Speed)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install ALL Engines (Quad-Core)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     
     echo -ne "  ${C}Select Option ❯❯ ${NC}"; read eng_opt
-    if [[ ! "$eng_opt" =~ ^[1-4]$ ]]; then return; fi
+    if [[ ! "$eng_opt" =~ ^[1-5]$ ]]; then return; fi
     
     echo -e "\n  ${DIM}┌─[ INITIALIZING INSTALLATION ]${NC}"
     
@@ -406,11 +437,11 @@ install_core_engines() {
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
         
         timeout 25 apt-get update -o Acquire::ForceIPv4=true -y -q >/dev/null 2>&1 || true
-        DEBIAN_FRONTEND=noninteractive timeout 35 apt-get install -o Acquire::ForceIPv4=true -y -q jq libjq1 libonig5 curl wget gzip iptables >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive timeout 35 apt-get install -o Acquire::ForceIPv4=true -y -q jq libjq1 libonig5 curl wget gzip iptables tar >/dev/null 2>&1 || true
     ) &
     draw_progress_bar $! "Resolving Dependencies" 90
 
-    if [[ "$eng_opt" == "4" || "$eng_opt" == "1" ]]; then
+    if [[ "$eng_opt" == "5" || "$eng_opt" == "1" ]]; then
         (
             mkdir -p /etc/haproxy /var/lib/haproxy /usr/sbin /usr/local/sbin 2>/dev/null
             touch /var/lib/haproxy/stats 2>/dev/null
@@ -442,7 +473,7 @@ EOF_HAP
         draw_progress_bar $! "Deploying HAProxy Engine" 70
     fi
 
-    if [[ "$eng_opt" == "4" || "$eng_opt" == "2" ]]; then
+    if [[ "$eng_opt" == "5" || "$eng_opt" == "2" ]]; then
         (
             download_gost_binary
             mkdir -p /etc/gost 2>/dev/null
@@ -470,7 +501,35 @@ EOF_GST
         draw_progress_bar $! "Deploying Gost Engine" 100
     fi
 
-    if [[ "$eng_opt" == "4" || "$eng_opt" == "3" ]]; then
+    if [[ "$eng_opt" == "5" || "$eng_opt" == "3" ]]; then
+        (
+            download_realm_binary
+            mkdir -p /etc/realm 2>/dev/null
+            if [ ! -f "$R_CONF" ] || ! jq . "$R_CONF" >/dev/null 2>&1; then 
+                echo '{"network": {"no_tcp_delay": true}, "endpoints": []}' > "$R_CONF"
+            fi
+            cat <<EOF_RLM > /etc/systemd/system/realm.service
+[Unit]
+Description=Realm High-Performance Port Forwarder
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/realm -c /etc/realm/config.json
+Restart=always
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF_RLM
+            systemctl daemon-reload >/dev/null 2>&1
+            systemctl enable realm >/dev/null 2>&1
+            systemctl restart realm >/dev/null 2>&1 || true
+        ) &
+        draw_progress_bar $! "Deploying Realm Engine" 80
+    fi
+
+    if [[ "$eng_opt" == "5" || "$eng_opt" == "4" ]]; then
         (
             mkdir -p "$IPT_DIR" 2>/dev/null
             touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
@@ -520,8 +579,9 @@ format_engine() {
     local e_list=()
     [[ "$raw" == *"HAP"* ]] && e_list+=("${C}HAProxy${NC}")
     [[ "$raw" == *"GST"* ]] && e_list+=("${M}Gost${NC}")
+    [[ "$raw" == *"RLM"* ]] && e_list+=("${G}Realm${NC}")
     [[ "$raw" == *"IPT"* ]] && e_list+=("${Y}KernelNAT${NC}")
-    [[ "$raw" == *"TUN"* ]] && e_list+=("${G}CoreNAT${NC}")
+    [[ "$raw" == *"TUN"* ]] && e_list+=("${B}CoreNAT${NC}")
     
     local res=""
     for ((i=0; i<${#e_list[@]}; i++)); do
@@ -533,21 +593,28 @@ format_engine() {
 
 get_stats() {
     server_ip=$(get_local_ip)
-    if systemctl is-active --quiet haproxy; then hap_stat="${G}●${NC}"; raw_hap="●"; else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
+    if systemctl is-active --quiet haproxy; then hap_stat="${C}●${NC}"; raw_hap="●"; else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
     if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"; else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
+    if systemctl is-active --quiet realm; then rlm_stat="${G}●${NC}"; raw_rlm="●"; else rlm_stat="${DIM}○${NC}"; raw_rlm="○"; fi
     if systemctl is-active --quiet mporter-iptables; then ipt_stat="${Y}●${NC}"; raw_ipt="●"; else ipt_stat="${DIM}○${NC}"; raw_ipt="○"; fi
     
-    local h_ports=0; local g_ports=0; local ipt_ports=0; local ext_ports_count=0
+    local h_ports=0; local g_ports=0; local r_ports=0; local ipt_ports=0; local ext_ports_count=0
     if [ -f "$H_CONF" ]; then h_ports=$(grep -c -w "frontend" "$H_CONF" 2>/dev/null); ((h_ports--)); [ "$h_ports" -lt 0 ] && h_ports=0; fi
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
         g_ports=$(jq '.ServeNodes | length' "$G_CONF" 2>/dev/null); [ -z "$g_ports" ] && g_ports=0
     fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        r_ports=$(jq '.endpoints | length' "$R_CONF" 2>/dev/null); [ -z "$r_ports" ] && r_ports=0
+    fi
     if [ -f "$IPT_CONF" ]; then ipt_ports=$(grep -c "PREROUTING" "$IPT_CONF" 2>/dev/null); fi
     
-    local h_ips=""; local g_ips=""; local ipt_ips=""; local ext_ips=""
+    local h_ips=""; local g_ips=""; local r_ips=""; local ipt_ips=""; local ext_ips=""
     [ -f "$H_CONF" ] && h_ips=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
         g_ips=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
+    fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        r_ips=$(jq -r '.endpoints[].remote?' "$R_CONF" 2>/dev/null | cut -d: -f1 | sort -u)
     fi
     [ -f "$IPT_CONF" ] && ipt_ips=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
 
@@ -570,8 +637,8 @@ get_stats() {
     done
     shopt -u nullglob
 
-    total_ports=$((h_ports + g_ports + ipt_ports + ext_ports_count))
-    local all_ips=$(echo -e "$h_ips\n$g_ips\n$ipt_ips\n$ext_ips" | grep -v '^$' | sort -u)
+    total_ports=$((h_ports + g_ports + r_ports + ipt_ports + ext_ports_count))
+    local all_ips=$(echo -e "$h_ips\n$g_ips\n$r_ips\n$ipt_ips\n$ext_ips" | grep -v '^$' | sort -u)
     mapped_ips=$(echo "$all_ips" | grep -v '^$' | wc -l)
     
     if [ "$mapped_ips" -gt 0 ]; then ip_status="${G}${mapped_ips} ACTIVE${NC}"; raw_ip="${mapped_ips} ACTIVE"
@@ -580,21 +647,24 @@ get_stats() {
 
 draw_header() {
     get_stats; clear; echo ""
-    raw_text=" MPorter v${MODULE_VERSION} │ IP: $server_ip │ HAP: $raw_hap │ Gost: $raw_gst │ IPT: $raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
+    raw_text=" MPorter v${MODULE_VERSION} │ IP: $server_ip │ HAP:$raw_hap RLM:$raw_rlm GST:$raw_gst IPT:$raw_ipt │ IPs: $raw_ip │ Pts: $total_ports "
     pad_len=$(( 106 - ${#raw_text} ))
     if (( pad_len < 0 )); then pad_len=0; fi
     padding=$(printf '%*s' "$pad_len" "")
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${B}│${NC} ${DIM}Gost:${NC} ${gst_stat} ${B}│${NC} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${server_ip}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${hap_stat} ${DIM}RLM:${NC} ${rlm_stat} ${DIM}GST:${NC} ${gst_stat} ${DIM}IPT:${NC} ${ipt_stat} ${B}│${NC} ${DIM}IPs:${NC} ${ip_status} ${B}│${NC} ${DIM}Pts:${NC} ${G}${total_ports}${NC}${padding}${B}│${NC}"
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┬──────────┼────────────────────────────┼──────────────────────┬────────────────────────────┤${NC}"
     
-    local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
+    local h_map=""; local g_map=""; local r_map=""; local ipt_map=""; local ext_map_raw=""
     [ -f "$H_CONF" ] && h_map=$(grep -E 'server srv_[0-9_]+ [0-9\.]+|server srv_[0-9]+ [0-9\.]+' "$H_CONF" 2>/dev/null | awk '{print $3}' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|HAP"}')
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
         g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1 | sort | uniq -c | awk '{print $2 "|" $1 "|GST"}')
+    fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        r_map=$(jq -r '.endpoints[]?' "$R_CONF" 2>/dev/null | grep -oP '"remote":\s*"\K[0-9\.]+' | sort | uniq -c | awk '{print $2 "|" $1 "|RLM"}')
     fi
     [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' | sort | uniq -c | awk '{print $2 "|" $1 "|IPT"}')
 
@@ -613,7 +683,7 @@ draw_header() {
     done
     shopt -u nullglob
 
-    local ip_port_counts=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$' | awk -F'|' '{
+    local ip_port_counts=$(echo -e "$h_map\n$g_map\n$r_map\n$ipt_map\n$ext_map_raw" | grep -v '^$' | awk -F'|' '{
         a[$1]+=$2; 
         if(eng[$1] == "") eng[$1]=$3; else if(index(eng[$1], $3) == 0) eng[$1]=eng[$1] "/" $3
     } END {for (i in a) print i"|"a[i]"|"eng[i]}')
@@ -675,15 +745,16 @@ smart_map() {
     echo -e "\n  ${DIM}┌─[ STRICT FORWARDING ENGINE ]${NC}"
     echo -e "  ${DIM}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} ${DIM}(Load Balancer / Stable)${NC}"
     echo -e "  ${DIM}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} ${DIM}(TLS/WS Obfuscator)${NC}"
-    echo -e "  ${DIM}│${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Iptables Kernel NAT${NC} ${DIM}(Raw Speed / 0% CPU)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Realm${NC} ${DIM}(High-Performance / Rust)${NC}"
+    echo -e "  ${DIM}│${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Iptables Kernel NAT${NC} ${DIM}(Raw Speed / 0% CPU)${NC}"
     echo -ne "  ${DIM}└─${NC} ${C}Select ❯❯ ${NC}"; read fwd_engine
-    fwd_engine=$(echo "$fwd_engine" | tr -dc '1-3')
+    fwd_engine=$(echo "$fwd_engine" | tr -dc '1-4')
     
     if [ -z "$fwd_engine" ]; then echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; fi
     
-    if [ "$fwd_engine" == "2" ]; then
+    if [ "$fwd_engine" == "2" ] || [ "$fwd_engine" == "3" ]; then
         if ! ensure_jq; then
-            echo -e "  ${R}● Gost requires 'jq' and its dependencies. Auto-repair failed! Run Installer (1) first.${NC}"
+            echo -e "  ${R}● Engine requires 'jq' and its dependencies. Auto-repair failed! Run Installer (1) first.${NC}"
             sleep 2
             return
         fi
@@ -790,6 +861,8 @@ smart_map() {
         elif grep -q -w "frontend ft_$p" "$H_CONF" 2>/dev/null; then skip_reason="HAProxy"
         elif [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
             if jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then skip_reason="Gost"; fi
+        elif [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+            if jq -e ".endpoints[] | select(.listen == \"0.0.0.0:$p\")" "$R_CONF" >/dev/null 2>&1; then skip_reason="Realm"; fi
         elif grep -q -- "--dport $p " "$IPT_CONF" 2>/dev/null; then skip_reason="KernelNAT"
         fi
 
@@ -810,6 +883,10 @@ smart_map() {
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${M}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "Gost" "$target_ip"
             
         elif [ "$fwd_engine" == "3" ]; then
+            jq --arg lport "0.0.0.0:$p" --arg rport "$target_ip:$p" '.endpoints += [{"listen": $lport, "remote": $rport}]' "$R_CONF" > /tmp/rconfig.json 2>/dev/null && mv /tmp/rconfig.json "$R_CONF" 2>/dev/null
+            printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${G}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "Realm" "$target_ip"
+            
+        elif [ "$fwd_engine" == "4" ]; then
             echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$target_ip\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
             echo "iptables -t nat -A POSTROUTING -d $target_ip -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$target_ip\" -j MASQUERADE" >> "$IPT_CONF"
             printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${Y}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "Iptable" "$target_ip"
@@ -822,10 +899,11 @@ smart_map() {
 
     [ "$fwd_engine" == "1" ] && systemctl restart haproxy 2>/dev/null
     [ "$fwd_engine" == "2" ] && systemctl restart gost 2>/dev/null
-    [ "$fwd_engine" == "3" ] && systemctl restart mporter-iptables 2>/dev/null
+    [ "$fwd_engine" == "3" ] && systemctl restart realm 2>/dev/null
+    [ "$fwd_engine" == "4" ] && systemctl restart mporter-iptables 2>/dev/null
     setup_mporter_service
 
-    if [ "$fwd_engine" == "1" ] || [ "$fwd_engine" == "3" ]; then
+    if [ "$fwd_engine" == "1" ] || [ "$fwd_engine" == "4" ]; then
         echo -ne "\n  ${C}●${NC} ${W}Enable Strict OBFS Stealth for these ports? (y/n): ${NC}"; read enable_obfs
         enable_obfs=$(echo "$enable_obfs" | tr -dc 'yn')
         
@@ -885,15 +963,18 @@ smart_map() {
 edit_mapping() {
     draw_header
     echo -e "\n  ${DIM}┌─[ EDIT FORWARDING MAPPINGS ]${NC}"
-    local h_map=""; local g_map=""; local ipt_map=""
+    local h_map=""; local g_map=""; local r_map=""; local ipt_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
         g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
     fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        r_map=$(jq -r '.endpoints[].remote?' "$R_CONF" 2>/dev/null | cut -d: -f1)
+    fi
     
     [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null)
     
-    local all_ips=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | sort -u)
+    local all_ips=$(echo -e "$h_map\n$g_map\n$r_map\n$ipt_map" | grep -v '^$' | sort -u)
     if [ -z "$all_ips" ]; then echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; fi
 
     local ip_arr=($all_ips)
@@ -913,7 +994,9 @@ edit_mapping() {
         if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
             t_ports+=" "$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP 'tcp://:\K[0-9]+' | xargs)
         fi
-        
+        if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+            t_ports+=" "$(jq -r '.endpoints[]?' "$R_CONF" 2>/dev/null | grep "$target_ip:" | grep -oP '"listen":\s*"0.0.0.0:\K[0-9]+' | xargs)
+        fi
         [ -f "$IPT_CONF" ] && t_ports+=" "$(grep "MPORTER_NAT_$target_ip" "$IPT_CONF" 2>/dev/null | grep "PREROUTING" | grep -oP -- '--dport \K[0-9]+' | xargs)
         
         t_ports=$(echo "$t_ports" | tr ' ' '\n' | grep -v '^$' | sort -un | xargs)
@@ -941,11 +1024,11 @@ edit_mapping() {
                 raw_ports=$(echo "$raw_ports" | tr -dc '0-9,')
                 if [ -z "$raw_ports" ]; then echo -e "  ${R}● Invalid port format!${NC}"; sleep 1.5; continue; fi
                 clean_ports=$(echo "$raw_ports" | tr ',' ' ' | xargs -n1 | sort -u -n | xargs)
-                echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} | ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} | ${W}3${NC} ${DIM}❯${NC} ${Y}Iptables NAT${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} | ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} | ${W}3${NC} ${DIM}❯${NC} ${G}Realm${NC} | ${W}4${NC} ${DIM}❯${NC} ${Y}Iptables NAT${NC}"
                 echo -ne "  ${C}Select Engine ❯❯ ${NC}"; read e_opt
-                e_opt=$(echo "$e_opt" | tr -dc '1-3')
+                e_opt=$(echo "$e_opt" | tr -dc '1-4')
                 
-                if [ "$e_opt" == "2" ]; then
+                if [ "$e_opt" == "2" ] || [ "$e_opt" == "3" ]; then
                     ensure_jq >/dev/null 2>&1
                 fi
 
@@ -958,12 +1041,14 @@ edit_mapping() {
                         ) 200>/var/lock/mporter_haproxy.lock
                     elif [ "$e_opt" == "2" ]; then 
                         jq --arg node "tcp://:$p/$target_ip:$p" '.ServeNodes += [$node]' "$G_CONF" > /tmp/gconfig.json 2>/dev/null && mv /tmp/gconfig.json "$G_CONF" 2>/dev/null
-                    elif [ "$e_opt" == "3" ]; then
+                    elif [ "$e_opt" == "3" ]; then 
+                        jq --arg lport "0.0.0.0:$p" --arg rport "$target_ip:$p" '.endpoints += [{"listen": $lport, "remote": $rport}]' "$R_CONF" > /tmp/rconfig.json 2>/dev/null && mv /tmp/rconfig.json "$R_CONF" 2>/dev/null
+                    elif [ "$e_opt" == "4" ]; then
                         echo "iptables -t nat -A PREROUTING -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$target_ip\" -j DNAT --to-destination $target_ip:$p" >> "$IPT_CONF"
                         echo "iptables -t nat -A POSTROUTING -d $target_ip -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$target_ip\" -j MASQUERADE" >> "$IPT_CONF"
                     fi
                     
-                    if [ "$has_obfs" = true ] && [ "$e_opt" != "2" ]; then
+                    if [ "$has_obfs" = true ] && [ "$e_opt" != "2" ] && [ "$e_opt" != "3" ]; then
                         local ex_gost=$(grep "$target_ip:" "$OBFS_DIR/gost.sh" | head -n 1)
                         local remote_pub=$(echo "$ex_gost" | grep -oP '://\K[0-9\.]+'); local stealth_port=$(echo "$ex_gost" | grep -oP "$remote_pub:\K[0-9]+")
                         local method=$(echo "$ex_gost" | grep -oP -- '-F \K[a-z\+]+')
@@ -975,7 +1060,8 @@ edit_mapping() {
                 sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
                 [ "$e_opt" == "1" ] && systemctl restart haproxy 2>/dev/null
                 [ "$e_opt" == "2" ] && systemctl restart gost 2>/dev/null
-                [ "$e_opt" == "3" ] && systemctl restart mporter-iptables 2>/dev/null
+                [ "$e_opt" == "3" ] && systemctl restart realm 2>/dev/null
+                [ "$e_opt" == "4" ] && systemctl restart mporter-iptables 2>/dev/null
                 setup_mporter_service
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports added successfully!${NC}"; sleep 1.5 ;;
@@ -993,6 +1079,7 @@ edit_mapping() {
                     
                     if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
                         jq --arg p "$p" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:"+$p+"/") | not)]' "$G_CONF" > /tmp/g.json 2>/dev/null && mv /tmp/g.json "$G_CONF" 2>/dev/null
+                        jq --arg p "0.0.0.0:$p" '.endpoints = [.endpoints[]? | select(.listen != $p)]' "$R_CONF" > /tmp/r.json 2>/dev/null && mv /tmp/r.json "$R_CONF" 2>/dev/null
                     fi
                     if [ -f "$IPT_CONF" ]; then
                         sed -i "/--dport $p .*MPORTER_NAT_$target_ip/d" "$IPT_CONF" 2>/dev/null
@@ -1003,7 +1090,7 @@ edit_mapping() {
                     fi
                 done
                 sed -i '/^[[:space:]]*$/d' "$H_CONF" 2>/dev/null
-                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
                 setup_mporter_service
                 [ "$has_obfs" = true ] && build_obfs_runner
                 echo -e "  ${G}● Ports removed securely!${NC}"; sleep 1.5 ;;
@@ -1047,6 +1134,7 @@ edit_mapping() {
 
                     for p in $t_ports; do
                         if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1 && jq -e ".ServeNodes[] | select(. | contains(\"tcp://:$p/\"))" "$G_CONF" >/dev/null 2>&1; then continue; fi
+                        if command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1 && jq -e ".endpoints[] | select(.listen == \"0.0.0.0:$p\")" "$R_CONF" >/dev/null 2>&1; then continue; fi
                         
                         local obfs_lport=$((30000 + p)); [ "$obfs_lport" -gt 65535 ] && obfs_lport=$(( p + 10000 ))
                         echo "iptables -t nat -A OUTPUT -d $target_ip -p tcp --dport $p -m comment --comment \"MPORTER_OBFS\" -j REDIRECT --to-ports $obfs_lport" >> "$OBFS_DIR/nat.sh"
@@ -1074,11 +1162,14 @@ edit_mapping() {
                 if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
                     jq --arg old "/$target_ip:" --arg new "/$new_ip:" '.ServeNodes = [.ServeNodes[]? | sub($old; $new)]' "$G_CONF" > /tmp/g.json 2>/dev/null && mv /tmp/g.json "$G_CONF" 2>/dev/null
                 fi
+                if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then
+                    jq --arg old "$target_ip:" --arg new "$new_ip:" '.endpoints = [.endpoints[]? | .remote |= sub($old; $new)]' "$R_CONF" > /tmp/r.json 2>/dev/null && mv /tmp/r.json "$R_CONF" 2>/dev/null
+                fi
                 
                 if [ -f "$OBFS_DIR/nat.sh" ]; then sed -i "s/\b${target_ip}\b/${new_ip}/g" "$OBFS_DIR/nat.sh"; fi
                 if [ -f "$OBFS_DIR/gost.sh" ]; then sed -i "s/\b${target_ip}\b/${new_ip}/g" "$OBFS_DIR/gost.sh"; fi
                 
-                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
                 setup_mporter_service
                 [ -f "$OBFS_DIR/nat.sh" ] && build_obfs_runner
                 
@@ -1098,11 +1189,14 @@ show_table() {
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-34s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARD ENGINE" "FORWARDED PORTS"
     echo -e "  ${B}├──────────────┼──────────┼────────────────┼──────────────────────────┼────────────────────────────────────┤${NC}"
     
-    local h_map=""; local g_map=""; local ipt_map=""; local ext_map_raw=""
+    local h_map=""; local g_map=""; local r_map=""; local ipt_map=""; local ext_map_raw=""
     
     [ -f "$H_CONF" ] && h_map=$(grep -E "frontend ft_|server srv_" "$H_CONF" 2>/dev/null | awk '/frontend ft_/ {port=$2; sub(/ft_/, "", port)} /server srv_/ {ip=$3; sub(/:.*/, "", ip); print port "|" ip "|HAP"}')
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
         g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | sed -E 's/tcp:\/\/:([0-9]+)\/([0-9\.]+):.*/\1|\2|GST/g')
+    fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        r_map=$(jq -r '.endpoints[]? | "\(.listen)|\(.remote)|RLM"' "$R_CONF" 2>/dev/null | sed -E 's/0\.0\.0\.0:([0-9]+)\|([0-9\.]+):[0-9]+\|RLM/\1|\2|RLM/g')
     fi
     [ -f "$IPT_CONF" ] && ipt_map=$(grep "PREROUTING" "$IPT_CONF" 2>/dev/null | grep -oP -- '--dport \K[0-9]+.*MPORTER_NAT_[0-9\.]+' | awk '{print $1 "|" $NF "|IPT"}' | sed 's/MPORTER_NAT_//g')
     
@@ -1121,7 +1215,7 @@ show_table() {
     done
     shopt -u nullglob
     
-    local mappings=$(echo -e "$h_map\n$g_map\n$ipt_map\n$ext_map_raw" | grep -v '^$')
+    local mappings=$(echo -e "$h_map\n$g_map\n$r_map\n$ipt_map\n$ext_map_raw" | grep -v '^$')
     
     if [ -z "$mappings" ]; then 
         printf "  ${B}│${NC} ${DIM}%-104s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
@@ -1178,14 +1272,17 @@ purge_menu() {
     echo -ne "  ${C}Select ❯❯ ${NC}"; read p_opt
     p_opt=$(echo "$p_opt" | tr -dc '0-3')
     
-    local h_map=""; local g_map=""; local ipt_map=""
+    local h_map=""; local g_map=""; local r_map=""; local ipt_map=""
     [ -f "$H_CONF" ] && h_map=$(grep -oP 'server srv_[0-9_]+ \K[0-9\.]+|server srv_[0-9]+ \K[0-9\.]+' "$H_CONF" 2>/dev/null)
     if [ -f "$G_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
         g_map=$(jq -r '.ServeNodes[]?' "$G_CONF" 2>/dev/null | grep -oP '\/\K[0-9\.,:]+' | tr ',' '\n' | cut -d: -f1)
     fi
+    if [ -f "$R_CONF" ] && command -v jq >/dev/null 2>&1 && jq -n 'null' >/dev/null 2>&1; then 
+        r_map=$(jq -r '.endpoints[].remote?' "$R_CONF" 2>/dev/null | cut -d: -f1)
+    fi
     [ -f "$IPT_CONF" ] && ipt_map=$(grep -oP -- 'MPORTER_NAT_\K[0-9\.]+' "$IPT_CONF" 2>/dev/null | sort -u)
     
-    local all_ips=$(echo -e "$h_map\n$g_map\n$ipt_map" | grep -v '^$' | sort -u)
+    local all_ips=$(echo -e "$h_map\n$g_map\n$r_map\n$ipt_map" | grep -v '^$' | sort -u)
 
     case $p_opt in
         1)
@@ -1223,7 +1320,7 @@ purge_menu() {
             conf=$(echo "$conf" | tr -dc 'yn')
             if [[ "$conf" == "y" ]]; then
                 for ip in ${iface_ips[$selected_ifc_info]}; do purge_ip_core "$ip"; done
-                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
                 setup_mporter_service
                 [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
                 echo -e "  ${G}● Interface $t_name purged successfully!${NC}"; sleep 1.5
@@ -1251,7 +1348,7 @@ purge_menu() {
             if [ -z "$target_ip" ]; then echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
             
             purge_ip_core "$target_ip"
-            systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+            systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
             setup_mporter_service
             [ -x "/usr/local/bin/mporter-obfs.sh" ] && /usr/local/bin/mporter-obfs.sh
             echo -e "  ${G}● IP $target_ip purged successfully!${NC}"; sleep 1.5 ;;
@@ -1262,9 +1359,10 @@ purge_menu() {
                 echo -e "global\n    maxconn 500000\n    daemon\ndefaults\n    mode tcp\n    timeout connect 5s\n    timeout client 1h\n    timeout server 1h\n" > "$H_CONF"
                 echo -e "frontend dummy_check\n    bind 127.0.0.1:9999\n    default_backend dummy_back\nbackend dummy_back\n    server local 127.0.0.1:9999" >> "$H_CONF"
                 echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
+                echo '{"network": {"no_tcp_delay": true}, "endpoints": []}' > "$R_CONF"
                 > "$IPT_CONF"
                 rm -rf "$OBFS_DIR"
-                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
+                systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null
                 setup_mporter_service
                 build_obfs_runner
                 echo -e "  ${G}● All global mappings wiped. Core configs preserved.${NC}"; sleep 1.5
@@ -1325,15 +1423,16 @@ smart_watchdog_menu() {
 
 manual_restart() {
     draw_header
-    echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Restart Kernel NAT Engine${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Restart ALL Engines${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "\n  ${DIM}┌─[ RESTART SERVICES ]${NC}\n  ${DIM}│${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Restart Realm Engine${NC}\n  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Restart Kernel NAT Engine${NC}\n  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Restart ALL Engines${NC}\n  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read r_opt
-    r_opt=$(echo "$r_opt" | tr -dc '0-4')
+    r_opt=$(echo "$r_opt" | tr -dc '0-5')
     echo ""
     case $r_opt in
         1) systemctl restart haproxy 2>/dev/null; setup_mporter_service; echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
         2) systemctl restart gost 2>/dev/null; setup_mporter_service; echo -e "  ${G}● Gost restarted successfully.${NC}" ;;
-        3) systemctl restart mporter-iptables 2>/dev/null; setup_mporter_service; echo -e "  ${G}● Kernel NAT restarted successfully.${NC}" ;;
-        4) systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null; setup_mporter_service; echo -e "  ${G}● All engines restarted successfully.${NC}" ;;
+        3) systemctl restart realm 2>/dev/null; setup_mporter_service; echo -e "  ${G}● Realm restarted successfully.${NC}" ;;
+        4) systemctl restart mporter-iptables 2>/dev/null; setup_mporter_service; echo -e "  ${G}● Kernel NAT restarted successfully.${NC}" ;;
+        5) systemctl restart haproxy 2>/dev/null; systemctl restart gost 2>/dev/null; systemctl restart realm 2>/dev/null; systemctl restart mporter-iptables 2>/dev/null; setup_mporter_service; echo -e "  ${G}● All engines restarted successfully.${NC}" ;;
         0) return ;; *) echo -e "  ${R}● Invalid selection!${NC}" ;;
     esac
     sleep 1.5
@@ -1350,7 +1449,7 @@ while true; do
 
     draw_header
     echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Install & Configure Tri-Core System${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Install & Configure Quad-Core System${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Uninstall Engines & Purge (Nuclear Wipe)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
@@ -1377,11 +1476,12 @@ while true; do
            if [[ "$confirm" == "y" ]]; then 
                systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
                systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
+               systemctl stop realm 2>/dev/null; systemctl disable realm 2>/dev/null
                systemctl stop mporter-obfs 2>/dev/null; systemctl disable mporter-obfs 2>/dev/null
                systemctl stop mporter-iptables 2>/dev/null; systemctl disable mporter-iptables 2>/dev/null
                systemctl stop mporter-watchdog 2>/dev/null; systemctl disable mporter-watchdog 2>/dev/null
                systemctl stop mporter.service 2>/dev/null; systemctl disable mporter.service 2>/dev/null
-               rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service "$OBFS_DIR" "$IPT_DIR" /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service /etc/systemd/system/mporter-watchdog.service /etc/systemd/system/mporter.service
+               rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service /usr/local/bin/realm /etc/realm /etc/systemd/system/realm.service "$OBFS_DIR" "$IPT_DIR" /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service /etc/systemd/system/mporter-watchdog.service /etc/systemd/system/mporter.service
                apt-get purge -y haproxy 2>/dev/null; systemctl daemon-reload
                iptables -t nat -S OUTPUT 2>/dev/null | grep "MPORTER_OBFS" | sed 's/-A /-D /' | while read rule; do iptables -t nat $rule; done
                iptables -t mangle -S OUTPUT 2>/dev/null | grep "OBFS_CNT_TX_" | sed 's/-A /-D /' | while read rule; do iptables -t mangle $rule; done

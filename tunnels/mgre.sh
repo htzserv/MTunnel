@@ -1,10 +1,10 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.0 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.1 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
 
-MODULE_VERSION="6.0.0"
+MODULE_VERSION="6.0.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -353,22 +353,33 @@ read_with_refresh() {
     eval "$__resultvar=\"\$buffer\""
 }
 
+fetch_remote_version() {
+    local url="$1" payload version=""
+    if command -v curl >/dev/null 2>&1; then
+        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([^" ]*\)".*/\1/p' | head -n 1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
 check_update_bg() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mgre.sh${cb}"
     local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mgre.sh${cb}"
-    local remote_ver=""
-    
-    if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-    elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-    fi
-    
-    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mgre_remote_ver"
+    local gh_ver="" mirror_ver=""
+
+    gh_ver=$(fetch_remote_version "$raw_url")
+    mirror_ver=$(fetch_remote_version "$mirror_url")
+    rm -f "$SECURE_TMP/.mgre_remote_ver_github" "$SECURE_TMP/.mgre_remote_ver_mirror"
+    [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mgre_remote_ver_github"
+    [ -n "$mirror_ver" ] && printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.mgre_remote_ver_mirror"
 }
+
 
 update_watcher_loop() {
     while true; do
@@ -568,24 +579,27 @@ self_update_module() {
     local rel_path="tunnels/mgre.sh"
     local cb="?t=$(date +%s)"
     
-    local remote_v="Unknown"
-    [ -f "$SECURE_TMP/.mgre_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mgre_remote_ver" 2>/dev/null | tr -d '\r\n ')
+    local gh_ver="Unknown" mirror_ver="Unknown"
+    [ -f "$SECURE_TMP/.mgre_remote_ver_github" ] && gh_ver=$(tr -d '\r\n ' < "$SECURE_TMP/.mgre_remote_ver_github")
+    [ -f "$SECURE_TMP/.mgre_remote_ver_mirror" ] && mirror_ver=$(tr -d '\r\n ' < "$SECURE_TMP/.mgre_remote_ver_mirror")
 
     local gh_text="${C}Official GitHub Server${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ]; then
-        if [ "$remote_v" != "$MODULE_VERSION" ]; then
-            gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
-        else
-            gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
-        fi
-    fi
+    local mirror_text="${G}ParsPack Iranian Mirror${NC}"
+    if [ "$gh_ver" != "Unknown" ]; then
+        if [ "$gh_ver" != "$MODULE_VERSION" ]; then gh_text+="    ${Y}(v${MODULE_VERSION} ➔ v${gh_ver})${NC}"
+        else gh_text+="    ${DIM}(v${gh_ver})${NC}"; fi
+    else gh_text+="    ${DIM}(version unavailable)${NC}"; fi
+    if [ "$mirror_ver" != "Unknown" ]; then
+        if [ "$mirror_ver" != "$MODULE_VERSION" ]; then mirror_text+="    ${Y}(v${MODULE_VERSION} ➔ v${mirror_ver})${NC}"
+        else mirror_text+="    ${DIM}(v${mirror_ver})${NC}"; fi
+    else mirror_text+="    ${DIM}(version unavailable)${NC}"; fi
 
     draw_mgre_header
     echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MGRE Engine) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${mirror_text} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"

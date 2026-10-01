@@ -4,7 +4,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="2.0.0"
+MODULE_VERSION="2.1.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -381,9 +381,13 @@ check_update_bg() {
 
     gh_ver=$(fetch_remote_version "$raw_url")
     mirror_ver=$(fetch_remote_version "$mirror_url")
-    rm -f "$SECURE_TMP/.mxlan_remote_ver_github" "$SECURE_TMP/.mxlan_remote_ver_mirror"
     [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mxlan_remote_ver_github"
     [ -n "$mirror_ver" ] && printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.mxlan_remote_ver_mirror"
+    local latest_ver=""
+    latest_ver=$(printf '%s\n' "$gh_ver" "$mirror_ver" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    if [ -n "$latest_ver" ]; then
+        printf '%s\n' "$latest_ver" > "$SECURE_TMP/.mxlan_remote_ver"
+    fi
 }
 
 
@@ -1234,6 +1238,14 @@ esac
 
 [ ! -f "$SERVICE_FILE" ] && setup_service
 
+update_available_badge() {
+    local remote_v=""
+    [ -f "$SECURE_TMP/.mxlan_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mxlan_remote_ver")
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        printf '  %b' "${Y}(Update Available: v${remote_v})${NC}"
+    fi
+}
+
 render_mxlan_menu() {
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ PROVISION & MANAGE ]${NC}"
@@ -1264,7 +1276,7 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC} $(update_available_badge)"
     echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"

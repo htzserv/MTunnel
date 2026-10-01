@@ -1,10 +1,10 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.1 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.0 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
 
-MODULE_VERSION="6.0.1"
+MODULE_VERSION="6.1.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -301,6 +301,10 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
+MAIN_PID=$$
+NEED_REFRESH=false
+trap 'NEED_REFRESH=true' SIGUSR1
+
 UPDATE_CHECK_INTERVAL=60
 PING_CHECK_INTERVAL=5
 
@@ -316,6 +320,15 @@ read_with_refresh() {
     echo -ne "$prompt"
 
     while true; do
+        if [ "$NEED_REFRESH" = true ]; then
+            NEED_REFRESH=false
+            if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
+                "$redraw_func"
+                echo -ne "$prompt$buffer"
+                last_refresh=$(date +%s)
+            fi
+        fi
+
         local now
         now=$(date +%s)
         if [ $((now - last_refresh)) -ge "$PING_CHECK_INTERVAL" ]; then
@@ -375,15 +388,20 @@ check_update_bg() {
 
     gh_ver=$(fetch_remote_version "$raw_url")
     mirror_ver=$(fetch_remote_version "$mirror_url")
-    rm -f "$SECURE_TMP/.mgre_remote_ver_github" "$SECURE_TMP/.mgre_remote_ver_mirror"
     [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mgre_remote_ver_github"
     [ -n "$mirror_ver" ] && printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.mgre_remote_ver_mirror"
+    local latest_ver=""
+    latest_ver=$(printf '%s\n' "$gh_ver" "$mirror_ver" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    if [ -n "$latest_ver" ]; then
+        printf '%s\n' "$latest_ver" > "$SECURE_TMP/.mgre_remote_ver"
+    fi
 }
 
 
 update_watcher_loop() {
     while true; do
         check_update_bg
+        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
@@ -1326,6 +1344,14 @@ esac
 
 [ ! -f "$SERVICE_FILE" ] && setup_service
 
+update_available_badge() {
+    local remote_v=""
+    [ -f "$SECURE_TMP/.mgre_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mgre_remote_ver")
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        printf '  %b' "${Y}(Update Available: v${remote_v})${NC}"
+    fi
+}
+
 render_mgre_menu() {
     draw_mgre_header
     echo -e "\n  ${DIM}┌─[ PROVISION & MANAGE ]${NC}"
@@ -1356,7 +1382,7 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC} $(update_available_badge)"
     echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"

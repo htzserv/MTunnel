@@ -5,7 +5,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
 
-MODULE_VERSION="6.4.0"
+MODULE_VERSION="6.4.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -643,14 +643,14 @@ draw_mgre_header() {
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
-    local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS TUN_SECRET TUN_PROTO LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6
-    local pure_name vip_stat vip_col peer_txt is_v6 proto_tag l6 r6 right_txt left_len pad_l sp_l act_mtu
+    local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS TUN_SECRET TUN_PROTO LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4
+    local pure_name vip_stat vip_col peer_txt is_v6 proto_tag
     local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp
     local len_name len_rem pad_peer sp_peer
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; REMOTE_PUB=""; T_NAME=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""
-        TUN_PROTO="ipv4"; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""
+        TUN_PROTO="ipv4"; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; REMOTE_V4=""
         source "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         ((shown++))
@@ -659,10 +659,12 @@ draw_mgre_header() {
         pure_name=$(get_pure_tun_name "$T_NAME")
         pure_name="${pure_name:0:10}"
 
-        # IPv6-outer tunnels: line 1 shows a protocol tag, line 2 shows the full endpoints
-        is_v6=0; mgre_proto_is_v6 "$TUN_PROTO" && is_v6=1
+                is_v6=0; mgre_proto_is_v6 "$TUN_PROTO" && is_v6=1
         proto_tag=$(mgre_proto_tag "$TUN_PROTO")
-        if [ "$is_v6" -eq 1 ]; then peer_txt="[${proto_tag}]"; else peer_txt="${REMOTE_PUB:0:18}"; fi
+        if [ "$is_v6" -eq 1 ]; then
+            # IPv6-outer tunnel: show the peer's IPv4 (same look as IPv4 tunnels); tag only if no IPv4 was stored
+            if is_ipv4 "$REMOTE_V4"; then peer_txt="${REMOTE_V4:0:18}"; else peer_txt="[${proto_tag}]"; fi
+        else peer_txt="${REMOTE_PUB:0:18}"; fi
 
         len_name=${#pure_name}
         len_rem=${#peer_txt}
@@ -721,19 +723,6 @@ draw_mgre_header() {
         printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
             "$stat_col" "$stat_icon" "$NC" "$pure_name" "$peer_txt" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
 
-        # Line 2 (IPv6 only): local ➔ remote, full address, protocol + live MTU on the right
-        if [ "$is_v6" -eq 1 ]; then
-            l6="${LOCAL_PUB6:-$LOCAL_IP6}"; r6="${REMOTE_PUB6:-$REMOTE_IP6}"
-            [ -z "$l6" ] && l6="-"; [ -z "$r6" ] && r6="-"
-            act_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
-            right_txt="${proto_tag} | MTU ${act_mtu:---}"
-            # width is computed from ASCII parts only (the arrows are 1 column but multi-byte), so it is locale-safe
-            left_len=$(( 8 + ${#l6} + ${#r6} ))
-            pad_l=$(( 117 - left_len - ${#right_txt} - 1 ))
-            if [ "$pad_l" -lt 1 ]; then right_txt=""; pad_l=$(( 117 - left_len - 1 )); [ "$pad_l" -lt 0 ] && pad_l=0; fi
-            sp_l=$(printf '%*s' "$pad_l" "")
-            printf "  ${B}│${NC}   ${DIM}↳${NC} ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s${DIM}%s${NC} ${B}│${NC}\n" "$l6" "$r6" "$sp_l" "$right_txt"
-        fi
     done
 
     if [ "$shown" -eq 0 ]; then
@@ -1723,7 +1712,7 @@ while true; do
            [[ "$suffix" == "q" ]] && continue
            if [ -f "$CONF_DIR/${t_name}.conf" ]; then echo -e "\n  ${R}● Error: Interface name [${t_name}] already exists!${NC}"; sleep 2; continue; fi
 
-           local_ip=""; local_ip6=""; r_ip=""; r_ip6=""; core_v6=""; probe_dst=""
+           local_ip=""; local_ip6=""; r_ip=""; r_ip6=""; r_v4=""; core_v6=""; probe_dst=""
            if ! mgre_proto_is_v6 "$tun_proto"; then
                local_ip="$(get_local_ip)"
                while true; do
@@ -1765,6 +1754,14 @@ while true; do
                    echo -e "  ${R}✖ Invalid IPv6 address.${NC}"
                done
                [[ "$r_ip6" == "q" ]] && continue
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Remote Server IPv4 (for header display, Enter to skip): ${NC}"; read -r r_v4
+                   [[ "$r_v4" == "q" ]] && break
+                   r_v4=$(echo "$r_v4" | tr -dc '0-9.'); [ -z "$r_v4" ] && break
+                   is_ipv4 "$r_v4" && break
+                   echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
+               done
+               [[ "$r_v4" == "q" ]] && continue
                probe_dst="$r_ip6"
            fi
 
@@ -1791,7 +1788,7 @@ while true; do
 
            conf_path="$CONF_DIR/${t_name}.conf"
            {
-             echo "TYPE=$s_type"; echo "LOCAL_PUB=$local_ip"; echo "REMOTE_PUB=$r_ip"; echo "LOCAL_PUB6=$local_ip6"; echo "REMOTE_PUB6=$r_ip6"; echo "MAX_IPS=0"; echo "SYNC_KEY="; echo "TUN_SECRET=$tun_secret"; echo "T_NAME=$t_name"; echo "TUN_ID=$tun_id"; echo "CORE_SUBNET=$core_sub"; echo "CORE_V6=$core_v6"; echo "TUN_PROTO=$tun_proto"; echo "LOCAL_IP6=$local_ip6_inner"; echo "REMOTE_IP6=$remote_ip6_inner"; echo "FWD_TCP="; echo "FWD_UDP="; echo "LB_MODE=0"; echo "CUSTOM_MTU=$cust_mtu"; echo "ENCRYPT=0";
+             echo "TYPE=$s_type"; echo "LOCAL_PUB=$local_ip"; echo "REMOTE_PUB=$r_ip"; echo "LOCAL_PUB6=$local_ip6"; echo "REMOTE_PUB6=$r_ip6"; echo "REMOTE_V4=$r_v4"; echo "MAX_IPS=0"; echo "SYNC_KEY="; echo "TUN_SECRET=$tun_secret"; echo "T_NAME=$t_name"; echo "TUN_ID=$tun_id"; echo "CORE_SUBNET=$core_sub"; echo "CORE_V6=$core_v6"; echo "TUN_PROTO=$tun_proto"; echo "LOCAL_IP6=$local_ip6_inner"; echo "REMOTE_IP6=$remote_ip6_inner"; echo "FWD_TCP="; echo "FWD_UDP="; echo "LB_MODE=0"; echo "CUSTOM_MTU=$cust_mtu"; echo "ENCRYPT=0";
            } > "$conf_path"
            chmod 600 "$conf_path"
            apply_tunnel "$conf_path"
@@ -1869,10 +1866,13 @@ while true; do
         8)
            select_tunnel_interactive || continue
            draw_mgre_header
-           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; TUN_PROTO="ipv4"; T_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; REMOTE_V4=""; TUN_PROTO="ipv4"; T_NAME=""; source "$SELECTED_CONF" 2>/dev/null
            if mgre_proto_is_v6 "$TUN_PROTO"; then
                echo -ne "  ${C}●${NC} ${W}New Local Public IPv6 [${Y}${LOCAL_PUB6:-$LOCAL_IP6}${W}]: ${NC}"; read -r new_local6
                echo -ne "  ${C}●${NC} ${W}New Remote Public IPv6 [${Y}${REMOTE_PUB6:-$REMOTE_IP6}${W}]: ${NC}"; read -r new_remote6
+               echo -ne "  ${C}●${NC} ${W}New Remote Server IPv4 for header [${Y}${REMOTE_V4}${W}]: ${NC}"; read -r new_rv4
+               new_rv4=$(echo "$new_rv4" | tr -dc '0-9.')
+               if [ -n "$new_rv4" ] && ! is_ipv4 "$new_rv4"; then echo -e "  ${R}✖ Invalid IPv4 address.${NC}"; sleep 1.5; continue; fi
                new_local6=$(echo "$new_local6" | tr -dc '0-9a-fA-F:'); new_local6="${new_local6,,}"
                new_remote6=$(echo "$new_remote6" | tr -dc '0-9a-fA-F:'); new_remote6="${new_remote6,,}"
                if [ -n "$new_local6" ] && ! is_global_ipv6 "$new_local6"; then echo -e "  ${R}✖ Invalid local IPv6.${NC}"; sleep 1.5; continue; fi
@@ -1880,6 +1880,7 @@ while true; do
                xfrm_clear "$T_NAME"
                [ -n "$new_local6" ] && set_conf_var "$SELECTED_CONF" LOCAL_PUB6 "$new_local6"
                [ -n "$new_remote6" ] && set_conf_var "$SELECTED_CONF" REMOTE_PUB6 "$new_remote6"
+               [ -n "$new_rv4" ] && set_conf_var "$SELECTED_CONF" REMOTE_V4 "$new_rv4"
            else
                echo -ne "  ${C}●${NC} ${W}New Local Public IPv4 [${Y}${LOCAL_PUB}${W}]: ${NC}"; read -r new_local
                echo -ne "  ${C}●${NC} ${W}New Remote Public IPv4 [${Y}${REMOTE_PUB}${W}]: ${NC}"; read -r new_remote

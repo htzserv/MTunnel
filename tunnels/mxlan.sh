@@ -1,10 +1,11 @@
 #!/bin/bash
 # --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v2.0.0 ---
+# [v2.2.0: IPv6 underlay (VXLAN over IPv6) | IPv6-aware header (2nd line) | ip6tables peer Guard | IPv6 ESP | IPv6 path-MTU probe | manual MTU menu]
 # [v2.0.0: Quote-safe iptables cleanup | Safe pickers | Cross-tool subnet guard | SSH-safe DNAT | MSS clamp
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="2.1.0"
+MODULE_VERSION="2.2.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -44,6 +45,43 @@ is_subnet3() {
     return 0
 }
 
+
+# Strict-enough IPv6 literal check (no zone ids, no embedded IPv4)
+is_ipv6() {
+    local ip="$1" g n=0 f=0 dbl=0 rest
+    local -a parts
+    [ -n "$ip" ] && [ "${#ip}" -le 39 ] || return 1
+    [[ "$ip" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+    [[ "$ip" == *:* ]] || return 1
+    [[ "$ip" == *:::* ]] && return 1
+    if [[ "$ip" == *::* ]]; then
+        rest="${ip#*::}"; [[ "$rest" == *::* ]] && return 1
+        dbl=1
+    fi
+    [[ "$ip" == :* && "$ip" != ::* ]] && return 1
+    [[ "$ip" == *: && "$ip" != *:: ]] && return 1
+    IFS=':' read -ra parts <<< "$ip"
+    for g in "${parts[@]}"; do
+        f=$((f+1))
+        [ -z "$g" ] && continue
+        [ "${#g}" -le 4 ] || return 1
+        n=$((n+1))
+    done
+    if [ "$dbl" -eq 1 ]; then
+        [ "$n" -le 7 ] || return 1
+    else
+        { [ "$n" -eq 8 ] && [ "$f" -eq 8 ]; } || return 1
+    fi
+    return 0
+}
+# IPv6 usable as a tunnel endpoint (rejects ::, ::1, link-local fe80::/10, multicast)
+is_global_ipv6() {
+    local ip="${1,,}"
+    is_ipv6 "$ip" || return 1
+    case "$ip" in ::|::1|fe8*|fe9*|fea*|feb*|ff*) return 1 ;; esac
+    return 0
+}
+
 # Safe single-variable write into a flat conf (adds the key if missing)
 set_conf_var() {
     local file="$1" key="$2" val="$3"
@@ -63,10 +101,10 @@ pick_index() {
 
 # Delete all rules carrying an exact comment tag (quote-safe, fixes rule leaks)
 ipt_delete_tagged() {
-    local tbl="$1" ch="$2" tag="$3" r
-    iptables -t "$tbl" -S "$ch" 2>/dev/null | grep -E -- "--comment \"?${tag}\"?( |$)" | sed 's/^-A /-D /' | \
+    local tbl="$1" ch="$2" tag="$3" r bin="${IPT_BIN:-iptables}"
+    "$bin" -t "$tbl" -S "$ch" 2>/dev/null | grep -E -- "--comment \"?${tag}\"?( |$)" | sed 's/^-A /-D /' | \
     while IFS= read -r r; do
-        [ -n "$r" ] && echo "$r" | xargs iptables -t "$tbl" 2>/dev/null
+        [ -n "$r" ] && echo "$r" | xargs "$bin" -t "$tbl" 2>/dev/null
     done
 }
 
@@ -190,7 +228,13 @@ xfrm_apply() {
     local sel="$*"
     xfrm_clear "$name"
     [ -z "$tok" ] || [ -z "$lip" ] || [ -z "$rip" ] && return 1
-    ip -4 addr show 2>/dev/null | grep -qF "inet $lip/" || { echo "  [xfrm] $name: local IP $lip not on this host (NAT?), encryption skipped" >&2; return 1; }
+    local plen=32
+    if [[ "$lip" == *:* ]]; then
+        plen=128
+        [ -n "$(ip -6 -o addr show to "$lip" 2>/dev/null)" ] || { echo "  [xfrm] $name: local IP $lip not on this host, encryption skipped" >&2; return 1; }
+    else
+        ip -4 addr show 2>/dev/null | grep -qF "inet $lip/" || { echo "  [xfrm] $name: local IP $lip not on this host (NAT?), encryption skipped" >&2; return 1; }
+    fi
     local h ab ba reqid ek_ab ak_ab ek_ba ak_ba spi_out spi_in ek_out ak_out ek_in ak_in
     h=$(echo -n "mtun_esp_${tok}" | sha256sum)
     ab=$(printf '0x%08x' $(( 16#${h:0:7} + 256 )))
@@ -205,11 +249,11 @@ xfrm_apply() {
         auth-trunc 'hmac(sha256)' "0x$ak_out" 128 enc 'cbc(aes)' "0x$ek_out" 2>/dev/null || return 1
     ip xfrm state add src "$rip" dst "$lip" proto esp spi "$spi_in" reqid "$reqid" mode transport replay-window 0 \
         auth-trunc 'hmac(sha256)' "0x$ak_in" 128 enc 'cbc(aes)' "0x$ek_in" 2>/dev/null || return 1
-    ip xfrm policy add src "$lip/32" dst "$rip/32" $sel dir out tmpl src "$lip" dst "$rip" proto esp reqid "$reqid" mode transport 2>/dev/null
-    ip xfrm policy add src "$rip/32" dst "$lip/32" $sel dir in  tmpl src "$rip" dst "$lip" proto esp reqid "$reqid" mode transport 2>/dev/null
+    ip xfrm policy add src "$lip/$plen" dst "$rip/$plen" $sel dir out tmpl src "$lip" dst "$rip" proto esp reqid "$reqid" mode transport 2>/dev/null
+    ip xfrm policy add src "$rip/$plen" dst "$lip/$plen" $sel dir in  tmpl src "$rip" dst "$lip" proto esp reqid "$reqid" mode transport 2>/dev/null
     {
-        echo "ip xfrm policy delete src $lip/32 dst $rip/32 $sel dir out"
-        echo "ip xfrm policy delete src $rip/32 dst $lip/32 $sel dir in"
+        echo "ip xfrm policy delete src $lip/$plen dst $rip/$plen $sel dir out"
+        echo "ip xfrm policy delete src $rip/$plen dst $lip/$plen $sel dir in"
         echo "ip xfrm state delete src $lip dst $rip proto esp spi $spi_out"
         echo "ip xfrm state delete src $rip dst $lip proto esp spi $spi_in"
     } > "$(xfrm_state_file "$name")"
@@ -219,28 +263,32 @@ xfrm_apply() {
 
 # ---- Path MTU probe towards the remote public IP (needs ICMP echo on peer) ----
 probe_path_mtu() {
-    local dst="$1" lo=500 hi=1472 mid best=0
-    ping -c1 -W1 -M do -s "$lo" "$dst" >/dev/null 2>&1 || { echo 0; return; }
+    local dst="$1" lo=500 hi=1472 mid best=0 hdr=28 pc="ping"
+    if [[ "$dst" == *:* ]]; then pc="ping -6"; hi=1452; hdr=48; fi   # IPv6: 40 (IP) + 8 (ICMPv6)
+    $pc -c1 -W1 -M do -s "$lo" "$dst" >/dev/null 2>&1 || { echo 0; return; }
     best=$lo
     while [ "$lo" -le "$hi" ]; do
         mid=$(( (lo + hi) / 2 ))
-        if ping -c1 -W1 -M do -s "$mid" "$dst" >/dev/null 2>&1; then best=$mid; lo=$((mid + 1)); else hi=$((mid - 1)); fi
+        if $pc -c1 -W1 -M do -s "$mid" "$dst" >/dev/null 2>&1; then best=$mid; lo=$((mid + 1)); else hi=$((mid - 1)); fi
     done
-    echo $((best + 28))
+    echo $((best + hdr))
 }
 
+# Usage: auto_mtu_for_vxlan <remote> [proto ipv4|ipv6]
 auto_mtu_for_vxlan() {
-    local dst="$1" pmtu mtu
+    local dst="$1" proto="${2:-ipv4}" pmtu mtu ovh max_mtu
+    ovh=$(mx_overhead "$proto"); max_mtu=$(mx_mtu_max "$proto")
     pmtu=$(probe_path_mtu "$dst")
     if [ "$pmtu" -eq 0 ]; then
-        echo "  ● Peer did not answer the MTU probe; using safe fallback MTU 1400." >&2
-        echo 1400
+        local fb=1400; [ "$proto" == "ipv6" ] && fb=1380
+        echo "  ● Peer did not answer the MTU probe; using safe fallback MTU $fb." >&2
+        echo "$fb"
         return
     fi
-    mtu=$((pmtu - 50))
-    [ "$mtu" -gt "$MX_MTU_MAX" ] && mtu="$MX_MTU_MAX"
+    mtu=$((pmtu - ovh))
+    [ "$mtu" -gt "$max_mtu" ] && mtu="$max_mtu"
     [ "$mtu" -lt "$MX_MTU_MIN" ] && mtu="$MX_MTU_MIN"
-    echo "  ● Detected path MTU $pmtu; selected VXLAN MTU $mtu (50-byte overhead)." >&2
+    echo "  ● Detected path MTU $pmtu; selected VXLAN MTU $mtu ($ovh-byte overhead)." >&2
     echo "$mtu"
 }
 
@@ -293,7 +341,28 @@ backup_configs() {
 # ======================================================================
 
 MX_MTU_MIN=900
-MX_MTU_MAX=1450
+MX_MTU_MAX=1450          # IPv4 underlay: 1500 - 50
+MX_MTU_MAX6=1430         # IPv6 underlay: 1500 - 70
+
+# ---- IPv4 / IPv6 underlay helpers ----
+mx_is_v6() { [ "${FAB_PROTO:-ipv4}" == "ipv6" ]; }
+mx_overhead() { [ "$1" == "ipv6" ] && echo 70 || echo 50; }
+mx_mtu_max()  { [ "$1" == "ipv6" ] && echo "$MX_MTU_MAX6" || echo "$MX_MTU_MAX"; }
+mx_proto_tag() { [ "$1" == "ipv6" ] && echo "VXLAN6" || echo "VXLAN"; }
+
+# Outer (underlay) endpoints of the currently sourced conf -> EP_L EP_R EP_V6
+mx_endpoints() {
+    if mx_is_v6; then EP_V6=1; EP_L="$LOCAL_PUB6"; EP_R="$REMOTE_PUB6"
+    else EP_V6=0; EP_L="$LOCAL_PUB"; EP_R="$REMOTE_PUB"; fi
+}
+
+# Stable global IPv6 of this host (skips privacy/temporary addresses)
+get_local_ipv6() {
+    local ip
+    ip=$(ip -6 -o addr show scope global 2>/dev/null | grep -v -E 'temporary|deprecated|tentative' | awk '{print $4}' | cut -d/ -f1 | head -n 1)
+    [ -z "$ip" ] && ip=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    echo "${ip,,}"
+}
 # Valid core subnet even for legacy confs without CORE_SUBNET (old fallback broke for VNI > 255)
 mx_core_sub() {
     if [ -n "$CORE_SUBNET" ]; then echo "$CORE_SUBNET"
@@ -510,21 +579,23 @@ draw_mxlan_header() {
 
     local shown=0
     local TYPE REMOTE_PUB VX_NAME BR_NAME CORE_SUBNET VNI_ID FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
+    local FAB_PROTO LOCAL_PUB LOCAL_PUB6 REMOTE_PUB6 peer_txt proto_tag l6 r6 right_txt left_len pad_l sp_l act_mtu
     local live_ping live_loss cached_entry loss_disp loss_col fwd_str if_uptime stat_icon stat_col fwd_col sec_disp
     local len_name len_rem pad_peer sp_peer
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; source "$conf" 2>/dev/null
+        TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; FAB_PROTO="ipv4"; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; source "$conf" 2>/dev/null
         [ -z "$VX_NAME" ] && continue
         ((shown++))
         [ "$shown" -gt 3 ] && break
 
         pure_name=$(get_pure_vx_name "$VX_NAME")
         pure_name="${pure_name:0:10}"
-        REMOTE_PUB="${REMOTE_PUB:0:18}"
+        proto_tag=$(mx_proto_tag "$FAB_PROTO")
+        if mx_is_v6; then peer_txt="[${proto_tag}]"; else peer_txt="${REMOTE_PUB:0:18}"; fi
 
         len_name=${#pure_name}
-        len_rem=${#REMOTE_PUB}
+        len_rem=${#peer_txt}
         pad_peer=$(( 38 - (len_name + len_rem) ))
         [ "$pad_peer" -lt 0 ] && pad_peer=0
         sp_peer=$(printf '%*s' "$pad_peer" "")
@@ -578,7 +649,19 @@ draw_mxlan_header() {
         sec_disp="${sec_disp:0:5}"
 
         printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$REMOTE_PUB" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$peer_txt" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+
+        # Line 2 (IPv6 only): local ➔ remote, full address, protocol + live MTU on the right
+        if mx_is_v6; then
+            l6="${LOCAL_PUB6:--}"; r6="${REMOTE_PUB6:--}"
+            act_mtu=$(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null)
+            right_txt="${proto_tag} | MTU ${act_mtu:---}"
+            left_len=$(( 8 + ${#l6} + ${#r6} ))
+            pad_l=$(( 117 - left_len - ${#right_txt} - 1 ))
+            if [ "$pad_l" -lt 1 ]; then right_txt=""; pad_l=$(( 117 - left_len - 1 )); [ "$pad_l" -lt 0 ] && pad_l=0; fi
+            sp_l=$(printf '%*s' "$pad_l" "")
+            printf "  ${B}│${NC}   ${DIM}↳${NC} ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC}%s${DIM}%s${NC} ${B}│${NC}\n" "$l6" "$r6" "$sp_l" "$right_txt"
+        fi
     done
 
     if [ "$shown" -eq 0 ]; then
@@ -721,29 +804,37 @@ remove_ports() {
 apply_fabric() {
     local conf="$1"
     [ ! -s "$conf" ] && return
-    local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" VNI_ID="" BR_NAME="" VX_NAME="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0"
+    local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" VNI_ID="" BR_NAME="" VX_NAME="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4"
     source "$conf" 2>/dev/null
     [ -z "$VX_NAME" ] || [ -z "$BR_NAME" ] && return
+    mx_endpoints
 
     local c_sub; c_sub=$(mx_core_sub)
     local local_br_ip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
 
     clean_fwd_rules "$VX_NAME"; clean_mss_rules "$VX_NAME"; xfrm_clear "$VX_NAME"
 
-    local has_local=0
-    [ -n "$LOCAL_PUB" ] && ip -4 addr show 2>/dev/null | grep -qF "inet $LOCAL_PUB/" && has_local=1
-    local eth_iface=""
-    [ "$has_local" == "1" ] && eth_iface=$(ip -o -4 addr show 2>/dev/null | awk -v t="$LOCAL_PUB" '{split($4,a,"/"); if (a[1]==t) {print $2; exit}}')
-    [ -z "$eth_iface" ] && eth_iface=$(ip route get "$REMOTE_PUB" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
-    [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    local has_local=0 eth_iface=""
+    if [ "$EP_V6" -eq 1 ]; then
+        [ -n "$EP_L" ] && [ -n "$(ip -6 -o addr show to "$EP_L" 2>/dev/null)" ] && has_local=1
+        [ "$has_local" == "1" ] && eth_iface=$(ip -6 -o addr show to "$EP_L" 2>/dev/null | awk '{print $2; exit}')
+        [ -z "$eth_iface" ] && eth_iface=$(ip -6 route get "$EP_R" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+        [ -z "$eth_iface" ] && eth_iface=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    else
+        [ -n "$EP_L" ] && ip -4 addr show 2>/dev/null | grep -qF "inet $EP_L/" && has_local=1
+        [ "$has_local" == "1" ] && eth_iface=$(ip -o -4 addr show 2>/dev/null | awk -v t="$EP_L" '{split($4,a,"/"); if (a[1]==t) {print $2; exit}}')
+        [ -z "$eth_iface" ] && eth_iface=$(ip route get "$EP_R" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+        [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
+    fi
 
     ip link del "$VX_NAME" >/dev/null 2>&1
     ip link del "$BR_NAME" >/dev/null 2>&1
 
+    local fab_max; fab_max=$(mx_mtu_max "$FAB_PROTO")
     local eff_mtu="$CUSTOM_MTU"
-    if ! is_uint "$eff_mtu"; then eff_mtu=$MX_MTU_MAX; [ "$ENCRYPT" == "1" ] && eff_mtu=$((MX_MTU_MAX - 64)); fi
+    if ! is_uint "$eff_mtu"; then eff_mtu=$fab_max; [ "$ENCRYPT" == "1" ] && eff_mtu=$((fab_max - 64)); fi
     [ "$eff_mtu" -lt "$MX_MTU_MIN" ] && eff_mtu=$MX_MTU_MIN
-    [ "$eff_mtu" -gt "$MX_MTU_MAX" ] && eff_mtu=$MX_MTU_MAX
+    [ "$eff_mtu" -gt "$fab_max" ] && eff_mtu=$fab_max
 
     ip link add "$BR_NAME" type bridge 2>/dev/null
     ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null
@@ -751,8 +842,8 @@ apply_fabric() {
 
     local -a vx_args=(type vxlan id "$VNI_ID")
     [ -n "$eth_iface" ] && vx_args+=(dev "$eth_iface")
-    vx_args+=(remote "$REMOTE_PUB")
-    [ "$has_local" == "1" ] && vx_args+=(local "$LOCAL_PUB")
+    vx_args+=(remote "$EP_R")
+    [ "$has_local" == "1" ] && vx_args+=(local "$EP_L")
     vx_args+=(dstport 4789)
     ip link add "$VX_NAME" "${vx_args[@]}" 2>/dev/null
 
@@ -764,7 +855,7 @@ apply_fabric() {
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$BR_NAME" -m comment --comment "MXLAN_MSS_$VX_NAME" -j TCPMSS --set-mss $((eff_mtu - 40)) 2>/dev/null
 
     if [ "$ENCRYPT" == "1" ]; then
-        xfrm_apply "$VX_NAME" "$TYPE" "$LOCAL_PUB" "$REMOTE_PUB" "$TUN_SECRET" proto udp dport 4789
+        xfrm_apply "$VX_NAME" "$TYPE" "$EP_L" "$EP_R" "$TUN_SECRET" proto udp dport 4789
     fi
 
     if is_uint "$MAX_IPS" && [ "$MAX_IPS" -gt 0 ]; then
@@ -813,10 +904,11 @@ show_fabric_details() {
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return; }
 
     echo -e "\n  ${Y}● Deployed Fabrics Registry:${NC}"
-    local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VNI_ID BR_NAME VX_NAME CORE_SUBNET
+    local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VNI_ID BR_NAME VX_NAME CORE_SUBNET LOCAL_PUB6 REMOTE_PUB6 FAB_PROTO
     local c_sub lip tip t_role t_sec left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 pad3 sp3 l4 pad4 sp4
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; CORE_SUBNET=""; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; CORE_SUBNET=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; source "$conf" 2>/dev/null
+        mx_endpoints
         c_sub="$(mx_core_sub)"
         lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
         tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
@@ -838,9 +930,12 @@ show_fabric_details() {
         pad2=$(( 90 - ${#l2} - ${#r2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}vIP Sync Key :${NC} ${W}${sync_disp}${NC}${sp2}${DIM}Virtual IPs :${NC} ${G}${MAX_IPS} active${NC} ${B}│${NC}"
 
-        l3="Public IPs   : ${LOCAL_PUB:0:16} -> ${REMOTE_PUB:0:16}"
+        l3="Public IPs   : ${EP_L:0:39} -> ${EP_R:0:39}"
         pad3=$(( 90 - ${#l3} )); [ "$pad3" -lt 0 ] && pad3=0; sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${LOCAL_PUB:0:16}${NC} ${DIM}->${NC} ${W}${REMOTE_PUB:0:16}${NC}${sp3} ${B}│${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Public IPs   :${NC} ${W}${EP_L:0:39}${NC} ${DIM}->${NC} ${W}${EP_R:0:39}${NC}${sp3} ${B}│${NC}"
+        local l5="Underlay     : $(mx_proto_tag "$FAB_PROTO") ($([ "$FAB_PROTO" == "ipv6" ] && echo IPv6 || echo IPv4)) | MTU limit $(mx_mtu_max "$FAB_PROTO")" pad5 sp5
+        pad5=$(( 90 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; sp5=$(printf '%*s' "$pad5" "")
+        echo -e "  ${B}│${NC} ${DIM}Underlay     :${NC} ${C}$(mx_proto_tag "$FAB_PROTO")${NC} ${DIM}($([ "$FAB_PROTO" == "ipv6" ] && echo IPv6 || echo IPv4)) | MTU limit $(mx_mtu_max "$FAB_PROTO")${NC}${sp5} ${B}│${NC}"
 
         l4="Core Subnet  : ${c_sub}.x (${lip} -> ${tip})"
         pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; sp4=$(printf '%*s' "$pad4" "")
@@ -853,19 +948,20 @@ show_fabric_details() {
 
 show_mxlan_monitor() {
     echo -e "\n  ${C}Live Monitoring (Auto-Refresh | Press 'q' to exit)${NC}"
-    local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY CORE_SUBNET VNI_ID BR_NAME VX_NAME FWD_TCP FWD_UDP LB_MODE
+    local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY CORE_SUBNET VNI_ID BR_NAME VX_NAME FWD_TCP FWD_UDP LB_MODE LOCAL_PUB6 REMOTE_PUB6 FAB_PROTO
     local v_ips title_txt raw_l1 pad1 sp1 eval_l1 disp_tcp disp_udp lb_txt raw_l2 pad2 sp2 lb_stat eval_l2
     local c_sub main_tip main_lip ping_res lat lat_raw lat_color stat_icon stat_text stat_color m_icon total_v idx lip base_ip last tip v_icon
 
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; CORE_SUBNET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; CORE_SUBNET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; source "$conf" 2>/dev/null
+        mx_endpoints
         mapfile -t v_ips < <(ip -4 addr show dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
 
         title_txt="${VX_NAME}/${BR_NAME}"
-        raw_l1=" ▼ ${title_txt} | PUB: ${LOCAL_PUB} -> ${REMOTE_PUB}"
+        raw_l1=" ▼ ${title_txt} | PUB: ${EP_L} -> ${EP_R}"
         pad1=$(( 92 - ${#raw_l1} )); [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
-        eval_l1=$(printf " %b▼ %s%b ${DIM}| PUB: ${W}%s ${DIM}→${W} %s${NC}" "${M}" "${title_txt}" "${NC}" "${LOCAL_PUB}" "${REMOTE_PUB}")
+        eval_l1=$(printf " %b▼ %s%b ${DIM}| PUB: ${W}%s ${DIM}→${W} %s${NC}" "${M}" "${title_txt}" "${NC}" "${EP_L}" "${EP_R}")
 
         echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         echo -e "  ${B}│${NC}${eval_l1}${sp1}${B}│${NC}"
@@ -1024,17 +1120,43 @@ teardown_fabric() {
 
 rebuild_guard() {
     ipt_delete_tagged filter INPUT "MXLAN_GUARD_HOOK"
+    IPT_BIN=ip6tables ipt_delete_tagged filter INPUT "MXLAN_GUARD_HOOK"
     iptables -F MXLAN_GUARD 2>/dev/null
-    if [ ! -f "$GUARD_FLAG" ]; then iptables -X MXLAN_GUARD 2>/dev/null; return 0; fi
-    iptables -N MXLAN_GUARD 2>/dev/null
-    local conf REMOTE_PUB
+    ip6tables -F MXLAN6_GUARD 2>/dev/null
+    if [ ! -f "$GUARD_FLAG" ]; then
+        iptables -X MXLAN_GUARD 2>/dev/null
+        ip6tables -X MXLAN6_GUARD 2>/dev/null
+        return 0
+    fi
+    local conf REMOTE_PUB REMOTE_PUB6 LOCAL_PUB LOCAL_PUB6 FAB_PROTO peers4=0 peers6=0
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        REMOTE_PUB=""; source "$conf" 2>/dev/null
-        is_ipv4 "$REMOTE_PUB" && iptables -A MXLAN_GUARD -s "$REMOTE_PUB" -j ACCEPT
+        REMOTE_PUB=""; REMOTE_PUB6=""; LOCAL_PUB=""; LOCAL_PUB6=""; FAB_PROTO="ipv4"; source "$conf" 2>/dev/null
+        if mx_is_v6; then
+            if is_ipv6 "$REMOTE_PUB6"; then
+                [ "$peers6" -eq 0 ] && ip6tables -N MXLAN6_GUARD 2>/dev/null
+                ip6tables -A MXLAN6_GUARD -s "$REMOTE_PUB6" -j ACCEPT; peers6=1
+            fi
+        else
+            if is_ipv4 "$REMOTE_PUB"; then
+                [ "$peers4" -eq 0 ] && iptables -N MXLAN_GUARD 2>/dev/null
+                iptables -A MXLAN_GUARD -s "$REMOTE_PUB" -j ACCEPT; peers4=1
+            fi
+        fi
     done
-    iptables -A MXLAN_GUARD -j DROP
-    iptables -I INPUT 1 -p udp --dport 4789 -m comment --comment "MXLAN_GUARD_HOOK" -j MXLAN_GUARD
+    # Hooks exist only for the IP families actually used, so unrelated VXLAN of the other family stays untouched
+    if [ "$peers4" -eq 1 ]; then
+        iptables -A MXLAN_GUARD -j DROP
+        iptables -I INPUT 1 -p udp --dport 4789 -m comment --comment "MXLAN_GUARD_HOOK" -j MXLAN_GUARD
+    else
+        iptables -X MXLAN_GUARD 2>/dev/null
+    fi
+    if [ "$peers6" -eq 1 ]; then
+        ip6tables -A MXLAN6_GUARD -j DROP
+        ip6tables -I INPUT 1 -p udp --dport 4789 -m comment --comment "MXLAN_GUARD_HOOK" -j MXLAN6_GUARD
+    else
+        ip6tables -X MXLAN6_GUARD 2>/dev/null
+    fi
 }
 
 mxlan_watchdog() {
@@ -1073,22 +1195,23 @@ mxlan_watchdog() {
 }
 
 mxlan_status_cli() {
-    local conf TYPE VX_NAME REMOTE_PUB CORE_SUBNET VNI_ID ENCRYPT tip st lat
-    printf "%-16s %-16s %-6s %-8s %-8s %s\n" "FABRIC" "PEER" "ROLE" "LINK" "PING" "ENC"
+    local conf TYPE VX_NAME REMOTE_PUB REMOTE_PUB6 LOCAL_PUB LOCAL_PUB6 FAB_PROTO CORE_SUBNET VNI_ID ENCRYPT tip st lat
+    printf "%-16s %-28s %-6s %-8s %-8s %s\n" "FABRIC" "PEER" "ROLE" "LINK" "PING" "ENC"
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; VX_NAME=""; REMOTE_PUB=""; CORE_SUBNET=""; VNI_ID=""; ENCRYPT="0"; source "$conf" 2>/dev/null
+        TYPE=""; VX_NAME=""; REMOTE_PUB=""; REMOTE_PUB6=""; LOCAL_PUB=""; LOCAL_PUB6=""; FAB_PROTO="ipv4"; CORE_SUBNET=""; VNI_ID=""; ENCRYPT="0"; source "$conf" 2>/dev/null
+        mx_endpoints
         tip=$([ "$TYPE" == "1" ] && echo "$(mx_core_sub).2" || echo "$(mx_core_sub).1")
         st=$([ -d "/sys/class/net/$VX_NAME" ] && echo UP || echo DOWN)
         lat=$(ping -c1 -W1 "$tip" 2>/dev/null | grep -oP 'time=\K[0-9.]+'); lat="${lat:+${lat}ms}"
-        printf "%-16s %-16s %-6s %-8s %-8s %s\n" "$VX_NAME" "$REMOTE_PUB" "$([ "$TYPE" == "1" ] && echo IR || echo KH)" "$st" "${lat:----}" "$([ "$ENCRYPT" == "1" ] && echo ON || echo OFF)"
+        printf "%-16s %-28s %-6s %-8s %-8s %s\n" "$VX_NAME" "${EP_R:0:28}" "$([ "$TYPE" == "1" ] && echo IR || echo KH)" "$st" "${lat:----}" "$([ "$ENCRYPT" == "1" ] && echo ON || echo OFF)"
     done
 }
 
 # ---------------- ADVANCED MENU ACTIONS ----------------
 menu_encrypt() {
     select_fabric_interactive || return
-    local ENCRYPT="0" VX_NAME="" TYPE="" LOCAL_PUB="" REMOTE_PUB="" TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
+    local ENCRYPT="0" VX_NAME="" TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4" TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ IPsec ESP ENCRYPTION: ${W}${VX_NAME}${DIM} ]${NC}"
     echo -e "  ${DIM}│${NC} Status : $([ "$ENCRYPT" == "1" ] && echo -e "${G}ENCRYPTED (AES-256-CBC + HMAC-SHA256)${NC}" || echo -e "${R}PLAINTEXT VXLAN${NC}")"
@@ -1112,7 +1235,7 @@ menu_guard() {
     local on=0; [ -f "$GUARD_FLAG" ] && on=1
     echo -e "\n  ${DIM}┌─[ FIREWALL GUARD (Anti-Spoof / Anti-Injection) ]${NC}"
     echo -e "  ${DIM}│${NC} Status : $([ "$on" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${R}OFF${NC}")"
-    echo -e "  ${DIM}│${NC} Accepts VXLAN (UDP 4789) ONLY from configured peer IPs: stops L2 frame injection."
+    echo -e "  ${DIM}│${NC} Accepts VXLAN (UDP 4789, IPv4 + IPv6) ONLY from configured peer IPs: stops L2 frame injection."
     echo -e "  ${DIM}│${NC} ${Y}Note: blocks any other VXLAN endpoints on this host not managed by MXLAN.${NC}"
     echo -e "  ${DIM}└─${NC}"
     echo -ne "  ${C}●${NC} ${W}Turn Guard $([ "$on" == "1" ] && echo OFF || echo ON)? (y/n): ${NC}"; read -r ans
@@ -1140,12 +1263,14 @@ menu_watchdog() {
 
 menu_auto_mtu() {
     select_fabric_interactive || return
-    local VX_NAME="" REMOTE_PUB="" ENCRYPT="0" CUSTOM_MTU=""; source "$SELECTED_CONF" 2>/dev/null
+    local VX_NAME="" REMOTE_PUB="" REMOTE_PUB6="" LOCAL_PUB="" LOCAL_PUB6="" FAB_PROTO="ipv4" ENCRYPT="0" CUSTOM_MTU=""; source "$SELECTED_CONF" 2>/dev/null
+    mx_endpoints
+    local fab_max; fab_max=$(mx_mtu_max "$FAB_PROTO")
     draw_mxlan_header
     local act; act=$(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null)
     echo -e "\n  ${DIM}┌─[ MTU & MSS: ${W}${VX_NAME}${DIM} ]${NC}"
-    echo -e "  ${DIM}├─${NC} Live MTU : ${Y}${act:-N/A}${NC}   Saved: ${W}${CUSTOM_MTU:-Auto}${NC}   Range: ${W}${MX_MTU_MIN}-${MX_MTU_MAX}${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Auto-Discover (probe path to ${REMOTE_PUB})${NC}"
+    echo -e "  ${DIM}├─${NC} Live MTU : ${Y}${act:-N/A}${NC}   Saved: ${W}${CUSTOM_MTU:-Auto}${NC}   Range: ${W}${MX_MTU_MIN}-${fab_max}${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Auto-Discover (probe path to ${EP_R})${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Set Manually${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Reset to Auto${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
@@ -1154,15 +1279,15 @@ menu_auto_mtu() {
     case "$ans" in
         1)
             echo -e "  ${C}⟳${NC} ${W}Probing path MTU (DF-bit binary search)...${NC}"
-            local pmtu; pmtu=$(probe_path_mtu "$REMOTE_PUB")
+            local pmtu; pmtu=$(probe_path_mtu "$EP_R")
             if [ "$pmtu" -eq 0 ]; then echo -e "  ${R}✖ Peer does not answer ICMP. Use manual mode.${NC}"; sleep 2.5; return; fi
-            local ovh=50; [ "$ENCRYPT" == "1" ] && ovh=$((ovh + 64))
-            best=$((pmtu - ovh)); [ "$best" -gt "$MX_MTU_MAX" ] && best=$MX_MTU_MAX; [ "$best" -lt "$MX_MTU_MIN" ] && best=$MX_MTU_MIN
+            local ovh; ovh=$(mx_overhead "$FAB_PROTO"); [ "$ENCRYPT" == "1" ] && ovh=$((ovh + 64))
+            best=$((pmtu - ovh)); [ "$best" -gt "$fab_max" ] && best=$fab_max; [ "$best" -lt "$MX_MTU_MIN" ] && best=$MX_MTU_MIN
             echo -e "  ${DIM}├─${NC} Path MTU ${W}${pmtu}${NC} - overhead ${W}${ovh}${NC} = recommended ${G}${best}${NC}"
             echo -ne "  ${C}●${NC} ${W}Apply? Use the same value on the peer. (y/n): ${NC}"; read -r c; [[ "${c,,}" == "y" ]] || return ;;
         2)
-            echo -ne "  ${C}●${NC} ${W}MTU (${MX_MTU_MIN}-${MX_MTU_MAX}): ${NC}"; read -r best; best=$(echo "$best" | tr -dc '0-9')
-            if ! is_uint "$best" || [ "$best" -lt "$MX_MTU_MIN" ] || [ "$best" -gt "$MX_MTU_MAX" ]; then echo -e "  ${R}✖ Out of range.${NC}"; sleep 2; return; fi ;;
+            echo -ne "  ${C}●${NC} ${W}MTU (${MX_MTU_MIN}-${fab_max}): ${NC}"; read -r best; best=$(echo "$best" | tr -dc '0-9')
+            if ! is_uint "$best" || [ "$best" -lt "$MX_MTU_MIN" ] || [ "$best" -gt "$fab_max" ]; then echo -e "  ${R}✖ Out of range.${NC}"; sleep 2; return; fi ;;
         3) best="" ;;
         *) return ;;
     esac
@@ -1170,6 +1295,9 @@ menu_auto_mtu() {
     apply_fabric "$SELECTED_CONF"
     echo -e "  ${G}✔ MTU now $(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null || echo "${best:-Auto}") (MSS clamp follows automatically).${NC}"; sleep 2
 }
+
+# Option 11 used to point at an undefined function; the manual path lives in the MTU manager
+menu_manual_mtu() { menu_auto_mtu; }
 
 show_traffic_monitor() {
     local -A prx ptx
@@ -1250,7 +1378,7 @@ render_mxlan_menu() {
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ PROVISION & MANAGE ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (Token Mesh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Setup New VXLAN Fabric (IPv4 / IPv6 Underlay)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}MPorter Port Forwarder / Manager${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
@@ -1260,7 +1388,7 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─[ CONFIGURATION ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Edit Fabric Name${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Edit Public IPs (Local / Remote)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Edit Public IPs (IPv4 / IPv6)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Edit Master Token${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Edit Core Subnet Base${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Edit MTU & MSS (Manual)${NC}"
@@ -1292,6 +1420,10 @@ while true; do
            echo -e "\n  ${DIM}┌─[ VXLAN DEPLOYMENT ]${NC}"
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read -r s_type; [[ "$s_type" == "q" ]] && break; [[ "$s_type" == "1" || "$s_type" == "2" ]] && break; done
            [[ "$s_type" == "q" ]] && continue
+
+           while true; do echo -ne "  ${C}●${NC} ${W}Underlay IP Family [1:IPv4 | 2:IPv6 | q:Back]: ${NC}"; read -r fam_choice; [[ "$fam_choice" == "q" ]] && break; [[ "$fam_choice" == "1" || "$fam_choice" == "2" ]] && break; done
+           [[ "$fam_choice" == "q" ]] && continue
+           fab_proto="ipv4"; [[ "$fam_choice" == "2" ]] && fab_proto="ipv6"
            
            while true; do
                echo -ne "  ${C}●${NC} ${W}Fabric Suffix Name (e.g. ir, kh): ${NC}"; read -r suffix
@@ -1307,25 +1439,52 @@ while true; do
                echo -e "\n  ${R}● Error: Fabric name [${vx_name}] already exists!${NC}"; sleep 2; continue
            fi
 
-           auto_lip=$(get_local_ip)
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${auto_lip}${W}]: ${NC}"; read -r custom_ip
-               [[ "$custom_ip" == "q" ]] && break
-               custom_ip=$(echo "$custom_ip" | tr -dc '0-9.')
-               if [ -n "$custom_ip" ] && ! is_ipv4 "$custom_ip"; then echo -e "  ${R}✖ Invalid IPv4 address.${NC}"; continue; fi
-               [ -n "$custom_ip" ] && auto_lip=$custom_ip
-               break
-           done
-           [[ "$custom_ip" == "q" ]] && continue
-           local_ip="$auto_lip"
+           local_ip=""; r_ip=""; local_ip6=""; r_ip6=""; probe_dst=""
+           if [ "$fab_proto" == "ipv4" ]; then
+               auto_lip=$(get_local_ip)
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Local Public IPv4 [${Y}${auto_lip}${W}]: ${NC}"; read -r custom_ip
+                   [[ "$custom_ip" == "q" ]] && break
+                   custom_ip=$(echo "$custom_ip" | tr -dc '0-9.')
+                   if [ -n "$custom_ip" ] && ! is_ipv4 "$custom_ip"; then echo -e "  ${R}✖ Invalid IPv4 address.${NC}"; continue; fi
+                   [ -n "$custom_ip" ] && auto_lip=$custom_ip
+                   break
+               done
+               [[ "$custom_ip" == "q" ]] && continue
+               local_ip="$auto_lip"
 
-           while true; do
-               echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IP: ${NC}"; read -r r_ip
-               [[ "$r_ip" == "q" ]] && break
-               r_ip=$(echo "$r_ip" | tr -dc '0-9.'); is_ipv4 "$r_ip" && break
-               echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
-           done
-           [[ "$r_ip" == "q" ]] && continue
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IPv4: ${NC}"; read -r r_ip
+                   [[ "$r_ip" == "q" ]] && break
+                   r_ip=$(echo "$r_ip" | tr -dc '0-9.'); is_ipv4 "$r_ip" && break
+                   echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
+               done
+               [[ "$r_ip" == "q" ]] && continue
+               probe_dst="$r_ip"
+           else
+               local_ip6="$(get_local_ipv6)"
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Local Public IPv6 [${Y}${local_ip6:-none}${W}]: ${NC}"; read -r custom_ip6
+                   [[ "$custom_ip6" == "q" ]] && break
+                   custom_ip6=$(echo "$custom_ip6" | tr -dc '0-9a-fA-F:'); custom_ip6="${custom_ip6,,}"
+                   if [ -n "$custom_ip6" ]; then
+                       is_global_ipv6 "$custom_ip6" && { local_ip6="$custom_ip6"; break; }
+                       echo -e "  ${R}✖ Invalid IPv6 address (global/ULA only, no link-local).${NC}"; continue
+                   fi
+                   is_global_ipv6 "$local_ip6" && break
+                   echo -e "  ${R}✖ No usable IPv6 detected on this host. Enter its public IPv6 manually.${NC}"
+               done
+               [[ "$custom_ip6" == "q" ]] && continue
+               while true; do
+                   echo -ne "  ${C}●${NC} ${W}Remote Endpoint Public IPv6: ${NC}"; read -r r_ip6
+                   [[ "$r_ip6" == "q" ]] && break
+                   r_ip6=$(echo "$r_ip6" | tr -dc '0-9a-fA-F:'); r_ip6="${r_ip6,,}"
+                   is_global_ipv6 "$r_ip6" && break
+                   echo -e "  ${R}✖ Invalid IPv6 address.${NC}"
+               done
+               [[ "$r_ip6" == "q" ]] && continue
+               probe_dst="$r_ip6"
+           fi
 
            s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null)
            [ -z "$s_key" ] && s_key=$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)
@@ -1350,15 +1509,16 @@ while true; do
            fi
 
            echo -e "  ${C}⟳${NC} ${W}Detecting a safe VXLAN MTU automatically...${NC}"
-           cust_mtu=$(auto_mtu_for_vxlan "$r_ip")
+           cust_mtu=$(auto_mtu_for_vxlan "$probe_dst" "$fab_proto")
            conf_path="$CONF_DIR/${vx_name}.conf"
-           echo -e "TYPE=$s_type\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nMAX_IPS=0\nSYNC_KEY=$tun_secret\nTUN_SECRET=$tun_secret\nVX_NAME=$vx_name\nBR_NAME=$br_name\nVNI_ID=$vni_id\nCORE_SUBNET=$core_sub\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0\nCUSTOM_MTU=$cust_mtu" > "$conf_path"
+           echo -e "TYPE=$s_type\nFAB_PROTO=$fab_proto\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nLOCAL_PUB6=$local_ip6\nREMOTE_PUB6=$r_ip6\nMAX_IPS=0\nSYNC_KEY=$tun_secret\nTUN_SECRET=$tun_secret\nVX_NAME=$vx_name\nBR_NAME=$br_name\nVNI_ID=$vni_id\nCORE_SUBNET=$core_sub\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0\nCUSTOM_MTU=$cust_mtu" > "$conf_path"
            chmod 600 "$conf_path"
            apply_fabric "$conf_path"
 
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
-               echo -e "  ${G}● Fabric [${vx_name}] deployed (VNI: ${vni_id} | Subnet: ${core_sub}.x | Auto MTU: ${cust_mtu})${NC}"
+               echo -e "  ${G}● Fabric [${vx_name}] deployed (Underlay: ${fab_proto} | VNI: ${vni_id} | Subnet: ${core_sub}.x | Auto MTU: ${cust_mtu})${NC}"
+               [ "$fab_proto" == "ipv6" ] && echo -e "  ${DIM}● IPv6 underlay: allow UDP 4789 over IPv6 in the firewall on BOTH servers.${NC}"
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
 
                echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read -r run_initial_ping
@@ -1490,17 +1650,30 @@ while true; do
         8)
            select_fabric_interactive || continue
            draw_mxlan_header
-           LOCAL_PUB=""; REMOTE_PUB=""; source "$SELECTED_CONF" 2>/dev/null
-           echo -ne "  ${C}●${NC} ${W}New Local Public IP [Current: ${Y}${LOCAL_PUB}${W}, Enter to skip]: ${NC}"; read -r new_lip
-           echo -ne "  ${C}●${NC} ${W}New Remote Public IP [Current: ${Y}${REMOTE_PUB}${W}, Enter to skip]: ${NC}"; read -r new_rip
-           new_lip=$(echo "$new_lip" | tr -dc '0-9.')
-           new_rip=$(echo "$new_rip" | tr -dc '0-9.')
-           if { [ -n "$new_lip" ] && ! is_ipv4 "$new_lip"; } || { [ -n "$new_rip" ] && ! is_ipv4 "$new_rip"; }; then
-               echo -e "  ${R}✖ Invalid IPv4 address. Nothing changed.${NC}"; sleep 2; continue
+           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           if mx_is_v6; then
+               echo -ne "  ${C}●${NC} ${W}New Local Public IPv6 [Current: ${Y}${LOCAL_PUB6}${W}, Enter to skip]: ${NC}"; read -r new_lip6
+               echo -ne "  ${C}●${NC} ${W}New Remote Public IPv6 [Current: ${Y}${REMOTE_PUB6}${W}, Enter to skip]: ${NC}"; read -r new_rip6
+               new_lip6=$(echo "$new_lip6" | tr -dc '0-9a-fA-F:'); new_lip6="${new_lip6,,}"
+               new_rip6=$(echo "$new_rip6" | tr -dc '0-9a-fA-F:'); new_rip6="${new_rip6,,}"
+               if { [ -n "$new_lip6" ] && ! is_global_ipv6 "$new_lip6"; } || { [ -n "$new_rip6" ] && ! is_global_ipv6 "$new_rip6"; }; then
+                   echo -e "  ${R}✖ Invalid IPv6 address. Nothing changed.${NC}"; sleep 2; continue
+               fi
+               xfrm_clear "$VX_NAME"
+               [ -n "$new_lip6" ] && set_conf_var "$SELECTED_CONF" LOCAL_PUB6 "$new_lip6"
+               [ -n "$new_rip6" ] && set_conf_var "$SELECTED_CONF" REMOTE_PUB6 "$new_rip6"
+           else
+               echo -ne "  ${C}●${NC} ${W}New Local Public IP [Current: ${Y}${LOCAL_PUB}${W}, Enter to skip]: ${NC}"; read -r new_lip
+               echo -ne "  ${C}●${NC} ${W}New Remote Public IP [Current: ${Y}${REMOTE_PUB}${W}, Enter to skip]: ${NC}"; read -r new_rip
+               new_lip=$(echo "$new_lip" | tr -dc '0-9.')
+               new_rip=$(echo "$new_rip" | tr -dc '0-9.')
+               if { [ -n "$new_lip" ] && ! is_ipv4 "$new_lip"; } || { [ -n "$new_rip" ] && ! is_ipv4 "$new_rip"; }; then
+                   echo -e "  ${R}✖ Invalid IPv4 address. Nothing changed.${NC}"; sleep 2; continue
+               fi
+               xfrm_clear "$VX_NAME"
+               [ -n "$new_lip" ] && set_conf_var "$SELECTED_CONF" LOCAL_PUB "$new_lip"
+               [ -n "$new_rip" ] && set_conf_var "$SELECTED_CONF" REMOTE_PUB "$new_rip"
            fi
-           xfrm_clear "$VX_NAME"
-           [ -n "$new_lip" ] && sed -i "s/^LOCAL_PUB=.*/LOCAL_PUB=$new_lip/" "$SELECTED_CONF"
-           [ -n "$new_rip" ] && sed -i "s/^REMOTE_PUB=.*/REMOTE_PUB=$new_rip/" "$SELECTED_CONF"
            apply_fabric "$SELECTED_CONF"
            echo -e "  ${G}● Public IPs updated and applied.${NC}"; sleep 1.5 ;;
 

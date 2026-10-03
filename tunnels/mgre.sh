@@ -1,7 +1,7 @@
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.0 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
-# [v6.5.0: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
+# [v6.5.2: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
 # [v6.4.0: GRE6 / IPIP4>4 / IPIP4>6 / IPIP6>6 | IPv6-aware header (2nd line) | locale-safe layout | shared proto helpers]

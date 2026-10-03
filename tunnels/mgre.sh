@@ -1,11 +1,14 @@
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.0 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
+# [v6.5.0: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
+#          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
+#          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
 # [v6.4.0: GRE6 / IPIP4>4 / IPIP4>6 / IPIP6>6 | IPv6-aware header (2nd line) | locale-safe layout | shared proto helpers]
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
 
-MODULE_VERSION="6.5.0"
+MODULE_VERSION="6.5.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -423,38 +426,54 @@ fi
 
 MAIN_PID=$$
 NEED_REFRESH=false
-trap 'NEED_REFRESH=true' SIGUSR1
+trap '' SIGUSR1   # ignored: a signal must never interrupt typing in any prompt
 
 UPDATE_CHECK_INTERVAL=60
 PING_CHECK_INTERVAL=5
 
+# Live header: repaint ONLY the header box in place (cursor saved/restored, nothing else touched).
+# LIVE_HEADER_FUNC = header function, LIVE_ROWS = number of lines printed above the prompt line.
+LIVE_HEADER_FUNC=""
+LIVE_ROWS=0
+LIVE_HEADER_INTERVAL=2
+LIVE_MENU_FUNC=""        # menu renderer: redrawn (typed text kept) when the watcher finds a new remote version
+LIVE_FRAME_FILE=""
+LIVE_VER_FILE="$SECURE_TMP/.mgre_remote_ver"
+
+live_header_tick() {
+    [ -n "$LIVE_HEADER_FUNC" ] || return 0
+    local rows frame
+    rows=$(stty size 2>/dev/null | awk '{print $1}'); [ -z "$rows" ] && rows="${LINES:-24}"
+    # page taller than the terminal -> header already scrolled off-screen, never paint over the menu
+    [ "$LIVE_ROWS" -ge "$rows" ] && return 0
+    frame=$(HEADER_LIVE=1 "$LIVE_HEADER_FUNC")
+    printf '\e7\e[%dA\r%s\e8' "$LIVE_ROWS" "$frame"
+}
+
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
-    local redraw_func="$3"
     local buffer=""
-    local char rc
-    local last_refresh
-    last_refresh=$(date +%s)
+    local char rc now last_refresh upd_seen="" upd_cur=""
+    printf -v last_refresh '%(%s)T' -1
+    [ -f "$LIVE_VER_FILE" ] && read -r upd_seen < "$LIVE_VER_FILE"
 
     echo -ne "$prompt"
 
     while true; do
-        if [ "$NEED_REFRESH" = true ]; then
-            NEED_REFRESH=false
-            if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
-                "$redraw_func"
-                echo -ne "$prompt$buffer"
-                last_refresh=$(date +%s)
-            fi
+        printf -v now '%(%s)T' -1
+        if [ $((now - last_refresh)) -ge "$LIVE_HEADER_INTERVAL" ]; then
+            last_refresh=$now
+            live_header_tick
         fi
 
-        local now
-        now=$(date +%s)
-        if [ $((now - last_refresh)) -ge "$PING_CHECK_INTERVAL" ]; then
-            last_refresh=$now
-            if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
-                "$redraw_func"
+        # new version found by the background watcher -> repaint the menu so the update badge shows live
+        upd_cur=""; [ -f "$LIVE_VER_FILE" ] && read -r upd_cur < "$LIVE_VER_FILE"
+        if [ "$upd_cur" != "$upd_seen" ]; then
+            upd_seen="$upd_cur"
+            if [ -n "$LIVE_MENU_FUNC" ] && [ -n "$LIVE_FRAME_FILE" ]; then
+                "$LIVE_MENU_FUNC" > "$LIVE_FRAME_FILE"; cat "$LIVE_FRAME_FILE"
+                LIVE_ROWS=$(( $(wc -l < "$LIVE_FRAME_FILE") ))
                 echo -ne "$prompt$buffer"
             fi
         fi
@@ -521,7 +540,6 @@ check_update_bg() {
 update_watcher_loop() {
     while true; do
         check_update_bg
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
@@ -632,7 +650,8 @@ draw_mgre_header() {
         fi
     done
 
-    clear; echo ""
+    [ -z "$HEADER_LIVE" ] && clear
+    echo ""
     local border
     local BOXW=125 extra tw
     extra=$(( BOXW - 117 )); tw=$(( 24 + extra ))
@@ -1689,8 +1708,12 @@ render_mgre_menu() {
 }
 
 while true; do
-    render_mgre_menu
-    read_with_refresh "  ${C}MGRE ❯❯ ${NC}" opt render_mgre_menu
+    render_mgre_menu > "$SECURE_TMP/.mgre_frame"
+    cat "$SECURE_TMP/.mgre_frame"
+    LIVE_ROWS=$(( $(wc -l < "$SECURE_TMP/.mgre_frame") )); LIVE_HEADER_FUNC="draw_mgre_header"
+    LIVE_MENU_FUNC="render_mgre_menu"; LIVE_FRAME_FILE="$SECURE_TMP/.mgre_frame"
+    read_with_refresh "  ${C}MGRE ❯❯ ${NC}" opt
+    LIVE_HEADER_FUNC=""; LIVE_MENU_FUNC=""
     opt=$(echo "$opt" | tr -d '\r')
     case $opt in
         1) 

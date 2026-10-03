@@ -2,6 +2,12 @@
 # --- MDesign Modular Core (mporter.sh) | MPorter Manager v11.1 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
+# v11.2 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
+#  - IPv6 targets everywhere: HAProxy / Gost / Realm / Kernel NAT (ip6tables) / OBFS / health probes
+#  - New tunnel interface families recognised: GRE6 / 6to4 (g6*), IPIP4>4 (i4*), IPIP4>6 (i46*), IPIP6>6 (i66*), VXLAN over IPv6
+#  - Peer discovery understands IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer, ip -6 neighbours)
+#  - Header shows the host's IPv6, target columns widened for IPv6 addresses
+#
 # v11.1 changelog (bugfix release over v10.0.0)
 #  - Added missing edit_mapping (menu 5): remove single port / disable OBFS / add ports
 #  - Headless flags (--health-scan, --purge-ip, ...) no longer run installer/update side effects
@@ -19,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="11.1"
+MODULE_VERSION="11.2"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mporter"
@@ -73,10 +79,46 @@ valid_ipv4() {
     return 0
 }
 
+valid_ipv6() {
+    local ip="${1,,}" g n=0 f=0 dbl=0 rest
+    local -a parts
+    [ -n "$ip" ] && [ "${#ip}" -le 39 ] || return 1
+    [[ "$ip" =~ ^[0-9a-f:]+$ ]] || return 1
+    [[ "$ip" == *:* ]] || return 1
+    [[ "$ip" == *:::* ]] && return 1
+    if [[ "$ip" == *::* ]]; then rest="${ip#*::}"; [[ "$rest" == *::* ]] && return 1; dbl=1; fi
+    [[ "$ip" == :* && "$ip" != ::* ]] && return 1
+    [[ "$ip" == *: && "$ip" != *:: ]] && return 1
+    IFS=':' read -ra parts <<< "$ip"
+    for g in "${parts[@]}"; do
+        f=$((f+1)); [ -z "$g" ] && continue
+        [ "${#g}" -le 4 ] || return 1
+        n=$((n+1))
+    done
+    if [ "$dbl" -eq 1 ]; then [ "$n" -le 7 ] || return 1; else { [ "$n" -eq 8 ] && [ "$f" -eq 8 ]; } || return 1; fi
+    return 0
+}
+# IPv4 or IPv6 literal
+valid_ip() { valid_ipv4 "$1" || valid_ipv6 "$1"; }
+is_v6() { [[ "$1" == *:* ]]; }
+# Usable as a forwarding target (not link-local / unspecified / multicast)
+valid_target_ip() {
+    valid_ipv4 "$1" && return 0
+    valid_ipv6 "$1" || return 1
+    case "${1,,}" in ::|fe8*|fe9*|fea*|feb*|ff*) return 1 ;; esac
+    return 0
+}
+# host:port in the notation every engine understands ([v6]:port for IPv6)
+hostport() { if is_v6 "$1"; then printf '[%s]:%s' "$1" "$2"; else printf '%s:%s' "$1" "$2"; fi; }
+# HAProxy server address (v6 needs the ipv6@ prefix; port is the text after the last colon)
+hap_addr() { if is_v6 "$1"; then printf 'ipv6@%s:%s' "$1" "$2"; else printf '%s:%s' "$1" "$2"; fi; }
+# iptables binary for a target address
+ipt_bin_for() { if is_v6 "$1"; then echo ip6tables; else echo iptables; fi; }
+
 valid_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$((10#$1))" -ge 1 ] && [ "$((10#$1))" -le 65535 ]; }
 
 valid_host() {
-    valid_ipv4 "$1" && return 0
+    valid_ip "$1" && return 0
     [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}))+$ ]]
 }
 
@@ -96,7 +138,7 @@ ip_in_cidr() {
     [ $(( $(ip_to_int "$ip") & mask )) -eq $(( $(ip_to_int "$net") & mask )) ]
 }
 
-route_dev() { ip route get "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}'; }
+route_dev() { local fam=-4; is_v6 "$1" && fam=-6; ip $fam route get "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}'; }
 
 # Safe KEY=VALUE reader. Tunnel configs are parsed, never sourced.
 read_conf_value() {
@@ -273,6 +315,27 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
+# Stable global IPv6 of this host (skips temporary/deprecated addresses); empty if none
+get_local_ipv6() {
+    local ip
+    ip=$(ip -6 -o addr show scope global 2>/dev/null | grep -v -E 'temporary|deprecated|tentative' | awk '{print $4}' | cut -d/ -f1 | head -n 1)
+    [ -z "$ip" ] && ip=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
+    echo "${ip,,}"
+}
+
+# IPv6 forwarding is only switched on when an IPv6 target is really mapped. Enabling it makes the kernel ignore
+# router advertisements, so accept_ra=2 is set first on the uplink(s) or the host could lose its IPv6 default route.
+enable_v6_forwarding() {
+    [ "$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)" = "1" ] && return 0
+    local dif cf="/etc/sysctl.d/99-mporter-ipv6.conf" lines=""
+    for dif in $(ip -6 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | sort -u); do
+        sysctl -w "net.ipv6.conf.${dif}.accept_ra=2" >/dev/null 2>&1
+        lines+="net.ipv6.conf.${dif}.accept_ra=2"$'\n'
+    done
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+    { printf '%s' "$lines"; echo "net.ipv6.conf.all.forwarding=1"; } > "$cf" 2>/dev/null
+}
+
 # Never kills the worker (killing apt/dpkg mid-install breaks the system). It only waits.
 draw_progress_bar() {
     local pid=$1 text=$2 width=28 timeout_s=${3:-40} start_ts rc
@@ -335,24 +398,28 @@ state_remove_port() {
     state_apply --argjson p "$1" --arg now "$(date -Is)" '.mappings=[.mappings[]|select(.port != $p)] | .pools=[.pools[] | .ports -= [$p] | select((.ports|length)>0)] | .updated_at=$now'
 }
 
-# All live mappings from engine configs: "port|target_ip|target_port|ENGINE"
+# All live mappings from engine configs: "port|target_ip|target_port|ENGINE" (target may be IPv4 or IPv6)
 collect_mappings() {
     if [ -f "$H_CONF" ]; then
         awk '/^[^ \t#]/ {b=""}
              /^backend[ \t]+bk_[0-9]+[ \t]*$/ {b=$2; sub(/^bk_/,"",b); next}
-             b!="" && $1=="server" { n=split($3,a,":"); if (n==2 && a[1] ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && a[2] ~ /^[0-9]+$/) print b"|"a[1]"|"a[2]"|HAP" }' "$H_CONF" 2>/dev/null
+             b!="" && $1=="server" {
+                 a=$3; sub(/^ipv[46]@/,"",a)
+                 k=match(a, /:[0-9]+$/); if (!k) next
+                 ip=substr(a,1,k-1); rp=substr(a,k+1); gsub(/\[|\]/,"",ip)
+                 if ((ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || ip ~ /^[0-9a-fA-F:]+$/ && index(ip,":")>0) && rp ~ /^[0-9]+$/) print b"|"tolower(ip)"|"rp"|HAP" }' "$H_CONF" 2>/dev/null
     fi
     if command -v jq >/dev/null 2>&1; then
-        [ -f "$G_CONF" ] && jq -r '.ServeNodes[]? | strings | capture("^tcp://[^/]*:(?<p>[0-9]+)/(?<ip>[0-9.]+):(?<rp>[0-9]+)") | "\(.p)|\(.ip)|\(.rp)|GST"' "$G_CONF" 2>/dev/null
-        [ -f "$R_CONF" ] && jq -r '.endpoints[]? | select(.listen and .remote) | (.listen|tostring|split(":")|last) as $p | (.remote|tostring|split(":")) as $r | "\($p)|\($r[0])|\($r[1])|RLM"' "$R_CONF" 2>/dev/null
+        [ -f "$G_CONF" ] && jq -r '.ServeNodes[]? | strings | capture("^tcp://[^/]*:(?<p>[0-9]+)/(?<ip>\\[[0-9a-fA-F:]+\\]|[0-9.]+):(?<rp>[0-9]+)") | "\(.p)|\(.ip|gsub("[\\[\\]]";"")|ascii_downcase)|\(.rp)|GST"' "$G_CONF" 2>/dev/null
+        [ -f "$R_CONF" ] && jq -r '.endpoints[]? | select(.listen and .remote) | (.listen|tostring|split(":")|last) as $p | (.remote|tostring|capture("^\\[?(?<ip>[^\\]]+?)\\]?:(?<rp>[0-9]+)$")) as $r | "\($p)|\($r.ip|ascii_downcase)|\($r.rp)|RLM"' "$R_CONF" 2>/dev/null
     fi
-    [ -f "$IPT_CONF" ] && grep -E -- '-A PREROUTING' "$IPT_CONF" 2>/dev/null | sed -nE 's/.*--dport ([0-9]+) .*MPORTER_NAT_([0-9.]+)\\?".*--to-destination [0-9.]+:([0-9]+).*/\1|\2|\3|IPT/p'
+    [ -f "$IPT_CONF" ] && grep -E -- '-A PREROUTING' "$IPT_CONF" 2>/dev/null | sed -nE 's/.*--dport ([0-9]+) .*MPORTER_NAT_([0-9a-fA-F:.]+)\\?".*--to-destination \[?[0-9a-fA-F:.]+\]?:([0-9]+).*/\1|\2|\3|IPT/p'
 }
 
 # OBFS targets "ip|port" (v11 tags + legacy v10 lines)
 obfs_targets() {
     [ -f "$OBFS_DIR/nat.sh" ] || return 0
-    grep -oE '# MP_OBFS ip=[0-9.]+ port=[0-9]+' "$OBFS_DIR/nat.sh" 2>/dev/null | sed -E 's/# MP_OBFS ip=([0-9.]+) port=([0-9]+)/\1|\2/'
+    grep -oE '# MP_OBFS ip=[0-9a-fA-F:.]+ port=[0-9]+' "$OBFS_DIR/nat.sh" 2>/dev/null | sed -E 's/# MP_OBFS ip=([0-9a-fA-F:.]+) port=([0-9]+)/\1|\2/'
     grep -E -- '-A OUTPUT -d [0-9.]+ -p tcp --dport [0-9]+ .*MPORTER_OBFS' "$OBFS_DIR/nat.sh" 2>/dev/null | grep -v 'MP_OBFS ip=' | sed -nE 's/.*-d ([0-9.]+) -p tcp --dport ([0-9]+) .*/\1|\2/p'
 }
 
@@ -360,7 +427,7 @@ state_reconcile() {
     ensure_jq >/dev/null 2>&1 || return 1
     state_init || return 1
     local found obfs
-    found=$(collect_mappings | awk -F'|' '$2 != "127.0.0.1"' | jq -Rn '[inputs | split("|") | select(length==4) | {port:(.[0]|tonumber), target_ip:.[1], target_port:(.[2]|tonumber), engine:.[3]}]' 2>/dev/null)
+    found=$(collect_mappings | awk -F'|' '$2 != "127.0.0.1" && $2 != "::1"' | jq -Rn '[inputs | split("|") | select(length==4) | {port:(.[0]|tonumber), target_ip:.[1], target_port:(.[2]|tonumber), engine:.[3]}]' 2>/dev/null)
     [ -n "$found" ] || found='[]'
     obfs=$(obfs_targets | jq -Rn '[inputs | split("|") | select(length==2) | {ip:.[0], port:(.[1]|tonumber)}]' 2>/dev/null)
     [ -n "$obfs" ] || obfs='[]'
@@ -395,20 +462,34 @@ state_sync_interface_metadata() {
 
 # Priority: explicit tunnel metadata -> kernel neighbour -> /30,/31 peer inference.
 # Order is preserved (no sort), and only peers routed through the interface are accepted.
-# Optional $2 = local IP on the interface: restrict to peers inside that address' subnet.
+# Optional $2 = local IP on the interface: restrict to peers of that address (same family / v4 subnet).
+# IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer) come from the tunnel metadata; underlay (outer) addresses are never returned.
 discover_peer_ips() {
-    local iface="$1" want_local="${2:-}" conf var val cidr out=() own=() subnet=""
+    local iface="$1" want_local="${2:-}" conf var val cidr out=() own=() own6=() subnet="" fam_only=""
     mapfile -t own < <(ip -o -4 addr show dev "$iface" 2>/dev/null | awk '{print $4}')
+    mapfile -t own6 < <(ip -o -6 addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}')
     if [ -n "$want_local" ]; then
-        for cidr in "${own[@]}"; do [ "${cidr%/*}" = "$want_local" ] && subnet="$cidr"; done
+        if is_v6 "$want_local"; then fam_only=6; else
+            fam_only=4
+            for cidr in "${own[@]}"; do [ "${cidr%/*}" = "$want_local" ] && subnet="$cidr"; done
+        fi
     fi
+    local tproto tcore tkind
     while read -r conf; do
         [ "$(read_conf_value "$conf" T_NAME)" = "$iface" ] || [ "$(read_conf_value "$conf" BR_NAME)" = "$iface" ] || continue
         for var in PEER_IP PEER_ADDR PEER_ADDRESS CORE_PEER_IP TUNNEL_PEER_IP REMOTE_IP REMOTE_ADDR REMOTE_ADDRESS REMOTE ENDPOINT ENDPOINT_IP; do
             val=$(read_conf_value "$conf" "$var"); valid_ipv4 "$val" && out+=("$val")
         done
+        # mgre: inner IPv6 peer of 6to4 and the deterministic ::1/::2 pair of ipip6to6
+        val=$(read_conf_value "$conf" REMOTE_IP6); valid_ipv6 "$val" && out+=("${val,,}")
+        tproto=$(read_conf_value "$conf" TUN_PROTO); tcore=$(read_conf_value "$conf" CORE_V6); tkind=$(read_conf_value "$conf" TYPE)
+        if [ "$tproto" = "ipip6to6" ] && [ -n "$tcore" ]; then
+            if [ "$tkind" = "1" ]; then val="${tcore}::2"; else val="${tcore}::1"; fi
+            valid_ipv6 "$val" && out+=("${val,,}")
+        fi
     done < <(tunnel_conf_files)
     while read -r val; do valid_ipv4 "$val" && out+=("$val"); done < <(ip -4 neigh show dev "$iface" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {print $1}')
+    while read -r val; do valid_target_ip "$val" && is_v6 "$val" && out+=("${val,,}"); done < <(ip -6 neigh show dev "$iface" 2>/dev/null | awk '$0 !~ /FAILED|INCOMPLETE/ {print $1}')
     for cidr in "${own[@]}"; do
         [ -n "$subnet" ] && [ "$cidr" != "$subnet" ] && continue
         local pre="${cidr#*/}" n base
@@ -423,9 +504,11 @@ discover_peer_ips() {
     local p c skip
     for p in "${out[@]}"; do
         skip=false
-        for c in "${own[@]}"; do [ "${c%/*}" = "$p" ] && skip=true; done
+        [ "$fam_only" = "4" ] && is_v6 "$p" && continue
+        [ "$fam_only" = "6" ] && ! is_v6 "$p" && continue
+        for c in "${own[@]}" "${own6[@]}"; do [ "${c%/*}" = "$p" ] && skip=true; done
         $skip && continue
-        [ -n "$subnet" ] && ! ip_in_cidr "$p" "$subnet" && continue
+        if ! is_v6 "$p"; then [ -n "$subnet" ] && ! ip_in_cidr "$p" "$subnet" && continue; fi
         [ "$(route_dev "$p")" = "$iface" ] || continue
         echo "$p"
     done | awk 'NF && !seen[$0]++'
@@ -508,7 +591,7 @@ hap_strip_ports() {
 
 hap_remove_server() { # port ip file -> stdout
     awk -v p="$1" -v ip="$2" '/^[^ \t]/ { inb = ($0 ~ ("^backend[ \t]+bk_" p "[ \t]*$")) }
-        inb && $1=="server" { split($3,a,":"); if (a[1]==ip) next }
+        inb && $1=="server" { x=$3; sub(/^ipv[46]@/,"",x); sub(/:[0-9]+$/,"",x); gsub(/\[|\]/,"",x); if (tolower(x)==ip) next }
         { print }' "$3"
 }
 
@@ -569,6 +652,9 @@ apply_scoped_mss() {
     for chain in OUTPUT FORWARD; do
         iptables -t mangle -C "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
         iptables -t mangle -A "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+        command -v ip6tables >/dev/null 2>&1 || continue
+        ip6tables -t mangle -C "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+        ip6tables -t mangle -A "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
     done
 }
 
@@ -577,8 +663,12 @@ mss_reapply_all() {
     local i; while read -r i; do [ -n "$i" ] && apply_scoped_mss "$i" false; done < "$MSS_FILE"
 }
 
-ipt_flush_tag() { # table chain fixed-string
-    iptables -t "$1" -S "$2" 2>/dev/null | grep -F -- "$3" | sed 's/^-A /-D /' | while read -r rule; do iptables -t "$1" $rule 2>/dev/null; done
+ipt_flush_tag() { # table chain fixed-string  (IPv4 + IPv6)
+    local bin
+    for bin in iptables ip6tables; do
+        command -v "$bin" >/dev/null 2>&1 || continue
+        "$bin" -t "$1" -S "$2" 2>/dev/null | grep -F -- "$3" | sed 's/^-A /-D /' | while read -r rule; do "$bin" -t "$1" $rule 2>/dev/null; done
+    done
 }
 
 obfs_flush_rules() {
@@ -609,8 +699,8 @@ obfs_filter() {
     f="$OBFS_DIR/nat.sh"
     if [ -f "$f" ]; then
         tmp=$(mp_tmp obfs) || return 1
-        awk 'NR==FNR { if (match($0, /MP_OBFS ip=[0-9.]+ /)) live[substr($0, RSTART+11, RLENGTH-12)]=1; next }
-             { if (match($0, /MP_CNT ip=[0-9.]+ /)) { s=substr($0, RSTART+10, RLENGTH-11); if (!(s in live)) next } print }' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"
+        awk 'NR==FNR { if (match($0, /MP_OBFS ip=[0-9a-fA-F:.]+ /)) live[substr($0, RSTART+11, RLENGTH-12)]=1; next }
+             { if (match($0, /MP_CNT ip=[0-9a-fA-F:.]+ /)) { s=substr($0, RSTART+10, RLENGTH-11); if (!(s in live)) next } print }' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"
         rm -f "$tmp"
     fi
 }
@@ -640,7 +730,8 @@ restart_all_engines() {
 
 purge_ip_core() {
     local ip="$1" p
-    valid_ipv4 "$ip" || return 1
+    ip="${ip,,}"
+    valid_ip "$ip" || return 1
     ensure_jq >/dev/null 2>&1 || true
     if [ -f "$H_CONF" ]; then
         local hports; hports=$(collect_mappings | awk -F'|' -v ip="$ip" '$4=="HAP" && $2==ip {print $1}' | sort -un | xargs)
@@ -655,8 +746,8 @@ purge_ip_core() {
         fi
     fi
     if command -v jq >/dev/null 2>&1; then
-        json_edit "$G_CONF" '.ServeNodes = [.ServeNodes[]? | select(((capture("^tcp://[^/]*/(?<ip>[0-9.]+):") | .ip) // "") != $ip)]' --arg ip "$ip"
-        json_edit "$R_CONF" '.endpoints = [.endpoints[]? | select(((.remote // "")|tostring|split(":")[0]) != $ip)]' --arg ip "$ip"
+        json_edit "$G_CONF" '.ServeNodes = [.ServeNodes[]? | select((((capture("^tcp://[^/]*/(?<ip>\\[[0-9a-fA-F:]+\\]|[0-9.]+):") | .ip | gsub("[\\[\\]]";"") | ascii_downcase)) // "") != $ip)]' --arg ip "$ip"
+        json_edit "$R_CONF" '.endpoints = [.endpoints[]? | select((((.remote // "")|tostring|sub("\\]?:[0-9]+$";"")|sub("^\\[";"")|ascii_downcase)) != $ip)]' --arg ip "$ip"
     fi
     ipt_conf_filter "$ip" ""
     obfs_filter ip "$ip"
@@ -686,9 +777,12 @@ purge_port_core() {
 build_iptables_runner() {
     cat <<'EOF_IPT' > /usr/local/bin/mporter-iptables.sh
 #!/bin/bash
-for spec in "nat PREROUTING" "nat POSTROUTING" "filter FORWARD"; do
-    set -- $spec
-    iptables -t "$1" -S "$2" 2>/dev/null | grep -F "MPORTER_NAT_" | sed 's/^-A /-D /' | while read -r rule; do iptables -t "$1" $rule 2>/dev/null; done
+for bin in iptables ip6tables; do
+    command -v "$bin" >/dev/null 2>&1 || continue
+    for spec in "nat PREROUTING" "nat POSTROUTING" "filter FORWARD"; do
+        set -- $spec
+        "$bin" -t "$1" -S "$2" 2>/dev/null | grep -F "MPORTER_NAT_" | sed 's/^-A /-D /' | while read -r rule; do "$bin" -t "$1" $rule 2>/dev/null; done
+    done
 done
 [ -f /etc/mporter/iptables_core/rules.sh ] && source /etc/mporter/iptables_core/rules.sh 2>/dev/null
 exit 0
@@ -713,7 +807,7 @@ EOF_SRV_IPT
 build_obfs_runner() {
     cat <<'EOF_OBFS' > /usr/local/bin/mporter-obfs.sh
 #!/bin/bash
-flush() { iptables -t "$1" -S "$2" 2>/dev/null | grep -F -- "$3" | sed 's/^-A /-D /' | while read -r rule; do iptables -t "$1" $rule 2>/dev/null; done; }
+flush() { local bin; for bin in iptables ip6tables; do command -v "$bin" >/dev/null 2>&1 || continue; "$bin" -t "$1" -S "$2" 2>/dev/null | grep -F -- "$3" | sed 's/^-A /-D /' | while read -r rule; do "$bin" -t "$1" $rule 2>/dev/null; done; done; }
 flush nat OUTPUT MPORTER_OBFS; flush nat PREROUTING MPORTER_OBFS
 flush mangle OUTPUT OBFS_CNT_TX_; flush mangle INPUT OBFS_CNT_RX_
 [ "${1:-}" = "--flush" ] && exit 0
@@ -892,7 +986,7 @@ EOF_RLM
 
 health_probe() {
     local ip="$1" port="$2" timeout_s="${3:-2}"
-    valid_ipv4 "$ip" && valid_port "$port" || return 2
+    valid_ip "$ip" && valid_port "$port" || return 2
     timeout "$timeout_s" bash -c "</dev/tcp/$ip/$port" >/dev/null 2>&1
 }
 
@@ -922,26 +1016,26 @@ health_scan() {
         fi
         [ -z "$iface" ] || [ "$iface" = "unknown" ] && iface=$(route_dev "$ip")
         health_check_backend "$iface" "$ip" "$rp" 2 >> "$tmp"
-    done < <(collect_mappings | awk -F'|' '$4=="HAP" && $2!="127.0.0.1"')
+    done < <(collect_mappings | awk -F'|' '$4=="HAP" && $2!="127.0.0.1" && $2!="::1"')
     chmod 644 "$tmp"; mv -f "$tmp" "$HEALTH_FILE"
 }
 
 show_health_matrix() {
     draw_header
     echo -e "\n  ${DIM}┌─[ BACKEND HEALTH MATRIX ]${NC}"
-    printf "  ${B}│${NC} ${W}%-18s %-16s %-7s %-18s %-6s${NC}\n" "INTERFACE" "TARGET" "PORT" "STATE" "FAILS"
-    echo -e "  ${B}├──────────────────────────────────────────────────────────────────────${NC}"
+    printf "  ${B}│${NC} ${W}%-18s %-26s %-7s %-18s %-6s${NC}\n" "INTERFACE" "TARGET" "PORT" "STATE" "FAILS"
+    echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────${NC}"
     if [ ! -s "$HEALTH_FILE" ]; then health_scan >/dev/null 2>&1; fi
     if [ -s "$HEALTH_FILE" ]; then
         local iface ip port state fails ts sc
         while IFS='|' read -r iface ip port state fails ts; do
             case "$state" in UP) sc="$G";; DOWN) sc="$R";; INTERFACE_REMOVED) sc="$Y";; *) sc="$DIM";; esac
-            printf "  ${B}│${NC} %-18s %-16s %-7s ${sc}%-18s${NC} %-6s\n" "${iface:-?}" "$ip" "$port" "$state" "$fails"
+            printf "  ${B}│${NC} %-18s %-26s %-7s ${sc}%-18s${NC} %-6s\n" "${iface:-?}" "$ip" "$port" "$state" "$fails"
         done < "$HEALTH_FILE"
     else
         echo -e "  ${DIM}│  No HAProxy backends discovered.${NC}"
     fi
-    echo -e "  ${B}╰──────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r _
 }
 
@@ -953,19 +1047,42 @@ get_iface_info() {
     local target_ip=$1 iface subnet
     iface=$(route_dev "$target_ip")
     if [ -z "$iface" ] || [ "$iface" == "lo" ]; then
-        subnet="$(echo "$target_ip" | cut -d'.' -f1-3)."
-        local check_iface; check_iface=$(ip -o -4 addr show 2>/dev/null | awk -v s="$subnet" 'index($4, s)==1 && $2!="lo" {print $2; exit}')
+        local check_iface=""
+        if is_v6 "$target_ip"; then
+            subnet="${target_ip%::*}::"
+            check_iface=$(ip -o -6 addr show scope global 2>/dev/null | awk -v s="$subnet" 'index(tolower($4), s)==1 && $2!="lo" {print $2; exit}')
+        else
+            subnet="$(echo "$target_ip" | cut -d'.' -f1-3)."
+            check_iface=$(ip -o -4 addr show 2>/dev/null | awk -v s="$subnet" 'index($4, s)==1 && $2!="lo" {print $2; exit}')
+        fi
         [ -n "$check_iface" ] && iface="$check_iface"
     fi
-    local t_type="System" t_name="$iface"
-    if [[ "$iface" == greir* ]]; then t_type="GRE"; t_name="${iface#greir}"
+    local t_type="System" t_name="$iface" conf proto=""
+    # mgre tunnels: protocol comes from the tunnel file, so GRE6 / 6to4 / IPIP variants are labelled exactly
+    if [ -n "$iface" ] && conf=$(tunnel_conf_for_iface "$iface") && [ "$(read_conf_value "$conf" T_NAME)" = "$iface" ]; then
+        proto=$(read_conf_value "$conf" TUN_PROTO)
+    fi
+    if [ -n "$proto" ]; then
+        case "$proto" in
+            6to4) t_type="6to4" ;; gre6) t_type="GRE6" ;; ipip4to4) t_type="IPIP4>4" ;;
+            ipip4to6) t_type="IPIP4>6" ;; ipip6to6) t_type="IPIP6>6" ;; *) t_type="GRE" ;;
+        esac
+        t_name="$iface"
+        local pf; for pf in gre6ir gre6kh g6ir g6kh greir grekh i46i i46k i66i i66k i4ir i4kh; do
+            if [[ "$iface" == "$pf"* ]]; then t_name="${iface#"$pf"}"; break; fi
+        done
+    elif [[ "$iface" == greir* ]]; then t_type="GRE"; t_name="${iface#greir}"
     elif [[ "$iface" == grekh* ]]; then t_type="GRE"; t_name="${iface#grekh}"
+    elif [[ "$iface" == g6ir* || "$iface" == g6kh* ]]; then t_type="GRE6"; t_name="${iface#g6ir}"; t_name="${t_name#g6kh}"
+    elif [[ "$iface" == i4ir* || "$iface" == i4kh* ]]; then t_type="IPIP4>4"; t_name="${iface#i4ir}"; t_name="${t_name#i4kh}"
+    elif [[ "$iface" == i46i* || "$iface" == i46k* ]]; then t_type="IPIP4>6"; t_name="${iface#i46i}"; t_name="${t_name#i46k}"
+    elif [[ "$iface" == i66i* || "$iface" == i66k* ]]; then t_type="IPIP6>6"; t_name="${iface#i66i}"; t_name="${t_name#i66k}"
     elif [[ "$iface" == vx_* || "$iface" == br_* ]]; then t_type="VXLAN"; t_name="${iface#vx_}"; t_name="${t_name#br_}"
     elif [[ "$iface" == bh_* ]]; then t_type="BACKHAUL"; t_name="${iface#bh_}"
     elif [[ "$iface" == rh_* || "$iface" == rt_* ]]; then t_type="RATHOLE"; t_name="${iface#rh_}"; t_name="${t_name#rt_}"
     elif [[ "$iface" == l2tp_* ]]; then t_type="L2TP"; t_name="${iface#l2tp_}"
     elif [[ "$iface" == hys_* ]]; then t_type="HYSTERIA"; t_name="${iface#hys_}"
-    elif [[ "$target_ip" == 127.* ]]; then t_type="Local"; t_name="Loopback"
+    elif [[ "$target_ip" == 127.* || "$target_ip" == "::1" ]]; then t_type="Local"; t_name="Loopback"
     else [ -z "$t_name" ] && t_name="Unknown"; fi
     echo "${t_type}|${t_name}"
 }
@@ -985,11 +1102,11 @@ format_engine() {
 
 # "port|ip|ENGINE" for every mapping incl. tunnel Core-NAT, loopback excluded
 all_mapping_rows() {
-    { collect_mappings | awk -F'|' '{print $1"|"$2"|"$4}'; tunnel_ext_entries; } | awk -F'|' 'NF==3 && $2 !~ /^127\./' | sort -u
+    { collect_mappings | awk -F'|' '{print $1"|"$2"|"$4}'; tunnel_ext_entries; } | awk -F'|' 'NF==3 && $2 !~ /^127\./ && $2 != "::1"' | sort -u
 }
 
 get_stats() {
-    local server_ip; server_ip=$(get_local_ip)
+    local server_ip server_ip6; server_ip=$(get_local_ip); server_ip6=$(get_local_ipv6)
     local hap_stat raw_hap gst_stat raw_gst rlm_stat raw_rlm ipt_stat raw_ipt
     if systemctl is-active --quiet haproxy; then hap_stat="${C}●${NC}"; raw_hap="●"; else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
     if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"; else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
@@ -1005,7 +1122,7 @@ get_stats() {
     local ip_status="${DIM}NONE${NC}" raw_ip="NONE"
     if [ "$mapped_ips" -gt 0 ]; then ip_status="${G}${mapped_ips} ACTIVE${NC}"; raw_ip="${mapped_ips} ACTIVE"; fi
 
-    STATS_SERVER_IP="$server_ip" STATS_TOTAL_PORTS="$total_ports" STATS_RAW_HAP="$raw_hap" STATS_RAW_RLM="$raw_rlm" STATS_RAW_GST="$raw_gst" STATS_RAW_IPT="$raw_ipt" STATS_RAW_IP="$raw_ip"
+    STATS_SERVER_IP="$server_ip" STATS_SERVER_IP6="$server_ip6" STATS_TOTAL_PORTS="$total_ports" STATS_RAW_HAP="$raw_hap" STATS_RAW_RLM="$raw_rlm" STATS_RAW_GST="$raw_gst" STATS_RAW_IPT="$raw_ipt" STATS_RAW_IP="$raw_ip"
     STATS_HAP_STAT="$hap_stat" STATS_RLM_STAT="$rlm_stat" STATS_GST_STAT="$gst_stat" STATS_IPT_STAT="$ipt_stat" STATS_IP_STATUS="$ip_status"
 }
 
@@ -1017,6 +1134,11 @@ draw_header() {
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${STATS_SERVER_IP}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${STATS_HAP_STAT} ${DIM}RLM:${NC} ${STATS_RLM_STAT} ${DIM}GST:${NC} ${STATS_GST_STAT} ${DIM}IPT:${NC} ${STATS_IPT_STAT} ${B}│${NC} ${DIM}IPs:${NC} ${STATS_IP_STATUS} ${B}│${NC} ${DIM}Pts:${NC} ${G}${STATS_TOTAL_PORTS}${NC}${padding}${B}│${NC}"
+    if [ -n "${STATS_SERVER_IP6:-}" ]; then
+        local raw6=" IPv6: ${STATS_SERVER_IP6} │ IPv6 targets: HAP/GST/RLM/IPT " pad6
+        pad6=$(( 106 - ${#raw6} )); (( pad6 < 0 )) && pad6=0
+        echo -e "  ${B}│${NC} ${DIM}IPv6:${NC} ${W}${STATS_SERVER_IP6}${NC} ${B}│${NC} ${DIM}IPv6 targets:${NC} ${G}HAP/GST/RLM/IPT${NC}$(printf '%*s' "$pad6" "")${B}│${NC}"
+    fi
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"
@@ -1108,7 +1230,7 @@ smart_map() {
             echo -ne "\n  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read -r target_ip
         elif [[ "$if_choice" =~ ^[0-9]+$ ]] && [ -n "${gre_ifs[$if_choice]:-}" ]; then
             selected_if="${gre_ifs[$if_choice]}"
-            local map_ips=(); mapfile -t map_ips < <(ip -o -4 addr show dev "$selected_if" 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+            local map_ips=(); mapfile -t map_ips < <({ ip -o -4 addr show dev "$selected_if" 2>/dev/null; ip -o -6 addr show dev "$selected_if" scope global 2>/dev/null; } | awk '{print $4}' | cut -d/ -f1)
             if [ ${#map_ips[@]} -eq 0 ]; then
                 echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read -r target_ip
             else
@@ -1136,8 +1258,8 @@ smart_map() {
         else echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; fi
     fi
 
-    target_ip="${target_ip//[[:space:]]/}"
-    if [ "$is_auto_all" = false ] && ! valid_ipv4 "$target_ip"; then echo -e "  ${R}● Invalid IP format!${NC}"; sleep 1.5; return; fi
+    target_ip="${target_ip//[[:space:]]/}"; target_ip="${target_ip#[}"; target_ip="${target_ip%]}"; target_ip="${target_ip,,}"
+    if [ "$is_auto_all" = false ] && ! valid_target_ip "$target_ip"; then echo -e "  ${R}● Invalid IP format! (IPv4 or global/ULA IPv6; link-local is not allowed)${NC}"; sleep 1.5; return; fi
 
     local raw_ports clean_ports
     echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443): ${NC}"; read -r raw_ports
@@ -1164,13 +1286,15 @@ smart_map() {
         owner=$(port_owner "$p")
         if [ -n "$owner" ]; then printf "  ${B}│${NC} ${R}%-12s${NC} ${B}│${NC} ${DIM}%-7s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "$p" "-" "Skipped ($owner)"; continue; fi
         case "$fwd_engine" in
-            1) printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind *:$p" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    server srv_$p $t:$p check inter 5s" >> "$work" ;;
-            2) jq --arg node "tcp://:$p/$t:$p" '.ServeNodes = ((.ServeNodes // []) + [$node])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
-            3) jq --arg lp "0.0.0.0:$p" --arg rp "$t:$p" '.endpoints = ((.endpoints // []) + [{listen:$lp, remote:$rp}])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
-            4) ipt_add+="iptables -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$t\" -j DNAT --to-destination $t:$p"$'\n'
-               ipt_add+="iptables -t nat -A POSTROUTING -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j MASQUERADE"$'\n'
-               ipt_add+="iptables -I FORWARD -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
-               ipt_add+="iptables -I FORWARD -s $t -p tcp --sport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n' ;;
+            1) printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind *:$p" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    server srv_$p $(hap_addr "$t" "$p") check inter 5s" >> "$work" ;;
+            2) jq --arg node "tcp://:$p/$(hostport "$t" "$p")" '.ServeNodes = ((.ServeNodes // []) + [$node])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
+            3) jq --arg lp "0.0.0.0:$p" --arg rp "$(hostport "$t" "$p")" '.endpoints = ((.endpoints // []) + [{listen:$lp, remote:$rp}])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
+            4) local ipb; ipb=$(ipt_bin_for "$t")
+               ipt_add+="$ipb -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$t\" -j DNAT --to-destination $(hostport "$t" "$p")"$'\n'
+               ipt_add+="$ipb -t nat -A POSTROUTING -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j MASQUERADE"$'\n'
+               ipt_add+="$ipb -I FORWARD -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
+               ipt_add+="$ipb -I FORWARD -s $t -p tcp --sport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
+               if is_v6 "$t"; then enable_v6_forwarding; command -v ip6tables >/dev/null 2>&1 || echo -e "  ${Y}⚠ ip6tables not found: IPv6 Kernel NAT rule for $t will not apply.${NC}"; fi ;;
         esac
         map_target[$p]="$t"; mapped_ports+=("$p")
         printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "$eng_name" "$t"
@@ -1214,11 +1338,13 @@ obfs_setup() {
         download_gost_binary || { echo -e "  ${R}✖ gost download failed; OBFS skipped.${NC}"; return 1; }
     fi
     local remote_pub="" conf stealth_port t_proto method
-    if [ "$selected_if" != "Manual" ] && conf=$(tunnel_conf_for_iface "$selected_if"); then remote_pub=$(read_conf_value "$conf" REMOTE_PUB); fi
+    if [ "$selected_if" != "Manual" ] && conf=$(tunnel_conf_for_iface "$selected_if"); then remote_pub=$(read_conf_value "$conf" REMOTE_PUB)
+        valid_host "$remote_pub" || remote_pub=$(read_conf_value "$conf" REMOTE_PUB6)   # IPv6 underlay (mgre/mxlan)
+    fi
     if valid_host "$remote_pub"; then
         echo -e "  ${G}✔ Auto-detected Kharej IP: ${remote_pub}${NC}"
     else
-        echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP / host: ${NC}"; read -r remote_pub; remote_pub="${remote_pub//[[:space:]]/}"
+        echo -ne "  ${C}●${NC} ${W}Enter Kharej Server PUBLIC IP / host: ${NC}"; read -r remote_pub; remote_pub="${remote_pub//[[:space:]]/}"; remote_pub="${remote_pub#[}"; remote_pub="${remote_pub%]}"
     fi
     valid_host "$remote_pub" || { echo -e "  ${R}✖ Invalid host; OBFS skipped.${NC}"; return 1; }
     echo -ne "  ${C}●${NC} ${W}Enter Kharej Stealth Port (Target Receiver): ${NC}"; read -r stealth_port
@@ -1228,24 +1354,27 @@ obfs_setup() {
 
     mkdir -p "$OBFS_DIR"; touch "$OBFS_DIR/nat.sh" "$OBFS_DIR/gost.sh"
     local ctag="${selected_if//[^a-zA-Z0-9_]/_}" p t lport tag
+    local ipb loop_l rfhp
+    rfhp=$(hostport "$remote_pub" "$stealth_port")
     for p in "$@"; do
-        t="${_targets[$p]}"; valid_ipv4 "$t" || continue
+        t="${_targets[$p]}"; valid_target_ip "$t" || continue
+        ipb=$(ipt_bin_for "$t"); loop_l="127.0.0.1"; is_v6 "$t" && loop_l="[::1]"
         lport=$(find_free_local_port "$p") || { echo -e "  ${R}● No free OBFS local port for $p; skipping.${NC}"; continue; }
         tag="# MP_OBFS ip=$t port=$p lport=$lport "
         if [ "$engine" = "1" ]; then
             # HAProxy dials target:p locally -> nat OUTPUT -> gost on loopback
-            echo "iptables -t nat -A OUTPUT -d $t -p tcp --dport $p -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
-            echo "/usr/local/bin/gost -L tcp://127.0.0.1:$lport/$t:$p -F $method://$remote_pub:$stealth_port & $tag" >> "$OBFS_DIR/gost.sh"
+            echo "$ipb -t nat -A OUTPUT -d $t -p tcp --dport $p -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
+            echo "/usr/local/bin/gost -L tcp://$loop_l:$lport/$(hostport "$t" "$p") -F $method://$rfhp & $tag" >> "$OBFS_DIR/gost.sh"
         else
             # Kernel NAT traffic never reaches nat OUTPUT: catch it in PREROUTING before the DNAT rule
-            echo "iptables -t nat -I PREROUTING 1 -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
-            echo "/usr/local/bin/gost -L tcp://:$lport/$t:$p -F $method://$remote_pub:$stealth_port & $tag" >> "$OBFS_DIR/gost.sh"
+            echo "$ipb -t nat -I PREROUTING 1 -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
+            echo "/usr/local/bin/gost -L tcp://:$lport/$(hostport "$t" "$p") -F $method://$rfhp & $tag" >> "$OBFS_DIR/gost.sh"
         fi
         if ! grep -qF "# MP_CNT ip=$t " "$OBFS_DIR/nat.sh"; then
-            echo "iptables -t mangle -A OUTPUT -d $t -m comment --comment \"OBFS_CNT_TX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
-            echo "iptables -t mangle -A INPUT -s $t -m comment --comment \"OBFS_CNT_RX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
+            echo "$ipb -t mangle -A OUTPUT -d $t -m comment --comment \"OBFS_CNT_TX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
+            echo "$ipb -t mangle -A INPUT -s $t -m comment --comment \"OBFS_CNT_RX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
         fi
-        echo -e "  ${M}● OBFS${NC} $p ➔ $t ${DIM}(local $lport, $method://$remote_pub:$stealth_port)${NC}"
+        echo -e "  ${M}● OBFS${NC} $p ➔ $t ${DIM}(local $lport, $method://$rfhp)${NC}"
     done
     build_obfs_runner; echo -e "\n  ${G}● OBFS Stealth Layer configured dynamically!${NC}"
 }
@@ -1316,7 +1445,7 @@ smart_loadbalance() {
         printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind *:$p" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    balance $balance" >> "$block"
         local srv_idx=1 target
         for target in "${selected_peers[@]}"; do
-            echo "    server srv_${p}_${srv_idx} ${target}:$p check inter 3s fall 2 rise 2 observe layer4 error-limit 3 on-error mark-down" >> "$block"
+            echo "    server srv_${p}_${srv_idx} $(hap_addr "$target" "$p") check inter 3s fall 2 rise 2 observe layer4 error-limit 3 on-error mark-down" >> "$block"
             srv_idx=$((srv_idx + 1))
         done
     done
@@ -1358,9 +1487,9 @@ smart_loadbalance() {
 
 show_table() {
     draw_header; echo -e "\n  ${Y}● Detailed IP -> Port Matrix:${NC}"
-    echo -e "  ${B}├──────────────┬──────────┬────────────────┬──────────────────────────┬────────────────────────────────────┤${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-34s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARD ENGINE" "FORWARDED PORTS"
-    echo -e "  ${B}├──────────────┼──────────┼────────────────┼──────────────────────────┼────────────────────────────────────┤${NC}"
+    echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────────┬────────────────────────┤${NC}"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-22s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET IP" "FORWARD ENGINE" "FORWARDED PORTS"
+    echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────────┼────────────────────────┤${NC}"
 
     if [ -z "$MP_ROWS" ]; then
         printf "  ${B}│${NC} ${DIM}%-104s${NC} ${B}│${NC}\n" "  No active mappings. Ready to route strictly."
@@ -1386,12 +1515,13 @@ show_table() {
                 if [ -n "${obfs_set["$d_ip|$p"]:-}" ]; then display_ports+="${M}${p}*(OBFS)${Y}, "; else display_ports+="${p}, "; fi
             done
             display_ports="${display_ports%, }"; clean_str=$(echo -e "$display_ports" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
-            if [ ${#clean_str} -gt 34 ]; then display_ports="${clean_str:0:31}..."; clean_str="$display_ports"; fi
-            pad=$(printf '%*s' "$((34 - ${#clean_str}))" "")
-            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-14s${NC} ${B}│${NC} %b%s ${B}│${NC} ${Y}%b%s${NC} ${B}│${NC}\n" "$clean_name" "$t_type" "$d_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
+            if [ ${#clean_str} -gt 22 ]; then display_ports="${clean_str:0:19}..."; clean_str="$display_ports"; fi
+            pad=$(printf '%*s' "$((22 - ${#clean_str}))" "")
+            local show_ip="$d_ip"; [ ${#show_ip} -gt 26 ] && show_ip="${show_ip:0:23}..."
+            printf "  ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} ${M}%-8s${NC} ${B}│${NC} ${G}%-26s${NC} ${B}│${NC} %b%s ${B}│${NC} ${Y}%b%s${NC} ${B}│${NC}\n" "$clean_name" "$t_type" "$show_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
         done < <(printf '%s\n' "${!ip_ports_arr[@]}" | sort -V)
     fi
-    echo -e "  ${B}╰──────────────┴──────────┴────────────────┴──────────────────────────┴────────────────────────────────────╯${NC}"
+    echo -e "  ${B}╰──────────────┴──────────┴────────────────────────────┴──────────────────────────┴────────────────────────╯${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r _
 }
 
@@ -1410,7 +1540,7 @@ edit_mapping() {
     case "$e_opt" in
         1) smart_map ;;
         2)
-            local rows=(); mapfile -t rows < <(collect_mappings | awk -F'|' '$2 !~ /^127\./ {print $1"|"$4}' | sort -u | awk -F'|' '{a[$1]=a[$1] (a[$1]?"/":"") $2} END {for (k in a) print k"|"a[k]}' | sort -t'|' -k1,1n)
+            local rows=(); mapfile -t rows < <(collect_mappings | awk -F'|' '$2 !~ /^127\./ && $2 != "::1" {print $1"|"$4}' | sort -u | awk -F'|' '{a[$1]=a[$1] (a[$1]?"/":"") $2} END {for (k in a) print k"|"a[k]}' | sort -t'|' -k1,1n)
             [ ${#rows[@]} -gt 0 ] || { echo -e "  ${R}● No MPorter mappings found.${NC}"; sleep 1.5; return; }
             echo -e "\n  ${B}╭────────────── Local Ports ──────────────╮${NC}"
             local i; for i in "${!rows[@]}"; do printf "  ${B}│${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-7s${NC} ${DIM}%-24s${NC} ${B}│${NC}\n" "$i" "${rows[$i]%%|*}" "${rows[$i]#*|}"; done
@@ -1447,7 +1577,7 @@ purge_menu() {
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     local p_opt idx confirm; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r p_opt; p_opt="${p_opt//[^0-3]/}"
 
-    local all_ips; all_ips=$(collect_mappings | cut -d'|' -f2 | grep -v '^127\.' | sort -uV)
+    local all_ips; all_ips=$(collect_mappings | cut -d'|' -f2 | grep -v -E '^(127\.|::1$)' | sort -uV)
 
     case $p_opt in
         1)
@@ -1481,8 +1611,8 @@ purge_menu() {
             local i; for i in "${!ip_arr[@]}"; do
                 local ifc_info disp_name raw_str pad sp
                 ifc_info=$(get_iface_info "${ip_arr[$i]}"); disp_name="${ifc_info##*|} [${ifc_info%%|*}]"
-                raw_str=$(printf "  %02d ❯ %-15s (%s)" "$i" "${ip_arr[$i]}" "$disp_name"); pad=$(( 58 - ${#raw_str} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
-                printf "  ${B}│${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-15s${NC} ${DIM}(%s)${NC}%s${B}│${NC}\n" "$i" "${ip_arr[$i]}" "$disp_name" "$sp"
+                raw_str=$(printf "  %02d ❯ %-26s (%s)" "$i" "${ip_arr[$i]}" "$disp_name"); pad=$(( 58 - ${#raw_str} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
+                printf "  ${B}│${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-26s${NC} ${DIM}(%s)${NC}%s${B}│${NC}\n" "$i" "${ip_arr[$i]}" "$disp_name" "$sp"
             done
             echo -e "  ${B}╰──────────────────────────────────────────────────────────────╯${NC}"
             echo -ne "  ${C}Select Index ❯❯ ${NC}"; read -r idx; idx="${idx//[^0-9]/}"
@@ -1595,6 +1725,7 @@ nuclear_wipe() {
     obfs_flush_rules
     ipt_flush_tag nat PREROUTING MPORTER_NAT_; ipt_flush_tag nat POSTROUTING MPORTER_NAT_; ipt_flush_tag filter FORWARD MPORTER_NAT_
     ipt_flush_tag mangle OUTPUT MPORTER_MSS_; ipt_flush_tag mangle FORWARD MPORTER_MSS_
+    rm -f /etc/sysctl.d/99-mporter-ipv6.conf
     rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /usr/local/bin/realm /etc/realm "$OBFS_DIR" "$IPT_DIR" "$STATE_DIR" "$SECURE_TMP" "$HEALTH_FILE" \
            /etc/systemd/system/gost.service /etc/systemd/system/realm.service /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service \
            "/etc/systemd/system/$WATCHDOG_SERVICE" "$SERVICE_FILE" /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-iptables.sh "$WATCHDOG_SCRIPT" "$INSTALL_PATH"
@@ -1611,7 +1742,7 @@ case "${1:-}" in
     --boot-apply)  mss_reapply_all; exit 0 ;;
     --state-sync)  state_reconcile; rc=$?; state_sync_interface_metadata; exit $rc ;;
     --purge-ip)
-        valid_ipv4 "${2:-}" || { echo "usage: mporter --purge-ip <IPv4>"; exit 1; }
+        valid_ip "${2:-}" || { echo "usage: mporter --purge-ip <IPv4|IPv6>"; exit 1; }
         purge_ip_core "$2"; restart_all_engines; exit 0 ;;
     --cleanup-orphans)
         # Only removes mappings whose recorded interface is truly gone.

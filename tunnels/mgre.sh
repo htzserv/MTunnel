@@ -5,7 +5,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
 
-MODULE_VERSION="6.4.5"
+MODULE_VERSION="6.5.0"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mgre"
@@ -634,17 +634,19 @@ draw_mgre_header() {
 
     clear; echo ""
     local border
-    printf -v border '%*s' 117 ''
+    local BOXW=125 extra tw
+    extra=$(( BOXW - 117 )); tw=$(( 24 + extra ))
+    printf -v border '%*s' "$BOXW" ''
     border="${border// /─}"
 
     echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-34.34s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-25.25s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3.3s${NC}%-24.24s ${B}│${NC}\n" \
+    printf "  ${B}│${NC} ${W}%-34.34s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-25.25s${NC} ${B}│${NC} ${DIM}Active Tunnels:${NC} ${G}%-3.3s${NC}%-${tw}.${tw}s ${B}│${NC}\n" \
         "MGRE Core v${MODULE_VERSION}" "$s_ip" "$active_tunnels" ""
     echo -e "  ${B}├${border}┤${NC}"
 
     local shown=0
     local TYPE REMOTE_PUB T_NAME CORE_SUBNET FWD_TCP FWD_UDP MAX_IPS TUN_SECRET TUN_PROTO LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4
-    local pure_name vip_stat vip_col peer_txt tag_txt is_v6 proto_tag
+    local local_txt pure_name vip_stat vip_col peer_txt tag_txt is_v6 proto_tag
     local live_ping live_loss cached_entry loss_disp loss_col fwd_str tun_uptime stat_icon stat_col fwd_col sec_disp
     local len_name len_rem pad_peer sp_peer
     for conf in "$CONF_DIR"/*.conf; do
@@ -668,9 +670,20 @@ draw_mgre_header() {
 
         len_name=${#pure_name}
         tag_txt="[${proto_tag}]"
-        len_rem=$(( ${#peer_txt} + 1 + ${#tag_txt} ))
-        pad_peer=$(( 38 - (len_name + len_rem) ))
-        [ "$pad_peer" -lt 0 ] && pad_peer=0
+        # Local IPv4: the tunnel's own IPv4 endpoint, or this host's primary IPv4 for IPv6-underlay tunnels
+        local_txt="${LOCAL_PUB:0:15}"
+        [ -z "$local_txt" ] && local_txt="${s_ip:0:15}"
+        [ -z "$local_txt" ] && local_txt="---"
+        [ -z "$peer_txt" ] && peer_txt="---"
+        # row = name ➔ local ➔ remote [TYPE]; the second arrow and spaces count as 5 columns
+        len_rem=$(( ${#local_txt} + 3 + ${#peer_txt} + 1 + ${#tag_txt} ))
+        pad_peer=$(( 38 + extra - (len_name + len_rem) ))
+        if [ "$pad_peer" -lt 0 ]; then
+            # too wide: shorten the name (never below 3 chars), then clamp
+            len_name=$(( len_name + pad_peer )); [ "$len_name" -lt 3 ] && len_name=3
+            pure_name="${pure_name:0:len_name}"
+            pad_peer=$(( 38 + extra - (len_name + len_rem) )); [ "$pad_peer" -lt 0 ] && pad_peer=0
+        fi
         sp_peer=$(printf '%*s' "$pad_peer" "")
 
         vip_stat="OFF"; vip_col="${DIM}"
@@ -721,13 +734,13 @@ draw_mgre_header() {
         [ -z "$sec_disp" ] && sec_disp="---"
         sec_disp="${sec_disp:0:5}"
 
-        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC} ${C}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$peer_txt" "$tag_txt" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
+        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC} ${DIM}➔${NC} ${Y}%s${NC} ${C}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
+            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$local_txt" "$peer_txt" "$tag_txt" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$tun_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
 
     done
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\n" "No active tunnels configured on this host."
+        printf "  ${B}│${NC}  ${DIM}● %-$((111+extra)).$((111+extra))s${NC}  ${B}│${NC}\n" "No active tunnels configured on this host."
     fi
     echo -e "  ${B}╰${border}╯${NC}"
 }

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v10.1.2 ---
+# --- MDesign Master Core | Central Dashboard v10.1.3 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="10.1.2"
+MODULE_VERSION="10.1.3"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -89,12 +89,16 @@ mt_is_newer_version() {
 
 mt_ask_bind_host() {
     local choice host
-    echo '  Server listen: 1) IPv4  2) IPv6  3) Specific IP'
-    read -r -p '  Select [1]: ' choice
+    echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(0.0.0.0)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(::)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Specific IP${NC}"
+    echo -ne "  ${C}Select Address [1] ❯❯ ${NC}"; read -r choice
     case "${choice:-1}" in
         1) MT_BIND_HOST='0.0.0.0';;
         2) MT_BIND_HOST='::';;
-        3) read -r -p '  Listen IP: ' host
+        3) echo -ne "  ${C}●${NC} ${W}Listen IP: ${NC}"; read -r host
            host=$(mt_normalize_host "$host")
            mt_valid_ipv4 "$host" || mt_valid_ipv6 "$host" || return 1
            MT_BIND_HOST="$host";;
@@ -410,6 +414,7 @@ mt_validate_tunnel_conf() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1236,7 +1241,16 @@ install_bundle_scripts() {
         if mt_is_newer_version "$cur" "$new"; then echo "Refusing downgrade: $mod" >&2; return 1; fi
         files+=("$candidate" "$LOCAL_DIR/$rel" "$candidate" "$target")
     done
-    mt_install_files 755 "${files[@]}"
+    mt_install_files 755 "${files[@]}" || return 1
+    if [ "${2:-0}" == 1 ]; then
+        local current=0 version
+        for mod in "${ALL_MODULES[@]}"; do
+            current=$((current+1)); rel="${MOD_MAP[$mod]}"
+            version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/$rel")
+            draw_item_progress "$current" "${#ALL_MODULES[@]}" "$mod" "$version"
+        done
+    fi
+    return 0
 }
 
 sync_script_bundle() {
@@ -1248,18 +1262,12 @@ sync_script_bundle() {
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
         if ! mt_download "$base/$rel" "$stage/$rel" || ! mt_validate_script "$stage/$rel"; then rc=1; break; fi
     done
-    [ "$rc" != 0 ] || install_bundle_scripts "$stage" || rc=1
+    [ "$rc" != 0 ] || install_bundle_scripts "$stage" "${2:-0}" || rc=1
     rm -rf "$stage"
     return "$rc"
 }
 
-choose_module() {
-    local i selection
-    for i in "${!ALL_MODULES[@]}"; do printf '  %d) %s\n' "$((i+1))" "${ALL_MODULES[$i]}"; done
-    read -r -p '  Module index (blank cancels): ' selection
-    [[ "$selection" =~ ^[0-9]{1,2}$ ]] && ((10#$selection>=1 && 10#$selection<=${#ALL_MODULES[@]})) || return 1
-    CHOSEN_MODULE="${ALL_MODULES[$((10#$selection-1))]}"
-}
+
 
 offline_local_deploy() {
     local source="$1" stage='' bundle rc=0
@@ -1272,7 +1280,7 @@ offline_local_deploy() {
     [ -d "$source" ] || return 1
     bundle=$(find "$source" -maxdepth 3 -type f -name main.sh -printf '%h\n' | head -n 1)
     if [ -n "$bundle" ]; then
-        install_bundle_scripts "$bundle" || { [ -z "$stage" ] || rm -rf "$stage"; return 1; }
+        install_bundle_scripts "$bundle" "${2:-0}" || { [ -z "$stage" ] || rm -rf "$stage"; return 1; }
         [ ! -d "$bundle/packages" ] || deploy_binaries_from_dir "$bundle/packages" || rc=1
     else deploy_binaries_from_dir "$source" || rc=1; fi
     [ -z "$stage" ] || rm -rf "$stage"
@@ -1295,54 +1303,215 @@ fetch_package_group() {
         mt_install_files 755 "${files[@]}" || rc=1
         if [ "$kind" == cores ] && [ "$rc" == 0 ]; then deploy_binaries_from_dir "$stage" || rc=1; fi
     fi
+    if [ "$rc" == 0 ] && [ "${3:-0}" == 1 ]; then
+        local current=0 version label
+        for item in "${items[@]}"; do
+            current=$((current+1)); label="$item"; version="${BIN_VERSIONS[$item]:-Core}"
+            if [[ "$item" == *.deb ]]; then label="${item%%_*}"; version="${item#*_}"; version="${version%%_*}"; fi
+            draw_item_progress "$current" "${#items[@]}" "$label" "$version"
+        done
+    fi
     rm -rf "$stage"
     return "$rc"
 }
 
+render_ota_menu() {
+    draw_main_header
+    echo -e "\n  ${DIM}┌─[ MDesign Ecosystem Central Updater ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SCRIPT CORE ENGINE UPDATES ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Sync All Scripts from Official GitHub${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Sync All Scripts from Iranian Mirror (ParsPack)${NC}"
+
+    local main_sub_badge=""
+    if [ -f "$UPDATE_FILE" ]; then
+        local m_line=$(grep "^main:" "$UPDATE_FILE")
+        if [ -n "$m_line" ]; then
+            local o_v=$(echo "$m_line" | cut -d: -f2)
+            local n_v=$(echo "$m_line" | cut -d: -f3)
+            main_sub_badge="  ${Y}(v${o_v} ➔ v${n_v})${NC}"
+        fi
+    fi
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Update Master Core Dashboard (Main Script Only)${NC}${main_sub_badge}"
+
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ BINARY CORES ONLY (BH, RAT, PAQET, GOST, HAPROXY) ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch Binary Cores from Official GitHub${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch Binary Cores from Iranian Mirror${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ FULL PREREQUISITES & DEB PACKAGES ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Fetch All Packages & Prerequisites from GitHub${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Fetch All Packages & Prerequisites from Iranian Mirror${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Raw Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
+}
+
+draw_item_progress() {
+    local n="$1" total="$2" label="$3" version="$4" state="${5:-ok}" width=30
+    local percent=$((n*100/total)) filled empty bar_f bar_e suffix padding pad_len
+    filled=$((percent*width/100)); empty=$((width-filled))
+    bar_f=$(printf '%*s' "$filled" '' | tr ' ' '#')
+    bar_e=$(printf '%*s' "$empty" '' | tr ' ' '-')
+    suffix=" (v${version})"; [ "$state" != failed ] || suffix=' (FAILED)'
+    pad_len=$((26-${#label}-${#suffix})); [ "$pad_len" -ge 0 ] || pad_len=0
+    padding=$(printf '%*s' "$pad_len" '')
+    if [ "$state" == failed ]; then
+        printf "  ${R}✖${NC} ${R}%s%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$label" "$suffix" "$padding" "$bar_f" "$bar_e" "$percent"
+    else
+        printf "  ${G}✔${NC} ${W}%s${NC}${Y}%s${NC}%s ${W}[%s${DIM}%s${W}] %3d%%${NC}\n" "$label" "$suffix" "$padding" "$bar_f" "$bar_e" "$percent"
+    fi
+}
+
+choose_module() {
+    local i selection branch mode="${1:-OVERWRITE}"
+    draw_main_header
+    if [ "$mode" == EDITOR ]; then
+        echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n  ${DIM}│${NC}"
+    else
+        echo -e "\n  ${DIM}┌─[ SELECT MODULE TARGET TO OVERWRITE ]${NC}\n  ${DIM}│${NC}"
+    fi
+    for i in "${!ALL_MODULES[@]}"; do
+        branch='├─'; [ "$i" -ne "$((${#ALL_MODULES[@]}-1))" ] || branch='└─'
+        echo -e "  ${DIM}${branch}${NC} ${W}$((i+1))${NC} ${DIM}❯${NC} ${C}${ALL_MODULES[$i]}${NC}"
+    done
+    echo -ne "\n  ${C}${mode} ❯❯ ${NC}"; read -r selection
+    [[ "$selection" =~ ^[0-9]{1,2}$ ]] && ((10#$selection>=1 && 10#$selection<=${#ALL_MODULES[@]})) || return 1
+    CHOSEN_MODULE="${ALL_MODULES[$((10#$selection-1))]}"
+}
+
+ota_pause() {
+    local dummy
+    echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read -r dummy
+}
+
+reload_dashboard() {
+    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
+    [ -z "${STATS_PID:-}" ] || kill "$STATS_PID" 2>/dev/null || true
+    exec "$MTUNNEL_PATH"
+}
+
 show_ota_update_hub() {
-    local option base work url file module rel target confirm rc
+    local option base work url file module rel target confirm new_ver current_v kind source_name
     while true; do
-        draw_main_header
-        echo '  1) Sync all scripts: GitHub    2) Sync all scripts: Mirror'
-        echo '  3) Update main only           4) Binary cores: GitHub'
-        echo '  5) Binary cores: Mirror       6) Cache packages: GitHub'
-        echo '  7) Cache packages: Mirror     8) Custom HTTPS script/ZIP'
-        echo '  9) Paste module in editor     0) Return'
-        read -r -p '  OTA ❯❯ ' option
+        render_ota_menu
+        read_with_refresh "  ${C}OTA-HUB ❯❯ ${NC}" option render_ota_menu
+        option="${option//[$' \r']/}"
         case "$option" in
             0|'') return 0;;
             1|2)
-                base="$REPO_SCRIPTS"; [ "$option" != 2 ] || base="$MIRROR_SCRIPTS"
-                if sync_script_bundle "$base"; then echo 'All scripts committed successfully.'; else echo 'Script update failed; previous scripts preserved.' >&2; fi;;
-            3) download_file_to_cache main "$REPO_SCRIPTS" && deploy_cached_module main || echo 'Main update failed; previous installation preserved.' >&2;;
+                draw_main_header
+                base="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
+                if [ "$option" == 2 ]; then base="$MIRROR_SCRIPTS"; source_name='IRANIAN MIRROR (PARSPACK)'; fi
+                echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
+                if sync_script_bundle "$base" 1; then
+                    : > "$UPDATE_FILE"
+                    echo -e "\n\n  ${G}● Script sync finished. Press Enter to reload core...${NC}\n"
+                    read -r confirm
+                    reload_dashboard
+                else
+                    echo -e "\n  ${R}✖ Script update failed. Previous scripts preserved.${NC}\n" >&2
+                fi;;
+            3)
+                draw_main_header
+                echo -e "\n  ${DIM}┌─[ UPDATING MASTER CORE (MAIN.SH) ]${NC}\n"
+                if download_file_to_cache main "$REPO_SCRIPTS" && deploy_cached_module main; then
+                    new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$LOCAL_DIR/main.sh")
+                    draw_item_progress 1 1 main "$new_ver"
+                    echo -e "\n\n  ${G}● Master Core successfully updated! Reloading...${NC}\n"
+                    reload_dashboard
+                else
+                    draw_item_progress 1 1 main '' failed
+                    echo -e "\n  ${R}✖ Main update failed. Previous installation preserved.${NC}\n" >&2
+                fi;;
             4|5|6|7)
-                base="$REPO_SCRIPTS/packages"; [[ "$option" != 5 && "$option" != 7 ]] || base="$MIRROR_PACKAGES"
-                local kind=cores; [[ "$option" != 6 && "$option" != 7 ]] || kind=all
-                fetch_package_group "$base" "$kind" || echo 'Package operation failed; inspect the reported error.' >&2;;
+                draw_main_header
+                base="$REPO_SCRIPTS/packages"; source_name='OFFICIAL GITHUB'
+                if [[ "$option" == 5 || "$option" == 7 ]]; then base="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR (PARSPACK)'; fi
+                kind=cores
+                if [[ "$option" == 6 || "$option" == 7 ]]; then
+                    kind=all
+                    echo -e "\n  ${DIM}┌─[ FETCHING ALL PREREQUISITES & PACKAGES FROM ${source_name} ]${NC}\n"
+                else
+                    echo -e "\n  ${DIM}┌─[ FETCHING BINARY CORES FROM ${source_name} ]${NC}\n"
+                fi
+                if fetch_package_group "$base" "$kind" 1; then
+                    echo -e "\n\n  ${G}● Package operation completed successfully.${NC}\n"
+                else
+                    echo -e "\n  ${R}✖ Package operation failed. Check the reported error.${NC}\n" >&2
+                fi;;
             8|9)
                 work=$(mktemp -d "$SECURE_TMP/manual.XXXXXX") || return 1
                 file="$work/input"
                 if [ "$option" == 8 ]; then
-                    read -r -p '  HTTPS script or ZIP link: ' url
-                    if ! mt_download "$url" "$file"; then rm -rf "$work"; continue; fi
+                    draw_main_header
+                    echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}\n"
+                    echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read -r url
+                    [ -n "$url" ] || { rm -rf "$work"; continue; }
+                    mt_download "$url" "$file" &
+                    local pid=$!
+                    draw_progress_bar "$pid" 'Downloading Custom Resource'
+                    if ! wait "$pid"; then
+                        echo -e "\n  ${R}✖ Download failed! Check URL.${NC}\n" >&2
+                        rm -rf "$work"; ota_pause; continue
+                    fi
                     mkdir "$work/extracted"
                     if mt_extract_archive "$file" "$work/extracted" 2>/dev/null; then
-                        offline_local_deploy "$work/extracted" || echo 'Bundle deployment failed.' >&2
-                        rm -rf "$work"; continue
+                        if offline_local_deploy "$work/extracted" 1; then
+                            echo -e "\n  ${G}✔ Archive extracted and modules deployed successfully!${NC}\n"
+                            rm -rf "$work"; reload_dashboard
+                        else
+                            echo -e "\n  ${R}✖ Bundle deployment failed.${NC}\n" >&2
+                        fi
+                        rm -rf "$work"; ota_pause; continue
+                    fi
+                    if ! mt_validate_script "$file" || ! choose_module; then
+                        echo -e "\n  ${R}✖ Invalid script or cancelled selection.${NC}\n"
+                        rm -rf "$work"; ota_pause; continue
                     fi
                 else
+                    if ! choose_module EDITOR; then rm -rf "$work"; continue; fi
+                    echo -e "\n  ${DIM}● Opening clean editor... Paste your raw code, save (Ctrl+O, Enter) and exit (Ctrl+X).${NC}\n"
                     if command -v nano >/dev/null 2>&1; then nano "$file"
                     elif command -v vi >/dev/null 2>&1; then vi "$file"
-                    else echo 'No editor available.'; rm -rf "$work"; continue; fi
+                    else echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -rf "$work"; ota_pause; continue; fi
+                    if ! mt_validate_script "$file"; then
+                        echo -e "\n  ${R}✖ Invalid format or empty paste!${NC}\n"
+                        rm -rf "$work"; ota_pause; continue
+                    fi
                 fi
-                if ! mt_validate_script "$file" || ! choose_module; then rm -rf "$work"; continue; fi
                 module="$CHOSEN_MODULE"; rel="${MOD_MAP[$module]}"; target="/usr/bin/$module"
                 [ "$module" != main ] || target="$MTUNNEL_PATH"
-                read -r -p "  Replace $module? [y/N]: " confirm
-                if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then mt_install_script "$file" "$rel" "$target" || echo 'Module install failed.' >&2; fi
+                new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$file")
+                current_v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
+                draw_main_header
+                echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${DIM}│${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Target Module   :${NC} ${C}${module}${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+                echo -e "  ${DIM}│${NC}"
+                echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+                if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
+                    if mt_install_script "$file" "$rel" "$target"; then
+                        echo -e "\n  ${G}✔ Module ${module} (v${new_ver}) successfully applied! Rebooting core...${NC}\n"
+                        rm -rf "$work"; reload_dashboard
+                    else
+                        echo -e "\n  ${R}✖ Module install failed. Previous module preserved.${NC}\n" >&2
+                    fi
+                else
+                    echo -e "\n  ${Y}● Manual update cancelled by user.${NC}\n"
+                fi
                 rm -rf "$work";;
+            *) continue;;
         esac
-        read -r -p '  Press Enter to continue... ' confirm
+        ota_pause
     done
 }
 
@@ -1658,10 +1827,15 @@ while true; do
         10) run_mod "mbbr" ;;
         11) show_ota_update_hub ;;
         12)
-            read -r -p '  Local directory or archive [current directory]: ' local_input
-            if offline_local_deploy "$local_input"; then echo 'Offline deployment completed.'
-            else echo 'Offline deployment failed; inspect the reported error.' >&2; fi
-            read -r -p '  Press Enter to return... ' dummy
+            draw_main_header
+            echo -e "\n  ${DIM}┌─[ OFFLINE LOCAL DEPLOY ENGINE ]${NC}\n"
+            echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read -r local_input
+            draw_main_header
+            echo -e "\n  ${DIM}┌─[ DEPLOYING FROM LOCAL SOURCE ]${NC}\n"
+            if offline_local_deploy "$local_input" 1; then
+                echo -e "\n\n  ${G}● Local scripts and available binary packages deployed successfully.${NC}\n"
+            else echo -e "\n  ${R}✖ Offline deployment failed. Check the reported error.${NC}\n" >&2; fi
+            ota_pause
             ;;
 
         13)

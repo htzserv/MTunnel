@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign BBR Accelerator Core (mbbr.sh) v1.1.1 ---
+# --- MDesign BBR Accelerator Core (mbbr.sh) v1.1.2 ---
 # [Features: Async Background Checker | MDesign UI Spacing | Minimal OTA]
 
-MODULE_VERSION="1.1.1"
+MODULE_VERSION="1.1.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -89,12 +89,16 @@ mt_is_newer_version() {
 
 mt_ask_bind_host() {
     local choice host
-    echo '  Server listen: 1) IPv4  2) IPv6  3) Specific IP'
-    read -r -p '  Select [1]: ' choice
+    echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(0.0.0.0)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(::)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Specific IP${NC}"
+    echo -ne "  ${C}Select Address [1] ❯❯ ${NC}"; read -r choice
     case "${choice:-1}" in
         1) MT_BIND_HOST='0.0.0.0';;
         2) MT_BIND_HOST='::';;
-        3) read -r -p '  Listen IP: ' host
+        3) echo -ne "  ${C}●${NC} ${W}Listen IP: ${NC}"; read -r host
            host=$(mt_normalize_host "$host")
            mt_valid_ipv4 "$host" || mt_valid_ipv6 "$host" || return 1
            MT_BIND_HOST="$host";;
@@ -416,6 +420,7 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
 
+
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mbbr"
 LOCAL_DIR="/root/mtunnel"
@@ -449,37 +454,71 @@ check_update_bg &
 # ---------------------------------------
 
 self_update_module() {
-    local rel_path="tools/mbbr.sh" src_opt custom_url dl_url tmp_file confirm
-    echo '  Update: 1) GitHub  2) Mirror  3) HTTPS link  4) Paste in editor  0) Cancel'
-    read -r -p '  Select: ' src_opt
+    local src_opt custom_url dl_url tmp_file confirm
+    local rel_path="tools/mbbr.sh"
+    local cb="?t=$(date +%s)"
+    
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mbbr_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mbbr_remote_ver" | tr -d '\r\n ')
+
+    local gh_text="${C}Official GitHub Server${NC}"
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+        gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+    else
+        gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
+    fi
+
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MBBR Core) ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
+    
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
     tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
     if [ "$src_opt" == 4 ]; then
-        if command -v nano >/dev/null 2>&1; then nano "$tmp_file"
+        if command -v nano >/dev/null 2>&1; then
+            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
+            nano "$tmp_file"
         elif command -v vi >/dev/null 2>&1; then vi "$tmp_file"
-        else rm -f "$tmp_file"; echo 'No editor available.'; return 1; fi
+        else rm -f "$tmp_file"; echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; return 1; fi
     else
         case "$src_opt" in
             1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path";;
             2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path";;
-            3) read -r -p '  HTTPS link: ' dl_url;;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read -r dl_url;;
         esac
-        if ! mt_download "$dl_url" "$tmp_file"; then rm -f "$tmp_file"; echo 'Download failed; installed module preserved.'; return 1; fi
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+        if ! mt_download "$dl_url" "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Download failed. Installed module preserved.${NC}"; return 1; fi
     fi
     sed -i 's/\r$//' "$tmp_file"
-    if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo 'Invalid Bash module; installed module preserved.'; return 1; fi
+    if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo 'Downloaded module is older; update refused.'; return 1; fi
-    read -r -p "  Install v$new_ver (current $MODULE_VERSION)? [y/N]: " confirm
-    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { rm -f "$tmp_file"; return 0; }
+    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        
+    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
-        rm -f "$tmp_file"; echo 'Update failed; previous module preserved.'; return 1
+        rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
     fi
     rm -f "$tmp_file"
+    echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
     exec "$INSTALL_PATH" "$@"
 }
 
 enable_bbr() {
+    echo -e "\n  ${DIM}● Enabling TCP BBR Acceleration...${NC}"
     local qdisc cc cfg=/etc/sysctl.d/99-zz-mtunnel-bbr.conf state=/etc/mtunnel/bbr.previous tmp
     qdisc=$(sysctl -n net.core.default_qdisc) && cc=$(sysctl -n net.ipv4.tcp_congestion_control) || return 1
     modprobe tcp_bbr 2>/dev/null || true
@@ -496,10 +535,11 @@ enable_bbr() {
     if ! mt_install_files 644 "$tmp" "$cfg"; then rm -f "$tmp"; sysctl -w "net.core.default_qdisc=$qdisc" "net.ipv4.tcp_congestion_control=$cc"; return 1; fi
     rm -f "$tmp"
     [ "$(sysctl -n net.ipv4.tcp_congestion_control)" == bbr ] || return 1
-    echo 'BBR enabled.'
+    echo -e "  ${G}● BBR Acceleration successfully ENABLED!${NC}"
 }
 
 disable_bbr() {
+    echo -e "\n  ${DIM}● Disabling TCP BBR & Restoring Congestion Control...${NC}"
     local state=/etc/mtunnel/bbr.previous cfg=/etc/sysctl.d/99-zz-mtunnel-bbr.conf qdisc cc old_qdisc old_cc tmp
     old_qdisc=$(sysctl -n net.core.default_qdisc) && old_cc=$(sysctl -n net.ipv4.tcp_congestion_control) || return 1
     qdisc=$(sed -n 's/^QDISC=//p' "$state" 2>/dev/null); cc=$(sed -n 's/^CC=//p' "$state" 2>/dev/null)
@@ -515,7 +555,7 @@ disable_bbr() {
     if ! mt_install_files 644 "$tmp" "$cfg"; then rm -f "$tmp"; sysctl -w "net.core.default_qdisc=$old_qdisc" "net.ipv4.tcp_congestion_control=$old_cc"; return 1; fi
     rm -f "$tmp"
     [ "$(sysctl -n net.ipv4.tcp_congestion_control)" == "$cc" ] || return 1
-    echo "BBR disabled; congestion control restored to $cc."
+    echo -e "  ${G}● BBR has been DISABLED and congestion control restored to ${cc}.${NC}"
 }
 
 get_status() {

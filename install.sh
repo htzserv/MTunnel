@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="8.4.2"
+MODULE_VERSION="8.4.3"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -87,12 +87,16 @@ mt_is_newer_version() {
 
 mt_ask_bind_host() {
     local choice host
-    echo '  Server listen: 1) IPv4  2) IPv6  3) Specific IP'
-    read -r -p '  Select [1]: ' choice
+    echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(0.0.0.0)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(::)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Specific IP${NC}"
+    echo -ne "  ${C}Select Address [1] ❯❯ ${NC}"; read -r choice
     case "${choice:-1}" in
         1) MT_BIND_HOST='0.0.0.0';;
         2) MT_BIND_HOST='::';;
-        3) read -r -p '  Listen IP: ' host
+        3) echo -ne "  ${C}●${NC} ${W}Listen IP: ${NC}"; read -r host
            host=$(mt_normalize_host "$host")
            mt_valid_ipv4 "$host" || mt_valid_ipv6 "$host" || return 1
            MT_BIND_HOST="$host";;
@@ -413,6 +417,46 @@ mt_validate_tunnel_conf() {
 
 
 
+
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+
+draw_progress() {
+    local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
+    [ -z "$total" ] || [ "$total" -le 0 ] && total=1
+    local percent=$(( n * 100 / total ))
+    local filled=$(( percent * width / 100 ))
+    local empty=$(( width - filled ))
+    local bar=$(printf "%${filled}s" "" | tr ' ' '#')
+    local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+
+    local ver_clean=""
+    [ -n "$ver" ] && [ "$ver" != "Unknown" ] && ver_clean=" (v${ver})"
+
+    local plain_label="${text}${ver_clean}"
+    local pad_spaces=$(( 26 - ${#plain_label} ))
+    [ "$pad_spaces" -lt 0 ] && pad_spaces=0
+    local padding=$(printf '%*s' "$pad_spaces" "")
+
+    tput civis 2>/dev/null || true
+    if [ -n "$ver_clean" ]; then
+        printf "\r  %b✔%b %b%s%b%b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
+            "$G" "$NC" \
+            "$W" "$text" "$NC" \
+            "$Y" "$ver_clean" "$NC" \
+            "$padding" \
+            "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
+            "$W" "$percent" "$NC"
+    else
+        printf "\r  %b✔%b %b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
+            "$G" "$NC" \
+            "$W" "$text" "$NC" \
+            "$padding" \
+            "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
+            "$W" "$percent" "$NC"
+    fi
+    tput cnorm 2>/dev/null || true
+}
+
 installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
     local script_file="${BASH_SOURCE[0]}" script_dir
@@ -482,7 +526,16 @@ installer_main() {
         done
     fi
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
-    echo 'MTunnel scripts installed successfully (main v10.1.2).'
+    local current=0 mod_ver
+    for item in "${modules[@]}"; do
+        current=$((current+1)); name="${item%%:*}"; path="${item#*:}"
+        mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
+        draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
+        echo ''
+    done
+    if [ "$launch" == 1 ]; then
+        echo -e "\n  ${G}● MTunnel Installation Complete! Launching Core Dashboard...${NC}\n"
+    else echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"; fi
     if [ "$with_cores" == 1 ] && [ -z "$root" ]; then
         while read -r target; do
             [ -z "$target" ] || systemctl restart "$target" || return 1

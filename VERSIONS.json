@@ -1,0 +1,73 @@
+{
+  "release": "10.1.1",
+  "base_commit": "1fb95c746dc9be81429d04d960c2307444eddba6",
+  "modules": {
+    "main.sh": {
+      "previous": "10.0",
+      "version": "10.1.1"
+    },
+    "install.sh": {
+      "previous": "8.3.2",
+      "version": "8.4.1"
+    },
+    "mporter.sh": {
+      "previous": "11.2",
+      "version": "11.3.0"
+    },
+    "tunnels/mgre.sh": {
+      "previous": "6.5.2",
+      "version": "6.6.0"
+    },
+    "tunnels/mxlan.sh": {
+      "previous": "2.3.0",
+      "version": "2.4.0"
+    },
+    "tunnels/mrathole.sh": {
+      "previous": "3.5.3",
+      "version": "3.6.1"
+    },
+    "tunnels/mbackhaul.sh": {
+      "previous": "2.5.3",
+      "version": "2.6.1"
+    },
+    "tunnels/mpaqet.sh": {
+      "previous": "8.3.3",
+      "version": "8.4.0"
+    },
+    "tools/mstats.sh": {
+      "previous": "3.8.1",
+      "version": "3.9.0"
+    },
+    "tools/mhealer.sh": {
+      "previous": "2.3.1",
+      "version": "2.4.0"
+    },
+    "tools/minterface.sh": {
+      "previous": "4.0.1",
+      "version": "4.1.0"
+    },
+    "tools/mbbr.sh": {
+      "previous": "1.0.4",
+      "version": "1.1.0"
+    },
+    "tools/mdiag.sh": {
+      "previous": "4.0.3",
+      "version": "4.1.0"
+    },
+    "tools/linktest.sh": {
+      "previous": "3.9.2",
+      "version": "3.10.0"
+    }
+  },
+  "unchanged_exclusions": {
+    "tools/mweb.sh": "5.7.4",
+    "tools/mshield.sh": "3.0.1"
+  },
+  "absent_exclusions": [
+    "mstealth"
+  ],
+  "bundled_reverse_cores": {
+    "backhaul": "0.7.2",
+    "rathole": "0.5.0"
+  }
+}

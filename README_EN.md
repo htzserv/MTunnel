@@ -1,3 +1,5 @@
+> Patched bundle **10.1.1**: install this ZIP using [INSTALL_FA.md](INSTALL_FA.md). See [changes](CHANGELOG_FA.md), [versions](VERSIONS.json) and [test results](TEST_RESULTS.md). The original upstream download commands below do not install this patched bundle.
+
 # 🛡️ MTunnel
 
 **Enterprise-Grade Tunneling, Layer-4 Forwarding, Raw Packet Manipulation & Network Diagnostics for Linux**

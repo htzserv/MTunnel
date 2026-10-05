@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mporter.sh) | MPorter Manager v11.1 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
-# v11.3.0 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
+# v11.3.1 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
 #  - IPv6 targets everywhere: HAProxy / Gost / Realm / Kernel NAT (ip6tables) / OBFS / health probes
 #  - New tunnel interface families recognised: GRE6 / 6to4 (g6*), IPIP4>4 (i4*), IPIP4>6 (i46*), IPIP6>6 (i66*), VXLAN over IPv6
 #  - Peer discovery understands IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer, ip -6 neighbours)
@@ -25,10 +25,10 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="11.3.0"
+MODULE_VERSION="11.3.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
-# Shared helpers embedded in standalone modules by maintenance/embed_helpers.py.
+# Internal helpers; each distributed script contains its own copy.
 # Sourcing this file performs no network, filesystem, or service operations.
 
 mt_normalize_host() {
@@ -404,24 +404,6 @@ mt_update_core() {
     rm -rf "$work"
 }
 
-mt_verify_manifest() {
-    local root="$1" digest path actual count=0
-    [ -s "$root/SHA256SUMS" ] || return 1
-    while read -r digest path; do
-        [[ "$digest" =~ ^[0-9a-fA-F]{64}$ && "$path" =~ ^[A-Za-z0-9_./-]+$ ]] || return 1
-        case "/$path/" in *'/../'*|//* ) return 1;; esac
-        [ -f "$root/$path" ] && [ ! -L "$root/$path" ] || return 1
-        actual=$(sha256sum "$root/$path" | cut -d' ' -f1)
-        [ "$actual" == "${digest,,}" ] || { echo "Checksum mismatch: $path" >&2; return 1; }
-        ((count+=1))
-    done < "$root/SHA256SUMS"
-    [ "$count" -gt 0 ]
-}
-
-mt_manifest_hash() {
-    awk -v path="$2" '$2==path {print $1;exit}' "$1/SHA256SUMS"
-}
-
 # A backup must have a coherent network identity before any live teardown.
 mt_validate_tunnel_conf() {
     local conf="$1" kind="$2"
@@ -451,6 +433,7 @@ mt_validate_tunnel_conf() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 

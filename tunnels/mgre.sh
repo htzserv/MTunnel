@@ -1,17 +1,17 @@
 #!/bin/bash
 # --- MGRE Modular Core (mgre.sh) | MDesign Core v6.0.0 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
-# [v6.6.0: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
+# [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
 # [v6.4.0: GRE6 / IPIP4>4 / IPIP4>6 / IPIP6>6 | IPv6-aware header (2nd line) | locale-safe layout | shared proto helpers]
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
 
-MODULE_VERSION="6.6.0"
+MODULE_VERSION="6.6.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
-# Shared helpers embedded in standalone modules by maintenance/embed_helpers.py.
+# Internal helpers; each distributed script contains its own copy.
 # Sourcing this file performs no network, filesystem, or service operations.
 
 mt_normalize_host() {
@@ -387,24 +387,6 @@ mt_update_core() {
     rm -rf "$work"
 }
 
-mt_verify_manifest() {
-    local root="$1" digest path actual count=0
-    [ -s "$root/SHA256SUMS" ] || return 1
-    while read -r digest path; do
-        [[ "$digest" =~ ^[0-9a-fA-F]{64}$ && "$path" =~ ^[A-Za-z0-9_./-]+$ ]] || return 1
-        case "/$path/" in *'/../'*|//* ) return 1;; esac
-        [ -f "$root/$path" ] && [ ! -L "$root/$path" ] || return 1
-        actual=$(sha256sum "$root/$path" | cut -d' ' -f1)
-        [ "$actual" == "${digest,,}" ] || { echo "Checksum mismatch: $path" >&2; return 1; }
-        ((count+=1))
-    done < "$root/SHA256SUMS"
-    [ "$count" -gt 0 ]
-}
-
-mt_manifest_hash() {
-    awk -v path="$2" '$2==path {print $1;exit}' "$1/SHA256SUMS"
-}
-
 # A backup must have a coherent network identity before any live teardown.
 mt_validate_tunnel_conf() {
     local conf="$1" kind="$2"
@@ -434,6 +416,7 @@ mt_validate_tunnel_conf() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 

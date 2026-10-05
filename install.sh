@@ -1,9 +1,9 @@
 #!/bin/bash
-# MTunnel checked, staged installer. Local release bundles are preferred.
-MODULE_VERSION="8.4.0"
+# MTunnel standalone installer: use local scripts or bootstrap from GitHub.
+MODULE_VERSION="8.4.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
-# Shared helpers embedded in standalone modules by maintenance/embed_helpers.py.
+# Internal helpers; each distributed script contains its own copy.
 # Sourcing this file performs no network, filesystem, or service operations.
 
 mt_normalize_host() {
@@ -379,24 +379,6 @@ mt_update_core() {
     rm -rf "$work"
 }
 
-mt_verify_manifest() {
-    local root="$1" digest path actual count=0
-    [ -s "$root/SHA256SUMS" ] || return 1
-    while read -r digest path; do
-        [[ "$digest" =~ ^[0-9a-fA-F]{64}$ && "$path" =~ ^[A-Za-z0-9_./-]+$ ]] || return 1
-        case "/$path/" in *'/../'*|//* ) return 1;; esac
-        [ -f "$root/$path" ] && [ ! -L "$root/$path" ] || return 1
-        actual=$(sha256sum "$root/$path" | cut -d' ' -f1)
-        [ "$actual" == "${digest,,}" ] || { echo "Checksum mismatch: $path" >&2; return 1; }
-        ((count+=1))
-    done < "$root/SHA256SUMS"
-    [ "$count" -gt 0 ]
-}
-
-mt_manifest_hash() {
-    awk -v path="$2" '$2==path {print $1;exit}' "$1/SHA256SUMS"
-}
-
 # A backup must have a coherent network identity before any live teardown.
 mt_validate_tunnel_conf() {
     local conf="$1" kind="$2"
@@ -430,9 +412,11 @@ mt_validate_tunnel_conf() {
 
 
 
+
 installer_main() {
-    local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next digest
-    local script_dir; script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || return 1
+    local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
+    local script_file="${BASH_SOURCE[0]}" script_dir
+    script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mweb:tools/mweb.sh mstats:tools/mstats.sh mhealer:tools/mhealer.sh minterface:tools/minterface.sh mbbr:tools/mbbr.sh mdiag:tools/mdiag.sh mshield:tools/mshield.sh linktest:tools/linktest.sh)
     local -a files=()
     while [ "$#" -gt 0 ]; do
@@ -442,58 +426,66 @@ installer_main() {
             --with-cores) with_cores=1; shift;;
             --no-launch) launch=0; shift;;
             --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; shift 2;;
-            --help|-h) echo 'Usage: sudo bash install.sh [--local DIR] [--with-cores] [--no-launch]'; echo 'Test only: --root DIR. Remote release: --remote HTTPS_BASE (SHA256SUMS required).'; return 0;;
+            --help|-h)
+                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE] [--no-launch]'
+                echo 'Without options: use adjacent scripts, or download from GitHub.'
+                echo 'Optional local binaries: --with-cores. Test installation: --root DIR.'
+                return 0;;
             *) echo "Unknown option: $1" >&2; return 1;;
         esac
     done
     if [ -n "$root" ]; then [[ "$root" == /* && "$root" != / && "$root" != *'/../'* ]] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
-    if [ -z "$source_dir" ] && [ -z "$remote" ] && [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"; fi
+    if [ -z "$source_dir" ] && [ -z "$remote" ]; then
+        if [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
+        elif [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
+        else remote="${MTUNNEL_REPO_URL:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"; fi
+    fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"
-    # EXIT cleanup also covers interruptions and validation failures.
-    trap 'rm -rf -- "$INSTALLER_WORK"' EXIT
     INSTALLER_WORK="$work"
+    trap 'rm -rf -- "$INSTALLER_WORK"' EXIT
     if [ -n "$remote" ]; then
-        [[ "$remote" == https://* ]] || return 1
-        mkdir "$work/bundle" || return 1
-        mt_download "$remote/SHA256SUMS" "$work/bundle/SHA256SUMS" || return 1
-        while read -r digest path; do
-            [[ "$digest" =~ ^[0-9a-fA-F]{64}$ && "$path" =~ ^[A-Za-z0-9_./-]+$ ]] || return 1
-            case "/$path/" in *'/../'*|//*) return 1;; esac
-            mkdir -p "$work/bundle/$(dirname "$path")" || return 1
-            mt_download "$remote/$path" "$work/bundle/$path" "$digest" || return 1
-        done < "$work/bundle/SHA256SUMS"
-        source_dir="$work/bundle"
+        [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
+        remote="${remote%/}"
+        mkdir "$work/scripts" || return 1
+        for item in "${modules[@]}"; do
+            path="${item#*:}"
+            mkdir -p "$work/scripts/$(dirname "$path")" || return 1
+            if ! mt_download "$remote/$path" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
+                echo "Cannot prepare module: $path. Installed scripts preserved." >&2; return 1
+            fi
+        done
+        source_dir="$work/scripts"
     fi
-    [ -n "$source_dir" ] && mt_verify_manifest "$source_dir" || { echo 'A complete release directory with valid SHA256SUMS is required.' >&2; return 1; }
+    [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
     for item in "${modules[@]}"; do
         name="${item%%:*}"; path="${item#*:}"; target="$root/usr/bin/$name"
         [ "$name" != main ] || target="$root/usr/bin/mtunnel"
-        [ -n "$(mt_manifest_hash "$source_dir" "$path")" ] && mt_validate_script "$source_dir/$path" || { echo "Invalid module: $path" >&2; return 1; }
+        mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
         if mt_validate_script "$target" 2>/dev/null; then
             cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
             next=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
             mt_is_newer_version "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
         fi
-        files+=("$source_dir/$path" "$target")
+        files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
     done
-    # Retain the complete bundle, including archives, docs and checksums.
-    while read -r digest path; do files+=("$source_dir/$path" "$root/root/mtunnel/$path"); done < "$source_dir/SHA256SUMS"
-    files+=("$source_dir/SHA256SUMS" "$root/root/mtunnel/SHA256SUMS")
+    if [ -f "$source_dir/install.sh" ]; then
+        mt_validate_script "$source_dir/install.sh" || return 1
+        files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
+    fi
     if [ "$with_cores" == 1 ]; then
         for name in bh rathole paqet gost haproxy; do
             path="packages/$name"
-            [ -n "$(mt_manifest_hash "$source_dir" "$path")" ] && mt_valid_elf "$source_dir/$path" || { echo "Invalid core or unsupported architecture: $name" >&2; return 1; }
-            files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name")
+            mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
+            files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")
         done
     fi
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
-    echo "MTunnel installed successfully (main v10.1.0)."
+    echo 'MTunnel scripts installed successfully (main v10.1.2).'
     if [ "$with_cores" == 1 ] && [ -z "$root" ]; then
-        # Restart only the units that were already active, after the whole bundle commits.
         while read -r target; do
-            [ -n "$target" ] && systemctl restart "$target" || return 1
+            [ -z "$target" ] || systemctl restart "$target" || return 1
         done < <(systemctl list-units --type=service --state=active --no-legend --plain 'mrathole@*.service' 'mbackhaul@*.service' 'mpaqet@*.service' 'gost.service' 'haproxy.service' 2>/dev/null | awk '{print $1}')
     fi
     if [ "$launch" == 1 ]; then exec "$root/usr/bin/mtunnel"; fi

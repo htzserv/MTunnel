@@ -1,11 +1,11 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v10.1.0 ---
+# --- MDesign Master Core | Central Dashboard v10.1.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="10.1.0"
+MODULE_VERSION="10.1.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
-# Shared helpers embedded in standalone modules by maintenance/embed_helpers.py.
+# Internal helpers; each distributed script contains its own copy.
 # Sourcing this file performs no network, filesystem, or service operations.
 
 mt_normalize_host() {
@@ -381,24 +381,6 @@ mt_update_core() {
     rm -rf "$work"
 }
 
-mt_verify_manifest() {
-    local root="$1" digest path actual count=0
-    [ -s "$root/SHA256SUMS" ] || return 1
-    while read -r digest path; do
-        [[ "$digest" =~ ^[0-9a-fA-F]{64}$ && "$path" =~ ^[A-Za-z0-9_./-]+$ ]] || return 1
-        case "/$path/" in *'/../'*|//* ) return 1;; esac
-        [ -f "$root/$path" ] && [ ! -L "$root/$path" ] || return 1
-        actual=$(sha256sum "$root/$path" | cut -d' ' -f1)
-        [ "$actual" == "${digest,,}" ] || { echo "Checksum mismatch: $path" >&2; return 1; }
-        ((count+=1))
-    done < "$root/SHA256SUMS"
-    [ "$count" -gt 0 ]
-}
-
-mt_manifest_hash() {
-    awk -v path="$2" '$2==path {print $1;exit}' "$1/SHA256SUMS"
-}
-
 # A backup must have a coherent network identity before any live teardown.
 mt_validate_tunnel_conf() {
     local conf="$1" kind="$2"
@@ -428,6 +410,7 @@ mt_validate_tunnel_conf() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1241,13 +1224,12 @@ ensure_module() {
 run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
 
 install_bundle_scripts() {
-    local source="$1" mod rel candidate target cur new expected
+    local source="$1" mod rel candidate target cur new
     local -a files=()
-    mt_verify_manifest "$source" || { echo 'Bundle manifest is missing or invalid.' >&2; return 1; }
+    [ -d "$source" ] || return 1
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"; target="/usr/bin/$mod"
         [ "$mod" != main ] || target="$MTUNNEL_PATH"
-        expected=$(mt_manifest_hash "$source" "$rel"); [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || return 1
         mt_validate_script "$candidate" || return 1
         cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
         new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
@@ -1258,16 +1240,14 @@ install_bundle_scripts() {
 }
 
 sync_script_bundle() {
-    local base="$1" stage mod rel hash rc=0
+    local base="$1" stage mod rel rc=0
     stage=$(mktemp -d "$SECURE_TMP/sync.XXXXXX") || return 1
-    mt_download "$base/SHA256SUMS" "$stage/SHA256SUMS" || { rm -rf "$stage"; echo 'Release manifest unavailable; no modules changed.' >&2; return 1; }
-    # Fetch the entire manifest so a mixed or corrupt release cannot be installed.
-    while read -r hash rel; do
-        [[ "$hash" =~ ^[0-9a-fA-F]{64}$ && "$rel" =~ ^[A-Za-z0-9_./-]+$ ]] || { rc=1; break; }
-        case "/$rel/" in *'/../'*|//*) rc=1; break;; esac
+    # Stage all scripts and check Bash/version before committing any module.
+    for mod in "${ALL_MODULES[@]}"; do
+        rel="${MOD_MAP[$mod]}"
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
-        mt_download "$base/$rel" "$stage/$rel" "$hash" || { rc=1; break; }
-    done < "$stage/SHA256SUMS"
+        if ! mt_download "$base/$rel" "$stage/$rel" || ! mt_validate_script "$stage/$rel"; then rc=1; break; fi
+    done
     [ "$rc" != 0 ] || install_bundle_scripts "$stage" || rc=1
     rm -rf "$stage"
     return "$rc"

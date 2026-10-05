@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v10.1.3 ---
+# --- MDesign Master Core | Central Dashboard v12.0.1 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="10.1.3"
+MODULE_VERSION="12.0.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -158,7 +158,7 @@ mt_download() {
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
+        curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
     elif command -v wget >/dev/null 2>&1; then
         wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
     fi
@@ -412,8 +412,59 @@ mt_validate_tunnel_conf() {
     [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
 }
 
+mt_valid_scope() {
+    case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
+}
+
+mt_run_tool() {
+    local name="$1" path; shift
+    case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
+    for path in "${MTUNNEL_TEST_ROOT:-}/usr/bin/$name" "${LOCAL_DIR:-/root/mtunnel}/tools/$name.sh"; do
+        if [ -f "$path" ] && mt_validate_script "$path"; then
+            bash "$path" "$@"
+            return $?
+        fi
+    done
+    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    return 1
+}
+
+mt_ask_bbr_on_create() {
+    local answer
+    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    read -r answer || answer=''
+    case "${answer,,}" in
+        y|yes)
+            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        *) ;;
+    esac
+    return 0
+}
+
+mt_render_tunnel_tools() {
+    local iface="$1" healer="$2" bbr="$3"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_config_value() {
+    local key="$1" file="$2" value
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    value=$(sed -n "s/^${key}=//p" "$file" | head -n 1)
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf '%s' "$value"
+}
+
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
 
 
 
@@ -1317,7 +1368,7 @@ fetch_package_group() {
 
 render_ota_menu() {
     draw_main_header
-    echo -e "\n  ${DIM}┌─[ MDesign Ecosystem Central Updater ]${NC}"
+    echo -e "\n  ${DIM}┌─[ Update and Local Install ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SCRIPT CORE ENGINE UPDATES ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1350,6 +1401,10 @@ render_ota_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Raw Editor)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ LOCAL INSTALL ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}Offline Local Install (Directory / ZIP / Archive)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
 }
@@ -1509,6 +1564,7 @@ show_ota_update_hub() {
                     echo -e "\n  ${Y}● Manual update cancelled by user.${NC}\n"
                 fi
                 rm -rf "$work";;
+            10) show_local_install; continue;;
             *) continue;;
         esac
         ota_pause
@@ -1692,121 +1748,50 @@ run_iperf3() {
     done
 }
 
-show_tunnel_hub() {
-    render_tunnel_menu() {
-        local badge_mgre="" badge_mxlan="" badge_mrathole="" badge_mbackhaul="" badge_mpaqet=""
-        if [ -f "$UPDATE_FILE" ]; then
-            grep -q "^mgre:" "$UPDATE_FILE" && badge_mgre=" ${Y}(Update Available: v$(grep "^mgre:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mxlan:" "$UPDATE_FILE" && badge_mxlan=" ${Y}(Update Available: v$(grep "^mxlan:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mrathole:" "$UPDATE_FILE" && badge_mrathole=" ${Y}(Update Available: v$(grep "^mrathole:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mbackhaul:" "$UPDATE_FILE" && badge_mbackhaul=" ${Y}(Update Available: v$(grep "^mbackhaul:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-            grep -q "^mpaqet:" "$UPDATE_FILE" && badge_mpaqet=" ${Y}(Update Available: v$(grep "^mpaqet:" "$UPDATE_FILE" | cut -d: -f3))${NC}"
-        fi
 
-        draw_main_header
-        echo -e "\n  ${DIM}┌─[ PRIMARY INFRASTRUCTURE HUB ]${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Modular GRE/IP6GRE Core (Mgre)${NC}${badge_mgre}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric (Mxlan)${NC}${badge_mxlan}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel (Mrathole)${NC}${badge_mrathole}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Free Multiplexer (MBackhaul)${NC}${badge_mbackhaul}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel (MPaqet)${NC}${badge_mpaqet}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
-    }
-
-    while true; do
-        render_tunnel_menu
-        read_with_refresh "  ${C}TUNNEL ❯❯ ${NC}" t_opt render_tunnel_menu
-        t_opt=$(echo "$t_opt" | tr -d '\r ')
-        case $t_opt in
-            1) run_mod "mgre" ;; 
-            2) run_mod "mxlan" ;; 
-            3) run_mod "mrathole" ;; 
-            4) run_mod "mbackhaul" ;; 
-            5) run_mod "mpaqet" ;; 
-            0) break ;;
-        esac
-    done
+module_update_badge() {
+    local version
+    version=$(awk -F: -v mod="$1" '$1==mod {print $3;exit}' "$UPDATE_FILE" 2>/dev/null)
+    [ -z "$version" ] || printf ' %b' "${Y}(Update Available: v${version})${NC}"
+    return 0
 }
 
 render_main_menu() {
-    local badge_hub="" badge_porter="" badge_main="" badge_bbr="" badge_diag="" badge_shield="" badge_link="" badge_stats="" badge_healer="" badge_iface=""
-
-    if [ -f "$UPDATE_FILE" ]; then
-        local tun_updates=""
-        grep -q "^mgre:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(MGRE)${NC}"
-        grep -q "^mxlan:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(MXLAN)${NC}"
-        grep -q "^mrathole:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Rathole)${NC}"
-        grep -q "^mbackhaul:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Backhaul)${NC}"
-        grep -q "^mpaqet:" "$UPDATE_FILE" && tun_updates="${tun_updates} ${Y}(Paqet)${NC}"
-
-        if [ -n "$tun_updates" ]; then
-            badge_hub=" ${Y}(Update Available)${NC}${tun_updates}"
-        fi
-
-        if grep -q "^mporter:" "$UPDATE_FILE"; then
-            local p_ver=$(grep "^mporter:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_porter=" ${Y}(Update Available: v${p_ver})${NC}"
-        fi
-        if grep -q "^main:" "$UPDATE_FILE"; then
-            local m_ver=$(grep "^main:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_main=" ${Y}(Update Available: v${m_ver})${NC}"
-        fi
-        if grep -q "^mbbr:" "$UPDATE_FILE"; then
-            local b_ver=$(grep "^mbbr:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_bbr=" ${Y}(Update Available: v${b_ver})${NC}"
-        fi
-        if grep -q "^mdiag:" "$UPDATE_FILE"; then
-            local d_ver=$(grep "^mdiag:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_diag=" ${Y}(Update Available: v${d_ver})${NC}"
-        fi
-        if grep -q "^mshield:" "$UPDATE_FILE"; then
-            local s_ver=$(grep "^mshield:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_shield=" ${Y}(Update Available: v${s_ver})${NC}"
-        fi
-        if grep -q "^linktest:" "$UPDATE_FILE"; then
-            local l_ver=$(grep "^linktest:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_link=" ${Y}(Update Available: v${l_ver})${NC}"
-        fi
-        if grep -q "^mstats:" "$UPDATE_FILE"; then
-            local st_ver=$(grep "^mstats:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_stats=" ${Y}(Update Available: v${st_ver})${NC}"
-        fi
-        if grep -q "^mhealer:" "$UPDATE_FILE"; then
-            local h_ver=$(grep "^mhealer:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_healer=" ${Y}(Update Available: v${h_ver})${NC}"
-        fi
-        if grep -q "^minterface:" "$UPDATE_FILE"; then
-            local if_ver=$(grep "^minterface:" "$UPDATE_FILE" | cut -d: -f3)
-            badge_iface=" ${Y}(Update Available: v${if_ver})${NC}"
-        fi
-    fi
-
     draw_main_header
-    echo -e "\n  ${DIM}┌─[ CORE NETWORK & ROUTING ]${NC}"
+    echo -e "\n  ${DIM}┌─[ TUNNEL INFRASTRUCTURE ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Tunnel Infrastructure Hub (GRE / VXLAN / Rat / BH / Paqet)${NC}${badge_hub}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC}${badge_porter}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}${badge_iface}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}GRE / GRE6 / IPIP Tunnel${NC} $(module_update_badge mgre)"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric${NC} $(module_update_badge mxlan)"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel${NC} $(module_update_badge mrathole)"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Multiplexer${NC} $(module_update_badge mbackhaul)"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel${NC} $(module_update_badge mpaqet)"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SECURITY, DIAGNOSTICS & BENCHMARK ]${NC}"
+    echo -e "  ${DIM}├─[ ROUTING, MONITORING & BENCHMARK ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Stealth Anti-Probing & Anti-RST Shield${NC}${badge_shield}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${B}Bandwidth Radar & Web UI${NC}${badge_stats}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}${badge_healer}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}Network Diagnostics & Tests${NC}${badge_diag}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Two-Way Link & Port Filter Scanner (LinkTest)${NC}${badge_link}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC} $(module_update_badge mporter)"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${B}Bandwidth Radar & Web UI${NC} $(module_update_badge mstats)"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Two-Way Link & Port Filter Scanner (LinkTest)${NC} $(module_update_badge linktest)"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}iPerf3 Bandwidth Benchmark${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}TCP BBR Accelerator (Mbbr)${NC}${badge_bbr}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC} ${DIM}❯${NC} ${G}Unified Multi-Tier OTA Update Hub${NC}${badge_main}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC} ${DIM}❯${NC} ${M}Offline Local Deploy (Packages & Modules)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Update and Local Install${NC} $(module_update_badge main)"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
+}
+
+show_local_install() {
+    local local_input
+    draw_main_header
+    echo -e "\n  ${DIM}┌─[ OFFLINE LOCAL INSTALL ]${NC}\n"
+    echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read -r local_input
+    draw_main_header
+    echo -e "\n  ${DIM}┌─[ INSTALLING FROM LOCAL SOURCE ]${NC}\n"
+    if offline_local_deploy "$local_input" 1; then
+        echo -e "\n\n  ${G}● Local scripts and available binary packages installed successfully.${NC}\n"
+    else echo -e "\n  ${R}✖ Local install failed. Check the reported error.${NC}\n" >&2; fi
+    ota_pause
 }
 
 while true; do
@@ -1815,30 +1800,17 @@ while true; do
     opt=$(echo "$opt" | tr -d '\r ')
 
     case $opt in
-        1) show_tunnel_hub ;;
-        2) run_mod "mporter" ;;
-        3) run_mod "minterface" ;;
-        4) run_mod "mshield" ;;
-        5) run_mod "mstats" ;;
-        6) run_mod "mhealer" ;;
-        7) run_mod "mdiag" ;;
+        1) run_mod "mgre" ;;
+        2) run_mod "mxlan" ;;
+        3) run_mod "mrathole" ;;
+        4) run_mod "mbackhaul" ;;
+        5) run_mod "mpaqet" ;;
+        6) run_mod "mporter" ;;
+        7) run_mod "mstats" ;;
         8) run_mod "linktest" ;;
         9) run_iperf3 ;;
-        10) run_mod "mbbr" ;;
-        11) show_ota_update_hub ;;
-        12)
-            draw_main_header
-            echo -e "\n  ${DIM}┌─[ OFFLINE LOCAL DEPLOY ENGINE ]${NC}\n"
-            echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read -r local_input
-            draw_main_header
-            echo -e "\n  ${DIM}┌─[ DEPLOYING FROM LOCAL SOURCE ]${NC}\n"
-            if offline_local_deploy "$local_input" 1; then
-                echo -e "\n\n  ${G}● Local scripts and available binary packages deployed successfully.${NC}\n"
-            else echo -e "\n  ${R}✖ Offline deployment failed. Check the reported error.${NC}\n" >&2; fi
-            ota_pause
-            ;;
-
-        13)
+        10) show_ota_update_hub ;;
+        11)
             draw_main_header
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"

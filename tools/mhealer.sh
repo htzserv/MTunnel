@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mhealer.sh) | Autonomous Healer v2.4.2 ---
+# --- MDesign Modular Core (mhealer.sh) | Autonomous Healer v12.0.1 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="2.4.2"
+MODULE_VERSION="12.0.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -158,7 +158,7 @@ mt_download() {
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
+        curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
     elif command -v wget >/dev/null 2>&1; then
         wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
     fi
@@ -412,8 +412,59 @@ mt_validate_tunnel_conf() {
     [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
 }
 
+mt_valid_scope() {
+    case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
+}
+
+mt_run_tool() {
+    local name="$1" path; shift
+    case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
+    for path in "${MTUNNEL_TEST_ROOT:-}/usr/bin/$name" "${LOCAL_DIR:-/root/mtunnel}/tools/$name.sh"; do
+        if [ -f "$path" ] && mt_validate_script "$path"; then
+            bash "$path" "$@"
+            return $?
+        fi
+    done
+    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    return 1
+}
+
+mt_ask_bbr_on_create() {
+    local answer
+    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    read -r answer || answer=''
+    case "${answer,,}" in
+        y|yes)
+            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        *) ;;
+    esac
+    return 0
+}
+
+mt_render_tunnel_tools() {
+    local iface="$1" healer="$2" bbr="$3"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_config_value() {
+    local key="$1" file="$2" value
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    value=$(sed -n "s/^${key}=//p" "$file" | head -n 1)
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf '%s' "$value"
+}
+
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
 
 
 
@@ -429,6 +480,14 @@ SVC_FILE="/etc/systemd/system/mhealer.service"
 CONF_FILE="/etc/mhealer.conf"
 LOG_FILE="/var/log/mhealer.log"
 
+HEAL_SCOPE=all
+if [ "${1:-}" == --scope ]; then
+    mt_valid_scope "${2:-}" || { echo 'Invalid tunnel scope.' >&2; exit 1; }
+    HEAL_SCOPE="$2"
+fi
+RETURN_LABEL='Return to Main Core'
+[ "${HEAL_SCOPE}" == all ] || RETURN_LABEL='Return to Tunnel Menu'
+
 mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tools" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 
@@ -436,8 +495,8 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     mt_install_files 755 "$0" "$INSTALL_PATH" || { echo "Cannot install module." >&2; exit 1; }
 fi
 
-HEAL_INTERVAL=$(sed -n 's/^HEAL_INTERVAL=//p' "$CONF_FILE" 2>/dev/null)
-[[ "$HEAL_INTERVAL" =~ ^[0-9]{1,5}$ ]] && ((10#$HEAL_INTERVAL>=5 && 10#$HEAL_INTERVAL<=86400)) || HEAL_INTERVAL=30
+HEAL_INTERVAL=30
+HEAL_SCOPES=''
 
 # --- ASYNC BACKGROUND UPDATE CHECKER ---
 check_update_bg() {
@@ -474,7 +533,7 @@ self_update_module() {
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MHealer Bot) ]${NC}"
+    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MHealer Bot) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -523,6 +582,87 @@ self_update_module() {
     exec "$INSTALL_PATH" "$@"
 }
 
+load_healer_settings() {
+    local interval scopes
+    interval=$(sed -n 's/^HEAL_INTERVAL=//p' "$CONF_FILE" 2>/dev/null)
+    [[ "$interval" =~ ^[0-9]{1,5}$ ]] && ((10#$interval>=5 && 10#$interval<=86400)) || interval=30
+    HEAL_INTERVAL=$((10#$interval))
+    if grep -q '^HEAL_SCOPES=' "$CONF_FILE" 2>/dev/null; then
+        scopes=$(sed -n 's/^HEAL_SCOPES=//p' "$CONF_FILE")
+        [[ "$scopes" =~ ^(gre|vxlan|rathole|backhaul|paqet)(,(gre|vxlan|rathole|backhaul|paqet))*$ || -z "$scopes" ]] || scopes=''
+    elif [ -f "$CONF_FILE" ]; then scopes='gre,vxlan' # Preserve legacy GRE/VXLAN installations.
+    else scopes=''; fi
+    HEAL_SCOPES="$scopes"
+}
+
+healer_scope_enabled() {
+    [[ ",${HEAL_SCOPES:-}," == *",$1,"* ]]
+}
+
+healer_set_scope() {
+    local scope="$1" action="$2" interval="${3:-}" item scopes='' tmp lock_fd rc=0
+    mt_valid_scope "$scope" && [[ "$action" == on || "$action" == off ]] || return 1
+    if [ -n "$interval" ]; then [[ "$interval" =~ ^[0-9]{1,5}$ ]] && ((10#$interval>=5 && 10#$interval<=86400)) || return 1; fi
+    exec {lock_fd}>"$SECURE_TMP/healer-settings.lock" || return 1
+    flock -w 10 "$lock_fd" || { exec {lock_fd}>&-; return 1; }
+    load_healer_settings
+    [ -z "$interval" ] || HEAL_INTERVAL=$((10#$interval))
+    for item in gre vxlan rathole backhaul paqet; do
+        if [[ "$scope" == all || "$scope" == "$item" ]]; then
+            [ "$action" != on ] || scopes+="${scopes:+,}$item"
+        elif healer_scope_enabled "$item"; then scopes+="${scopes:+,}$item"; fi
+    done
+    tmp=$(mktemp "$SECURE_TMP/healer-conf.XXXXXX") || { flock -u "$lock_fd"; exec {lock_fd}>&-; return 1; }
+    printf 'HEAL_INTERVAL=%s\nHEAL_SCOPES=%s\n' "$HEAL_INTERVAL" "$scopes" > "$tmp"
+    mt_install_files 600 "$tmp" "$CONF_FILE" || rc=1
+    rm -f "$tmp"
+    flock -u "$lock_fd"; exec {lock_fd}>&-
+    [ "$rc" != 0 ] || HEAL_SCOPES="$scopes"
+    return "$rc"
+}
+
+healer_check_service() {
+    local conf="$1" kind="$2" name unit failfile fails
+    case "$kind" in
+        rathole) name=$(basename "$(dirname "$conf")"); unit="mrathole@$name";;
+        backhaul) name=$(basename "$conf" .meta); unit="mbackhaul@$name";;
+        paqet) name=$(basename "$conf" .meta); unit="mpaqet@$name";;
+        *) return 1;;
+    esac
+    [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "$conf" ] || return 1
+    failfile="$HEAL_STATE/$kind-$name.fail"
+    # Deliberately disabled units stay disabled; remote outages never trigger resets.
+    if ! systemctl is-enabled --quiet "$unit" 2>/dev/null || systemctl is-active --quiet "$unit" 2>/dev/null; then
+        echo 0 > "$failfile"; return 0
+    fi
+    fails=$(cat "$failfile" 2>/dev/null); [[ "$fails" =~ ^[0-9]{1,4}$ ]] || fails=0
+    fails=$((fails+1)); echo "$fails" > "$failfile"
+    if [ "$fails" -ge 3 ]; then
+        printf '%s | %s/%s | LOCAL SERVICE FAULT | targeted recovery\n' "$(date -Is)" "$kind" "$name" >> "$LOG_FILE"
+        if systemctl restart "$unit" && systemctl is-active --quiet "$unit"; then echo 0 > "$failfile"
+        else printf '%s | %s/%s | RECOVERY FAILED\n' "$(date -Is)" "$kind" "$name" >> "$LOG_FILE"; fi
+    fi
+}
+
+healer_scan_once() {
+    local conf root="${MTUNNEL_TEST_ROOT:-}/etc"
+    if healer_scope_enabled gre; then
+        for conf in "$root"/mgre/tunnels/*.conf; do [ ! -f "$conf" ] || healer_check_one "$conf" gre; done
+    fi
+    if healer_scope_enabled vxlan; then
+        for conf in "$root"/mgre/vxlan/*.conf; do [ ! -f "$conf" ] || healer_check_one "$conf" vxlan; done
+    fi
+    if healer_scope_enabled rathole; then
+        for conf in "$root"/mrathole/tunnels/*/meta.conf; do [ ! -f "$conf" ] || healer_check_service "$conf" rathole; done
+    fi
+    if healer_scope_enabled backhaul; then
+        for conf in "$root"/mbackhaul/*.meta; do [ ! -f "$conf" ] || healer_check_service "$conf" backhaul; done
+    fi
+    if healer_scope_enabled paqet; then
+        for conf in "$root"/paqet/*.meta; do [ ! -f "$conf" ] || healer_check_service "$conf" paqet; done
+    fi
+}
+
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
@@ -532,7 +672,8 @@ get_local_ip() {
 draw_header() {
     local s_ip=$(get_local_ip)
     local h_stat="${DIM}OFFLINE${NC}"
-    if systemctl is-active --quiet mhealer.service 2>/dev/null; then h_stat="${G}ACTIVE${NC} ${DIM}(${HEAL_INTERVAL}s)${NC}"; fi
+    load_healer_settings
+    if systemctl is-active --quiet mhealer.service 2>/dev/null && { [ "$HEAL_SCOPE" == all ] && [ -n "$HEAL_SCOPES" ] || healer_scope_enabled "$HEAL_SCOPE"; }; then h_stat="${G}ACTIVE${NC} ${DIM}(${HEAL_INTERVAL}s)${NC}"; fi
     clear; echo ""
     local str1=" MHealer Autonomous Bot v${MODULE_VERSION} "
     local raw_len=$(( ${#str1} + 4 + ${#s_ip} + 12 ))
@@ -570,26 +711,25 @@ start_bot() {
     local interval
     echo -ne "\n  ${C}●${NC} ${W}Check interval in seconds (Default 30, range 5-86400): ${NC}"; read -r interval
     interval="${interval:-30}"
-    [[ "$interval" =~ ^[0-9]{1,5}$ ]] && ((10#$interval>=5 && 10#$interval<=86400)) || { echo 'Invalid interval.' >&2; return 1; }
-    HEAL_INTERVAL=$((10#$interval))
-    local tmp; tmp=$(mktemp "$SECURE_TMP/healer-conf.XXXXXX") || return 1
-    printf 'HEAL_INTERVAL=%s\n' "$HEAL_INTERVAL" > "$tmp"
-    mt_install_files 600 "$tmp" "$CONF_FILE" || { rm -f "$tmp"; return 1; }; rm -f "$tmp"
-    generate_daemon && systemctl enable mhealer.service && systemctl restart mhealer.service && systemctl is-active --quiet mhealer.service || { echo 'Healer failed to start.' >&2; return 1; }
-    echo -e "  ${G}● Healer Bot deployed and scanning every ${HEAL_INTERVAL}s.${NC}"
+    healer_set_scope "${HEAL_SCOPE:-all}" on "$interval" || { echo -e "  ${R}✖ Invalid interval or settings could not be saved.${NC}" >&2; return 1; }
+    generate_daemon && systemctl enable mhealer.service && systemctl restart mhealer.service && systemctl is-active --quiet mhealer.service || { echo -e "  ${R}✖ Healer failed to start.${NC}" >&2; return 1; }
+    echo -e "  ${G}● Healer enabled for ${HEAL_SCOPE:-all}; scanning every ${HEAL_INTERVAL}s.${NC}"
 }
 
 stop_bot() {
-    systemctl stop mhealer.service 2>/dev/null
-    systemctl disable mhealer.service 2>/dev/null
-    echo -e "\n  ${Y}● Healer Bot deactivated.${NC}"; sleep 1.5
+    healer_set_scope "${HEAL_SCOPE:-all}" off || return 1
+    if [ -z "$HEAL_SCOPES" ]; then
+        systemctl stop mhealer.service && systemctl disable mhealer.service || return 1
+    fi
+    echo -e "\n  ${Y}● Healer disabled for ${HEAL_SCOPE:-all}.${NC}"; sleep 1.5
 }
 
 view_logs() {
     draw_header
     echo -e "\n  ${DIM}┌─[ HEALER LOGS ]${NC}"
     if [ ! -s "$LOG_FILE" ]; then echo -e "  ${G}● No drops detected yet. System is stable.${NC}"
-    else tail -n 15 "$LOG_FILE" | sed 's/^/  │ /'; fi
+    elif [ "$HEAL_SCOPE" == all ]; then tail -n 15 "$LOG_FILE" | sed 's/^/  │ /'
+    else grep -F -- " | $HEAL_SCOPE/" "$LOG_FILE" | tail -n 15 | sed 's/^/  │ /'; fi
     echo -e "  ${DIM}└────────────────────────────────────────────────────────${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
@@ -620,7 +760,7 @@ healer_check_one() {
     fails=$(cat "$failfile" 2>/dev/null); [[ "$fails" =~ ^[0-9]{1,4}$ ]] || fails=0
     fails=$((fails+1)); echo "$fails" > "$failfile"
     if [ "$fails" -ge 3 ]; then
-        printf '%s | LOCAL FAULT | %s (%s) | targeted recovery\n' "$(date -Is)" "$iface" "$peer" >> "$LOG_FILE"
+        printf '%s | %s/%s | LOCAL FAULT | %s | targeted recovery\n' "$(date -Is)" "$kind" "$iface" "$peer" >> "$LOG_FILE"
         local mod=mgre; [ "$kind" != vxlan ] || mod=mxlan
         if "/usr/bin/$mod" --apply-one "$(basename "$conf" .conf)"; then echo 0 > "$failfile"
         else printf '%s | RECOVERY FAILED | %s\n' "$(date -Is)" "$iface" >> "$LOG_FILE"; fi
@@ -628,13 +768,13 @@ healer_check_one() {
 }
 
 healer_daemon() {
-    HEAL_STATE=/run/mtunnel-healer
+    HEAL_STATE="${MTUNNEL_TEST_ROOT:-}/run/mtunnel-healer"
     mkdir -p "$HEAL_STATE"; chmod 700 "$HEAL_STATE"
     exec 8>"$HEAL_STATE/daemon.lock" || return 1
     flock -n 8 || return 1
     while true; do
-        for conf in /etc/mgre/tunnels/*.conf; do [ -f "$conf" ] && healer_check_one "$conf" gre; done
-        for conf in /etc/mgre/vxlan/*.conf; do [ -f "$conf" ] && healer_check_one "$conf" vxlan; done
+        load_healer_settings
+        healer_scan_once
         sleep "$HEAL_INTERVAL"
     done
 }
@@ -652,17 +792,18 @@ while true; do
     fi
 
     draw_header
+    echo -e "  ${DIM}● Tunnel Scope: ${W}${HEAL_SCOPE^^}${NC}"
     echo -e "\n  ${DIM}┌─[ HEALER BOT ACTIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Activate Healer Bot${NC} ${DIM}(Auto-detect & fix drops)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Deactivate Healer Bot${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Activate Healer Bot${NC} ${DIM}(Selected Tunnel Type)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Deactivate Healer Bot${NC} ${DIM}(Selected Tunnel Type)"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}View Drop/Heal Logs${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}${RETURN_LABEL}${NC}\n"
 
     echo -ne "  ${C}MHEALER ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r ')

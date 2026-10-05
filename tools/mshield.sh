@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mshield.sh) | Stealth Anti-Probing & Anti-RST Shield v3.0.1 ---
+# --- MDesign Modular Core (mshield.sh) | Stealth Anti-Probing & Anti-RST Shield v12.0.1 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="3.0.1"
+MODULE_VERSION="12.0.1"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mshield"
@@ -52,7 +52,7 @@ self_update_module() {
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MShield Module) ]${NC}"
+    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MShield Module) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -190,7 +190,7 @@ while true; do
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 

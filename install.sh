@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="8.4.3"
+MODULE_VERSION="12.0.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -156,7 +156,7 @@ mt_download() {
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
+        curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
     elif command -v wget >/dev/null 2>&1; then
         wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
     fi
@@ -410,7 +410,58 @@ mt_validate_tunnel_conf() {
     [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
 }
 
+mt_valid_scope() {
+    case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
+}
+
+mt_run_tool() {
+    local name="$1" path; shift
+    case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
+    for path in "${MTUNNEL_TEST_ROOT:-}/usr/bin/$name" "${LOCAL_DIR:-/root/mtunnel}/tools/$name.sh"; do
+        if [ -f "$path" ] && mt_validate_script "$path"; then
+            bash "$path" "$@"
+            return $?
+        fi
+    done
+    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    return 1
+}
+
+mt_ask_bbr_on_create() {
+    local answer
+    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    read -r answer || answer=''
+    case "${answer,,}" in
+        y|yes)
+            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        *) ;;
+    esac
+    return 0
+}
+
+mt_render_tunnel_tools() {
+    local iface="$1" healer="$2" bbr="$3"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_config_value() {
+    local key="$1" file="$2" value
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    value=$(sed -n "s/^${key}=//p" "$file" | head -n 1)
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf '%s' "$value"
+}
+
 # END MTUNNEL SHARED HELPERS
+
+
+
 
 
 

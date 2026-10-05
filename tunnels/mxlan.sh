@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v2.4.2 ---
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v12.0.1 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="2.4.2"
+MODULE_VERSION="12.0.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -164,7 +164,7 @@ mt_download() {
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
+        curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
     elif command -v wget >/dev/null 2>&1; then
         wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
     fi
@@ -418,8 +418,59 @@ mt_validate_tunnel_conf() {
     [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
 }
 
+mt_valid_scope() {
+    case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
+}
+
+mt_run_tool() {
+    local name="$1" path; shift
+    case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
+    for path in "${MTUNNEL_TEST_ROOT:-}/usr/bin/$name" "${LOCAL_DIR:-/root/mtunnel}/tools/$name.sh"; do
+        if [ -f "$path" ] && mt_validate_script "$path"; then
+            bash "$path" "$@"
+            return $?
+        fi
+    done
+    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    return 1
+}
+
+mt_ask_bbr_on_create() {
+    local answer
+    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    read -r answer || answer=''
+    case "${answer,,}" in
+        y|yes)
+            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        *) ;;
+    esac
+    return 0
+}
+
+mt_render_tunnel_tools() {
+    local iface="$1" healer="$2" bbr="$3"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_config_value() {
+    local key="$1" file="$2" value
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    value=$(sed -n "s/^${key}=//p" "$file" | head -n 1)
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf '%s' "$value"
+}
+
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
 
 
 
@@ -1146,7 +1197,7 @@ self_update_module() {
     else mirror_text+="    ${DIM}(version unavailable)${NC}"; fi
 
     draw_mxlan_header
-    echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
+    echo -e "\n  ${DIM}┌─[ OTA Update (MXLAN Fabric) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -1872,9 +1923,10 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}Instant OTA Update Module${NC} $(update_available_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
     echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
+    mt_render_tunnel_tools 21 22 23
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
 
@@ -1997,6 +2049,7 @@ while true; do
 
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
+               mt_ask_bbr_on_create
                echo -e "  ${G}● Fabric [${vx_name}] deployed (Underlay: ${fab_proto} | VNI: ${vni_id} | Subnet: ${core_sub}.x | Auto MTU: ${cust_mtu})${NC}"
                [ "$fab_proto" == "ipv6" ] && echo -e "  ${DIM}● IPv6 underlay: allow UDP 4789 over IPv6 in the firewall on BOTH servers.${NC}"
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
@@ -2301,6 +2354,9 @@ while true; do
         14) menu_auto_mtu ;;
         13) show_traffic_monitor ;;
         18) menu_backup_restore ;;
+        21) mt_run_tool minterface --scope vxlan ;;
+        22) mt_run_tool mhealer --scope vxlan ;;
+        23) mt_run_tool mbbr --from-tunnel ;;
         0) break ;;
         11) menu_manual_mtu ;;
     esac

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (minterface.sh) | Interface Mapper v4.1.2 ---
+# --- MDesign Modular Core (minterface.sh) | Interface Mapper v12.0.1 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="4.1.2"
+MODULE_VERSION="12.0.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -158,7 +158,7 @@ mt_download() {
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
+        curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
     elif command -v wget >/dev/null 2>&1; then
         wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
     fi
@@ -412,8 +412,59 @@ mt_validate_tunnel_conf() {
     [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
 }
 
+mt_valid_scope() {
+    case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
+}
+
+mt_run_tool() {
+    local name="$1" path; shift
+    case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
+    for path in "${MTUNNEL_TEST_ROOT:-}/usr/bin/$name" "${LOCAL_DIR:-/root/mtunnel}/tools/$name.sh"; do
+        if [ -f "$path" ] && mt_validate_script "$path"; then
+            bash "$path" "$@"
+            return $?
+        fi
+    done
+    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    return 1
+}
+
+mt_ask_bbr_on_create() {
+    local answer
+    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    read -r answer || answer=''
+    case "${answer,,}" in
+        y|yes)
+            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        *) ;;
+    esac
+    return 0
+}
+
+mt_render_tunnel_tools() {
+    local iface="$1" healer="$2" bbr="$3"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_config_value() {
+    local key="$1" file="$2" value
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    value=$(sed -n "s/^${key}=//p" "$file" | head -n 1)
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf '%s' "$value"
+}
+
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
 
 
 
@@ -425,6 +476,14 @@ B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; 
 INSTALL_PATH="/usr/bin/minterface"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
+
+INTERFACE_SCOPE=all
+if [ "${1:-}" == --scope ]; then
+    mt_valid_scope "${2:-}" || { echo 'Invalid tunnel scope.' >&2; exit 1; }
+    INTERFACE_SCOPE="$2"
+fi
+RETURN_LABEL='Return to Main Core'
+[ "${INTERFACE_SCOPE}" == all ] || RETURN_LABEL='Return to Tunnel Menu'
 
 mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tools" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
@@ -468,7 +527,7 @@ self_update_module() {
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MInterface Module) ]${NC}"
+    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MInterface Module) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -523,12 +582,27 @@ get_local_ip() {
     echo "${ip:-Unknown}"
 }
 
-get_configs() { ls /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf 2>/dev/null; }
-
+get_configs() {
+    local root="${MTUNNEL_TEST_ROOT:-}/etc" conf scope="${INTERFACE_SCOPE:-all}"
+    local -a paths=()
+    case "$scope" in
+        gre) paths=("$root"/mgre/tunnels/*.conf);;
+        vxlan) paths=("$root"/mgre/vxlan/*.conf);;
+        rathole) paths=("$root"/mrathole/tunnels/*/meta.conf);;
+        backhaul) paths=("$root"/mbackhaul/*.meta);;
+        paqet) paths=("$root"/paqet/*.meta);;
+        all) paths=("$root"/mgre/tunnels/*.conf "$root"/mgre/vxlan/*.conf "$root"/mrathole/tunnels/*/meta.conf "$root"/mbackhaul/*.meta "$root"/paqet/*.meta);;
+        *) return 1;;
+    esac
+    for conf in "${paths[@]}"; do [ ! -f "$conf" ] || printf '%s\n' "$conf"; done
+    return 0
+}
 detect_server_role() {
     local conf role seen1=0 seen2=0
     while IFS= read -r conf; do
-        role=$(sed -n 's/^TYPE=//p' "$conf")
+        role=$(mt_config_value TYPE "$conf")
+        [ -n "$role" ] || role=$(mt_config_value ROLE "$conf")
+        case "$conf" in */paqet/*.meta) if [ "$role" == 1 ]; then role=2; elif [ "$role" == 2 ]; then role=1; fi;; esac
         [ "$role" != 1 ] || seen1=1; [ "$role" != 2 ] || seen2=1
     done < <(get_configs)
     if [ "$seen1$seen2" == 11 ]; then echo -e "${Y}Mixed (Access + Gateway)${NC}"
@@ -556,9 +630,44 @@ draw_header() {
 
 print_row_2col() {
     local l_raw="$1"; local l_col="$2"; local r_raw="$3"; local r_col="$4"
+    if [ "${#r_raw}" -gt 63 ]; then r_raw="${r_raw:0:60}..."; r_col="${W}${r_raw}${NC}"; fi
     local l_spaces=$(printf '%*s' "$(( 28 - ${#l_raw} ))" "")
     local r_spaces=$(printf '%*s' "$(( 63 - ${#r_raw} ))" "")
     echo -e "  ${B}│${NC} ${l_col}${l_spaces} ${B}│${NC} ${r_col}${r_spaces} ${B}│${NC}"
+}
+
+render_application_blueprint() {
+    local conf="$1" kind name unit role remote port listen ports proto status
+    case "$conf" in
+        */mrathole/tunnels/*/meta.conf) kind=rathole; name=$(basename "$(dirname "$conf")");;
+        */mbackhaul/*.meta) kind=backhaul; name=$(basename "$conf" .meta);;
+        */paqet/*.meta) kind=paqet; name=$(basename "$conf" .meta);;
+        *) return 1;;
+    esac
+    [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    case "$kind" in rathole) unit="mrathole@$name";; backhaul) unit="mbackhaul@$name";; paqet) unit="mpaqet@$name";; esac
+    role=$(mt_config_value TYPE "$conf"); [ -n "$role" ] || role=$(mt_config_value ROLE "$conf")
+    remote=$(mt_config_value REMOTE_IP "$conf")
+    port=$(mt_config_value LINK_PORT "$conf"); [ -n "$port" ] || port=$(mt_config_value TUN_PORT "$conf")
+    listen=$(mt_config_value BIND_HOST "$conf"); listen="${listen:-0.0.0.0}"
+    proto=$(mt_config_value TRANSPORT "$conf")
+    [ -n "$proto" ] || { [ "$kind" != paqet ] && proto=TCP || proto='Raw KCP'; }
+    ports=$(mt_config_value PORTS "$conf")
+    [ -n "$ports" ] || ports="TCP:$(mt_config_value TCP_PORTS "$conf") UDP:$(mt_config_value UDP_PORTS "$conf")"
+    status=OFFLINE; systemctl is-active --quiet "$unit" 2>/dev/null && status=ACTIVE
+    echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+    print_row_2col 'Tunnel' "${C}Tunnel${NC}" "$name ($kind)" "${W}$name ($kind)${NC}"
+    print_row_2col 'Service' "${DIM}Service${NC}" "$unit: $status" "${W}$unit: $status${NC}"
+    print_row_2col 'Transport' "${DIM}Transport${NC}" "$proto" "${W}$proto${NC}"
+    if [ "$role" == 1 ]; then
+        listen=$(mt_hostport "$listen" "$port")
+        print_row_2col 'Listen Address' "${DIM}Listen Address${NC}" "$listen" "${G}$listen${NC}"
+    else
+        remote=$(mt_hostport "$remote" "$port")
+        print_row_2col 'Remote Endpoint' "${DIM}Remote Endpoint${NC}" "$remote" "${Y}$remote${NC}"
+    fi
+    print_row_2col 'Port Mappings' "${DIM}Port Mappings${NC}" "$ports" "${W}$ports${NC}"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────╯${NC}\n"
 }
 
 render_matrix() {
@@ -567,6 +676,11 @@ render_matrix() {
 
     echo -e "\n  ${Y}● Active Network Interface Blueprint:${NC}"
     for conf in "${configs[@]}"; do
+        case "$conf" in
+            */mrathole/tunnels/*/meta.conf|*/mbackhaul/*.meta|*/paqet/*.meta)
+                render_application_blueprint "$conf"; continue;;
+        esac
+        mt_validate_conf "$conf" || continue
         TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; FWD_TCP=""; FWD_UDP=""; LOCAL_IP6=""; REMOTE_IP6=""; VNI_ID=""; BR_NAME=""; source "$conf"
         local is_vx=false; local t_name="$T_NAME"
         
@@ -615,9 +729,19 @@ render_matrix() {
         print_row_2col "Tunnel Infrastructure" "${C}Tunnel Infrastructure${NC}" "$proto_lbl" "${W}$proto_lbl${NC}"
         
         local l_pub=${MT_LOCAL_PUBLIC:-Unknown}; local r_pub=${MT_REMOTE_PUBLIC:-Unknown}
-        print_row_2col "Public Endpoint IPs" "${DIM}Public Endpoint IPs${NC}" "Local: $l_pub   Remote: $r_pub" "${DIM}Local:${NC} ${W}$l_pub${NC}   ${DIM}Remote:${NC} ${W}$r_pub${NC}"
+        if [ $(( ${#l_pub} + ${#r_pub} + 17 )) -gt 63 ]; then
+            print_row_2col "Public Endpoint IPs" "${DIM}Public Endpoint IPs${NC}" "Local: $l_pub" "${DIM}Local:${NC} ${W}$l_pub${NC}"
+            print_row_2col "" "" "Remote: $r_pub" "${DIM}Remote:${NC} ${W}$r_pub${NC}"
+        else
+            print_row_2col "Public Endpoint IPs" "${DIM}Public Endpoint IPs${NC}" "Local: $l_pub   Remote: $r_pub" "${DIM}Local:${NC} ${W}$l_pub${NC}   ${DIM}Remote:${NC} ${W}$r_pub${NC}"
+        fi
         echo -e "  ${B}├──────────────────────────────┼─────────────────────────────────────────────────────────────────┤${NC}"
-        print_row_2col "Core IP Network" "${DIM}Core IP Network${NC}" "Local: $lip   Remote: $tip" "${DIM}Local:${NC} ${G}$lip${NC}   ${DIM}Remote:${NC} ${Y}$tip${NC}"
+        if [ $(( ${#lip} + ${#tip} + 17 )) -gt 63 ]; then
+            print_row_2col "Core IP Network" "${DIM}Core IP Network${NC}" "Local: $lip" "${DIM}Local:${NC} ${W}$lip${NC}"
+            print_row_2col "" "" "Remote: $tip" "${DIM}Remote:${NC} ${W}$tip${NC}"
+        else
+            print_row_2col "Core IP Network" "${DIM}Core IP Network${NC}" "Local: $lip   Remote: $tip" "${DIM}Local:${NC} ${G}$lip${NC}   ${DIM}Remote:${NC} ${Y}$tip${NC}"
+        fi
         print_row_2col "Active Port Mappings" "${Y}Active Port Mappings${NC}" "$h_ports" "${W}$h_ports${NC}"
         
         if [[ "$TUN_PROTO" == "6to4" ]]; then
@@ -640,15 +764,16 @@ while true; do
     fi
 
     draw_header
+    echo -e "  ${DIM}● Tunnel Scope: ${W}${INTERFACE_SCOPE^^}${NC}"
     echo -e "\n  ${DIM}┌─[ INTERFACE MATRIX ACTIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Render Active Network Blueprint${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}${RETURN_LABEL}${NC}\n"
 
     echo -ne "  ${C}MINTERFACE ❯❯ ${NC}"; read opt
     opt=$(echo "$opt" | tr -d '\r ')

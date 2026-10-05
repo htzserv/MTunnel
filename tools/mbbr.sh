@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign BBR Accelerator Core (mbbr.sh) v12.0.1 ---
+# --- MDesign BBR Accelerator Core (mbbr.sh) v12.0.2 ---
 # [Features: Async Background Checker | MDesign UI Spacing | Minimal OTA]
 
-MODULE_VERSION="12.0.1"
+MODULE_VERSION="12.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -443,13 +443,35 @@ mt_ask_bbr_on_create() {
 }
 
 mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3"
+    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
+    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_menu_tunnel_recovery() {
+    local kind="$1" header="$2" choice
+    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+    while true; do
+        "$header"
+        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"
+        read -r choice || return 0
+        case "${choice//$'\r'/}" in
+            1) menu_watchdog;;
+            2) mt_run_tool mhealer --scope "$kind";;
+            0|q|Q) return 0;;
+        esac
+    done
 }
 
 mt_config_value() {
@@ -462,6 +484,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.1 ---
+# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="12.0.1"
+MODULE_VERSION="12.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -443,13 +443,35 @@ mt_ask_bbr_on_create() {
 }
 
 mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3"
+    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
+    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_menu_tunnel_recovery() {
+    local kind="$1" header="$2" choice
+    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+    while true; do
+        "$header"
+        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"
+        read -r choice || return 0
+        case "${choice//$'\r'/}" in
+            1) menu_watchdog;;
+            2) mt_run_tool mhealer --scope "$kind";;
+            0|q|Q) return 0;;
+        esac
+    done
 }
 
 mt_config_value() {
@@ -462,6 +484,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1511,23 +1534,23 @@ render_mbackhaul_menu() {
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Edit Tunnel Link Port${NC} ${DIM}(Connection Port)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Toggle UDP Support${NC} ${DIM}(Iran Server)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${C}Edit Listen Address${NC} ${DIM}(IPv4/IPv6)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Edit Listen Address${NC} ${DIM}(IPv4/IPv6)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Live Traffic & Bandwidth Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Live Traffic & Bandwidth Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    mt_render_tunnel_tools 14 15 16
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${R}Uninstall MBackhaul${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}21${NC}${DIM}❯${NC} ${R}Uninstall MBackhaul${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_tools 19 20 21
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
 
@@ -1651,7 +1674,7 @@ while true; do
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
            
-        3|4|5|6|7|8|9|13|14|18)
+        3|4|5|6|7|8|9|17|18|10)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN" .meta)
            ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"
@@ -1772,14 +1795,14 @@ while true; do
                    echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
                fi
                
-           elif [[ "$opt" == "13" ]]; then
+           elif [[ "$opt" == "17" ]]; then
                manage_cron "$t_name"; continue
                
-           elif [[ "$opt" == "18" ]]; then
+           elif [[ "$opt" == "10" ]]; then
                [ "$ROLE" == 1 ] || continue
                mt_ask_bind_host || continue; BIND_HOST="$MT_BIND_HOST"
 
-           elif [[ "$opt" == "14" ]]; then
+           elif [[ "$opt" == "18" ]]; then
                zero_bh_counters "$t_name"
            fi
            
@@ -1792,20 +1815,20 @@ while true; do
            fi
            ;;
            
-        10) show_live_radar ;;
-        11) show_tunnel_registry ;;
-        12) 
+        11) show_live_radar ;;
+        12) show_tunnel_registry ;;
+        13)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN" .meta)
            journalctl -u mbackhaul@$t_name -n 50 -f; continue
            ;;
            
-        15) menu_install_core ;;
-        16) self_update_module ;;
-        17) uninstall_mbackhaul ;;
-        19) mt_run_tool minterface --scope backhaul ;;
-        20) mt_run_tool mhealer --scope backhaul ;;
-        21) mt_run_tool mbbr --from-tunnel ;;
+        19) menu_install_core ;;
+        20) self_update_module ;;
+        21) uninstall_mbackhaul ;;
+        14) mt_run_tool minterface --scope backhaul ;;
+        15) mt_run_tool mhealer --scope backhaul ;;
+        16) mt_run_tool mbbr --from-tunnel ;;
         0) break ;;
     esac
 done

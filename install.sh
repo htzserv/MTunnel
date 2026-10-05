@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="12.0.1"
+MODULE_VERSION="12.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -441,13 +441,35 @@ mt_ask_bbr_on_create() {
 }
 
 mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3"
+    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
+    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_menu_tunnel_recovery() {
+    local kind="$1" header="$2" choice
+    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+    while true; do
+        "$header"
+        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"
+        read -r choice || return 0
+        case "${choice//$'\r'/}" in
+            1) menu_watchdog;;
+            2) mt_run_tool mhealer --scope "$kind";;
+            0|q|Q) return 0;;
+        esac
+    done
 }
 
 mt_config_value() {
@@ -459,6 +481,7 @@ mt_config_value() {
 }
 
 # END MTUNNEL SHARED HELPERS
+
 
 
 
@@ -508,12 +531,23 @@ draw_progress() {
     tput cnorm 2>/dev/null || true
 }
 
+draw_installer_header() {
+    local title="MTunnel Core Modular Installer v${MODULE_VERSION}"
+    local padding=$((59-${#title}))
+    [ "$padding" -ge 0 ] || padding=0
+    clear 2>/dev/null || true
+    echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
+    printf "  %b│%b %b%s%b%*s%b│%b\n" "$B" "$NC" "$W" "$title" "$NC" "$padding" '' "$B" "$NC"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
+}
+
 installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
     local script_file="${BASH_SOURCE[0]}" script_dir
     script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mweb:tools/mweb.sh mstats:tools/mstats.sh mhealer:tools/mhealer.sh minterface:tools/minterface.sh mbbr:tools/mbbr.sh mdiag:tools/mdiag.sh mshield:tools/mshield.sh linktest:tools/linktest.sh)
     local -a files=()
+    local current=0 mod_ver
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; shift 2;;
@@ -540,6 +574,7 @@ installer_main() {
     chmod 700 "$work"
     INSTALLER_WORK="$work"
     trap 'rm -rf -- "$INSTALLER_WORK"' EXIT
+    draw_installer_header
     if [ -n "$remote" ]; then
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
         remote="${remote%/}"
@@ -550,6 +585,10 @@ installer_main() {
             if ! mt_download "$remote/$path" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
                 echo "Cannot prepare module: $path. Installed scripts preserved." >&2; return 1
             fi
+            current=$((current+1)); name="${item%%:*}"
+            mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$work/scripts/$path")
+            draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
+            echo ''
         done
         source_dir="$work/scripts"
     fi
@@ -564,6 +603,12 @@ installer_main() {
             mt_is_newer_version "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
         fi
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
+        if [ -z "$remote" ]; then
+            current=$((current+1))
+            mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
+            draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
+            echo ''
+        fi
     done
     if [ -f "$source_dir/install.sh" ]; then
         mt_validate_script "$source_dir/install.sh" || return 1
@@ -577,13 +622,6 @@ installer_main() {
         done
     fi
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
-    local current=0 mod_ver
-    for item in "${modules[@]}"; do
-        current=$((current+1)); name="${item%%:*}"; path="${item#*:}"
-        mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-        draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
-        echo ''
-    done
     if [ "$launch" == 1 ]; then
         echo -e "\n  ${G}● MTunnel Installation Complete! Launching Core Dashboard...${NC}\n"
     else echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"; fi
@@ -592,6 +630,6 @@ installer_main() {
             [ -z "$target" ] || systemctl restart "$target" || return 1
         done < <(systemctl list-units --type=service --state=active --no-legend --plain 'mrathole@*.service' 'mbackhaul@*.service' 'mpaqet@*.service' 'gost.service' 'haproxy.service' 2>/dev/null | awk '{print $1}')
     fi
-    if [ "$launch" == 1 ]; then exec "$root/usr/bin/mtunnel"; fi
+    if [ "$launch" == 1 ]; then sleep 1.5; exec "$root/usr/bin/mtunnel"; fi
 }
 installer_main "$@"

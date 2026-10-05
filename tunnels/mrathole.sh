@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="12.0.1"
+MODULE_VERSION="12.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -443,13 +443,35 @@ mt_ask_bbr_on_create() {
 }
 
 mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3"
+    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
+    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_menu_tunnel_recovery() {
+    local kind="$1" header="$2" choice
+    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+    while true; do
+        "$header"
+        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"
+        read -r choice || return 0
+        case "${choice//$'\r'/}" in
+            1) menu_watchdog;;
+            2) mt_run_tool mhealer --scope "$kind";;
+            0|q|Q) return 0;;
+        esac
+    done
 }
 
 mt_config_value() {
@@ -462,6 +484,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1326,23 +1349,23 @@ render_mrathole_menu() {
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Auth Token (Secret)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Edit Tunnel Link Port${NC} ${DIM}(Connection Port)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${C}Edit Listen Address${NC} ${DIM}(IPv4/IPv6)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Edit Listen Address${NC} ${DIM}(IPv4/IPv6)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    mt_render_tunnel_tools 13 14 15
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_tools 18 19 20
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
 
@@ -1465,7 +1488,7 @@ EOF
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
 
-        3|4|5|6|7|8|12|13|17)
+        3|4|5|6|7|8|16|17|9)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; BIND_HOST="0.0.0.0"
@@ -1561,14 +1584,14 @@ EOF
                    echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
                fi
                
-           elif [[ "$opt" == "12" ]]; then
+           elif [[ "$opt" == "16" ]]; then
                manage_cron "$t_name"; continue
                
-           elif [[ "$opt" == "17" ]]; then
+           elif [[ "$opt" == "9" ]]; then
                [ "$TYPE" == 1 ] || continue
                mt_ask_bind_host || continue; BIND_HOST="$MT_BIND_HOST"
 
-           elif [[ "$opt" == "13" ]]; then
+           elif [[ "$opt" == "17" ]]; then
                zero_rat_counters "$t_name"
            fi
            
@@ -1592,20 +1615,20 @@ EOF
            fi
            ;;
 
-        9) show_live_radar ;;
-        10) show_tunnel_registry ;;
-        11) 
+        10) show_live_radar ;;
+        11) show_tunnel_registry ;;
+        12)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            journalctl -u mrathole@$t_name -n 50 -f; continue
            ;;
            
-        14) menu_install_core ;;
-        15) self_update_module ;;
-        16) uninstall_mrathole ;;
-        18) mt_run_tool minterface --scope rathole ;;
-        19) mt_run_tool mhealer --scope rathole ;;
-        20) mt_run_tool mbbr --from-tunnel ;;
+        18) menu_install_core ;;
+        19) self_update_module ;;
+        20) uninstall_mrathole ;;
+        13) mt_run_tool minterface --scope rathole ;;
+        14) mt_run_tool mhealer --scope rathole ;;
+        15) mt_run_tool mbbr --from-tunnel ;;
         0) break ;;
     esac
 done

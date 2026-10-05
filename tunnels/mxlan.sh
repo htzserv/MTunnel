@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v12.0.1 ---
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v12.0.2 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="12.0.1"
+MODULE_VERSION="12.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -449,13 +449,35 @@ mt_ask_bbr_on_create() {
 }
 
 mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3"
+    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
+    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+}
+
+mt_menu_tunnel_recovery() {
+    local kind="$1" header="$2" choice
+    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+    while true; do
+        "$header"
+        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"
+        read -r choice || return 0
+        case "${choice//$'\r'/}" in
+            1) menu_watchdog;;
+            2) mt_run_tool mhealer --scope "$kind";;
+            0|q|Q) return 0;;
+        esac
+    done
 }
 
 mt_config_value() {
@@ -468,6 +490,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1918,15 +1941,14 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${C}Auto MTU Discovery${NC}"
     echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Fabric${NC}"
     echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only VXLAN)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC} $(watchdog_is_on && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
+    mt_render_tunnel_tools 17 18 19 vxlan
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
-    echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}21${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}22${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_tools 21 22 23
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
 
@@ -2346,17 +2368,16 @@ while true; do
                read -t 2 -n 1 -s b_opt
                [[ "$b_opt" == "q" || "$b_opt" == "Q" ]] && break
            done ;;
-        19) self_update_module ;;
-        20) uninstall_mxlan ;;
+        20) self_update_module ;;
+        22) uninstall_mxlan ;;
         15) menu_encrypt ;;
         16) menu_guard ;;
-        17) menu_watchdog ;;
+        18) mt_menu_tunnel_recovery vxlan draw_mxlan_header ;;
         14) menu_auto_mtu ;;
         13) show_traffic_monitor ;;
-        18) menu_backup_restore ;;
-        21) mt_run_tool minterface --scope vxlan ;;
-        22) mt_run_tool mhealer --scope vxlan ;;
-        23) mt_run_tool mbbr --from-tunnel ;;
+        21) menu_backup_restore ;;
+        17) mt_run_tool minterface --scope vxlan ;;
+        19) mt_run_tool mbbr --from-tunnel ;;
         0) break ;;
         11) menu_manual_mtu ;;
     esac

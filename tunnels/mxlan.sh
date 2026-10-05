@@ -1,6 +1,6 @@
 #!/bin/bash
 # --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v2.0.0 ---
-# [v2.3.0: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
+# [v2.4.0: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
 # [v2.2.0: IPv6 underlay (VXLAN over IPv6) | IPv6-aware header (2nd line) | ip6tables peer Guard | IPv6 ESP | IPv6 path-MTU probe | manual MTU menu]
@@ -8,7 +8,436 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="2.3.0"
+MODULE_VERSION="2.4.0"
+
+# BEGIN MTUNNEL SHARED HELPERS
+# Shared helpers embedded in standalone modules by maintenance/embed_helpers.py.
+# Sourcing this file performs no network, filesystem, or service operations.
+
+mt_normalize_host() {
+    local host="$1"
+    if [[ "$host" == \[*\] ]]; then host="${host:1:${#host}-2}"; fi
+    printf '%s' "$host"
+}
+
+mt_valid_port() {
+    [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535))
+}
+
+mt_valid_ipv4() {
+    local part; local -a octets=()
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    IFS=. read -ra octets <<< "$1"
+    for part in "${octets[@]}"; do
+        [[ "$part" =~ ^[0-9]{1,3}$ ]] && ((10#$part <= 255)) || return 1
+    done
+}
+
+mt_valid_ipv6() {
+    local ip tail group rest count=0 extra=0
+    ip=$(mt_normalize_host "$1")
+    if [[ "$ip" == *%* ]]; then
+        [[ "${ip#*%}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+        ip="${ip%%\%*}"
+    fi
+    [[ "$ip" == *:* ]] || return 1
+    if [[ "$ip" == *.* ]]; then
+        tail="${ip##*:}"; mt_valid_ipv4 "$tail" || return 1
+        ip="${ip%:*}:0:0"
+    fi
+    [[ "$ip" =~ ^[0-9a-fA-F:]+$ && "$ip" != *:::* ]] || return 1
+    [[ "$ip" != :* || "$ip" == ::* ]] || return 1
+    [[ "$ip" != *: || "$ip" == *:: ]] || return 1
+    rest="${ip/::/}"
+    [[ "$rest" != *::* ]] || return 1
+    if [[ "$ip" != *::* ]]; then
+        [[ "$ip" != :* && "$ip" != *: ]] || return 1
+    fi
+    local -a groups=()
+    IFS=: read -ra groups <<< "$ip"
+    for group in "${groups[@]}"; do
+        [ -z "$group" ] && continue
+        [[ "$group" =~ ^[0-9a-fA-F]{1,4}$ ]] || return 1
+        ((count+=1))
+    done
+    if [[ "$ip" == *::* ]]; then ((count < 8)); else ((count == 8)); fi
+}
+
+mt_valid_host() {
+    local host label
+    host=$(mt_normalize_host "$1")
+    [[ "$1" != \[*\] ]] || [[ "$host" == *:* ]] || return 1
+    [ -n "$host" ] && [ "${#host}" -le 253 ] || return 1
+    if [[ "$host" == *:* ]]; then mt_valid_ipv6 "$host"; return; fi
+    if [[ "$host" =~ ^[0-9.]+$ ]]; then mt_valid_ipv4 "$host"; return; fi
+    host="${host%.}"
+    [[ "$host" =~ ^[A-Za-z0-9.-]+$ && "$host" != *..* ]] || return 1
+    local -a labels=()
+    IFS=. read -ra labels <<< "$host"
+    for label in "${labels[@]}"; do
+        [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] && [ "${#label}" -le 63 ] || return 1
+    done
+}
+
+mt_hostport() {
+    local host; host=$(mt_normalize_host "$1")
+    if [[ "$host" == *:* ]]; then printf '[%s]:%s' "$host" "$2"; else printf '%s:%s' "$host" "$2"; fi
+}
+
+mt_valid_index() {
+    [[ "$1" =~ ^[0-9]{1,8}$ ]] && ((10#$1 < $2))
+}
+
+mt_is_newer_version() {
+    [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
+}
+
+mt_ask_bind_host() {
+    local choice host
+    echo '  Server listen: 1) IPv4  2) IPv6  3) Specific IP'
+    read -r -p '  Select [1]: ' choice
+    case "${choice:-1}" in
+        1) MT_BIND_HOST='0.0.0.0';;
+        2) MT_BIND_HOST='::';;
+        3) read -r -p '  Listen IP: ' host
+           host=$(mt_normalize_host "$host")
+           mt_valid_ipv4 "$host" || mt_valid_ipv6 "$host" || return 1
+           MT_BIND_HOST="$host";;
+        *) return 1;;
+    esac
+}
+
+mt_tcp_probe() {
+    local host; host=$(mt_normalize_host "$1")
+    mt_valid_host "$host" && mt_valid_port "$2" || return 1
+    timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$2" 2>/dev/null
+}
+
+mt_list_has_port() {
+    local item; local -a parts=()
+    IFS=, read -ra parts <<< "$1"
+    for item in "${parts[@]}"; do
+        [[ "$item" == *"="* ]] && item="${item%%=*}"
+        [[ "$item" == *:* ]] && item="${item##*:}"
+        mt_valid_port "$item" && ((10#$item == 10#$2)) && return 0
+    done
+    return 1
+}
+
+mt_port_busy() {
+    local port="$1" proto="${2:-both}" opts='-Hln'
+    mt_valid_port "$port" || return 1
+    case "$proto" in tcp) opts+='t';; udp) opts+='u';; *) opts+='tu';; esac
+    ss "$opts" 2>/dev/null | awk -v p="$((10#$port))" '
+        { for (i=1;i<=NF;i++) if ($i ~ /:[0-9]+$/) {n=$i;sub(/^.*:/,"",n);if(n+0==p) found=1;break} }
+        END {exit !found}'
+}
+
+mt_validate_port_list() {
+    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item
+    local -A seen=(); local -a parts=()
+    [ -z "$list" ] && return 0
+    [[ "$list" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+    IFS=, read -ra parts <<< "$list"
+    for item in "${parts[@]}"; do
+        mt_valid_port "$item" || return 1
+        item=$((10#$item)); [ -z "${seen[$item]:-}" ] || return 1; seen[$item]=1
+        if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$item" && mt_port_busy "$item" "$proto"; then return 1; fi
+    done
+}
+
+mt_validate_script() {
+    local file="$1" version
+    [ -s "$file" ] && head -n 1 "$file" | grep -qE '^#!(/bin/bash|/usr/bin/env bash)$' || return 1
+    bash -n "$file" || return 1
+    version=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$file")
+    [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+}
+
+mt_download() {
+    local url="$1" dest="$2" expected="${3:-}" tmp rc=1
+    [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
+    tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl -fSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
+    fi
+    if [ "$rc" != 0 ] || [ ! -s "$tmp" ]; then rm -f "$tmp"; return 1; fi
+    if [ -n "$expected" ]; then
+        [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" == "${expected,,}" ] || { rm -f "$tmp"; return 1; }
+    fi
+    mv -f "$tmp" "$dest"
+}
+
+# Stage all destinations first. Roll back every committed file if a rename fails.
+mt_install_files() {
+    local mode="$1"; shift
+    local src dest stage backup i j rc=0
+    local -a stages=() backups=() destinations=() existed=()
+    [ "$(( $# % 2 ))" == 0 ] || return 1
+    while [ "$#" -gt 0 ]; do
+        src="$1"; dest="$2"; shift 2
+        mkdir -p "$(dirname "$dest")" || { rc=1; break; }
+        stage=$(mktemp "${dest}.stage.XXXXXX") || { rc=1; break; }
+        stages+=("$stage"); destinations+=("$dest"); backups+=(""); existed+=(0)
+        i=$((${#stages[@]}-1))
+        if ! cat "$src" > "$stage" || ! chmod "$mode" "$stage"; then rc=1; break; fi
+        if [ -e "$dest" ] || [ -L "$dest" ]; then
+            backup=$(mktemp "${dest}.rollback.XXXXXX") || { rc=1; break; }
+            backups[$i]="$backup"; existed[$i]=1
+            rm -f "$backup"
+            if ! cp -p --no-dereference "$dest" "$backup"; then rc=1; break; fi
+        fi
+    done
+    if [ "$rc" == 0 ]; then
+        for i in "${!destinations[@]}"; do
+            if ! mv -f "${stages[$i]}" "${destinations[$i]}"; then
+                rc=1
+                for ((j=i-1;j>=0;j--)); do
+                    if [ "${existed[$j]}" == 1 ]; then mv -f "${backups[$j]}" "${destinations[$j]}"; else rm -f "${destinations[$j]}"; fi
+                done
+                break
+            fi
+        done
+    fi
+    for stage in "${stages[@]}" "${backups[@]}"; do [ -n "$stage" ] && rm -f "$stage"; done
+    return "$rc"
+}
+
+mt_install_script() {
+    local candidate="$1" rel="$2" target="$3" current="${4:-}"; local -a files=()
+    mt_validate_script "$candidate" || return 1
+    if mt_validate_script "$target" 2>/dev/null; then
+        local current_version new_version
+        current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
+        new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
+        if mt_is_newer_version "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
+    fi
+    files+=("$candidate" "$target")
+    [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
+    if [ -f "$current" ] && [ "$(readlink -f "$current")" != "$(readlink -f "$target")" ] && [ "$current" != "$LOCAL_DIR/$rel" ]; then files+=("$candidate" "$current"); fi
+    mt_install_files 755 "${files[@]}"
+}
+
+mt_valid_elf() {
+    local file="$1" machine arch
+    [ -f "$file" ] && [ "$(wc -c < "$file")" -gt 4096 ] || return 1
+    [ "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" == 7f454c46 ] || return 1
+    machine=$(od -An -tu2 -j18 -N2 "$file" | tr -d ' \n'); arch=$(uname -m)
+    case "$arch:$machine" in x86_64:62|aarch64:183|arm64:183|armv7l:40|i686:3) return 0;; esac
+    return 1
+}
+
+mt_extract_archive() {
+    local archive="$1" dest="$2" list entry
+    list=$(mktemp "$dest/.entries.XXXXXX") || return 1
+    if tar -tzf "$archive" > "$list" 2>/dev/null; then
+        while IFS= read -r entry; do
+            case "/$entry/" in *'/../'*|*'/./../'*|//*|*'\\'*) rm -f "$list"; return 1;; esac
+        done < "$list"
+        # Reject symlinks, hard links and devices before extraction.
+        if tar -tvzf "$archive" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit !bad}'; then rm -f "$list"; return 1; fi
+        rm -f "$list"
+        tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$dest"
+    elif command -v unzip >/dev/null 2>&1 && unzip -Z1 "$archive" > "$list" 2>/dev/null; then
+        while IFS= read -r entry; do
+            case "/$entry/" in *'/../'*|//*|*'\\'*|*':'*) rm -f "$list"; return 1;; esac
+        done < "$list"
+        if unzip -Z -l "$archive" | awk '$1 ~ /^[lbcps]/ {bad=1} END {exit !bad}'; then rm -f "$list"; return 1; fi
+        rm -f "$list"; unzip -q "$archive" -d "$dest"
+    else rm -f "$list"; return 1; fi
+}
+
+mt_counter_sum() {
+    awk -v tag="$2" '{for(i=1;i<=NF;i++) if($i==tag){sum+=$2;break}} END {printf "%.0f\n",sum}' <<< "$1"
+}
+
+mt_setup_counter_pair() {
+    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" bin addr family
+    local -a addresses=() input=() output=()
+    mt_valid_port "$port" || return 1
+    if [ "$role" == 1 ]; then
+        input=(--dport "$port"); output=(--sport "$port")
+        if [[ "$bind" == *:* ]]; then addresses=('::'); else addresses=('0.0.0.0'); fi
+    else
+        remote=$(mt_normalize_host "$remote")
+        mt_valid_host "$remote" || return 1
+        if mt_valid_ipv4 "$remote" || mt_valid_ipv6 "$remote"; then addresses=("$remote")
+        else mapfile -t addresses < <({ getent ahostsv4 "$remote"; getent ahostsv6 "$remote"; } 2>/dev/null | awk '{print $1}' | sort -u); fi
+    fi
+    # IPv6 wildcard sockets may also accept IPv4 on Linux; count both families.
+    if [ "$role" == 1 ] && [ "$bind" == '::' ]; then addresses+=('0.0.0.0'); fi
+    for addr in "${addresses[@]}"; do
+        bin=iptables; [[ "$addr" == *:* ]] && bin=ip6tables
+        command -v "$bin" >/dev/null 2>&1 || continue
+        if [ "$role" != 1 ]; then input=(-s "$addr" --sport "$port"); output=(-d "$addr" --dport "$port"); fi
+        "$bin" -w 5 -t mangle -C INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
+    done
+}
+
+mt_tagged_rules() {
+    local bin="$1" table="$2" chain="$3" tag="$4" match="${5:-exact}"
+    "$bin" -t "$table" -L "$chain" -n --line-numbers 2>/dev/null |
+        awk -v tag="$tag" -v m="$match" '$1 ~ /^[0-9]+$/ {
+            if(m=="substring" && index($0,tag)) {print $1;next}
+            for(i=1;i<=NF;i++) if($i==tag || (m=="prefix" && index($i,tag)==1)){print $1;break}
+        }' | sort -rn
+}
+
+mt_delete_tagged_rules() {
+    local bin="$1" table="$2" chain="$3" tag="$4" match="${5:-exact}" num
+    while read -r num; do [ -n "$num" ] && "$bin" -w 5 -t "$table" -D "$chain" "$num" || return 1; done < <(mt_tagged_rules "$bin" "$table" "$chain" "$tag" "$match")
+    return 0
+}
+
+mt_milliseconds() { awk '{printf "%.0f\n", $1*1000}' /proc/uptime; }
+mt_rate() { local delta=$(($1-$2)); [ "$delta" -lt 0 ] && delta=0; local ms="$3"; [ "$ms" -gt 0 ] || ms=1; echo "$((delta*1000/ms))"; }
+
+mt_tunnel_addresses() {
+    local subnet
+    MT_LOCAL_PUBLIC="${LOCAL_PUB:-}"; MT_REMOTE_PUBLIC="${REMOTE_PUB:-}"
+    case "${TUN_PROTO:-ipv4}" in gre6|ipip4to6|ipip6to6) MT_LOCAL_PUBLIC="${LOCAL_PUB6:-${LOCAL_IP6:-}}"; MT_REMOTE_PUBLIC="${REMOTE_PUB6:-${REMOTE_IP6:-}}";; esac
+    if [ "${FAB_PROTO:-ipv4}" == ipv6 ]; then MT_LOCAL_PUBLIC="${LOCAL_PUB6:-}"; MT_REMOTE_PUBLIC="${REMOTE_PUB6:-}"; fi
+    if [ "${TUN_PROTO:-}" == ipip6to6 ]; then
+        [ -n "${CORE_V6:-}" ] || return 1
+        if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${CORE_V6}::1"; MT_CORE_PEER="${CORE_V6}::2"
+        else MT_CORE_LOCAL="${CORE_V6}::2"; MT_CORE_PEER="${CORE_V6}::1"; fi
+    else
+        subnet="${CORE_SUBNET:-10.76.${TUN_ID:-}}"
+        [ -z "${VNI_ID:-}" ] || subnet="${CORE_SUBNET:-10.88.$VNI_ID}"
+        if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${subnet}.1"; MT_CORE_PEER="${subnet}.2"
+        else MT_CORE_LOCAL="${subnet}.2"; MT_CORE_PEER="${subnet}.1"; fi
+    fi
+    mt_valid_ipv4 "$MT_CORE_PEER" || mt_valid_ipv6 "$MT_CORE_PEER"
+}
+
+mt_validate_conf() {
+    local file="$1" line key value
+    [ -s "$file" ] && bash -n "$file" || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
+        key="${line%%=*}"; value="${line#*=}"
+        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
+        if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+        [[ "$value" =~ ^[A-Za-z0-9_:./=,+%-]*$ ]] || return 1
+    done < "$file"
+}
+
+mt_stage_backup() {
+    local archive="$1" subdir="$2" stage conf found=0
+    stage=$(mktemp -d "$SECURE_TMP/restore.XXXXXX") || return 1
+    if ! mt_extract_archive "$archive" "$stage" || [ ! -d "$stage/$subdir" ]; then rm -rf "$stage"; return 1; fi
+    while IFS= read -r conf; do
+        case "$conf" in "$stage/$subdir/"*.conf) ;; *) rm -rf "$stage"; return 1;; esac
+        if [ "$(dirname "$conf")" != "$stage/$subdir" ] || ! mt_validate_conf "$conf"; then rm -rf "$stage"; return 1; fi
+        found=1
+    done < <(find "$stage" -type f)
+    [ "$found" == 1 ] || { rm -rf "$stage"; return 1; }
+    printf '%s\n' "$stage"
+}
+
+# Keep the running executable until the candidate has been downloaded and checked.
+mt_update_core() {
+    local name="$1" unit_prefix="$2" source="$3" kind="${4:-url}" expected="${5:-}" work candidate item unit failed=0 had_old=0
+    local target="${MTUNNEL_TEST_ROOT:-}/usr/local/bin/$name" alias="${MTUNNEL_TEST_ROOT:-}/usr/bin/$name"; local -a active=()
+    work=$(mktemp -d "$SECURE_TMP/core.XXXXXX") || return 1
+    if [ "$kind" == local ]; then
+        cp "$source" "$work/download" || { rm -rf "$work"; return 1; }
+    else
+        mt_download "$source" "$work/download" "$expected" || { rm -rf "$work"; return 1; }
+    fi
+    candidate="$work/download"
+    if ! mt_valid_elf "$candidate"; then
+        mkdir "$work/extracted"
+        mt_extract_archive "$candidate" "$work/extracted" || { rm -rf "$work"; return 1; }
+        candidate=''
+        while IFS= read -r item; do
+            if mt_valid_elf "$item"; then
+                [ -z "$candidate" ] || { echo 'Archive contains multiple candidate executables.' >&2; rm -rf "$work"; return 1; }
+                candidate="$item"
+            fi
+        done < <(find "$work/extracted" -type f -name "*$name*")
+        if [ "$name" == bh ] && [ -z "$candidate" ]; then
+            item="$work/extracted/backhaul"; mt_valid_elf "$item" && candidate="$item"
+        fi
+        [ -n "$candidate" ] || { rm -rf "$work"; return 1; }
+    fi
+    if [ ! -f "$target" ] && [ -f "$alias" ]; then
+        mkdir -p "$(dirname "$target")" && cp -pL "$alias" "$target" || { rm -rf "$work"; return 1; }
+    fi
+    if [ -f "$target" ]; then cp -pL "$target" "$work/previous" || { rm -rf "$work"; return 1; }; had_old=1; fi
+    mapfile -t active < <(systemctl list-units --type=service --state=active --no-legend --plain "${unit_prefix}@*.service" "${unit_prefix}.service" 2>/dev/null | awk '{print $1}')
+    if ! mt_install_files 755 "$candidate" "$target" "$candidate" "$alias"; then rm -rf "$work"; return 1; fi
+    for unit in "${active[@]}"; do
+        systemctl restart "$unit" && systemctl is-active --quiet "$unit" || failed=1
+    done
+    if [ "$failed" == 1 ]; then
+        if [ "$had_old" == 1 ]; then
+            mt_install_files 755 "$work/previous" "$target" "$work/previous" "$alias" || echo 'Failed to restore the previous core!' >&2
+            for unit in "${active[@]}"; do systemctl restart "$unit"; done
+        else rm -f "$target" "$alias"; fi
+        rm -rf "$work"; return 1
+    fi
+    rm -rf "$work"
+}
+
+mt_verify_manifest() {
+    local root="$1" digest path actual count=0
+    [ -s "$root/SHA256SUMS" ] || return 1
+    while read -r digest path; do
+        [[ "$digest" =~ ^[0-9a-fA-F]{64}$ && "$path" =~ ^[A-Za-z0-9_./-]+$ ]] || return 1
+        case "/$path/" in *'/../'*|//* ) return 1;; esac
+        [ -f "$root/$path" ] && [ ! -L "$root/$path" ] || return 1
+        actual=$(sha256sum "$root/$path" | cut -d' ' -f1)
+        [ "$actual" == "${digest,,}" ] || { echo "Checksum mismatch: $path" >&2; return 1; }
+        ((count+=1))
+    done < "$root/SHA256SUMS"
+    [ "$count" -gt 0 ]
+}
+
+mt_manifest_hash() {
+    awk -v path="$2" '$2==path {print $1;exit}' "$1/SHA256SUMS"
+}
+
+# A backup must have a coherent network identity before any live teardown.
+mt_validate_tunnel_conf() {
+    local conf="$1" kind="$2"
+    local TYPE='' T_NAME='' VX_NAME='' BR_NAME='' TUN_ID='' VNI_ID='' CORE_SUBNET='' CORE_V6='' TUN_PROTO=ipv4 FAB_PROTO=ipv4 LOCAL_PUB='' REMOTE_PUB='' LOCAL_PUB6='' REMOTE_PUB6='' LOCAL_IP6='' REMOTE_IP6='' CUSTOM_MTU='' MAX_IPS=0 ENCRYPT=0 TUN_SECRET='' SYNC_KEY='' FWD_TCP='' FWD_UDP=''
+    mt_validate_conf "$conf" || return 1
+    source "$conf"
+    [[ "$TYPE" =~ ^[12]$ && "$MAX_IPS" =~ ^[0-9]{1,4}$ && "$ENCRYPT" =~ ^[01]$ ]] || return 1
+    [ -z "$CUSTOM_MTU" ] || { [[ "$CUSTOM_MTU" =~ ^[0-9]{3,5}$ ]] && ((10#$CUSTOM_MTU >= 512 && 10#$CUSTOM_MTU <= 65535)); } || return 1
+    if [ "$kind" == gre ]; then
+        [[ "$T_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$TUN_ID" =~ ^[0-9]{1,9}$ && "$TUN_PROTO" =~ ^(ipv4|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]] || return 1
+        case "$TUN_PROTO" in
+            gre6|ipip4to6|ipip6to6) mt_valid_ipv6 "${LOCAL_PUB6:-$LOCAL_IP6}" && mt_valid_ipv6 "${REMOTE_PUB6:-$REMOTE_IP6}" || return 1;;
+            *) mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1;;
+        esac
+        if [ "$TUN_PROTO" == ipip6to6 ]; then mt_valid_ipv6 "$CORE_V6::1" || return 1
+        else mt_valid_ipv4 "$CORE_SUBNET.1" || return 1; fi
+        if [ "$TUN_PROTO" == 6to4 ]; then mt_valid_ipv6 "$LOCAL_IP6" && mt_valid_ipv6 "$REMOTE_IP6" || return 1; fi
+    else
+        [[ "$VX_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$BR_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$VNI_ID" =~ ^[0-9]{1,8}$ && "$FAB_PROTO" =~ ^(ipv4|ipv6)$ ]] && ((10#$VNI_ID >= 1 && 10#$VNI_ID <= 16777215)) || return 1
+        mt_valid_ipv4 "$CORE_SUBNET.1" || return 1
+        if [ "$FAB_PROTO" == ipv6 ]; then mt_valid_ipv6 "$LOCAL_PUB6" && mt_valid_ipv6 "$REMOTE_PUB6" || return 1
+        else mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1; fi
+    fi
+    mt_validate_port_list "$FWD_TCP" 0 tcp && mt_validate_port_list "$FWD_UDP" 0 udp || return 1
+    [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
+}
+
+# END MTUNNEL SHARED HELPERS
+if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
+
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mxlan"
@@ -104,11 +533,7 @@ pick_index() {
 
 # Delete all rules carrying an exact comment tag (quote-safe, fixes rule leaks)
 ipt_delete_tagged() {
-    local tbl="$1" ch="$2" tag="$3" r bin="${IPT_BIN:-iptables}"
-    "$bin" -t "$tbl" -S "$ch" 2>/dev/null | grep -E -- "--comment \"?${tag}\"?( |$)" | sed 's/^-A /-D /' | \
-    while IFS= read -r r; do
-        [ -n "$r" ] && echo "$r" | xargs "$bin" -t "$tbl" 2>/dev/null
-    done
+    mt_delete_tagged_rules "${IPT_BIN:-iptables}" "$1" "$2" "$3"
 }
 
 # Cross-tool subnet collision check (MGRE + MXLAN + live routes)
@@ -218,50 +643,56 @@ build_fwd_rules() {
 xfrm_state_file() { echo "$SECURE_TMP/.mxlan_xfrm_$1"; }
 
 xfrm_clear() {
-    local name="$1" sf; sf=$(xfrm_state_file "$name")
-    [ -f "$sf" ] || return 0
-    local line
-    while IFS= read -r line; do [ -n "$line" ] && eval "$line" >/dev/null 2>&1; done < "$sf"
+    local name="$1" sf line; local -a command=()
+    sf=$(xfrm_state_file "$name"); [ -f "$sf" ] || return 0
+    while IFS= read -r line; do
+        read -ra command <<< "$line"
+        [[ "${command[0]:-}" == ip && "${command[1]:-}" == xfrm && "${command[3]:-}" == delete ]] || continue
+        "${command[@]}" >/dev/null 2>&1
+    done < "$sf"
     rm -f "$sf"
 }
 
 # Usage: xfrm_apply <name> <type 1|2> <local> <remote> <token> <selector...>
 xfrm_apply() {
     local name="$1" type="$2" lip="$3" rip="$4" tok="$5"; shift 5
-    local sel="$*"
-    xfrm_clear "$name"
-    [ -z "$tok" ] || [ -z "$lip" ] || [ -z "$rip" ] && return 1
+    local -a selectors=("$@")
+    [[ "$tok" =~ ^[A-Za-z0-9_=-]+$ && "$type" =~ ^[12]$ ]] || return 1
+    mt_valid_ipv4 "$lip" || mt_valid_ipv6 "$lip" || return 1
+    mt_valid_ipv4 "$rip" || mt_valid_ipv6 "$rip" || return 1
     local plen=32
     if [[ "$lip" == *:* ]]; then
         plen=128
-        [ -n "$(ip -6 -o addr show to "$lip" 2>/dev/null)" ] || { echo "  [xfrm] $name: local IP $lip not on this host, encryption skipped" >&2; return 1; }
-    else
-        ip -4 addr show 2>/dev/null | grep -qF "inet $lip/" || { echo "  [xfrm] $name: local IP $lip not on this host (NAT?), encryption skipped" >&2; return 1; }
-    fi
-    local h ab ba reqid ek_ab ak_ab ek_ba ak_ba spi_out spi_in ek_out ak_out ek_in ak_in
-    h=$(echo -n "mtun_esp_${tok}" | sha256sum)
-    ab=$(printf '0x%08x' $(( 16#${h:0:7} + 256 )))
-    ba=$(printf '0x%08x' $(( 16#${h:8:7} + 256 )))
-    reqid=$(( 16#${h:16:6} + 1 ))
-    ek_ab=$(echo -n "enc_ab_${tok}" | sha256sum | cut -c1-64); ak_ab=$(echo -n "auth_ab_${tok}" | sha256sum | cut -c1-64)
-    ek_ba=$(echo -n "enc_ba_${tok}" | sha256sum | cut -c1-64); ak_ba=$(echo -n "auth_ba_${tok}" | sha256sum | cut -c1-64)
-    if [ "$type" == "1" ]; then spi_out=$ab; ek_out=$ek_ab; ak_out=$ak_ab; spi_in=$ba; ek_in=$ek_ba; ak_in=$ak_ba
+        [ -n "$(ip -6 -o addr show to "$lip" 2>/dev/null)" ] || return 1
+    else ip -4 addr show 2>/dev/null | grep -qF "inet $lip/" || return 1; fi
+    local h ab ba reqid ek_ab ak_ab ek_ba ak_ba spi_out spi_in ek_out ak_out ek_in ak_in sf pending
+    h=$(printf '%s' "mtun_esp_${tok}" | sha256sum)
+    ab=$(printf '0x%08x' "$((16#${h:0:7}+256))"); ba=$(printf '0x%08x' "$((16#${h:8:7}+256))"); reqid=$((16#${h:16:6}+1))
+    ek_ab=$(printf '%s' "enc_ab_${tok}" | sha256sum | cut -c1-64); ak_ab=$(printf '%s' "auth_ab_${tok}" | sha256sum | cut -c1-64)
+    ek_ba=$(printf '%s' "enc_ba_${tok}" | sha256sum | cut -c1-64); ak_ba=$(printf '%s' "auth_ba_${tok}" | sha256sum | cut -c1-64)
+    if [ "$type" == 1 ]; then spi_out=$ab; ek_out=$ek_ab; ak_out=$ak_ab; spi_in=$ba; ek_in=$ek_ba; ak_in=$ak_ba
     else spi_out=$ba; ek_out=$ek_ba; ak_out=$ak_ba; spi_in=$ab; ek_in=$ek_ab; ak_in=$ak_ab; fi
-
-    ip xfrm state add src "$lip" dst "$rip" proto esp spi "$spi_out" reqid "$reqid" mode transport replay-window 0 \
-        auth-trunc 'hmac(sha256)' "0x$ak_out" 128 enc 'cbc(aes)' "0x$ek_out" 2>/dev/null || return 1
-    ip xfrm state add src "$rip" dst "$lip" proto esp spi "$spi_in" reqid "$reqid" mode transport replay-window 0 \
-        auth-trunc 'hmac(sha256)' "0x$ak_in" 128 enc 'cbc(aes)' "0x$ek_in" 2>/dev/null || return 1
-    ip xfrm policy add src "$lip/$plen" dst "$rip/$plen" $sel dir out tmpl src "$lip" dst "$rip" proto esp reqid "$reqid" mode transport 2>/dev/null
-    ip xfrm policy add src "$rip/$plen" dst "$lip/$plen" $sel dir in  tmpl src "$rip" dst "$lip" proto esp reqid "$reqid" mode transport 2>/dev/null
-    {
-        echo "ip xfrm policy delete src $lip/$plen dst $rip/$plen $sel dir out"
-        echo "ip xfrm policy delete src $rip/$plen dst $lip/$plen $sel dir in"
-        echo "ip xfrm state delete src $lip dst $rip proto esp spi $spi_out"
-        echo "ip xfrm state delete src $rip dst $lip proto esp spi $spi_in"
-    } > "$(xfrm_state_file "$name")"
-    chmod 600 "$(xfrm_state_file "$name")" 2>/dev/null
-    return 0
+    xfrm_clear "$name"
+    sf=$(xfrm_state_file "$name"); pending=$(mktemp "$SECURE_TMP/xfrm.XXXXXX") || return 1
+    local failed=0 line
+    if ip xfrm state add src "$lip" dst "$rip" proto esp spi "$spi_out" reqid "$reqid" mode transport replay-window 0 auth-trunc 'hmac(sha256)' "0x$ak_out" 128 enc 'cbc(aes)' "0x$ek_out"; then
+        echo "ip xfrm state delete src $lip dst $rip proto esp spi $spi_out" >> "$pending"
+    else failed=1; fi
+    if [ "$failed" == 0 ] && ip xfrm state add src "$rip" dst "$lip" proto esp spi "$spi_in" reqid "$reqid" mode transport replay-window 0 auth-trunc 'hmac(sha256)' "0x$ak_in" 128 enc 'cbc(aes)' "0x$ek_in"; then
+        echo "ip xfrm state delete src $rip dst $lip proto esp spi $spi_in" >> "$pending"
+    else failed=1; fi
+    if [ "$failed" == 0 ] && ip xfrm policy add src "$lip/$plen" dst "$rip/$plen" "${selectors[@]}" dir out tmpl src "$lip" dst "$rip" proto esp reqid "$reqid" mode transport; then
+        printf '%s ' ip xfrm policy delete src "$lip/$plen" dst "$rip/$plen" "${selectors[@]}" dir out >> "$pending"; echo >> "$pending"
+    else failed=1; fi
+    if [ "$failed" == 0 ] && ip xfrm policy add src "$rip/$plen" dst "$lip/$plen" "${selectors[@]}" dir in tmpl src "$rip" dst "$lip" proto esp reqid "$reqid" mode transport; then
+        printf '%s ' ip xfrm policy delete src "$rip/$plen" dst "$lip/$plen" "${selectors[@]}" dir in >> "$pending"; echo >> "$pending"
+    else failed=1; fi
+    if [ "$failed" != 0 ]; then
+        local -a command=()
+        while IFS= read -r line; do read -ra command <<< "$line"; "${command[@]}" >/dev/null 2>&1; done < "$pending"
+        rm -f "$pending" "$sf"; echo "IPsec setup failed for $name; partial states removed." >&2; return 1
+    fi
+    chmod 600 "$pending" && mv -f "$pending" "$sf"
 }
 
 # ---- Path MTU probe towards the remote public IP (needs ICMP echo on peer) ----
@@ -338,7 +769,7 @@ watchdog_is_on() { systemctl is-active --quiet mxlan-watchdog.timer 2>/dev/null;
 # ---- Backup / Restore ----
 backup_configs() {
     mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
-    local f="$BACKUP_DIR/mxlan-$(date +%Y%m%d-%H%M%S).tgz"
+    local f; f=$(mktemp "$BACKUP_DIR/mxlan-$(date +%Y%m%d-%H%M%S)-XXXXXX.tgz") || return 1
     tar czf "$f" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")" 2>/dev/null && chmod 600 "$f" && echo "$f"
 }
 # ======================================================================
@@ -375,8 +806,7 @@ mx_core_sub() {
 
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
-    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
-    chmod +x "$INSTALL_PATH" 2>/dev/null
+    mt_install_files 755 "$0" "$INSTALL_PATH" || { echo "Cannot install module." >&2; exit 1; }
 fi
 
 MAIN_PID=$$
@@ -457,7 +887,7 @@ read_with_refresh() {
         echo -ne "$char"
     done
 
-    eval "$__resultvar=\"\$buffer\""
+    printf -v "$__resultvar" '%s' "$buffer"
 }
 
 fetch_remote_version() {
@@ -708,103 +1138,34 @@ draw_mxlan_header() {
 }
 
 self_update_module() {
-    local rel_path="tunnels/mxlan.sh"
-    local cb="?t=$(date +%s)"
-    
-    local gh_ver="Unknown" mirror_ver="Unknown"
-    [ -f "$SECURE_TMP/.mxlan_remote_ver_github" ] && gh_ver=$(tr -d '\r\n ' < "$SECURE_TMP/.mxlan_remote_ver_github")
-    [ -f "$SECURE_TMP/.mxlan_remote_ver_mirror" ] && mirror_ver=$(tr -d '\r\n ' < "$SECURE_TMP/.mxlan_remote_ver_mirror")
-
-    local gh_text="${C}Official GitHub Server${NC}"
-    local mirror_text="${G}ParsPack Iranian Mirror${NC}"
-    if [ "$gh_ver" != "Unknown" ]; then
-        if [ "$gh_ver" != "$MODULE_VERSION" ]; then gh_text+="    ${Y}(v${MODULE_VERSION} ➔ v${gh_ver})${NC}"
-        else gh_text+="    ${DIM}(v${gh_ver})${NC}"; fi
-    else gh_text+="    ${DIM}(version unavailable)${NC}"; fi
-    if [ "$mirror_ver" != "Unknown" ]; then
-        if [ "$mirror_ver" != "$MODULE_VERSION" ]; then mirror_text+="    ${Y}(v${MODULE_VERSION} ➔ v${mirror_ver})${NC}"
-        else mirror_text+="    ${DIM}(v${mirror_ver})${NC}"; fi
-    else mirror_text+="    ${DIM}(version unavailable)${NC}"; fi
-
-    draw_mxlan_header
-    echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MXLAN Fabric) ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${mirror_text} ${DIM}(c107328.parspack.net)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
-    
-    local tmp_file="$SECURE_TMP/.mxlan_update.$$"
-    > "$tmp_file"
-
-    if [[ "$src_opt" == "4" ]]; then
-        if command -v nano >/dev/null 2>&1; then
-            echo -e "  ${DIM}● Opening Nano editor... Paste code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
-            sleep 2; nano "$tmp_file"
-        elif command -v vi >/dev/null 2>&1; then
-            vi "$tmp_file"
-        else
-            echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -f "$tmp_file"; sleep 2; return
-        fi
-    elif [[ "$src_opt" =~ ^[123]$ ]]; then
-        local dl_url=""
-        case $src_opt in
-            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
-            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
-            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read -r custom_url; dl_url=$(echo "$custom_url" | tr -d '\r ') ;;
+    local rel_path="tunnels/mxlan.sh" src_opt custom_url dl_url tmp_file confirm
+    echo '  Update: 1) GitHub  2) Mirror  3) HTTPS link  4) Paste in editor  0) Cancel'
+    read -r -p '  Select: ' src_opt
+    [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
+    tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
+    if [ "$src_opt" == 4 ]; then
+        if command -v nano >/dev/null 2>&1; then nano "$tmp_file"
+        elif command -v vi >/dev/null 2>&1; then vi "$tmp_file"
+        else rm -f "$tmp_file"; echo 'No editor available.'; return 1; fi
+    else
+        case "$src_opt" in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path";;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path";;
+            3) read -r -p '  HTTPS link: ' dl_url;;
         esac
-        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
-        
-        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
-        if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
-        fi
-    else
-        rm -f "$tmp_file"
-        return
+        if ! mt_download "$dl_url" "$tmp_file"; then rm -f "$tmp_file"; echo 'Download failed; installed module preserved.'; return 1; fi
     fi
-
-    sed -i 's/\r$//' "$tmp_file" 2>/dev/null
-    if [ -s "$tmp_file" ] && head -n1 "$tmp_file" | grep -q "^#!/bin/bash" && bash -n "$tmp_file" 2>/dev/null; then
-        local new_ver
-        new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
-        [ -z "$new_ver" ] && new_ver="Unknown"
-        
-        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
-        
-        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
-            sed -i 's/\r$//' "$tmp_file" 2>/dev/null
-            chmod +x "$tmp_file"
-            
-            cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
-            [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
-            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
-            
-            rm -f "$tmp_file"
-            echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
-            sleep 1.5
-            
-            kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null
-            exec "$INSTALL_PATH" "$@"
-        else
-            echo -e "  ${Y}● Update cancelled.${NC}"
-            rm -f "$tmp_file"; sleep 1.5
-        fi
-    else
-        echo -e "  ${R}✖ Update failed. Invalid format or network error.${NC}"
-        rm -f "$tmp_file"; sleep 2
+    sed -i 's/\r$//' "$tmp_file"
+    if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo 'Invalid Bash module; installed module preserved.'; return 1; fi
+    local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
+    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo 'Downloaded module is older; update refused.'; return 1; fi
+    read -r -p "  Install v$new_ver (current $MODULE_VERSION)? [y/N]: " confirm
+    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { rm -f "$tmp_file"; return 0; }
+    if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
+        rm -f "$tmp_file"; echo 'Update failed; previous module preserved.'; return 1
     fi
+    rm -f "$tmp_file"
+    exec "$INSTALL_PATH" "$@"
 }
 
 merge_ports() {
@@ -849,7 +1210,9 @@ apply_fabric() {
     local c_sub; c_sub=$(mx_core_sub)
     local local_br_ip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
 
-    clean_fwd_rules "$VX_NAME"; clean_mss_rules "$VX_NAME"; xfrm_clear "$VX_NAME"
+    clean_fwd_rules "$VX_NAME"; clean_mss_rules "$VX_NAME"
+    [ "$ENCRYPT" != 1 ] || ip link set "$VX_NAME" down 2>/dev/null
+    xfrm_clear "$VX_NAME"
 
     local has_local=0 eth_iface=""
     if [ "$EP_V6" -eq 1 ]; then
@@ -864,16 +1227,18 @@ apply_fabric() {
         [ -z "$eth_iface" ] && eth_iface=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')
     fi
 
-    ip link del "$VX_NAME" >/dev/null 2>&1
-    ip link del "$BR_NAME" >/dev/null 2>&1
+    local layout="$VNI_ID|$EP_L|$EP_R|$BR_NAME|$eth_iface" layout_file="$SECURE_TMP/.mxlan_layout_$VX_NAME" keep_vx=0
+    if [ -f "$layout_file" ] && [ "$(cat "$layout_file")" == "$layout" ] && ip link show "$VX_NAME" >/dev/null 2>&1; then keep_vx=1; fi
+    if [ "$keep_vx" == 0 ]; then ip link del "$VX_NAME" >/dev/null 2>&1; fi
 
     local fab_max; fab_max=$(mx_mtu_max "$FAB_PROTO")
     local eff_mtu="$CUSTOM_MTU"
     if ! is_uint "$eff_mtu"; then eff_mtu=$fab_max; [ "$ENCRYPT" == "1" ] && eff_mtu=$((fab_max - 64)); fi
+    [ "$ENCRYPT" != 1 ] || fab_max=$((fab_max-64))
     [ "$eff_mtu" -lt "$MX_MTU_MIN" ] && eff_mtu=$MX_MTU_MIN
     [ "$eff_mtu" -gt "$fab_max" ] && eff_mtu=$fab_max
 
-    ip link add "$BR_NAME" type bridge 2>/dev/null
+    ip link show "$BR_NAME" >/dev/null 2>&1 || ip link add "$BR_NAME" type bridge || return 1
     ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null
     ip link set "$BR_NAME" up 2>/dev/null
 
@@ -882,18 +1247,29 @@ apply_fabric() {
     vx_args+=(remote "$EP_R")
     [ "$has_local" == "1" ] && vx_args+=(local "$EP_L")
     vx_args+=(dstport 4789)
-    ip link add "$VX_NAME" "${vx_args[@]}" 2>/dev/null
+    if [ "$keep_vx" == 0 ]; then ip link add "$VX_NAME" "${vx_args[@]}" || return 1; fi
+    printf '%s\n' "$layout" > "$layout_file"
 
     ip link set dev "$VX_NAME" mtu "$eff_mtu" 2>/dev/null
     ip link set "$VX_NAME" master "$BR_NAME" 2>/dev/null
-    ip link set "$VX_NAME" up 2>/dev/null
+    [ "$ENCRYPT" == 1 ] || ip link set "$VX_NAME" up || return 1
     ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null
-    ip addr add "${local_br_ip}/24" dev "$BR_NAME" 2>/dev/null
+    local core_file="$SECURE_TMP/.mxlan_core_$BR_NAME" old_core
+    old_core=$(cat "$core_file" 2>/dev/null || true)
+    if [ -n "$old_core" ] && [ "$old_core" != "${local_br_ip}/24" ] && mt_valid_ipv4 "${old_core%/*}" && [[ "$old_core" == */24 ]]; then
+        ip -4 addr del "$old_core" dev "$BR_NAME" 2>/dev/null || true
+    fi
+    ip addr replace "${local_br_ip}/24" dev "$BR_NAME" || return 1
+    printf '%s\n' "${local_br_ip}/24" > "$core_file"
     iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$BR_NAME" -m comment --comment "MXLAN_MSS_$VX_NAME" -j TCPMSS --set-mss $((eff_mtu - 40)) 2>/dev/null
 
     if [ "$ENCRYPT" == "1" ]; then
-        xfrm_apply "$VX_NAME" "$TYPE" "$EP_L" "$EP_R" "$TUN_SECRET" proto udp dport 4789
+        if ! xfrm_apply "$VX_NAME" "$TYPE" "$EP_L" "$EP_R" "$TUN_SECRET" proto udp dport 4789; then
+            ip link set "$VX_NAME" down; echo "Requested encryption failed; $VX_NAME stopped." >&2; return 1
+        fi
     fi
+
+    ip link set "$VX_NAME" up || return 1
 
     if is_uint "$MAX_IPS" && [ "$MAX_IPS" -gt 0 ]; then
         local nip tip clash
@@ -911,8 +1287,12 @@ apply_fabric() {
 }
 
 apply_all_fabrics() {
-    local conf
-    for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && apply_fabric "$conf"; done
+    local conf rc=0
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        apply_fabric "$conf" || rc=1
+    done
+    return "$rc"
 }
 
 select_fabric_interactive() {
@@ -1356,6 +1736,31 @@ show_traffic_monitor() {
     done
 }
 
+restore_validated_backup() {
+    local archive="$1" stage conf rollback failed=0
+    stage=$(mt_stage_backup "$archive" "vxlan") || return 1
+    # Validate tunnel identity/role/endpoints before stopping any live interface.
+    for conf in "$stage/vxlan"/*.conf; do
+        [ -f "$conf" ] || continue
+        if ! mt_validate_tunnel_conf "$conf" vxlan; then rm -rf "$stage"; return 1; fi
+    done
+    backup_configs >/dev/null || { rm -rf "$stage"; return 1; }
+    rollback=$(mktemp -d "${CONF_DIR}.rollback.XXXXXX") || { rm -rf "$stage"; return 1; }
+    cp -a "$CONF_DIR/." "$rollback/" || { rm -rf "$stage" "$rollback"; return 1; }
+    for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done
+    rm -f "$CONF_DIR"/*.conf
+    cp -a "$stage/vxlan/." "$CONF_DIR/" || failed=1
+    [ "$failed" != 0 ] || apply_all_fabrics || failed=1
+    if [ "$failed" != 0 ]; then
+        for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done
+        rm -f "$CONF_DIR"/*.conf
+        cp -a "$rollback/." "$CONF_DIR/"
+        apply_all_fabrics || echo 'Previous configs restored; some interfaces require attention.' >&2
+    fi
+    rm -rf "$stage" "$rollback"
+    return "$failed"
+}
+
 menu_backup_restore() {
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ BACKUP & RESTORE ]${NC}"
@@ -1373,18 +1778,16 @@ menu_backup_restore() {
         echo -ne "  ${C}●${NC} ${W}Pick backup: ${NC}"; read -r sel
         local idx; idx=$(pick_index "$sel" "${#bks[@]}") || return
         echo -ne "  ${R}● Current tunnels will be replaced. Type 'yes': ${NC}"; read -r c; [ "$c" == "yes" ] || return
-        local conf; for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done
-        backup_configs >/dev/null
-        rm -f "$CONF_DIR"/*.conf
-        tar xzf "${bks[$idx]}" -C "$(dirname "$CONF_DIR")" 2>/dev/null
-        apply_all_fabrics
+        restore_validated_backup "${bks[$idx]}" || { echo 'Restore failed; previous configuration retained.' >&2; return 1; }
         echo -e "  ${G}✔ Restored and applied.${NC}"; sleep 2
     fi
 }
 # ======================================================================
 
 case "$1" in
-    --apply)    apply_all_fabrics; exit 0 ;;
+    --teardown-all) for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done; exit 0 ;;
+    --apply)    apply_all_fabrics; exit $? ;;
+    --apply-one) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]+$ ]] && [ -f "$CONF_DIR/$2.conf" ] || exit 1; apply_fabric "$CONF_DIR/$2.conf"; exit $? ;;
     --watchdog) mxlan_watchdog; exit 0 ;;
     --status|--list) mxlan_status_cli; exit 0 ;;
     --backup)   f=$(backup_configs); [ -n "$f" ] && echo "Backup: $f" || { echo "Backup failed"; exit 1; }; exit 0 ;;
@@ -1393,6 +1796,7 @@ case "$1" in
     --help|-h)
         echo "mxlan v$MODULE_VERSION"
         echo "  mxlan                interactive menu"
+        echo "  mxlan --apply-one NAME   re-apply one configured tunnel"
         echo "  mxlan --apply        re-apply all fabrics (used by systemd)"
         echo "  mxlan --status       print fabric status table"
         echo "  mxlan --watchdog     run one watchdog cycle"
@@ -1406,7 +1810,7 @@ esac
 update_available_badge() {
     local remote_v=""
     [ -f "$SECURE_TMP/.mxlan_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mxlan_remote_ver")
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
         printf '  %b' "${Y}(Update Available: v${remote_v})${NC}"
     fi
 }
@@ -1734,7 +2138,6 @@ while true; do
            select_fabric_interactive || continue
            draw_mxlan_header
            TUN_SECRET=""; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
-           xfrm_clear "$VX_NAME"
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates VNI & Subnet): ${NC}"; read -r new_tok
            new_tok=$(echo "$new_tok" | tr -dc 'a-zA-Z0-9_=-')
            if [ -n "$new_tok" ]; then

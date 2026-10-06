@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v12.0.2 ---
+# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v12.0.3 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="12.0.2"
+MODULE_VERSION="12.0.4"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -327,10 +327,137 @@ mt_validate_conf() {
         [[ -z "$line" || "$line" == \#* ]] && continue
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"; value="${line#*=}"
-        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
+        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|FWD_TARGETS|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
         if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
         [[ "$value" =~ ^[A-Za-z0-9_:./=,+%-]*$ ]] || return 1
+        [ "$key" != FWD_TARGETS ] || mt_valid_fwd_targets "$value" || return 1
     done < "$file"
+}
+
+mt_valid_fwd_targets() {
+    local spec="$1" ip
+    [[ -z "$spec" || "$spec" == all ]] && return 0
+    [[ "$spec" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
+    local -a ips=()
+    IFS=',' read -ra ips <<< "$spec"
+    for ip in "${ips[@]}"; do mt_valid_ipv4 "$ip" || return 1; done
+}
+
+mt_fwd_candidates() {
+    local core="$1" key="$2" max="${3:-0}" type="$4" pair ip seen="|$1|"
+    mt_valid_ipv4 "$core" && [[ "$max" =~ ^[0-9]{1,3}$ && "$type" == 1 ]] && ((10#$max <= 64)) || return 1
+    max=$((10#$max))
+    printf '%s\n' "$core"
+    while read -r pair; do
+        ip="${pair#* }"
+        mt_valid_ipv4 "$ip" || continue
+        [[ "$seen" == *"|$ip|"* ]] && continue
+        seen+="$ip|"; printf '%s\n' "$ip"
+    done < <(vip_targets "$key" "$max" "$type")
+}
+
+mt_fwd_selected() {
+    local spec="$1" lb="$2"; shift 2
+    local available ip seen='|' found=0
+    available=$(mt_fwd_candidates "$@") || return 1
+    mt_valid_fwd_targets "$spec" || return 1
+    if [ -z "$spec" ]; then
+        if [ "$lb" == 1 ]; then spec=all
+        else printf '%s\n' "$available" | head -n 1; return 0; fi
+    fi
+    if [ "$spec" == all ]; then printf '%s\n' "$available"; return 0; fi
+    local -a chosen=()
+    IFS=',' read -ra chosen <<< "$spec"
+    for ip in "${chosen[@]}"; do
+        if grep -qxF "$ip" <<< "$available" && [[ "$seen" != *"|$ip|"* ]]; then
+            seen+="$ip|"; printf '%s\n' "$ip"; found=1
+        fi
+    done
+    # Never substitute an unselected core/vIP when selected addresses disappear.
+    [ "$found" == 1 ]
+}
+
+mt_parse_fwd_choice() {
+    local choice="${1//$'\r'/}" item idx ip seen='|' result=''; shift
+    local -a available=("$@") parts=()
+    choice="${choice// /}"
+    MT_FWD_CHOICE=''
+    case "${choice,,}" in '') return 2;; q) return 2;; all|a|'*') MT_FWD_CHOICE=all; return 0;; esac
+    [[ "$choice" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
+    IFS=',' read -ra parts <<< "$choice"
+    for item in "${parts[@]}"; do
+        if [[ "$item" == *.* ]]; then
+            mt_valid_ipv4 "$item" || return 1
+            ip="$item"
+            printf '%s\n' "${available[@]}" | grep -qxF "$ip" || return 1
+        else
+            [[ "$item" =~ ^[0-9]{1,3}$ ]] && ((10#$item >= 1 && 10#$item <= ${#available[@]})) || return 1
+            idx=$((10#$item-1)); ip="${available[$idx]}"
+        fi
+        [[ "$seen" == *"|$ip|"* ]] && continue
+        seen+="$ip|"; result+="${result:+,}$ip"
+    done
+    [ -n "$result" ] || return 1
+    MT_FWD_CHOICE="$result"
+}
+
+mt_save_fwd_selection() {
+    local file="$1" spec="$2" lb="$3" tmp rc=1
+    mt_validate_conf "$file" && mt_valid_fwd_targets "$spec" && [[ "$lb" =~ ^[01]$ ]] || return 1
+    tmp=$(mktemp "${file}.targets.XXXXXX") || return 1
+    if awk '!/^FWD_TARGETS=/ && !/^LB_MODE=/' "$file" > "$tmp" &&
+       printf 'FWD_TARGETS=%s\nLB_MODE=%s\n' "$spec" "$lb" >> "$tmp" &&
+       mt_validate_conf "$tmp" && mt_install_files 600 "$tmp" "$file"; then rc=0; fi
+    rm -f "$tmp"
+    return "$rc"
+}
+
+mt_choose_fwd_targets() {
+    local file="$1"; shift
+    local candidates selected choice rc spec lb count ip i label mark
+    candidates=$(mt_fwd_candidates "$@") || return 1
+    spec=$(mt_config_value FWD_TARGETS "$file"); lb=$(mt_config_value LB_MODE "$file")
+    selected=$(mt_fwd_selected "$spec" "$lb" "$@") || selected=''
+    local -a available=()
+    mapfile -t available <<< "$candidates"
+    while true; do
+        echo -e "\n  ${DIM}┌─[ FORWARDING & LOAD BALANCER TARGETS ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        for ((i=0; i<${#available[@]}; i++)); do
+            ip="${available[$i]}"; label=vIP; [ "$i" != 0 ] || label='Core Peer'
+            mark=''; grep -qxF "$ip" <<< "$selected" && mark=' [Selected]'
+            printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b %b(%s)%s%b\n' "$DIM" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$C" "$ip" "$NC" "$DIM" "$label" "$mark" "$NC"
+        done
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${G}All IPs (Core Peer + All vIPs)${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel / Keep Current${NC}\n"
+        echo -ne "  ${C}●${NC} ${W}Select IP(s) [e.g. 2 or 2,3 | a: all | Enter: keep]: ${NC}"
+        read -r choice || return 2
+        if mt_parse_fwd_choice "$choice" "${available[@]}"; then rc=0; else rc=$?; fi
+        [ "$rc" != 2 ] || return 2
+        if [ "$rc" != 0 ]; then echo -e "  ${R}✖ Select valid entries from this tunnel.${NC}"; continue; fi
+        spec="$MT_FWD_CHOICE"; count=0
+        if [ "$spec" == all ]; then count=${#available[@]}
+        else local -a chosen=(); IFS=',' read -ra chosen <<< "$spec"; count=${#chosen[@]}; fi
+        lb=0; [ "$count" -le 1 ] || lb=1
+        mt_save_fwd_selection "$file" "$spec" "$lb" || return 1
+        echo -e "  ${G}✔ Selected ${count} IP(s); $([ "$lb" == 1 ] && echo 'load balancing enabled' || echo 'direct forwarding enabled').${NC}"
+        return 0
+    done
+}
+
+mt_fwd_target_summary() {
+    local spec="$1" lb="$2" item count=0
+    if [ -z "$spec" ]; then
+        if [ "$lb" == 1 ]; then echo 'All IPs (Legacy)'; else echo 'Core Peer (Legacy)'; fi
+    elif [ "$spec" == all ]; then
+        if [ "$lb" == 1 ]; then echo 'All IPs (Core Peer + vIPs)'; else echo 'Core Peer (Direct)'; fi
+    else
+        local -a ips=(); IFS=',' read -ra ips <<< "$spec"; count=${#ips[@]}
+        if [ "$lb" != 1 ]; then echo "${ips[0]} (Direct)"
+        elif [ "$count" == 1 ]; then echo "${ips[0]}"
+        else echo "Selected Pool (${count} IPs)"; fi
+    fi
 }
 
 mt_stage_backup() {
@@ -448,33 +575,44 @@ mt_ask_bbr_on_create() {
     return 0
 }
 
-mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
-    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
+mt_render_tunnel_system_tools() {
+    local healer="$1" bbr="$2"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
 }
 
-mt_menu_tunnel_recovery() {
-    local kind="$1" header="$2" choice
-    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+mt_monitor_wait() {
+    local key='' rc=0
+    read -r -t "$1" -n 1 -s key || rc=$?
+    case "$key" in q|Q|$'\e') return 1;; esac
+    [ "$rc" -ne 1 ]
+}
+
+mt_tunnels_info_menu() {
+    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local extra_label='Live Service Logs'
+    mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
+    case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
         "$header"
-        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
-        read -r choice || return 0
+        rc=0
+        read -r choice || rc=$?
+        [ "$rc" -le 128 ] || continue
+        [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) menu_watchdog;;
-            2) mt_run_tool mhealer --scope "$kind";;
+            1) "$details";;
+            2) "$live";;
+            3) mt_run_tool minterface --scope "$kind" --render;;
+            4) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -490,6 +628,12 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
+
+
+
 
 
 
@@ -652,7 +796,8 @@ sanitize_ports() {
 # Derive vIP pair targets exactly like the original engine (keeps peer compatibility)
 vip_targets() {
     local key="$1" max="$2" type="$3" i hash rs o1 o2 o3
-    is_uint "$max" || return
+    [[ "$max" =~ ^[0-9]{1,3}$ ]] && ((10#$max <= 64)) || return 1
+    max=$((10#$max))
     for ((i=0; i<max; i++)); do
         hash=$(echo "${key}_${i}" | sha256sum)
         rs=$(( 0x${hash:0:2} % 3 ))
@@ -669,6 +814,8 @@ build_fwd_rules() {
     local tag="$1" tif="$2" tcp="$3" udp="$4" lb="$5" deadf="$6"; shift 6
     local -a targets=("$@") live=()
     local t proto list p idx n rem dst
+    [ "${#targets[@]}" -gt 0 ] || return 1
+    for t in "${targets[@]}"; do mt_valid_ipv4 "$t" || return 1; done
     if [[ "$lb" == "1" ]]; then
         for t in "${targets[@]}"; do
             if [ -s "$deadf" ] && grep -qxF "$t" "$deadf"; then continue; fi
@@ -755,37 +902,6 @@ xfrm_apply() {
         rm -f "$pending" "$sf"; echo "IPsec setup failed for $name; partial states removed." >&2; return 1
     fi
     chmod 600 "$pending" && mv -f "$pending" "$sf"
-}
-
-# ---- Path MTU probe towards the remote public IP (needs ICMP echo on peer) ----
-probe_path_mtu() {
-    local dst="$1" lo=500 hi=1472 mid best=0 hdr=28 pc="ping"
-    if [[ "$dst" == *:* ]]; then pc="ping -6"; hi=1452; hdr=48; fi   # IPv6: 40 (IP) + 8 (ICMPv6)
-    $pc -c1 -W1 -M do -s "$lo" "$dst" >/dev/null 2>&1 || { echo 0; return; }
-    best=$lo
-    while [ "$lo" -le "$hi" ]; do
-        mid=$(( (lo + hi) / 2 ))
-        if $pc -c1 -W1 -M do -s "$mid" "$dst" >/dev/null 2>&1; then best=$mid; lo=$((mid + 1)); else hi=$((mid - 1)); fi
-    done
-    echo $((best + hdr))
-}
-
-# Usage: auto_mtu_for_vxlan <remote> [proto ipv4|ipv6]
-auto_mtu_for_vxlan() {
-    local dst="$1" proto="${2:-ipv4}" pmtu mtu ovh max_mtu
-    ovh=$(mx_overhead "$proto"); max_mtu=$(mx_mtu_max "$proto")
-    pmtu=$(probe_path_mtu "$dst")
-    if [ "$pmtu" -eq 0 ]; then
-        local fb=1400; [ "$proto" == "ipv6" ] && fb=1380
-        echo "  ● Peer did not answer the MTU probe; using safe fallback MTU $fb." >&2
-        echo "$fb"
-        return
-    fi
-    mtu=$((pmtu - ovh))
-    [ "$mtu" -gt "$max_mtu" ] && mtu="$max_mtu"
-    [ "$mtu" -lt "$MX_MTU_MIN" ] && mtu="$MX_MTU_MIN"
-    echo "  ● Detected path MTU $pmtu; selected VXLAN MTU $mtu ($ovh-byte overhead)." >&2
-    echo "$mtu"
 }
 
 human_rate() {
@@ -1416,12 +1532,106 @@ select_fabric_interactive() {
     return 1
 }
 
+manage_port_forwarding() {
+    local target_conf="$1"
+    local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VX_NAME TUN_ID CORE_SUBNET VNI_ID TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
+    source "$target_conf" 2>/dev/null
+
+    if [ "$TYPE" != "1" ]; then
+        echo -e "\n  ${Y}● Port Forwarding & Load Balancer is only available on IRAN (Access) role!${NC}"
+        sleep 2
+        return
+    fi
+
+    local pf_opt add_tcp add_udp m_tcp m_udp rm_tcp rm_udp new_tcp new_udp new_lb
+    while true; do
+        FWD_TARGETS=''; LB_MODE=0; source "$target_conf" 2>/dev/null
+        draw_mxlan_header
+        echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")"
+        echo -e "  ${DIM}│${NC} ${DIM}Target IPs:${NC} ${W}$(mt_fwd_target_summary "$FWD_TARGETS" "$LB_MODE")${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Selected IPs)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Select Target IP(s) (Single / Multiple / All)${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
+
+        case $pf_opt in
+            1)
+                echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,9090 or 10000:10100) [Enter to skip]: ${NC}"; read -r add_tcp
+                echo -ne "  ${C}●${NC} ${W}Add UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r add_udp
+                add_tcp=$(sanitize_ports "$add_tcp" tcp)
+                add_udp=$(sanitize_ports "$add_udp" udp)
+                m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp")
+                m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
+                grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
+                echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp"
+                echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
+                mv "${target_conf}.tmp" "$target_conf"
+                FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
+                apply_fabric "$target_conf"
+                echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
+                ;;
+            2)
+                echo -ne "  ${C}●${NC} ${W}Remove TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read -r rm_tcp
+                echo -ne "  ${C}●${NC} ${W}Remove UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r rm_udp
+                rm_tcp=$(echo "$rm_tcp" | tr -dc '0-9,:')
+                rm_udp=$(echo "$rm_udp" | tr -dc '0-9,:')
+                m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp")
+                m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
+                grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
+                echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp"
+                echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
+                mv "${target_conf}.tmp" "$target_conf"
+                FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                apply_fabric "$target_conf"
+                echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
+                ;;
+            3)
+                echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read -r new_tcp
+                echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read -r new_udp
+                new_tcp=$(sanitize_ports "$new_tcp" tcp)
+                new_udp=$(sanitize_ports "$new_udp" udp)
+                grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
+                echo "FWD_TCP=$new_tcp" >> "${target_conf}.tmp"
+                echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp"
+                mv "${target_conf}.tmp" "$target_conf"
+                FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
+                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
+                apply_fabric "$target_conf"
+                echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8
+                ;;
+            4)
+                if [ "$LB_MODE" == 1 ]; then
+                    set_conf_var "$target_conf" LB_MODE 0 || continue
+                    mxlan_apply_fwd "$target_conf"
+                    echo -e "  ${G}● Load Balancer disabled; using the first selected IP.${NC}"
+                elif mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then
+                    mxlan_apply_fwd "$target_conf"
+                fi
+                sleep 1.5
+                ;;
+            5)
+                if mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then mxlan_apply_fwd "$target_conf"; fi
+                ;;
+            0) break ;;
+        esac
+    done
+}
+
 show_fabric_details() {
     draw_mxlan_header
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return; }
 
-    echo -e "\n  ${Y}● Deployed Fabrics Registry:${NC}"
+    echo -e "\n  ${Y}● Tunnels Info And Specs:${NC}"
     local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VNI_ID BR_NAME VX_NAME CORE_SUBNET LOCAL_PUB6 REMOTE_PUB6 FAB_PROTO
     local c_sub lip tip t_role t_sec left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 pad3 sp3 l4 pad4 sp4
     for conf in "${configs[@]}"; do
@@ -1615,15 +1825,16 @@ clean_mss_rules() {
 
 mxlan_apply_fwd() {
     local conf="$1"
-    local TYPE="" VX_NAME="" CORE_SUBNET="" VNI_ID="" BR_NAME="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0"
+    local TYPE="" VX_NAME="" CORE_SUBNET="" VNI_ID="" BR_NAME="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" FWD_TARGETS=''
     source "$conf" 2>/dev/null
     clean_fwd_rules "$VX_NAME"
     [ "$TYPE" == "1" ] || return 0
     [ -n "$FWD_TCP" ] && FWD_TCP=$(sanitize_ports "$FWD_TCP" tcp 2>/dev/null)
     [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
-    local -a targets=("$(mx_core_sub).2")
-    local pair
-    while read -r pair; do [ -n "$pair" ] && targets+=("${pair#* }"); done < <(vip_targets "$SYNC_KEY" "$MAX_IPS" "$TYPE")
+    local pool
+    pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || { echo "No selected forwarding targets remain for $VX_NAME. Select Target IP(s) again." >&2; return 1; }
+    local -a targets=()
+    mapfile -t targets <<< "$pool"
     build_fwd_rules "MXLAN_FWD_$VX_NAME" "$BR_NAME" "$FWD_TCP" "$FWD_UDP" "$LB_MODE" "$SECURE_TMP/.mxlan_lbdead_${VX_NAME}" "${targets[@]}"
 }
 
@@ -1678,10 +1889,10 @@ rebuild_guard() {
 }
 
 mxlan_watchdog() {
-    local conf TYPE VX_NAME CORE_SUBNET VNI_ID MAX_IPS SYNC_KEY LB_MODE FWD_TCP FWD_UDP tip pair t deadf newdead
+    local conf TYPE VX_NAME CORE_SUBNET VNI_ID MAX_IPS SYNC_KEY LB_MODE FWD_TCP FWD_UDP FWD_TARGETS pool tip pair t deadf newdead
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; VX_NAME=""; CORE_SUBNET=""; VNI_ID=""; MAX_IPS="0"; SYNC_KEY=""; LB_MODE="0"; FWD_TCP=""; FWD_UDP=""
+        TYPE=""; VX_NAME=""; CORE_SUBNET=""; VNI_ID=""; MAX_IPS="0"; SYNC_KEY=""; LB_MODE="0"; FWD_TCP=""; FWD_UDP=""; FWD_TARGETS=''
         source "$conf" 2>/dev/null
         [ -z "$VX_NAME" ] && continue
         tip=$([ "$TYPE" == "1" ] && echo "$(mx_core_sub).2" || echo "$(mx_core_sub).1")
@@ -1699,10 +1910,11 @@ mxlan_watchdog() {
         echo 0 > "$failf"
         if [ "$TYPE" == "1" ] && [ "$LB_MODE" == "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
             deadf="$SECURE_TMP/.mxlan_lbdead_${VX_NAME}"; newdead=""
-            while read -r pair; do
-                [ -z "$pair" ] && continue; t="${pair#* }"
+            pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || pool=''
+            while read -r t; do
+                [ -z "$t" ] && continue
                 ping -c 2 -i 0.3 -W 1 "$t" >/dev/null 2>&1 || newdead+="$t"$'\n'
-            done < <(vip_targets "$SYNC_KEY" "$MAX_IPS" "$TYPE")
+            done <<< "$pool"
             if [ "$(printf '%s' "$newdead")" != "$(cat "$deadf" 2>/dev/null)" ]; then
                 printf '%s' "$newdead" > "$deadf"
                 wd_log "$VX_NAME: LB pool changed, dead vIPs: $(echo "$newdead" | tr '\n' ' ')"
@@ -1763,59 +1975,38 @@ menu_guard() {
     echo -e "  ${G}✔ Firewall Guard $([ "$on" == "1" ] && echo disabled || echo enabled).${NC}"; sleep 1.8
 }
 
-menu_watchdog() {
-    draw_mxlan_header
-    local on=0; watchdog_is_on && on=1
-    echo -e "\n  ${DIM}┌─[ WATCHDOG: AUTO-HEAL + LB HEALTH CHECK ]${NC}"
-    echo -e "  ${DIM}│${NC} Status : $([ "$on" == "1" ] && echo -e "${G}ACTIVE (every 60s)${NC}" || echo -e "${R}OFF${NC}")"
-    echo -e "  ${DIM}│${NC} ● Re-applies a tunnel if its interface vanishes or the peer stops answering."
-    echo -e "  ${DIM}│${NC} ● With Load Balancer ON, dead vIPs are pulled out of rotation and re-added when back."
-    echo -e "  ${DIM}│${NC} ● Log: ${W}${WD_LOG}${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} Toggle Watchdog   ${W}2${NC} ${DIM}❯${NC} Show last 20 log lines   ${W}0${NC} ${DIM}❯${NC} Back"
-    echo -ne "  ${C}Select ❯❯ ${NC}"; read -r ans
-    case "$ans" in
-        1) if [ "$on" == "1" ]; then watchdog_disable; echo -e "  ${Y}● Watchdog disabled.${NC}"; else watchdog_enable; echo -e "  ${G}✔ Watchdog enabled.${NC}"; fi; sleep 1.5 ;;
-        2) echo ""; tail -n 20 "$WD_LOG" 2>/dev/null || echo "  (empty)"; echo -ne "\n  ${DIM}Press Enter...${NC}"; read -r _ ;;
-    esac
-}
 
-menu_auto_mtu() {
-    select_fabric_interactive || return
-    local VX_NAME="" REMOTE_PUB="" REMOTE_PUB6="" LOCAL_PUB="" LOCAL_PUB6="" FAB_PROTO="ipv4" ENCRYPT="0" CUSTOM_MTU=""; source "$SELECTED_CONF" 2>/dev/null
-    mx_endpoints
-    local fab_max; fab_max=$(mx_mtu_max "$FAB_PROTO")
+
+
+
+menu_manual_mtu() {
+    select_fabric_interactive || return 0
+    local VX_NAME="" FAB_PROTO="ipv4" CUSTOM_MTU="" ENCRYPT="0" best="" fab_max act
+    source "$SELECTED_CONF" 2>/dev/null
+    fab_max=$(mx_mtu_max "$FAB_PROTO")
+    [ "$ENCRYPT" != 1 ] || fab_max=$((fab_max - 64))
     draw_mxlan_header
-    local act; act=$(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null)
+    act=$(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null)
     echo -e "\n  ${DIM}┌─[ MTU & MSS: ${W}${VX_NAME}${DIM} ]${NC}"
-    echo -e "  ${DIM}├─${NC} Live MTU : ${Y}${act:-N/A}${NC}   Saved: ${W}${CUSTOM_MTU:-Auto}${NC}   Range: ${W}${MX_MTU_MIN}-${fab_max}${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Auto-Discover (probe path to ${EP_R})${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Set Manually${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Reset to Auto${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
-    echo -ne "  ${C}Select ❯❯ ${NC}"; read -r ans
-    local best=""
-    case "$ans" in
-        1)
-            echo -e "  ${C}⟳${NC} ${W}Probing path MTU (DF-bit binary search)...${NC}"
-            local pmtu; pmtu=$(probe_path_mtu "$EP_R")
-            if [ "$pmtu" -eq 0 ]; then echo -e "  ${R}✖ Peer does not answer ICMP. Use manual mode.${NC}"; sleep 2.5; return; fi
-            local ovh; ovh=$(mx_overhead "$FAB_PROTO"); [ "$ENCRYPT" == "1" ] && ovh=$((ovh + 64))
-            best=$((pmtu - ovh)); [ "$best" -gt "$fab_max" ] && best=$fab_max; [ "$best" -lt "$MX_MTU_MIN" ] && best=$MX_MTU_MIN
-            echo -e "  ${DIM}├─${NC} Path MTU ${W}${pmtu}${NC} - overhead ${W}${ovh}${NC} = recommended ${G}${best}${NC}"
-            echo -ne "  ${C}●${NC} ${W}Apply? Use the same value on the peer. (y/n): ${NC}"; read -r c; [[ "${c,,}" == "y" ]] || return ;;
-        2)
-            echo -ne "  ${C}●${NC} ${W}MTU (${MX_MTU_MIN}-${fab_max}): ${NC}"; read -r best; best=$(echo "$best" | tr -dc '0-9')
-            if ! is_uint "$best" || [ "$best" -lt "$MX_MTU_MIN" ] || [ "$best" -gt "$fab_max" ]; then echo -e "  ${R}✖ Out of range.${NC}"; sleep 2; return; fi ;;
-        3) best="" ;;
-        *) return ;;
-    esac
-    set_conf_var "$SELECTED_CONF" CUSTOM_MTU "$best"
-    apply_fabric "$SELECTED_CONF"
-    echo -e "  ${G}✔ MTU now $(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null || echo "${best:-Auto}") (MSS clamp follows automatically).${NC}"; sleep 2
+    echo -e "  ${DIM}├─${NC} Live MTU: ${Y}${act:-N/A}${NC}   Saved: ${W}${CUSTOM_MTU:-Default}${NC}"
+    echo -ne "  ${C}●${NC} ${W}MTU (${MX_MTU_MIN}-${fab_max}) [Enter: default | q: cancel]: ${NC}"
+    read -r best || return 0
+    best="${best//$'\r'/}"
+    case "$best" in q|Q) return 0;; esac
+    if [ -n "$best" ]; then
+        if ! [[ "$best" =~ ^[0-9]{1,5}$ ]]; then
+            echo -e "  ${R}✖ Invalid MTU.${NC}"; sleep 2; return 0
+        fi
+        best=$((10#$best))
+        if [ "$best" -lt "$MX_MTU_MIN" ] || [ "$best" -gt "$fab_max" ]; then
+            echo -e "  ${R}✖ Out of range.${NC}"; sleep 2; return 0
+        fi
+    fi
+    set_conf_var "$SELECTED_CONF" CUSTOM_MTU "$best" || return 1
+    apply_fabric "$SELECTED_CONF" || return 1
+    echo -e "  ${G}✔ MTU saved: ${best:-Default} (MSS clamp follows automatically).${NC}"
+    sleep 2
 }
-
-# Option 11 used to point at an undefined function; the manual path lives in the MTU manager
-menu_manual_mtu() { menu_auto_mtu; }
 
 show_traffic_monitor() {
     local -A prx ptx
@@ -1833,7 +2024,7 @@ show_traffic_monitor() {
             prx[$VX_NAME]=$rx; ptx[$VX_NAME]=$tx
             printf "  ${W}%-16s${NC} ${G}%-14s${NC} ${Y}%-14s${NC} %-12s %-12s\n" "$VX_NAME" "$(human_rate $drx)" "$(human_rate $dtx)" "$(human_bytes $rx)" "$(human_bytes $tx)"
         done
-        read -t 1 -n 1 -s k; [[ "$k" == "q" || "$k" == "Q" ]] && break
+        mt_monitor_wait 1 || break
     done
 }
 
@@ -1916,6 +2107,18 @@ update_available_badge() {
     fi
 }
 
+show_tunnels_info() {
+    mt_tunnels_info_menu vxlan draw_mxlan_header show_fabric_details show_live_monitor show_traffic_monitor
+}
+
+show_live_monitor() {
+    while true; do
+        draw_mxlan_header
+        show_mxlan_monitor
+        mt_monitor_wait 2 || return 0
+    done
+}
+
 render_mxlan_menu() {
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ PROVISION & MANAGE ]${NC}"
@@ -1924,7 +2127,7 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}MPorter Port Forwarder / Manager${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}View Fabric Config Registry${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Tunnels Info And Specs${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Delete Fabrics (Specific / ALL)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION ]${NC}"
@@ -1935,19 +2138,17 @@ render_mxlan_menu() {
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Edit Core Subnet Base${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Edit MTU & MSS (Manual)${NC}"
     echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SECURITY ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${Y}Live Traffic Monitor (RX/TX Rate)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${C}Auto MTU Discovery${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Fabric${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only VXLAN)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
-    mt_render_tunnel_tools 17 18 19 vxlan
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Fabric${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only VXLAN)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
-    echo -e "  ${DIM}├─${NC} ${W}21${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}22${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
+    mt_render_tunnel_system_tools 14 15
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${R}Uninstall MXLAN${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1985,7 +2186,7 @@ while true; do
                echo -e "\n  ${R}● Error: Fabric name [${vx_name}] already exists!${NC}"; sleep 2; continue
            fi
 
-           local_ip=""; r_ip=""; local_ip6=""; r_ip6=""; r_v4=""; probe_dst=""
+           local_ip=""; local_ip6=""; r_ip=""; r_ip6=""; r_v4=""
            if [ "$fab_proto" == "ipv4" ]; then
                auto_lip=$(get_local_ip)
                while true; do
@@ -2006,7 +2207,6 @@ while true; do
                    echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
                done
                [[ "$r_ip" == "q" ]] && continue
-               probe_dst="$r_ip"
            else
                local_ip6="$(get_local_ipv6)"
                while true; do
@@ -2037,7 +2237,6 @@ while true; do
                    echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
                done
                [[ "$r_v4" == "q" ]] && continue
-               probe_dst="$r_ip6"
            fi
 
            s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null)
@@ -2062,8 +2261,7 @@ while true; do
                echo -e "  ${R}● Collision: subnet ${core_sub}.x or VNI already used (MGRE/MXLAN/system route). Choose a different Token.${NC}"; sleep 2.5; continue
            fi
 
-           echo -e "  ${C}⟳${NC} ${W}Detecting a safe VXLAN MTU automatically...${NC}"
-           cust_mtu=$(auto_mtu_for_vxlan "$probe_dst" "$fab_proto")
+           cust_mtu=""  # Use the protocol default; manual MTU is available in Configuration.
            conf_path="$CONF_DIR/${vx_name}.conf"
            echo -e "TYPE=$s_type\nFAB_PROTO=$fab_proto\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nLOCAL_PUB6=$local_ip6\nREMOTE_PUB6=$r_ip6\nREMOTE_V4=$r_v4\nMAX_IPS=0\nSYNC_KEY=$tun_secret\nTUN_SECRET=$tun_secret\nVX_NAME=$vx_name\nBR_NAME=$br_name\nVNI_ID=$vni_id\nCORE_SUBNET=$core_sub\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0\nCUSTOM_MTU=$cust_mtu" > "$conf_path"
            chmod 600 "$conf_path"
@@ -2072,7 +2270,7 @@ while true; do
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
                mt_ask_bbr_on_create
-               echo -e "  ${G}● Fabric [${vx_name}] deployed (Underlay: ${fab_proto} | VNI: ${vni_id} | Subnet: ${core_sub}.x | Auto MTU: ${cust_mtu})${NC}"
+               echo -e "  ${G}● Fabric [${vx_name}] deployed (Underlay: ${fab_proto} | VNI: ${vni_id} | Subnet: ${core_sub}.x | MTU: ${cust_mtu:-Default})${NC}"
                [ "$fab_proto" == "ipv6" ] && echo -e "  ${DIM}● IPv6 underlay: allow UDP 4789 over IPv6 in the firewall on BOTH servers.${NC}"
                remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
 
@@ -2114,18 +2312,15 @@ while true; do
                        fwd_udp=$(sanitize_ports "$fwd_udp" udp)
                        
                        run_lb="0"
-                       if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
-                           echo -ne "  ${C}●${NC} ${W}Load Balance across all Virtual IPs? (y/n): ${NC}"; read -r ask_lb
-                           ask_lb=$(echo "$ask_lb" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                           if [[ "$ask_lb" == "y" || "$ask_lb" == "yes" ]]; then run_lb="1"; fi
-                       fi
-                       
                        grep -v "^FWD_TCP=" "$conf_path" | grep -v "^FWD_UDP=" | grep -v "^LB_MODE=" > "${conf_path}.tmp"
                        echo "FWD_TCP=$fwd_tcp" >> "${conf_path}.tmp"
                        echo "FWD_UDP=$fwd_udp" >> "${conf_path}.tmp"
                        echo "LB_MODE=$run_lb" >> "${conf_path}.tmp"
                        mv "${conf_path}.tmp" "$conf_path"
                        
+                       if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
+                           mt_choose_fwd_targets "$conf_path" "${core_sub}.2" "$(mt_config_value SYNC_KEY "$conf_path")" "$(mt_config_value MAX_IPS "$conf_path")" "$s_type" || true
+                       fi
                        apply_fabric "$conf_path"
                        echo -e "  ${G}● Port Forwarding applied successfully.${NC}"
                    fi
@@ -2282,62 +2477,7 @@ while true; do
 
         4)
            select_fabric_interactive || continue
-           while true; do
-               draw_mxlan_header
-               TYPE=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
-               if [ "$TYPE" != "1" ]; then
-                   echo -e "\n  ${Y}● Port Forwarding & Load Balancer is only available on IRAN role!${NC}"; sleep 2; break
-               fi
-               echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
-               echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
-               echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
-               echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")"
-               echo -e "  ${DIM}│${NC}"
-               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
-               echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
-               echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
-               echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Distribute across vIPs)${NC}"
-               echo -e "  ${DIM}│${NC}"
-               echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
-               echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
-               case $pf_opt in
-                   1)
-                       echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read -r add_tcp
-                       echo -ne "  ${C}●${NC} ${W}Add UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r add_udp
-                       add_tcp=$(sanitize_ports "$add_tcp" tcp); add_udp=$(sanitize_ports "$add_udp" udp)
-                       m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp"); m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
-                       grep -v "^FWD_TCP=" "$SELECTED_CONF" | grep -v "^FWD_UDP=" > "${SELECTED_CONF}.tmp"
-                       echo "FWD_TCP=$m_tcp" >> "${SELECTED_CONF}.tmp"; echo "FWD_UDP=$m_udp" >> "${SELECTED_CONF}.tmp"
-                       mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
-                       apply_fabric "$SELECTED_CONF"
-                       echo -e "  ${G}● Ports added. TCP: ${m_tcp:-None} | UDP: ${m_udp:-None}${NC}"; sleep 1.8 ;;
-                   2)
-                       echo -ne "  ${C}●${NC} ${W}Remove TCP Ports (e.g. 8080,9090) [Enter to skip]: ${NC}"; read -r rm_tcp
-                       echo -ne "  ${C}●${NC} ${W}Remove UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r rm_udp
-                       rm_tcp=$(echo "$rm_tcp" | tr -dc '0-9,:'); rm_udp=$(echo "$rm_udp" | tr -dc '0-9,:')
-                       m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp"); m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
-                       grep -v "^FWD_TCP=" "$SELECTED_CONF" | grep -v "^FWD_UDP=" > "${SELECTED_CONF}.tmp"
-                       echo "FWD_TCP=$m_tcp" >> "${SELECTED_CONF}.tmp"; echo "FWD_UDP=$m_udp" >> "${SELECTED_CONF}.tmp"
-                       mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
-                       apply_fabric "$SELECTED_CONF"
-                       echo -e "  ${G}● Ports removed. TCP: ${m_tcp:-None} | UDP: ${m_udp:-None}${NC}"; sleep 1.8 ;;
-                   3)
-                       echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read -r new_tcp
-                       echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read -r new_udp
-                       new_tcp=$(sanitize_ports "$new_tcp" tcp); new_udp=$(sanitize_ports "$new_udp" udp)
-                       grep -v "^FWD_TCP=" "$SELECTED_CONF" | grep -v "^FWD_UDP=" > "${SELECTED_CONF}.tmp"
-                       echo "FWD_TCP=$new_tcp" >> "${SELECTED_CONF}.tmp"; echo "FWD_UDP=$new_udp" >> "${SELECTED_CONF}.tmp"
-                       mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
-                       apply_fabric "$SELECTED_CONF"
-                       echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8 ;;
-                   4)
-                       new_lb="1"; [ "$LB_MODE" == "1" ] && new_lb="0"
-                       set_conf_var "$SELECTED_CONF" LB_MODE "$new_lb"; LB_MODE="$new_lb"
-                       apply_fabric "$SELECTED_CONF"
-                       echo -e "  ${G}● Load Balancer set to $([ "$new_lb" == "1" ] && echo ON || echo OFF).${NC}"; sleep 1.5 ;;
-                   0) break ;;
-               esac
-           done ;;
+           manage_port_forwarding "$SELECTED_CONF" ;;
 
         7)
            select_fabric_interactive || continue
@@ -2360,24 +2500,14 @@ while true; do
                echo -e "  ${G}● Fabric successfully renamed to: ${new_vx_name}${NC}"; sleep 1.5
            fi ;;
 
-        5) show_fabric_details ;;
-        12)
-           while true; do
-               draw_mxlan_header
-               show_mxlan_monitor
-               read -t 2 -n 1 -s b_opt
-               [[ "$b_opt" == "q" || "$b_opt" == "Q" ]] && break
-           done ;;
-        20) self_update_module ;;
-        22) uninstall_mxlan ;;
-        15) menu_encrypt ;;
-        16) menu_guard ;;
-        18) mt_menu_tunnel_recovery vxlan draw_mxlan_header ;;
-        14) menu_auto_mtu ;;
-        13) show_traffic_monitor ;;
-        21) menu_backup_restore ;;
-        17) mt_run_tool minterface --scope vxlan ;;
-        19) mt_run_tool mbbr --from-tunnel ;;
+        5) show_tunnels_info ;;
+        16) self_update_module ;;
+        18) uninstall_mxlan ;;
+        12) menu_encrypt ;;
+        13) menu_guard ;;
+        14) mt_run_tool mhealer --scope vxlan ;;
+        17) menu_backup_restore ;;
+        15) mt_run_tool mbbr --from-tunnel ;;
         0) break ;;
         11) menu_manual_mtu ;;
     esac

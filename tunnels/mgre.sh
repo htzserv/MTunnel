@@ -1,14 +1,14 @@
 #!/bin/bash
-# --- MGRE Modular Core (mgre.sh) | MDesign Core v12.0.2 ---
+# --- MGRE Modular Core (mgre.sh) | MDesign Core v12.0.3 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
 # [v6.4.0: GRE6 / IPIP4>4 / IPIP4>6 / IPIP6>6 | IPv6-aware header (2nd line) | locale-safe layout | shared proto helpers]
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
-#          | Correct MTU math | IPsec ESP | Firewall Guard | Watchdog + LB health | Auto-MTU | Traffic | Backup | CLI]
+#          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="12.0.2"
+MODULE_VERSION="12.0.4"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -327,10 +327,137 @@ mt_validate_conf() {
         [[ -z "$line" || "$line" == \#* ]] && continue
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"; value="${line#*=}"
-        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
+        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|FWD_TARGETS|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
         if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
         [[ "$value" =~ ^[A-Za-z0-9_:./=,+%-]*$ ]] || return 1
+        [ "$key" != FWD_TARGETS ] || mt_valid_fwd_targets "$value" || return 1
     done < "$file"
+}
+
+mt_valid_fwd_targets() {
+    local spec="$1" ip
+    [[ -z "$spec" || "$spec" == all ]] && return 0
+    [[ "$spec" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
+    local -a ips=()
+    IFS=',' read -ra ips <<< "$spec"
+    for ip in "${ips[@]}"; do mt_valid_ipv4 "$ip" || return 1; done
+}
+
+mt_fwd_candidates() {
+    local core="$1" key="$2" max="${3:-0}" type="$4" pair ip seen="|$1|"
+    mt_valid_ipv4 "$core" && [[ "$max" =~ ^[0-9]{1,3}$ && "$type" == 1 ]] && ((10#$max <= 64)) || return 1
+    max=$((10#$max))
+    printf '%s\n' "$core"
+    while read -r pair; do
+        ip="${pair#* }"
+        mt_valid_ipv4 "$ip" || continue
+        [[ "$seen" == *"|$ip|"* ]] && continue
+        seen+="$ip|"; printf '%s\n' "$ip"
+    done < <(vip_targets "$key" "$max" "$type")
+}
+
+mt_fwd_selected() {
+    local spec="$1" lb="$2"; shift 2
+    local available ip seen='|' found=0
+    available=$(mt_fwd_candidates "$@") || return 1
+    mt_valid_fwd_targets "$spec" || return 1
+    if [ -z "$spec" ]; then
+        if [ "$lb" == 1 ]; then spec=all
+        else printf '%s\n' "$available" | head -n 1; return 0; fi
+    fi
+    if [ "$spec" == all ]; then printf '%s\n' "$available"; return 0; fi
+    local -a chosen=()
+    IFS=',' read -ra chosen <<< "$spec"
+    for ip in "${chosen[@]}"; do
+        if grep -qxF "$ip" <<< "$available" && [[ "$seen" != *"|$ip|"* ]]; then
+            seen+="$ip|"; printf '%s\n' "$ip"; found=1
+        fi
+    done
+    # Never substitute an unselected core/vIP when selected addresses disappear.
+    [ "$found" == 1 ]
+}
+
+mt_parse_fwd_choice() {
+    local choice="${1//$'\r'/}" item idx ip seen='|' result=''; shift
+    local -a available=("$@") parts=()
+    choice="${choice// /}"
+    MT_FWD_CHOICE=''
+    case "${choice,,}" in '') return 2;; q) return 2;; all|a|'*') MT_FWD_CHOICE=all; return 0;; esac
+    [[ "$choice" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
+    IFS=',' read -ra parts <<< "$choice"
+    for item in "${parts[@]}"; do
+        if [[ "$item" == *.* ]]; then
+            mt_valid_ipv4 "$item" || return 1
+            ip="$item"
+            printf '%s\n' "${available[@]}" | grep -qxF "$ip" || return 1
+        else
+            [[ "$item" =~ ^[0-9]{1,3}$ ]] && ((10#$item >= 1 && 10#$item <= ${#available[@]})) || return 1
+            idx=$((10#$item-1)); ip="${available[$idx]}"
+        fi
+        [[ "$seen" == *"|$ip|"* ]] && continue
+        seen+="$ip|"; result+="${result:+,}$ip"
+    done
+    [ -n "$result" ] || return 1
+    MT_FWD_CHOICE="$result"
+}
+
+mt_save_fwd_selection() {
+    local file="$1" spec="$2" lb="$3" tmp rc=1
+    mt_validate_conf "$file" && mt_valid_fwd_targets "$spec" && [[ "$lb" =~ ^[01]$ ]] || return 1
+    tmp=$(mktemp "${file}.targets.XXXXXX") || return 1
+    if awk '!/^FWD_TARGETS=/ && !/^LB_MODE=/' "$file" > "$tmp" &&
+       printf 'FWD_TARGETS=%s\nLB_MODE=%s\n' "$spec" "$lb" >> "$tmp" &&
+       mt_validate_conf "$tmp" && mt_install_files 600 "$tmp" "$file"; then rc=0; fi
+    rm -f "$tmp"
+    return "$rc"
+}
+
+mt_choose_fwd_targets() {
+    local file="$1"; shift
+    local candidates selected choice rc spec lb count ip i label mark
+    candidates=$(mt_fwd_candidates "$@") || return 1
+    spec=$(mt_config_value FWD_TARGETS "$file"); lb=$(mt_config_value LB_MODE "$file")
+    selected=$(mt_fwd_selected "$spec" "$lb" "$@") || selected=''
+    local -a available=()
+    mapfile -t available <<< "$candidates"
+    while true; do
+        echo -e "\n  ${DIM}┌─[ FORWARDING & LOAD BALANCER TARGETS ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        for ((i=0; i<${#available[@]}; i++)); do
+            ip="${available[$i]}"; label=vIP; [ "$i" != 0 ] || label='Core Peer'
+            mark=''; grep -qxF "$ip" <<< "$selected" && mark=' [Selected]'
+            printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b %b(%s)%s%b\n' "$DIM" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$C" "$ip" "$NC" "$DIM" "$label" "$mark" "$NC"
+        done
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${G}All IPs (Core Peer + All vIPs)${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel / Keep Current${NC}\n"
+        echo -ne "  ${C}●${NC} ${W}Select IP(s) [e.g. 2 or 2,3 | a: all | Enter: keep]: ${NC}"
+        read -r choice || return 2
+        if mt_parse_fwd_choice "$choice" "${available[@]}"; then rc=0; else rc=$?; fi
+        [ "$rc" != 2 ] || return 2
+        if [ "$rc" != 0 ]; then echo -e "  ${R}✖ Select valid entries from this tunnel.${NC}"; continue; fi
+        spec="$MT_FWD_CHOICE"; count=0
+        if [ "$spec" == all ]; then count=${#available[@]}
+        else local -a chosen=(); IFS=',' read -ra chosen <<< "$spec"; count=${#chosen[@]}; fi
+        lb=0; [ "$count" -le 1 ] || lb=1
+        mt_save_fwd_selection "$file" "$spec" "$lb" || return 1
+        echo -e "  ${G}✔ Selected ${count} IP(s); $([ "$lb" == 1 ] && echo 'load balancing enabled' || echo 'direct forwarding enabled').${NC}"
+        return 0
+    done
+}
+
+mt_fwd_target_summary() {
+    local spec="$1" lb="$2" item count=0
+    if [ -z "$spec" ]; then
+        if [ "$lb" == 1 ]; then echo 'All IPs (Legacy)'; else echo 'Core Peer (Legacy)'; fi
+    elif [ "$spec" == all ]; then
+        if [ "$lb" == 1 ]; then echo 'All IPs (Core Peer + vIPs)'; else echo 'Core Peer (Direct)'; fi
+    else
+        local -a ips=(); IFS=',' read -ra ips <<< "$spec"; count=${#ips[@]}
+        if [ "$lb" != 1 ]; then echo "${ips[0]} (Direct)"
+        elif [ "$count" == 1 ]; then echo "${ips[0]}"
+        else echo "Selected Pool (${count} IPs)"; fi
+    fi
 }
 
 mt_stage_backup() {
@@ -448,33 +575,44 @@ mt_ask_bbr_on_create() {
     return 0
 }
 
-mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
-    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
+mt_render_tunnel_system_tools() {
+    local healer="$1" bbr="$2"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
 }
 
-mt_menu_tunnel_recovery() {
-    local kind="$1" header="$2" choice
-    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+mt_monitor_wait() {
+    local key='' rc=0
+    read -r -t "$1" -n 1 -s key || rc=$?
+    case "$key" in q|Q|$'\e') return 1;; esac
+    [ "$rc" -ne 1 ]
+}
+
+mt_tunnels_info_menu() {
+    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local extra_label='Live Service Logs'
+    mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
+    case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
         "$header"
-        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
-        read -r choice || return 0
+        rc=0
+        read -r choice || rc=$?
+        [ "$rc" -le 128 ] || continue
+        [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) menu_watchdog;;
-            2) mt_run_tool mhealer --scope "$kind";;
+            1) "$details";;
+            2) "$live";;
+            3) mt_run_tool minterface --scope "$kind" --render;;
+            4) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -490,6 +628,12 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
+
+
+
 
 
 
@@ -651,7 +795,8 @@ sanitize_ports() {
 # Derive vIP pair targets exactly like the original engine (keeps peer compatibility)
 vip_targets() {
     local key="$1" max="$2" type="$3" i hash rs o1 o2 o3
-    is_uint "$max" || return
+    [[ "$max" =~ ^[0-9]{1,3}$ ]] && ((10#$max <= 64)) || return 1
+    max=$((10#$max))
     for ((i=0; i<max; i++)); do
         hash=$(echo "${key}_${i}" | sha256sum)
         rs=$(( 0x${hash:0:2} % 3 ))
@@ -668,6 +813,8 @@ build_fwd_rules() {
     local tag="$1" tif="$2" tcp="$3" udp="$4" lb="$5" deadf="$6"; shift 6
     local -a targets=("$@") live=()
     local t proto list p idx n rem dst
+    [ "${#targets[@]}" -gt 0 ] || return 1
+    for t in "${targets[@]}"; do mt_valid_ipv4 "$t" || return 1; done
     if [[ "$lb" == "1" ]]; then
         for t in "${targets[@]}"; do
             if [ -s "$deadf" ] && grep -qxF "$t" "$deadf"; then continue; fi
@@ -756,35 +903,7 @@ xfrm_apply() {
     chmod 600 "$pending" && mv -f "$pending" "$sf"
 }
 
-# ---- Path MTU probe towards the remote public IP (needs ICMP echo on peer) ----
-probe_path_mtu() {
-    local dst="$1" lo=500 hi=1472 mid best=0 hdr=28 pc="ping"
-    if [[ "$dst" == *:* ]]; then pc="ping -6"; hi=1452; hdr=48; fi   # IPv6: 40 (IP) + 8 (ICMPv6)
-    $pc -c1 -W1 -M do -s "$lo" "$dst" >/dev/null 2>&1 || { echo 0; return; }
-    best=$lo
-    while [ "$lo" -le "$hi" ]; do
-        mid=$(( (lo + hi) / 2 ))
-        if $pc -c1 -W1 -M do -s "$mid" "$dst" >/dev/null 2>&1; then best=$mid; lo=$((mid + 1)); else hi=$((mid - 1)); fi
-    done
-    echo $((best + hdr))
-}
 
-auto_mtu_for_gre() {
-    local dst="$1" proto="$2" pmtu overhead min_mtu max_mtu fallback mtu
-    read -r min_mtu max_mtu fallback <<< "$(mgre_mtu_limits "$proto")"
-    pmtu=$(probe_path_mtu "$dst")
-    overhead=$(mgre_overhead "$proto")
-    if [ "$pmtu" -eq 0 ]; then
-        echo "  ● Peer did not answer the MTU probe; using safe fallback MTU $fallback." >&2
-        echo "$fallback"
-        return
-    fi
-    mtu=$((pmtu - overhead))
-    [ "$mtu" -gt "$max_mtu" ] && mtu="$max_mtu"
-    [ "$mtu" -lt "$min_mtu" ] && mtu="$min_mtu"
-    echo "  ● Detected path MTU $pmtu; selected tunnel MTU $mtu (overhead $overhead bytes)." >&2
-    echo "$mtu"
-}
 
 human_rate() {
     local b="$1"
@@ -1486,7 +1605,7 @@ select_tunnel_interactive() {
 
 manage_port_forwarding() {
     local target_conf="$1"
-    local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE
+    local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
     source "$target_conf" 2>/dev/null
     
     if [ "$TYPE" != "1" ]; then
@@ -1494,19 +1613,26 @@ manage_port_forwarding() {
         sleep 2
         return
     fi
+    if [ "$TUN_PROTO" == ipip6to6 ]; then
+        echo -e "\n  ${Y}● This forwarder uses IPv4 destinations; IPIP6→6 carries IPv6 payload.${NC}"
+        sleep 2; return
+    fi
 
     local pf_opt add_tcp add_udp m_tcp m_udp rm_tcp rm_udp new_tcp new_udp new_lb
     while true; do
+        FWD_TARGETS=''; LB_MODE=0; source "$target_conf" 2>/dev/null
         draw_mgre_header
         echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${T_NAME}${DIM} ]${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")"
+        echo -e "  ${DIM}│${NC} ${DIM}Target IPs:${NC} ${W}$(mt_fwd_target_summary "$FWD_TARGETS" "$LB_MODE")${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Distribute across vIPs)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Selected IPs)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Select Target IP(s) (Single / Multiple / All)${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
@@ -1524,6 +1650,7 @@ manage_port_forwarding() {
                 echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
                 mv "${target_conf}.tmp" "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
                 apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
@@ -1552,15 +1679,22 @@ manage_port_forwarding() {
                 echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp"
                 mv "${target_conf}.tmp" "$target_conf"
                 FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
+                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
                 apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8
                 ;;
             4)
-                new_lb="1"; [ "$LB_MODE" == "1" ] && new_lb="0"
-                set_conf_var "$target_conf" LB_MODE "$new_lb"
-                LB_MODE="$new_lb"
-                apply_tunnel "$target_conf"
-                echo -e "  ${G}● Load Balancer set to $([ "$new_lb" == "1" ] && echo ON || echo OFF).${NC}"; sleep 1.5
+                if [ "$LB_MODE" == 1 ]; then
+                    set_conf_var "$target_conf" LB_MODE 0 || continue
+                    mgre_apply_fwd "$target_conf"
+                    echo -e "  ${G}● Load Balancer disabled; using the first selected IP.${NC}"
+                elif mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then
+                    mgre_apply_fwd "$target_conf"
+                fi
+                sleep 1.5
+                ;;
+            5)
+                if mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then mgre_apply_fwd "$target_conf"; fi
                 ;;
             0) break ;;
         esac
@@ -1653,11 +1787,11 @@ show_tunnel_details() {
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return; }
 
-    echo -e "\n  ${Y}● Deployed Tunnels Registry:${NC}"
-    local conf TYPE LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET CORE_V6 TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE CUSTOM_MTU ENCRYPT
+    echo -e "\n  ${Y}● Tunnels Info And Specs:${NC}"
+    local conf TYPE LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET CORE_V6 TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE CUSTOM_MTU ENCRYPT FWD_TARGETS
     local lip tip t_role t_sec t_id proto_lbl lb_txt left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 r3 pad3 sp3 l4 pad4 sp4 l5 r5 pad5 sp5 act_mtu def_mtu curr_mtu sync_disp fwd_disp tn_s
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; CUSTOM_MTU=""; ENCRYPT="0"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; FWD_TARGETS=""; CUSTOM_MTU=""; ENCRYPT="0"; source "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         mgre_endpoints; mgre_core_ips
         lip="$CORE_LIP"; tip="$CORE_TIP"
@@ -1711,7 +1845,7 @@ show_tunnel_details() {
         fi
 
         if [ "$TYPE" == "1" ] && [ "$TUN_PROTO" != "ipip6to6" ]; then
-            lb_txt=$([ "$LB_MODE" == "1" ] && echo "Active (All vIPs)" || echo "Direct (Core IP)")
+            lb_txt=$(mt_fwd_target_summary "$FWD_TARGETS" "$LB_MODE")
             fwd_disp="${FWD_TCP:-None}"; [ ${#fwd_disp} -gt 25 ] && fwd_disp="${fwd_disp:0:22}..."
             l5="NAT FWD TCP  : ${fwd_disp}"; r5="Load Balancer: ${lb_txt}"
             pad5=$(( 90 - ${#l5} - ${#r5} )); [ "$pad5" -lt 0 ] && pad5=0; sp5=$(printf '%*s' "$pad5" "")
@@ -1872,16 +2006,17 @@ mgre_mtu_limits() { # <proto> -> "min max default"
 
 mgre_apply_fwd() {
     local conf="$1"
-    local TYPE="" T_NAME="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4"
+    local TYPE="" T_NAME="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
     source "$conf" 2>/dev/null
     clean_fwd_rules "$T_NAME"
     [ "$TYPE" == "1" ] || return 0
     [ "$TUN_PROTO" == "ipip6to6" ] && return 0     # IPv6 payload: the NAT forwarder is IPv4-only
     [ -n "$FWD_TCP" ] && FWD_TCP=$(sanitize_ports "$FWD_TCP" tcp 2>/dev/null)
     [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
-    local -a targets=("${CORE_SUBNET}.2")
-    local pair
-    while read -r pair; do [ -n "$pair" ] && targets+=("${pair#* }"); done < <(vip_targets "$SYNC_KEY" "$MAX_IPS" "$TYPE")
+    local pool
+    pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || { echo "No selected forwarding targets remain for $T_NAME. Select Target IP(s) again." >&2; return 1; }
+    local -a targets=()
+    mapfile -t targets <<< "$pool"
     build_fwd_rules "MGRE_FWD_$T_NAME" "$T_NAME" "$FWD_TCP" "$FWD_UDP" "$LB_MODE" "$SECURE_TMP/.mgre_lbdead_${T_NAME}" "${targets[@]}"
 }
 
@@ -1937,10 +2072,10 @@ rebuild_guard() {
 }
 
 mgre_watchdog() {
-    local conf TYPE T_NAME CORE_SUBNET CORE_V6 TUN_PROTO MAX_IPS SYNC_KEY LB_MODE FWD_TCP FWD_UDP pair t deadf newdead failf fails
+    local conf TYPE T_NAME CORE_SUBNET CORE_V6 TUN_PROTO MAX_IPS SYNC_KEY LB_MODE FWD_TCP FWD_UDP FWD_TARGETS pool pair t deadf newdead failf fails
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; T_NAME=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; MAX_IPS="0"; SYNC_KEY=""; LB_MODE="0"; FWD_TCP=""; FWD_UDP=""
+        TYPE=""; T_NAME=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; MAX_IPS="0"; SYNC_KEY=""; LB_MODE="0"; FWD_TCP=""; FWD_UDP=""; FWD_TARGETS=''
         source "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         mgre_core_ips
@@ -1958,10 +2093,11 @@ mgre_watchdog() {
         echo 0 > "$failf"
         if [ "$TYPE" == "1" ] && [ "$LB_MODE" == "1" ] && [ "$TUN_PROTO" != "ipip6to6" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
             deadf="$SECURE_TMP/.mgre_lbdead_${T_NAME}"; newdead=""
-            while read -r pair; do
-                [ -z "$pair" ] && continue; t="${pair#* }"
+            pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || pool=''
+            while read -r t; do
+                [ -z "$t" ] && continue
                 ping -c 2 -i 0.3 -W 1 "$t" >/dev/null 2>&1 || newdead+="$t"$'\n'
-            done < <(vip_targets "$SYNC_KEY" "$MAX_IPS" "$TYPE")
+            done <<< "$pool"
             if [ "$(printf '%s' "$newdead")" != "$(cat "$deadf" 2>/dev/null)" ]; then
                 printf '%s' "$newdead" > "$deadf"
                 wd_log "$T_NAME: LB pool changed, dead vIPs: $(echo "$newdead" | tr '\n' ' ')"
@@ -2028,43 +2164,9 @@ menu_guard() {
     echo -e "  ${G}✔ Firewall Guard $([ "$on" == "1" ] && echo disabled || echo enabled).${NC}"; sleep 1.8
 }
 
-menu_watchdog() {
-    draw_mgre_header
-    local on=0; watchdog_is_on && on=1
-    echo -e "\n  ${DIM}┌─[ WATCHDOG: AUTO-HEAL + LB HEALTH CHECK ]${NC}"
-    echo -e "  ${DIM}│${NC} Status : $([ "$on" == "1" ] && echo -e "${G}ACTIVE (every 60s)${NC}" || echo -e "${R}OFF${NC}")"
-    echo -e "  ${DIM}│${NC} ● Re-applies a tunnel if its interface vanishes or the peer stops answering."
-    echo -e "  ${DIM}│${NC} ● With Load Balancer ON, dead vIPs are pulled out of rotation and re-added when back."
-    echo -e "  ${DIM}│${NC} ● Log: ${W}${WD_LOG}${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} Toggle Watchdog   ${W}2${NC} ${DIM}❯${NC} Show last 20 log lines   ${W}0${NC} ${DIM}❯${NC} Back"
-    echo -ne "  ${C}Select ❯❯ ${NC}"; read -r ans
-    case "$ans" in
-        1) if [ "$on" == "1" ]; then watchdog_disable; echo -e "  ${Y}● Watchdog disabled.${NC}"; else watchdog_enable; echo -e "  ${G}✔ Watchdog enabled.${NC}"; fi; sleep 1.5 ;;
-        2) echo ""; tail -n 20 "$WD_LOG" 2>/dev/null || echo "  (empty)"; echo -ne "\n  ${DIM}Press Enter...${NC}"; read -r _ ;;
-    esac
-}
 
-menu_auto_mtu() {
-    select_tunnel_interactive || return
-    local T_NAME="" TUN_PROTO="ipv4" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" LOCAL_IP6="" REMOTE_IP6="" ENCRYPT="0"; source "$SELECTED_CONF" 2>/dev/null
-    mgre_endpoints
-    draw_mgre_header
-    echo -e "\n  ${C}⟳${NC} ${W}Probing path MTU to ${EP_R} (DF-bit binary search)...${NC}"
-    local pmtu; pmtu=$(probe_path_mtu "$EP_R")
-    if [ "$pmtu" -eq 0 ]; then echo -e "  ${R}✖ Peer does not answer ICMP. Cannot probe, set MTU manually (option 11).${NC}"; sleep 2.5; return; fi
-    local ovh; ovh=$(mgre_overhead "$TUN_PROTO"); [ "$ENCRYPT" == "1" ] && ovh=$((ovh + 64))
-    local lim min max; lim=$(mgre_mtu_limits "$TUN_PROTO"); min=${lim%% *}; max=$(echo "$lim" | awk '{print $2}')
-    local best=$((pmtu - ovh)); [ "$best" -gt "$max" ] && best=$max; [ "$best" -lt "$min" ] && best=$min
-    local mss_ovh=40; [ "$TUN_PROTO" == "ipip6to6" ] && mss_ovh=60
-    echo -e "  ${DIM}├─${NC} Path MTU      : ${W}${pmtu}${NC}"
-    echo -e "  ${DIM}├─${NC} Tunnel overhead: ${W}${ovh}${NC} bytes"
-    echo -e "  ${DIM}└─${NC} Recommended   : ${G}${best}${NC} (MSS $((best - mss_ovh)))"
-    echo -ne "  ${C}●${NC} ${W}Apply ${best} to ${T_NAME}? Use the same value on the peer. (y/n): ${NC}"; read -r ans
-    [[ "${ans,,}" == "y" ]] || return
-    set_conf_var "$SELECTED_CONF" CUSTOM_MTU "$best"
-    apply_tunnel "$SELECTED_CONF"
-    echo -e "  ${G}✔ MTU set to ${best}.${NC}"; sleep 1.8
-}
+
+
 
 show_traffic_monitor() {
     local -A prx ptx
@@ -2082,7 +2184,7 @@ show_traffic_monitor() {
             prx[$T_NAME]=$rx; ptx[$T_NAME]=$tx
             printf "  ${W}%-16s${NC} ${G}%-14s${NC} ${Y}%-14s${NC} %-12s %-12s\n" "$T_NAME" "$(human_rate $drx)" "$(human_rate $dtx)" "$(human_bytes $rx)" "$(human_bytes $tx)"
         done
-        read -t 1 -n 1 -s k; [[ "$k" == "q" || "$k" == "Q" ]] && break
+        mt_monitor_wait 1 || break
     done
 }
 
@@ -2165,6 +2267,18 @@ update_available_badge() {
     fi
 }
 
+show_tunnels_info() {
+    mt_tunnels_info_menu gre draw_mgre_header show_tunnel_details show_live_monitor show_traffic_monitor
+}
+
+show_live_monitor() {
+    while true; do
+        draw_mgre_header
+        show_mgre_monitor
+        mt_monitor_wait 2 || return 0
+    done
+}
+
 render_mgre_menu() {
     draw_mgre_header
     echo -e "\n  ${DIM}┌─[ PROVISION & MANAGE ]${NC}"
@@ -2173,7 +2287,7 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Virtual IP Manager (Add/Purge vIPs)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}MPorter Port Forwarder / Manager${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Manage Port Forwarding & Load Balancer${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}View Tunnel Config Registry${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Tunnels Info And Specs${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Delete Tunnels (Specific / ALL)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ CONFIGURATION ]${NC}"
@@ -2184,19 +2298,17 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Edit Core Subnet Base${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Edit MTU & MSS${NC}"
     echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SECURITY ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${W}Live Monitoring (Auto-Refresh Radar)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${Y}Live Traffic Monitor (RX/TX Rate)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${C}Auto MTU Discovery (Path Probe)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Tunnel${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only GRE)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
-    mt_render_tunnel_tools 17 18 19 gre
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Tunnel${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only GRE)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}20${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
-    echo -e "  ${DIM}├─${NC} ${W}21${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}22${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
+    mt_render_tunnel_system_tools 14 15
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -2243,7 +2355,7 @@ while true; do
            [[ "$suffix" == "q" ]] && continue
            if [ -f "$CONF_DIR/${t_name}.conf" ]; then echo -e "\n  ${R}● Error: Interface name [${t_name}] already exists!${NC}"; sleep 2; continue; fi
 
-           local_ip=""; local_ip6=""; r_ip=""; r_ip6=""; r_v4=""; core_v6=""; probe_dst=""
+           local_ip=""; local_ip6=""; r_ip=""; r_ip6=""; r_v4=""; core_v6=""
            if ! mgre_proto_is_v6 "$tun_proto"; then
                local_ip="$(get_local_ip)"
                while true; do
@@ -2262,7 +2374,6 @@ while true; do
                    echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
                done
                [[ "$r_ip" == "q" ]] && continue
-               probe_dst="$r_ip"
            else
                local_ip6="$(get_local_ipv6)"
                while true; do
@@ -2293,15 +2404,13 @@ while true; do
                    echo -e "  ${R}✖ Invalid IPv4 address.${NC}"
                done
                [[ "$r_v4" == "q" ]] && continue
-               probe_dst="$r_ip6"
            fi
 
            s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null); [ -z "$s_key" ] && s_key=$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)
            echo -ne "  ${C}●${NC} ${M}Master Secret Token [Default ${s_key}]: ${NC}"; read -r u_key; [[ "$u_key" == "q" ]] && continue
            u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-'); tun_secret=${u_key:-$s_key}
 
-           echo -e "  ${C}⟳${NC} ${W}Detecting a safe tunnel MTU automatically...${NC}"
-           cust_mtu=$(auto_mtu_for_gre "$probe_dst" "$tun_proto")
+           cust_mtu=""  # Use the protocol default; manual MTU is available in Configuration.
 
            local_ip6_inner=""; remote_ip6_inner=""
            if [[ "$tun_proto" == "6to4" ]]; then
@@ -2327,7 +2436,7 @@ while true; do
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
                mt_ask_bbr_on_create
-               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Protocol: ${tun_proto} | MTU: ${cust_mtu})${NC}"
+               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Protocol: ${tun_proto} | MTU: ${cust_mtu:-Default})${NC}"
                pt=$(TYPE="$s_type" TUN_PROTO="$tun_proto" CORE_SUBNET="$core_sub" CORE_V6="$core_v6"; mgre_core_ips; echo "$CORE_PING|$CORE_TIP")
                ping_cmd="${pt%%|*}"; remote_tip="${pt#*|}"
                mgre_proto_is_v6 "$tun_proto" && echo -e "  ${DIM}● IPv6 underlay (${tun_proto}): allow the tunnel protocol over IPv6 in the firewall on BOTH servers (GRE=47, IPIP4>6=4, IPIP6>6=41).${NC}"
@@ -2510,7 +2619,7 @@ while true; do
            echo -e "  ${DIM}│${NC} Valid Range      : ${W}${min_mtu} - ${max_mtu}${NC}"
            echo -e "  ${DIM}│${NC} Profiles         : ${W}1436${NC} (Default IR) | ${W}1360${NC} (Iran Broadband) | ${W}900-1200${NC} (Heavy Fragmentation)"
            echo -e "  ${DIM}└─${NC}"
-           echo -ne "  ${C}●${NC} ${W}Enter New MTU (${min_mtu}-${max_mtu}) [Enter for Auto]: ${NC}"; read -r new_mtu
+           echo -ne "  ${C}●${NC} ${W}Enter New MTU (${min_mtu}-${max_mtu}) [Enter for Default]: ${NC}"; read -r new_mtu
            new_mtu=$(echo "$new_mtu" | tr -dc '0-9')
 
            if [ -z "$new_mtu" ]; then
@@ -2518,7 +2627,7 @@ while true; do
                echo "CUSTOM_MTU=" >> "${SELECTED_CONF}.tmp"
                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
                apply_tunnel "$SELECTED_CONF"
-               echo -e "  ${G}● MTU reset to Auto ($def_mtu). MSS Clamping set to $((def_mtu - 40)).${NC}"; sleep 1.8
+               echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - 40)).${NC}"; sleep 1.8
            elif [ "$new_mtu" -ge "$min_mtu" ] && [ "$new_mtu" -le "$max_mtu" ] 2>/dev/null; then
                grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp"
                echo "CUSTOM_MTU=$new_mtu" >> "${SELECTED_CONF}.tmp"
@@ -2540,25 +2649,14 @@ while true; do
                echo -e "  ${R}✖ Invalid MTU! Value must be between ${min_mtu} and ${max_mtu}.${NC}"; sleep 2.5
            fi ;;
 
-        12)
-           while true; do
-               draw_mgre_header
-               show_mgre_monitor
-               read -t 2 -n 1 -s b_opt
-               [[ "$b_opt" == "q" || "$b_opt" == "Q" ]] && break
-           done ;;
-
-        5) show_tunnel_details ;;
-        20) self_update_module ;;
-        22) uninstall_mgre ;;
-        15) menu_encrypt ;;
-        16) menu_guard ;;
-        18) mt_menu_tunnel_recovery gre draw_mgre_header ;;
-        14) menu_auto_mtu ;;
-        13) show_traffic_monitor ;;
-        21) menu_backup_restore ;;
-        17) mt_run_tool minterface --scope gre ;;
-        19) mt_run_tool mbbr --from-tunnel ;;
+        5) show_tunnels_info ;;
+        16) self_update_module ;;
+        18) uninstall_mgre ;;
+        12) menu_encrypt ;;
+        13) menu_guard ;;
+        14) mt_run_tool mhealer --scope gre ;;
+        17) menu_backup_restore ;;
+        15) mt_run_tool mbbr --from-tunnel ;;
         0) break ;;
     esac
 done

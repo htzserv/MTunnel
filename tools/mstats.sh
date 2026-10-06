@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v12.0.2 ---
+# --- MDesign Modular Core (mstats.sh) | MStats Omni-Radar & Web Controller v12.0.3 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="12.0.2"
+MODULE_VERSION="12.0.4"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -321,10 +321,137 @@ mt_validate_conf() {
         [[ -z "$line" || "$line" == \#* ]] && continue
         [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
         key="${line%%=*}"; value="${line#*=}"
-        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
+        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|FWD_TARGETS|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
         if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
         [[ "$value" =~ ^[A-Za-z0-9_:./=,+%-]*$ ]] || return 1
+        [ "$key" != FWD_TARGETS ] || mt_valid_fwd_targets "$value" || return 1
     done < "$file"
+}
+
+mt_valid_fwd_targets() {
+    local spec="$1" ip
+    [[ -z "$spec" || "$spec" == all ]] && return 0
+    [[ "$spec" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
+    local -a ips=()
+    IFS=',' read -ra ips <<< "$spec"
+    for ip in "${ips[@]}"; do mt_valid_ipv4 "$ip" || return 1; done
+}
+
+mt_fwd_candidates() {
+    local core="$1" key="$2" max="${3:-0}" type="$4" pair ip seen="|$1|"
+    mt_valid_ipv4 "$core" && [[ "$max" =~ ^[0-9]{1,3}$ && "$type" == 1 ]] && ((10#$max <= 64)) || return 1
+    max=$((10#$max))
+    printf '%s\n' "$core"
+    while read -r pair; do
+        ip="${pair#* }"
+        mt_valid_ipv4 "$ip" || continue
+        [[ "$seen" == *"|$ip|"* ]] && continue
+        seen+="$ip|"; printf '%s\n' "$ip"
+    done < <(vip_targets "$key" "$max" "$type")
+}
+
+mt_fwd_selected() {
+    local spec="$1" lb="$2"; shift 2
+    local available ip seen='|' found=0
+    available=$(mt_fwd_candidates "$@") || return 1
+    mt_valid_fwd_targets "$spec" || return 1
+    if [ -z "$spec" ]; then
+        if [ "$lb" == 1 ]; then spec=all
+        else printf '%s\n' "$available" | head -n 1; return 0; fi
+    fi
+    if [ "$spec" == all ]; then printf '%s\n' "$available"; return 0; fi
+    local -a chosen=()
+    IFS=',' read -ra chosen <<< "$spec"
+    for ip in "${chosen[@]}"; do
+        if grep -qxF "$ip" <<< "$available" && [[ "$seen" != *"|$ip|"* ]]; then
+            seen+="$ip|"; printf '%s\n' "$ip"; found=1
+        fi
+    done
+    # Never substitute an unselected core/vIP when selected addresses disappear.
+    [ "$found" == 1 ]
+}
+
+mt_parse_fwd_choice() {
+    local choice="${1//$'\r'/}" item idx ip seen='|' result=''; shift
+    local -a available=("$@") parts=()
+    choice="${choice// /}"
+    MT_FWD_CHOICE=''
+    case "${choice,,}" in '') return 2;; q) return 2;; all|a|'*') MT_FWD_CHOICE=all; return 0;; esac
+    [[ "$choice" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
+    IFS=',' read -ra parts <<< "$choice"
+    for item in "${parts[@]}"; do
+        if [[ "$item" == *.* ]]; then
+            mt_valid_ipv4 "$item" || return 1
+            ip="$item"
+            printf '%s\n' "${available[@]}" | grep -qxF "$ip" || return 1
+        else
+            [[ "$item" =~ ^[0-9]{1,3}$ ]] && ((10#$item >= 1 && 10#$item <= ${#available[@]})) || return 1
+            idx=$((10#$item-1)); ip="${available[$idx]}"
+        fi
+        [[ "$seen" == *"|$ip|"* ]] && continue
+        seen+="$ip|"; result+="${result:+,}$ip"
+    done
+    [ -n "$result" ] || return 1
+    MT_FWD_CHOICE="$result"
+}
+
+mt_save_fwd_selection() {
+    local file="$1" spec="$2" lb="$3" tmp rc=1
+    mt_validate_conf "$file" && mt_valid_fwd_targets "$spec" && [[ "$lb" =~ ^[01]$ ]] || return 1
+    tmp=$(mktemp "${file}.targets.XXXXXX") || return 1
+    if awk '!/^FWD_TARGETS=/ && !/^LB_MODE=/' "$file" > "$tmp" &&
+       printf 'FWD_TARGETS=%s\nLB_MODE=%s\n' "$spec" "$lb" >> "$tmp" &&
+       mt_validate_conf "$tmp" && mt_install_files 600 "$tmp" "$file"; then rc=0; fi
+    rm -f "$tmp"
+    return "$rc"
+}
+
+mt_choose_fwd_targets() {
+    local file="$1"; shift
+    local candidates selected choice rc spec lb count ip i label mark
+    candidates=$(mt_fwd_candidates "$@") || return 1
+    spec=$(mt_config_value FWD_TARGETS "$file"); lb=$(mt_config_value LB_MODE "$file")
+    selected=$(mt_fwd_selected "$spec" "$lb" "$@") || selected=''
+    local -a available=()
+    mapfile -t available <<< "$candidates"
+    while true; do
+        echo -e "\n  ${DIM}┌─[ FORWARDING & LOAD BALANCER TARGETS ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        for ((i=0; i<${#available[@]}; i++)); do
+            ip="${available[$i]}"; label=vIP; [ "$i" != 0 ] || label='Core Peer'
+            mark=''; grep -qxF "$ip" <<< "$selected" && mark=' [Selected]'
+            printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b %b(%s)%s%b\n' "$DIM" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$C" "$ip" "$NC" "$DIM" "$label" "$mark" "$NC"
+        done
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${G}All IPs (Core Peer + All vIPs)${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel / Keep Current${NC}\n"
+        echo -ne "  ${C}●${NC} ${W}Select IP(s) [e.g. 2 or 2,3 | a: all | Enter: keep]: ${NC}"
+        read -r choice || return 2
+        if mt_parse_fwd_choice "$choice" "${available[@]}"; then rc=0; else rc=$?; fi
+        [ "$rc" != 2 ] || return 2
+        if [ "$rc" != 0 ]; then echo -e "  ${R}✖ Select valid entries from this tunnel.${NC}"; continue; fi
+        spec="$MT_FWD_CHOICE"; count=0
+        if [ "$spec" == all ]; then count=${#available[@]}
+        else local -a chosen=(); IFS=',' read -ra chosen <<< "$spec"; count=${#chosen[@]}; fi
+        lb=0; [ "$count" -le 1 ] || lb=1
+        mt_save_fwd_selection "$file" "$spec" "$lb" || return 1
+        echo -e "  ${G}✔ Selected ${count} IP(s); $([ "$lb" == 1 ] && echo 'load balancing enabled' || echo 'direct forwarding enabled').${NC}"
+        return 0
+    done
+}
+
+mt_fwd_target_summary() {
+    local spec="$1" lb="$2" item count=0
+    if [ -z "$spec" ]; then
+        if [ "$lb" == 1 ]; then echo 'All IPs (Legacy)'; else echo 'Core Peer (Legacy)'; fi
+    elif [ "$spec" == all ]; then
+        if [ "$lb" == 1 ]; then echo 'All IPs (Core Peer + vIPs)'; else echo 'Core Peer (Direct)'; fi
+    else
+        local -a ips=(); IFS=',' read -ra ips <<< "$spec"; count=${#ips[@]}
+        if [ "$lb" != 1 ]; then echo "${ips[0]} (Direct)"
+        elif [ "$count" == 1 ]; then echo "${ips[0]}"
+        else echo "Selected Pool (${count} IPs)"; fi
+    fi
 }
 
 mt_stage_backup() {
@@ -442,33 +569,44 @@ mt_ask_bbr_on_create() {
     return 0
 }
 
-mt_render_tunnel_tools() {
-    local iface="$1" healer="$2" bbr="$3" recovery_label='Autonomous Tunnel Healer'
-    case "${4:-}" in gre|vxlan) recovery_label='Watchdog & Tunnel Healer';; esac
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ TUNNEL TOOLS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${iface}${NC}${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}${recovery_label}${NC}"
+mt_render_tunnel_system_tools() {
+    local healer="$1" bbr="$2"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
 }
 
-mt_menu_tunnel_recovery() {
-    local kind="$1" header="$2" choice
-    case "$kind" in gre|vxlan) ;; *) return 1;; esac
+mt_monitor_wait() {
+    local key='' rc=0
+    read -r -t "$1" -n 1 -s key || rc=$?
+    case "$key" in q|Q|$'\e') return 1;; esac
+    [ "$rc" -ne 1 ]
+}
+
+mt_tunnels_info_menu() {
+    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local extra_label='Live Service Logs'
+    mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
+    case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
         "$header"
-        echo -e "\n  ${DIM}┌─[ WATCHDOG & TUNNEL HEALER ]${NC}"
+        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Watchdog: Auto-Heal + LB Health${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
-        read -r choice || return 0
+        rc=0
+        read -r choice || rc=$?
+        [ "$rc" -le 128 ] || continue
+        [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) menu_watchdog;;
-            2) mt_run_tool mhealer --scope "$kind";;
+            1) "$details";;
+            2) "$live";;
+            3) mt_run_tool minterface --scope "$kind" --render;;
+            4) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -484,6 +622,12 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
+
+
+
+
+
 
 
 

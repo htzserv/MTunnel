@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Modular Core (mweb.sh) | Enterprise UI v12.0.2 ---
+# --- MDesign Modular Core (mweb.sh) | Enterprise UI v12.0.3 ---
 # [Features: Versioned Telemetry | Background Sync | Cleaned Daemons]
 
-MODULE_VERSION="12.0.2"
+MODULE_VERSION="12.0.4"
 
 CONF_FILE="/etc/mweb/web.conf"
 LOCAL_DIR="/root/mtunnel"

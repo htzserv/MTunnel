@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="12.0.6"
+MODULE_VERSION="12.0.8"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -859,7 +859,7 @@ ensure_jq() {
 }
 
 download_file() {
-    mt_download "$1" "$2"
+    mp_download "$1" "$2"
 }
 
 check_update_bg() {
@@ -1091,15 +1091,31 @@ mp_bh_choose_target() {
     echo -e "  ${DIM}Only ports configured in Backhaul can be selected; the local destination port is automatic.${NC}"
 }
 
+mp_bh_public_host() {
+    local meta="$1" p="$2" host raw lhs start end
+    local -a items=()
+    host=$(read_conf_value "$meta" BIND_HOST); host="${host:-0.0.0.0}"
+    IFS=, read -ra items <<< "$(read_conf_value "$meta" PORTS)"
+    for raw in "${items[@]}"; do
+        lhs="${raw%%=*}"; lhs="${lhs// /}"
+        if [[ "$lhs" == *:* ]] && [ "${lhs##*:}" = "$p" ]; then host=$(mt_normalize_host "${lhs%:*}"); break; fi
+    done
+    valid_ip "$host" || return 1
+    printf '%s' "$host"
+}
+
 mp_bh_redirect_rules() {
     local ip="$1" p="$2" rp="$3" meta="$4" bin bind
     valid_ipv4 "$ip" && [[ "$ip" == 127.77.* ]] && valid_port "$p" && valid_port "$rp" || return 1
-    bind=$(read_conf_value "$meta" BACKEND_BIND)
-    local -a bins=(iptables); [ "$bind" != :: ] || bins+=(ip6tables)
+    bind=$(mp_bh_public_host "$meta" "$p") || return 1
+    local -a bins=(iptables) match=()
+    if [ "$bind" = :: ]; then bins+=(ip6tables)
+    elif is_v6 "$bind"; then bins=(ip6tables); fi
+    [[ "$bind" = 0.0.0.0 || "$bind" = :: ]] || match=(-d "$bind")
     for bin in "${bins[@]}"; do
         command -v "$bin" >/dev/null 2>&1 || return 1
-        printf '%s\n' "$bin -w 5 -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$ip\" -j REDIRECT --to-ports $rp"
-        printf '%s\n' "$bin -w 5 -t nat -A OUTPUT -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$ip\" -j REDIRECT --to-ports $rp"
+        printf '%s\n' "$bin -w 5 -t nat -A PREROUTING${match[*]:+ ${match[*]}} -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$ip\" -j REDIRECT --to-ports $rp"
+        printf '%s\n' "$bin -w 5 -t nat -A OUTPUT${match[*]:+ ${match[*]}} -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$ip\" -j REDIRECT --to-ports $rp"
     done
 }
 
@@ -1118,8 +1134,8 @@ collect_mappings() {
         [ -f "$R_CONF" ] && jq -r '.endpoints[]? | select(.listen and .remote) | (.listen|tostring|split(":")|last) as $p | (.remote|tostring|capture("^\\[?(?<ip>[^\\]]+?)\\]?:(?<rp>[0-9]+)$")) as $r | "\($p)|\($r.ip|ascii_downcase)|\($r.rp)|RLM"' "$R_CONF" 2>/dev/null
     fi
     [ -f "$IPT_CONF" ] && grep -E -- '-A PREROUTING' "$IPT_CONF" 2>/dev/null | sed -nE 's/.*--dport ([0-9]+) .*MPORTER_NAT_([0-9a-fA-F:.]+)\\?".*--to-destination \[?[0-9a-fA-F:.]+\]?:([0-9]+).*/\1|\2|\3|IPT/p'
-    # IPv4 REDIRECT is the canonical row; optional IPv6 rule has the same target.
-    [ -f "$IPT_CONF" ] && sed -nE 's/^iptables .*--dport ([0-9]+) .*MPORTER_NAT_(127\.77\.[0-9]+\.[0-9]+)".*-j REDIRECT --to-ports ([0-9]+).*/\1|\2|\3|IPT/p' "$IPT_CONF" | awk -F'|' '!seen[$0]++'
+    # Deduplicate both hooks and families; an IPv6-only frontend is valid too.
+    [ -f "$IPT_CONF" ] && sed -nE 's/^ip(6)?tables .*--dport ([0-9]+) .*MPORTER_NAT_(127\.77\.[0-9]+\.[0-9]+)".*-j REDIRECT --to-ports ([0-9]+).*/\2|\3|\4|IPT/p' "$IPT_CONF" | awk -F'|' '!seen[$0]++'
     return 0
 }
 
@@ -1234,8 +1250,8 @@ port_owner() {
     local p="$1"
     if [ -f "$H_CONF" ] && grep -qE "^frontend[[:space:]]+ft_${p}[[:space:]]*$" "$H_CONF" 2>/dev/null; then echo "HAProxy"; return 0; fi
     if command -v jq >/dev/null 2>&1; then
-        [ -f "$G_CONF" ] && jq -e --arg p "tcp://:$p/" '[.ServeNodes[]? | strings | select(startswith($p))] | length > 0' "$G_CONF" >/dev/null 2>&1 && { echo "Gost"; return 0; }
-        [ -f "$R_CONF" ] && jq -e --arg l "0.0.0.0:$p" '[.endpoints[]? | select(.listen == $l)] | length > 0' "$R_CONF" >/dev/null 2>&1 && { echo "Realm"; return 0; }
+        [ -f "$G_CONF" ] && jq -e --arg p "$p" '[.ServeNodes[]? | strings | select(test(":"+$p+"/"))] | length > 0' "$G_CONF" >/dev/null 2>&1 && { echo "Gost"; return 0; }
+        [ -f "$R_CONF" ] && jq -e --arg p "$p" '[.endpoints[]? | select((.listen|split(":")|last) == $p)] | length > 0' "$R_CONF" >/dev/null 2>&1 && { echo "Realm"; return 0; }
     fi
     grep -qE -- "-A PREROUTING .*--dport $p .*MPORTER_NAT_" "$IPT_CONF" 2>/dev/null && { echo "KernelNAT"; return 0; }
     port_listening "$p" && { echo "OS/System"; return 0; }
@@ -1334,14 +1350,17 @@ hap_commit() {
 
 # json_engine_commit <conf> <candidate> <service>: install candidate, restart, rollback if the service dies.
 json_engine_commit() {
-    local file="$1" new="$2" svc="$3" bak
+    local file="$1" new="$2" svc="$3" bak rc=0
     jq -e 'type=="object"' "$new" >/dev/null 2>&1 || { rm -f "$new"; return 1; }
     bak=$(mp_tmp bak) || return 1
-    cp -f "$file" "$bak" 2>/dev/null; cat "$new" > "$file"; rm -f "$new"
-    systemctl restart "$svc" >/dev/null 2>&1; sleep 1
-    if systemctl is-active --quiet "$svc"; then rm -f "$bak"; return 0; fi
-    cat "$bak" > "$file"; rm -f "$bak"; systemctl restart "$svc" >/dev/null 2>&1
-    return 1
+    cp -p "$file" "$bak" || { rm -f "$new" "$bak"; return 1; }
+    mt_install_files 600 "$new" "$file" || { rm -f "$new" "$bak"; return 1; }
+    rm -f "$new"
+    systemctl restart "$svc" && mp_service_ready "$svc" || rc=1
+    if [ "$rc" = 0 ]; then systemctl enable "$svc" >/dev/null 2>&1; rm -f "$bak"; return 0; fi
+    journalctl -u "$svc" -n 8 --no-pager >&2
+    mt_install_files 600 "$bak" "$file" && systemctl restart "$svc" >/dev/null 2>&1
+    rm -f "$bak"; return 1
 }
 
 json_edit() { # file filter [jq args...] : in-place, validated
@@ -1475,8 +1494,8 @@ purge_port_core() {
         local tmp; tmp=$(mp_tmp hap); hap_strip_ports "$p" "$H_CONF" > "$tmp"; hap_commit "$tmp" >/dev/null || true
     fi
     if command -v jq >/dev/null 2>&1; then
-        json_edit "$G_CONF" '.ServeNodes = [.ServeNodes[]? | select(startswith("tcp://:" + $p + "/") | not)]' --arg p "$p"
-        json_edit "$R_CONF" '.endpoints = [.endpoints[]? | select(.listen != ("0.0.0.0:" + $p))]' --arg p "$p"
+        json_edit "$G_CONF" '.ServeNodes = [.ServeNodes[]? | select(test(":"+$p+"/") | not)]' --arg p "$p"
+        json_edit "$R_CONF" '.endpoints = [.endpoints[]? | select((.listen|split(":")|last) != $p)]' --arg p "$p"
     fi
     ipt_conf_filter "" "$p"
     obfs_filter port "$p"
@@ -1555,44 +1574,205 @@ verify_sha256() { # file expected(optional)
 }
 
 # Optional pinning: export MPORTER_GOST_SHA256=<sha of the .gz> / MPORTER_REALM_SHA256=<sha of the .tar.gz>
-download_gost_binary() {
-    local target_bin="/usr/local/bin/gost" url gz raw
-    if [ -x "$target_bin" ] && "$target_bin" -V >/dev/null 2>&1; then return 0; fi
-    [ "$(uname -m)" = "x86_64" ] || { echo "gost: only the linux-amd64 build is mirrored" >&2; return 1; }
-    local mirrors=("https://c107328.parspack.net/c107328/MTunnel/gost-linux-amd64-2.11.5.gz"
-                   "https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
-                   "https://ghproxy.net/https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz")
-    for url in "${mirrors[@]}"; do
-        gz=$(mp_tmp gostgz) || return 1; raw="$gz.bin"
-        if download_file "$url" "$gz" && [ -s "$gz" ] && gzip -t "$gz" 2>/dev/null && verify_sha256 "$gz" "${MPORTER_GOST_SHA256:-}"; then
-            gzip -dc "$gz" > "$raw" 2>/dev/null && chmod +x "$raw"
-            if "$raw" -V >/dev/null 2>&1; then mv -f "$raw" "$target_bin"; rm -f "$gz"; return 0; fi
-        fi
-        rm -f "$gz" "$raw"
+mp_ensure_download_tools() {
+    local need_zip="${1:-0}" missing=() log
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then missing+=(curl); fi
+    if [ "$need_zip" = 1 ] && ! command -v unzip >/dev/null 2>&1; then missing+=(unzip); fi
+    [ -s /etc/ssl/certs/ca-certificates.crt ] || missing+=(ca-certificates)
+    [ "${#missing[@]}" -gt 0 ] || return 0
+    command -v apt-get >/dev/null 2>&1 || { echo "Install the missing packages: ${missing[*]}" >&2; return 1; }
+    echo -e "  ${DIM}● Installing download prerequisites: ${missing[*]}...${NC}"
+    log=$(mktemp "$SECURE_TMP/rh-deps.XXXXXX") || return 1
+    apt-get update -q > "$log" 2>&1 || true
+    if ! apt-get install -y -q "${missing[@]}" >> "$log" 2>&1; then
+        echo 'Download prerequisites could not be installed:' >&2
+        tail -n 6 "$log" >&2; rm -f "$log"; return 1
+    fi
+    rm -f "$log"
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || return 1
+    [ "$need_zip" != 1 ] || command -v unzip >/dev/null 2>&1 || return 1
+    [ -s /etc/ssl/certs/ca-certificates.crt ] || { echo 'System CA certificate bundle is missing.' >&2; return 1; }
+}
+
+mp_download() {
+    local url="$1" dest="$2" expected="${3:-}" tmp log tool family rc=1 code permanent=false
+    [[ "$url" == https://* ]] || { echo 'Download requires an HTTPS URL.' >&2; return 1; }
+    [[ -z "$expected" || "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Invalid expected SHA256.' >&2; return 1; }
+    tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
+    log=$(mktemp "$SECURE_TMP/rh-download.XXXXXX") || { rm -f "$tmp"; return 1; }
+    local -a args=()
+    for tool in curl wget; do
+        command -v "$tool" >/dev/null 2>&1 || continue
+        for family in auto ipv4; do
+            args=(); [ "$family" != ipv4 ] || args=(-4)
+            : > "$tmp"
+            echo -e "  ${DIM}● Downloading with $tool ($family)...${NC}"
+            if [ "$tool" = curl ]; then
+                code=$(curl "${args[@]}" -fsSL --proto '=https' --proto-redir '=https' \
+                    --connect-timeout 10 --max-time 120 --retry 1 -w '%{http_code}' -o "$tmp" "$url" 2> "$log"); rc=$?
+                if [ "$rc" = 22 ] && [[ "$code" =~ ^(400|401|403|404|410)$ ]]; then permanent=true; fi
+            else
+                wget "${args[@]}" --https-only --timeout=30 --tries=2 -O "$tmp" "$url" 2> "$log"; rc=$?
+                [ "$rc" != 8 ] || permanent=true
+            fi
+            if [ "$rc" = 0 ] && [ -s "$tmp" ]; then
+                if [ -n "$expected" ] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" != "${expected,,}" ]; then
+                    echo 'Downloaded package SHA256 does not match; installation refused.' >&2
+                    rm -f "$tmp" "$log"; return 1
+                fi
+                mv -f "$tmp" "$dest"; rc=$?
+                rm -f "$log"; return "$rc"
+            fi
+            [ "$permanent" != true ] || break
+        done
+        [ "$permanent" != true ] || break
     done
-    return 1
+    echo 'MPorter core download failed:' >&2
+    if [ -s "$log" ]; then tail -n 4 "$log" >&2; else echo 'The server returned an empty file or no downloader is available.' >&2; fi
+    rm -f "$tmp" "$log"; return 1
+}
+
+mp_choose_core_source() {
+    local choice
+    echo -e "\n  ${DIM}┌─[ CORE DOWNLOAD SOURCE ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack + official fallback${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom HTTPS link (asked per engine)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local /root/mtunnel/packages${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Select [1-4 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    [[ "$choice" =~ ^[1-4]$ ]] || return 1
+    MP_CORE_SOURCE="$choice"
+}
+
+mp_core_arch() {
+    case "${1:-$(uname -m)}" in
+        x86_64) MP_GOST_ARCH=amd64; MP_REALM_ARCH=x86_64;;
+        aarch64|arm64) MP_GOST_ARCH=armv8; MP_REALM_ARCH=aarch64;;
+        *) echo 'Supported architectures: x86_64 / aarch64.' >&2; return 1;;
+    esac
+}
+
+mp_unpack_core() {
+    local engine="$1" package="$2" dir="$3" file count=0 candidate=""
+    mkdir -p "$dir" || return 1
+    if mt_valid_elf "$package"; then
+        cp "$package" "$dir/$engine" || return 1; candidate="$dir/$engine"
+    elif [ "$engine" = gost ] && gzip -t "$package" >/dev/null 2>&1; then
+        if tar -tzf "$package" >/dev/null 2>&1; then mt_extract_archive "$package" "$dir" || return 1
+        else gzip -dc "$package" > "$dir/gost" || return 1; fi
+    else mt_extract_archive "$package" "$dir" || return 1; fi
+    if [ -z "$candidate" ]; then
+        while IFS= read -r file; do
+            mt_valid_elf "$file" || continue; candidate="$file"; count=$((count+1))
+        done < <(find "$dir" -type f -name "$engine*")
+        [ "$count" = 1 ] || return 1
+    fi
+    mt_valid_elf "$candidate" && chmod 700 "$candidate" || return 1
+    local version
+    if [ "$engine" = gost ]; then
+        version=$(timeout 5 "$candidate" -V 2>&1) || return 1
+        [[ "$version" =~ (^|[[:space:]])[vV]?2\.[0-9]+\.[0-9]+ ]] || { echo 'MPorter requires GOST v2; GOST v3 uses a different config.' >&2; return 1; }
+    else
+        version=$(timeout 5 "$candidate" --version 2>&1) || return 1
+        [[ "$version" =~ realm[[:space:]]+2\.[0-9]+\.[0-9]+ ]] || { echo 'MPorter requires Realm v2.' >&2; return 1; }
+    fi
+    printf '%s' "$candidate"
+}
+
+mp_download_core() {
+    local engine="$1" force="${2:-false}" target="${MTUNNEL_TEST_ROOT:-}/usr/local/bin/$1" source="${MP_CORE_SOURCE:-2}"
+    local asset official expected="" work package candidate item url rc=1
+    local -a urls=() locals=()
+    mp_core_arch || return 1
+    if [ "$force" != true ] && mt_valid_elf "$target"; then
+        if [ "$engine" = gost ]; then
+            local version; version=$("$target" -V 2>&1)
+            [[ "$version" =~ (^|[[:space:]])[vV]?2\.[0-9]+\.[0-9]+ ]] && return 0
+        elif "$target" --version >/dev/null 2>&1; then return 0; fi
+    fi
+    case "$engine" in
+        gost)
+            asset="gost-linux-${MP_GOST_ARCH}-2.11.5.gz"; expected="${MPORTER_GOST_SHA256:-}"
+            official="https://github.com/ginuerzh/gost/releases/download/v2.11.5/$asset"
+            urls=("https://c107328.parspack.net/c107328/MTunnel/packages/$asset" "https://c107328.parspack.net/c107328/MTunnel/$asset" "$official")
+            ;;
+        realm)
+            asset="realm-${MP_REALM_ARCH}-unknown-linux-musl.tar.gz"; expected="${MPORTER_REALM_SHA256:-}"
+            official="https://github.com/zhboner/realm/releases/download/v2.7.0/$asset"
+            urls=("https://c107328.parspack.net/c107328/MTunnel/packages/$asset")
+            [ "$MP_REALM_ARCH" != x86_64 ] || urls+=("https://c107328.parspack.net/c107328/MTunnel/realm.tar.gz")
+            urls+=("$official" "https://github.com/zhboner/realm/releases/download/v2.7.0/realm-${MP_REALM_ARCH}-unknown-linux-gnu.tar.gz");;
+        *) return 1;;
+    esac
+    work=$(mktemp -d "$SECURE_TMP/mp-core.XXXXXX") || return 1
+    package="$work/package"
+    case "$source" in
+        1) urls=("$official");;
+        2) :;;
+        3)
+            if [ "$engine" = gost ]; then url="${MP_CUSTOM_GOST_URL:-}"
+            else url="${MP_CUSTOM_REALM_URL:-}"; fi
+            if [ -z "$url" ]; then
+                echo -ne "  ${C}● $engine HTTPS direct link ❯❯ ${NC}"; read -r url || { rm -rf "$work"; return 1; }
+            fi
+            [[ "$url" == https://* ]] || { rm -rf "$work"; echo 'Use an HTTPS direct link.' >&2; return 1; }; urls=("$url");;
+        4)
+            locals=("${LOCAL_DIR:-/root/mtunnel}/packages/$engine" "${LOCAL_DIR:-/root/mtunnel}/packages/$asset" "${LOCAL_DIR:-/root/mtunnel}/packages/$engine.tar.gz")
+            for item in "${locals[@]}"; do [ ! -f "$item" ] || { cp "$item" "$package"; break; }; done
+            [ -s "$package" ] || { echo "No local $engine binary / $asset found." >&2; rm -rf "$work"; return 1; }; urls=();;
+        *) rm -rf "$work"; return 1;;
+    esac
+    if [ "${#urls[@]}" -gt 0 ]; then
+        mp_ensure_download_tools 0 || { rm -rf "$work"; return 1; }
+        for url in "${urls[@]}"; do
+            if mp_download "$url" "$package" "$expected"; then
+                rm -rf "$work/extracted"
+                candidate=$(mp_unpack_core "$engine" "$package" "$work/extracted") && break
+                echo "Downloaded package is incompatible with $engine / $(uname -m)." >&2
+            fi
+            candidate=""
+        done
+    else
+        verify_sha256 "$package" "$expected" && candidate=$(mp_unpack_core "$engine" "$package" "$work/extracted") || candidate=""
+    fi
+    if [ -n "$candidate" ]; then mt_update_core "$engine" "$engine" "$candidate" local; rc=$?; fi
+    rm -rf "$work"
+    [ "$rc" = 0 ] || echo "$engine installation failed; previous binary preserved." >&2
+    return "$rc"
+}
+
+mp_service_ready() {
+    local svc="$1" i
+    for i in 1 2 3 4; do sleep 0.4; systemctl is-active --quiet "$svc" || return 1; done
+}
+
+mp_check_backhaul_target() {
+    local meta="$1" ip="$2" port="$3" name remote transport
+    name=$(basename "$meta" .meta)
+    systemctl is-active --quiet "mbackhaul@$name" || { echo 'Start this Backhaul tunnel first.' >&2; return 1; }
+    transport=$(read_conf_value "$meta" TRANSPORT)
+    [ "$transport" != udp ] || { echo 'This MPorter target supports TCP applications; UDP needs Backhaul / iptables.' >&2; return 1; }
+    if [ -x /usr/bin/mbackhaul ]; then
+        /usr/bin/mbackhaul --apply-forwarder "$name" || { echo 'Backhaul firewall setup failed; mapping cancelled. Update mbackhaul and retry.' >&2; return 1; }
+    fi
+    if ! health_probe "$ip" "$port" 2; then
+        echo 'Backhaul private port is not listening yet. Connect the peer with matching transport/token first.' >&2
+        echo "Check: journalctl -u mbackhaul@$name -n 20 --no-pager" >&2
+        # Mappings may be prepared before the peer is online.
+    fi
+}
+
+
+download_gost_binary() {
+    mp_download_core gost "${1:-false}"
 }
 
 download_realm_binary() {
-    local target_bin="/usr/local/bin/realm" url dl dir bin
-    if [ -x "$target_bin" ] && "$target_bin" --version >/dev/null 2>&1; then return 0; fi
-    [ "$(uname -m)" = "x86_64" ] || { echo "realm: only the x86_64 build is mirrored" >&2; return 1; }
-    for url in "https://c107328.parspack.net/c107328/MTunnel/realm.tar.gz" \
-               "https://github.com/zhboner/realm/releases/latest/download/realm-x86_64-unknown-linux-gnu.tar.gz"; do
-        dl=$(mp_tmp realmtgz) || return 1; dir=$(mktemp -d "$SECURE_TMP/realm.XXXXXX")
-        if download_file "$url" "$dl" && [ -s "$dl" ] && verify_sha256 "$dl" "${MPORTER_REALM_SHA256:-}" && tar -xzf "$dl" -C "$dir" 2>/dev/null; then
-            bin=$(find "$dir" -type f -name realm | head -n1)
-            if [ -n "$bin" ] && chmod +x "$bin" && "$bin" --version >/dev/null 2>&1; then
-                mv -f "$bin" "$target_bin"; rm -rf "$dl" "$dir"; return 0
-            fi
-        fi
-        rm -rf "$dl" "$dir"
-    done
-    return 1
+    mp_download_core realm "${1:-false}"
 }
 
 install_core_engines() {
-    clear; echo -e "\n  ${DIM}┌─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
+    clear; draw_header; echo -e "\n  ${DIM}┌─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Engine Only${NC} ${DIM}(Load Balancer / Stable)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Engine Only${NC} ${DIM}(TLS/WS Obfuscator)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Realm Engine Only${NC} ${DIM}(High-Performance / Rust)${NC}"
@@ -1601,22 +1781,35 @@ install_core_engines() {
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Option ❯❯ ${NC}"; read -r eng_opt
     [[ "$eng_opt" =~ ^[1-5]$ ]] || return
+    MP_CORE_SOURCE=2
+    if [[ "$eng_opt" == 2 || "$eng_opt" == 3 || "$eng_opt" == 5 ]]; then mp_choose_core_source || return; fi
+    MP_CUSTOM_GOST_URL=""; MP_CUSTOM_REALM_URL=""
+    if [ "$MP_CORE_SOURCE" = 3 ]; then
+        if [[ "$eng_opt" == 2 || "$eng_opt" == 5 ]]; then
+            echo -ne "  ${C}● Gost HTTPS direct link ❯❯ ${NC}"; read -r MP_CUSTOM_GOST_URL || return 1
+            [[ "$MP_CUSTOM_GOST_URL" == https://* ]] || { echo 'Use an HTTPS direct link.' >&2; return 1; }
+        fi
+        if [[ "$eng_opt" == 3 || "$eng_opt" == 5 ]]; then
+            echo -ne "  ${C}● Realm HTTPS direct link ❯❯ ${NC}"; read -r MP_CUSTOM_REALM_URL || return 1
+            [[ "$MP_CUSTOM_REALM_URL" == https://* ]] || { echo 'Use an HTTPS direct link.' >&2; return 1; }
+        fi
+    fi
+    local install_failed=false
 
     echo -e "\n  ${DIM}┌─[ INITIALIZING INSTALLATION ]${NC}"
     (
         sysctl -w fs.file-max=2000000 >/dev/null 2>&1
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-        modprobe tcp_bbr >/dev/null 2>&1
-        sysctl -w net.core.default_qdisc=fq >/dev/null 2>&1
-        sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
-        sed -i '/^[[:space:]]*net.ipv4.ip_forward/d; /^[[:space:]]*net.core.default_qdisc/d; /^[[:space:]]*net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf 2>/dev/null
-        printf '%s\n' "net.ipv4.ip_forward=1" "net.core.default_qdisc=fq" "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+        # Congestion control remains an explicit choice in System / BBR.
         # Never delete dpkg locks: wait for them instead (DPkg::Lock::Timeout).
+        local missing=() tool
+        for tool in jq gzip iptables tar ip; do command -v "$tool" >/dev/null 2>&1 || missing+=("$tool"); done
+        if [ "${#missing[@]}" = 0 ] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then exit 0; fi
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
         DEBIAN_FRONTEND=noninteractive apt-get update "${APT_OPTS[@]}" >/dev/null 2>&1 || true
-        DEBIAN_FRONTEND=noninteractive apt-get install "${APT_OPTS[@]}" jq curl wget gzip iptables tar iproute2 >/dev/null 2>&1
+        DEBIAN_FRONTEND=noninteractive apt-get install "${APT_OPTS[@]}" jq curl wget gzip iptables tar iproute2 ca-certificates >/dev/null 2>&1
     ) &
-    draw_progress_bar $! "Resolving Dependencies" 90
+    draw_progress_bar $! "Resolving Dependencies" 90 || { echo "Dependencies failed; installation stopped." >&2; return 1; }
 
     if [[ "$eng_opt" == "5" || "$eng_opt" == "1" ]]; then
         (
@@ -1632,12 +1825,12 @@ install_core_engines() {
             systemctl daemon-reload >/dev/null 2>&1; systemctl enable haproxy >/dev/null 2>&1; systemctl restart haproxy >/dev/null 2>&1
             systemctl is-active --quiet haproxy
         ) &
-        draw_progress_bar $! "Deploying HAProxy Engine" 70
+        draw_progress_bar $! "Deploying HAProxy Engine" 70 || install_failed=true
     fi
 
     if [[ "$eng_opt" == "5" || "$eng_opt" == "2" ]]; then
         (
-            download_gost_binary || exit 1
+            download_gost_binary true || exit 1
             mkdir -p /etc/gost 2>/dev/null
             if [ ! -f "$G_CONF" ] || ! jq -e 'type=="object"' "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
             cat <<EOF_GST > /etc/systemd/system/gost.service
@@ -1653,14 +1846,17 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF_GST
-            systemctl daemon-reload >/dev/null 2>&1; systemctl enable gost >/dev/null 2>&1; systemctl restart gost >/dev/null 2>&1 || true
+            systemctl daemon-reload >/dev/null 2>&1 || exit 1
+            if jq -e '(.ServeNodes // []) | length > 0' "$G_CONF" >/dev/null 2>&1; then
+                systemctl enable gost >/dev/null 2>&1; systemctl restart gost && mp_service_ready gost || exit 1
+            else systemctl disable --now gost >/dev/null 2>&1; echo 'Gost installed; service will start when a mapping is added.'; fi
         ) &
-        draw_progress_bar $! "Deploying Gost Engine" 100
+        draw_progress_bar $! "Deploying Gost Engine" 100 || install_failed=true
     fi
 
     if [[ "$eng_opt" == "5" || "$eng_opt" == "3" ]]; then
         (
-            download_realm_binary || exit 1
+            download_realm_binary true || exit 1
             mkdir -p /etc/realm 2>/dev/null
             if [ ! -f "$R_CONF" ] || ! jq -e 'type=="object"' "$R_CONF" >/dev/null 2>&1; then echo '{"network": {"no_tcp_delay": true}, "endpoints": []}' > "$R_CONF"; fi
             cat <<EOF_RLM > /etc/systemd/system/realm.service
@@ -1676,21 +1872,29 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 EOF_RLM
-            systemctl daemon-reload >/dev/null 2>&1; systemctl enable realm >/dev/null 2>&1; systemctl restart realm >/dev/null 2>&1 || true
+            systemctl daemon-reload >/dev/null 2>&1 || exit 1
+            if jq -e '(.endpoints // []) | length > 0' "$R_CONF" >/dev/null 2>&1; then
+                systemctl enable realm >/dev/null 2>&1; systemctl restart realm && mp_service_ready realm || exit 1
+            else systemctl disable --now realm >/dev/null 2>&1; echo 'Realm installed; service will start when a mapping is added.'; fi
         ) &
-        draw_progress_bar $! "Deploying Realm Engine" 80
+        draw_progress_bar $! "Deploying Realm Engine" 80 || install_failed=true
     fi
 
     if [[ "$eng_opt" == "5" || "$eng_opt" == "4" ]]; then
         (
             command -v iptables >/dev/null 2>&1 || exit 1
             mkdir -p "$IPT_DIR" 2>/dev/null; touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
-            build_iptables_runner
+            build_iptables_runner || exit 1
+            systemctl restart mporter-iptables && systemctl is-active --quiet mporter-iptables
         ) &
-        draw_progress_bar $! "Deploying Kernel NAT Engine" 25
+        draw_progress_bar $! "Deploying Kernel NAT Engine" 25 || install_failed=true
     fi
 
     setup_mporter_service
+    if [ "$install_failed" = true ]; then
+        echo -e "  ${R}✖ One or more engines failed. Check the errors above.${NC}"
+        echo -ne "  ${DIM}Press Enter...${NC}"; read -r _; return 1
+    fi
     echo -e "  ${DIM}└──────────────────────────────────────────────────────────┘${NC}\n"; sleep 1
 }
 
@@ -2001,6 +2205,10 @@ smart_map() {
         echo -e "  ${R}● This reserved Backhaul address is not registered.${NC}"; sleep 2; return
     fi
     local raw_ports clean_ports
+    if [ -n "$bh_meta" ]; then
+        local first_pair; first_pair="${bh_pairs[0]}"
+        mp_check_backhaul_target "$bh_meta" "$target_ip" "${first_pair##*:}" || return
+    fi
     echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443)${MP_BH_PUBLIC_PORTS:+ [Enter: $MP_BH_PUBLIC_PORTS]}: ${NC}"; read -r raw_ports
     raw_ports="${raw_ports:-$MP_BH_PUBLIC_PORTS}"
     clean_ports=$(parse_ports "$raw_ports")
@@ -2035,9 +2243,18 @@ smart_map() {
         owner=$(port_owner "$p")
         if [ -n "$owner" ]; then printf "  ${B}│${NC} ${R}%-12s${NC} ${B}│${NC} ${DIM}%-7s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "$p" "-" "Skipped ($owner)"; continue; fi
         case "$fwd_engine" in
-            1) printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind *:$p" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    server srv_$p $(hap_addr "$t" "$rp") check inter 5s" >> "$work" ;;
-            2) jq --arg node "tcp://:$p/$(hostport "$t" "$rp")" '.ServeNodes = ((.ServeNodes // []) + [$node])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
-            3) jq --arg lp "0.0.0.0:$p" --arg rp "$(hostport "$t" "$rp")" '.endpoints = ((.endpoints // []) + [{listen:$lp, remote:$rp}])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
+            1) local listen="*:$p"
+               if [ -n "$bh_meta" ]; then
+                   local front_host; front_host=$(mp_bh_public_host "$bh_meta" "$p") || return
+                   listen=$(hostport "$front_host" "$p"); [ "$front_host" != :: ] || listen=":::$p v4v6"
+               fi
+               printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind $listen" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    server srv_$p $(hap_addr "$t" "$rp") check inter 5s" >> "$work" ;;
+            2) local listen=":$p"
+               [ -z "$bh_meta" ] || listen=$(hostport "$(mp_bh_public_host "$bh_meta" "$p")" "$p") || return
+               jq --arg node "tcp://$listen/$(hostport "$t" "$rp")" '.ServeNodes = ((.ServeNodes // []) + [$node])' "$work" > "$work.n" && mv -f "$work.n" "$work" || return 1 ;;
+            3) local listen="0.0.0.0:$p"
+               [ -z "$bh_meta" ] || listen=$(hostport "$(mp_bh_public_host "$bh_meta" "$p")" "$p") || return
+               jq --arg lp "$listen" --arg rp "$(hostport "$t" "$rp")" '.endpoints = ((.endpoints // []) + [{listen:$lp, remote:$rp}])' "$work" > "$work.n" && mv -f "$work.n" "$work" || return 1 ;;
             4) if [ -n "$bh_meta" ]; then
                    local rules; rules=$(mp_bh_redirect_rules "$t" "$p" "$rp" "$bh_meta") || return
                    ipt_add+="$rules"$'\n'
@@ -2070,8 +2287,7 @@ smart_map() {
         4) local previous; previous=$(mp_tmp ipt-backup)
            cp -p "$IPT_CONF" "$previous"
            printf '%s' "$ipt_add" >> "$work"
-           build_iptables_runner >/dev/null 2>&1
-           if ! bash -n "$work" || ! mt_install_files 750 "$work" "$IPT_CONF" || ! systemctl restart mporter-iptables || ! systemctl is-active --quiet mporter-iptables; then
+           if ! build_iptables_runner || ! bash -n "$work" || ! mt_install_files 750 "$work" "$IPT_CONF" || ! systemctl restart mporter-iptables || ! systemctl is-active --quiet mporter-iptables; then
                mt_install_files 750 "$previous" "$IPT_CONF" && systemctl restart mporter-iptables >/dev/null 2>&1
                ok=false
            fi

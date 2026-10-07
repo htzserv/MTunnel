@@ -2,7 +2,7 @@
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="12.0.6"
+MODULE_VERSION="12.0.8"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -655,6 +655,8 @@ ensure_dependencies() {
     command -v curl >/dev/null 2>&1 || missing+=("curl")
     command -v iptables >/dev/null 2>&1 || missing+=("iptables")
     command -v flock >/dev/null 2>&1 || missing+=("util-linux")
+    command -v openssl >/dev/null 2>&1 || missing+=("openssl")
+    command -v tar >/dev/null 2>&1 || missing+=("tar")
     if [ ${#missing[@]} -gt 0 ]; then
         apt-get update -y -q >/dev/null 2>&1
         apt-get install -y -q "${missing[@]}" >/dev/null 2>&1
@@ -712,6 +714,7 @@ validate_bh_ports() {
             fi
         done
     done
+    return 0
 }
 
 MAIN_PID=$$
@@ -898,35 +901,327 @@ apply_bbr_optimization() {
     return 0  # BBR is managed explicitly by mbbr.
 }
 
-generate_ssl_cert() {
-    if [[ ! -f "$CERT_DIR/wssmux.crt" ]] || [[ ! -f "$CERT_DIR/wssmux.key" ]]; then
-        openssl req -x509 -newkey rsa:2048 -keyout "$CERT_DIR/wssmux.key" \
-            -out "$CERT_DIR/wssmux.crt" -days 3650 -nodes \
-            -subj "/CN=mdesign-backhaul" \
-            -addext "subjectAltName=DNS:mdesign-backhaul,IP:127.0.0.1" >/dev/null 2>&1
+bh_select_transport() {
+    local choice
+    echo -e "\n  ${DIM}┌─[ TRANSPORT PROTOCOL ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC}       ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC}     ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}WS${NC}        ${W}6${NC} ${DIM}❯${NC} ${G}WSS (TLS)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}UDP (UDP applications only)${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    case "$choice" in
+        1) BH_TRANSPORT=tcp;; 2) BH_TRANSPORT=tcpmux;; 3) BH_TRANSPORT=wsmux;;
+        4) BH_TRANSPORT=wssmux;; 5) BH_TRANSPORT=ws;; 6) BH_TRANSPORT=wss;;
+        7) BH_TRANSPORT=udp;; *) return 1;;
+    esac
+}
+
+bh_load_options() {
+    local meta="$1" override="${2:-}" key value file
+    declare -gA BH_OPTS=([KEEPALIVE]=75 [HEARTBEAT]=40 [CHANNEL]=4096 [POOL]=8
+        [RETRY]=3 [DIAL]=10 [AGGRESSIVE]=false [NODELAY]=true [LOG]=info
+        [MUX_CON]=8 [MUX_VERSION]=1 [MUX_FRAME]=32768 [MUX_RECEIVE]=4194304 [MUX_STREAM]=65536
+        [MTU]=0 [MSS]=1360 [RCVBUF]=4194304 [SNDBUF]=4194304 [PROXY]=false
+        [EDGE]="" [TLS_CERT]="" [TLS_KEY]="")
+    for file in "$meta" "$override"; do
+        [ -n "$file" ] && [ -f "$file" ] || continue
+        while IFS='=' read -r key value; do
+            [[ "$key" == ADV_* ]] || continue; key="${key#ADV_}"
+            [[ "$key" =~ ^[A-Z_]+$ ]] && [[ -v BH_OPTS[$key] ]] || return 1
+            BH_OPTS[$key]="$value"
+        done < "$file"
+    done
+    bh_validate_options
+}
+
+bh_validate_options() {
+    local key value min max
+    for key in KEEPALIVE HEARTBEAT CHANNEL POOL RETRY DIAL MUX_CON MUX_VERSION MUX_FRAME MUX_RECEIVE MUX_STREAM MTU MSS RCVBUF SNDBUF; do
+        value="${BH_OPTS[$key]}"
+        [[ "$value" =~ ^[0-9]{1,9}$ ]] || { echo "Invalid $key." >&2; return 1; }
+        value=$((10#$value)); BH_OPTS[$key]="$value"
+        min=1; max=3600
+        case "$key" in
+            CHANNEL) max=65536;; POOL|MUX_CON) max=1024;; MUX_VERSION) max=2;;
+            MUX_FRAME) min=512; max=65535;; MUX_RECEIVE) min=65536; max=134217728;;
+            MUX_STREAM) min=1024; max=134217728;; MTU) min=0; max=9000;; MSS) min=0; max=8960;;
+            RCVBUF|SNDBUF) min=0; max=134217728;;
+        esac
+        ((value>=min && value<=max)) || { echo "$key must be $min-$max." >&2; return 1; }
+    done
+    ((BH_OPTS[MUX_STREAM]<=BH_OPTS[MUX_RECEIVE])) || { echo 'MUX stream buffer must not exceed receive buffer.' >&2; return 1; }
+    ((BH_OPTS[MTU]==0 || BH_OPTS[MTU]>=1280)) || { echo 'Link MTU must be 0 or 1280-9000.' >&2; return 1; }
+    ((BH_OPTS[MSS]==0 || BH_OPTS[MSS]>=536)) || { echo 'MSS must be 0 or 536-8960.' >&2; return 1; }
+    for key in AGGRESSIVE NODELAY PROXY; do [[ "${BH_OPTS[$key]}" =~ ^(true|false)$ ]] || return 1; done
+    [[ "${BH_OPTS[LOG]}" =~ ^(trace|debug|info|warn|error)$ ]] || return 1
+    [ -z "${BH_OPTS[EDGE]}" ] || mt_valid_ipv4 "${BH_OPTS[EDGE]}" || mt_valid_ipv6 "${BH_OPTS[EDGE]}" || return 1
+    for key in TLS_CERT TLS_KEY; do
+        [ -z "${BH_OPTS[$key]}" ] || [[ "${BH_OPTS[$key]}" =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
+    done
+    [[ -z "${BH_OPTS[TLS_CERT]}" && -z "${BH_OPTS[TLS_KEY]}" || -n "${BH_OPTS[TLS_CERT]}" && -n "${BH_OPTS[TLS_KEY]}" ]] || return 1
+}
+
+bh_ask_option() {
+    local key="$1" label="$2" value old="${BH_OPTS[$1]}"
+    while true; do
+        echo -ne "  ${DIM}├─${NC} ${W}$label [${old:-auto}; Enter: keep; -: auto/empty]${NC} ${C}❯❯ ${NC}"
+        read -r value || return 1; value="${value//$'\r'/}"
+        [ -n "$value" ] || return 0
+        [ "$value" != - ] || { value=""; [[ "$key" != MTU && "$key" != MSS && "$key" != RCVBUF && "$key" != SNDBUF ]] || value=0; }
+        BH_OPTS[$key]="$value"
+        if bh_validate_options; then return 0; fi
+        BH_OPTS[$key]="$old"; echo -e "  ${R}✖ Invalid value; try again.${NC}"
+    done
+}
+
+bh_advanced_wizard() {
+    local name="$1" role="$2" transport="$3" choice key
+    bh_load_options "$CONF_DIR/$name.meta" || return 1
+    BH_SETTINGS_FILE=""
+    echo -e "\n  ${DIM}┌─[ ADVANCED TUNNEL SETTINGS ]${NC}"
+    echo -ne "  ${DIM}├─${NC} ${W}Customize settings? [y/N]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
+    if [[ "${choice,,}" == y || "${choice,,}" == yes ]]; then
+        bh_ask_option LOG 'Log level (trace/debug/info/warn/error)' || return 1
+        if [ "$role" = 1 ]; then
+            bh_ask_option CHANNEL 'Pending channel capacity (1-65536)' || return 1
+            bh_ask_option HEARTBEAT 'Heartbeat interval (seconds)' || return 1
+        else
+            bh_ask_option POOL 'Connection pool (1-1024)' || return 1
+            bh_ask_option RETRY 'Retry interval (seconds)' || return 1
+            if [ "$transport" != udp ]; then
+                bh_ask_option DIAL 'Dial timeout (seconds)' || return 1
+                bh_ask_option AGGRESSIVE 'Aggressive pool (true/false)' || return 1
+            fi
+        fi
+        [ "$transport" = udp ] || bh_ask_option KEEPALIVE 'TCP keepalive (seconds)' || return 1
+        if [[ "$transport" == *mux ]]; then
+            echo -e "  ${DIM}├─${NC} ${Y}Use matching MUX version/frame/buffer settings on both peers.${NC}"
+            [ "$role" != 1 ] || bh_ask_option MUX_CON 'Streams per MUX connection (1-1024)' || return 1
+            bh_ask_option MUX_VERSION 'MUX version (1/2)' || return 1
+            bh_ask_option MUX_FRAME 'Maximum MUX frame (bytes, 512-65535)' || return 1
+            bh_ask_option MUX_RECEIVE 'MUX receive buffer (bytes)' || return 1
+            bh_ask_option MUX_STREAM 'MUX stream buffer (bytes <= receive buffer)' || return 1
+        fi
+        if [[ "$transport" == tcp || "$transport" == tcpmux ]]; then
+            bh_ask_option NODELAY 'TCP_NODELAY (true/false)' || return 1
+            echo -e "  ${DIM}├─${NC} ${W}Link MTU derives TCP MSS = MTU - 60 (IPv6-safe); interface MTU is unchanged.${NC}"
+            bh_ask_option MTU 'Link MTU (0: use MSS below; 1280-9000)' || return 1
+            [ "${BH_OPTS[MTU]}" != 0 ] || bh_ask_option MSS 'TCP MSS (0: kernel default)' || return 1
+            bh_ask_option RCVBUF 'Socket receive buffer (bytes; 0: kernel default)' || return 1
+            bh_ask_option SNDBUF 'Socket send buffer (bytes; 0: kernel default)' || return 1
+        fi
+        if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == *mux ]]; then
+            echo -e "  ${DIM}├─${NC} ${Y}PROXY protocol requires a compatible service at the destination.${NC}"
+            bh_ask_option PROXY 'Send PROXY protocol header (true/false)' || return 1
+        fi
+        if [ "$role" = 2 ] && [[ "$transport" == ws* ]]; then bh_ask_option EDGE 'Optional WebSocket edge IP' || return 1; fi
+        if [ "$role" = 1 ] && [[ "$transport" == wss || "$transport" == wssmux ]]; then
+            echo -e "  ${DIM}├─${NC} ${W}TLS paths: leave both empty for a generated certificate.${NC}"
+            # Both paths are collected together; validate the pair after collection.
+            echo -ne "  ${DIM}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-generated}; -: generated]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
+            if [ "$choice" = - ]; then BH_OPTS[TLS_CERT]=""; BH_OPTS[TLS_KEY]=""
+            elif [ -n "$choice" ]; then
+                BH_OPTS[TLS_CERT]="$choice"
+                echo -ne "  ${DIM}├─${NC} ${W}Private key path${NC} ${C}❯❯ ${NC}"; read -r choice || return 1; BH_OPTS[TLS_KEY]="$choice"
+            fi
+        fi
     fi
+    bh_validate_options || return 1
+    BH_SETTINGS_FILE=$(mktemp "$SECURE_TMP/bh-settings.XXXXXX") || return 1
+    for key in "${!BH_OPTS[@]}"; do printf 'ADV_%s=%s\n' "$key" "${BH_OPTS[$key]}"; done > "$BH_SETTINGS_FILE"
+}
+
+bh_emit_options() {
+    local role="$1" transport="$2" key mss="${BH_OPTS[MSS]}"
+    printf 'log_level = "%s"\nsniffer = false\nweb_port = 0\n' "${BH_OPTS[LOG]}"
+    if [ "$role" = 1 ]; then
+        printf 'channel_size = %s\nheartbeat = %s\n' "${BH_OPTS[CHANNEL]}" "${BH_OPTS[HEARTBEAT]}"
+    else
+        printf 'connection_pool = %s\nretry_interval = %s\n' "${BH_OPTS[POOL]}" "${BH_OPTS[RETRY]}"
+        [ "$transport" = udp ] || printf 'dial_timeout = %s\naggressive_pool = %s\n' "${BH_OPTS[DIAL]}" "${BH_OPTS[AGGRESSIVE]}"
+        if [[ "$transport" == ws* ]]; then
+            local edge="${BH_OPTS[EDGE]}"; [[ "$edge" != *:* ]] || edge="[$edge]"
+            printf 'edge_ip = "%s"\n' "$edge"
+        fi
+    fi
+    [ "$transport" = udp ] || printf 'keepalive_period = %s\n' "${BH_OPTS[KEEPALIVE]}"
+    if [[ "$transport" == *mux ]]; then
+        [ "$role" != 1 ] || printf 'mux_con = %s\n' "${BH_OPTS[MUX_CON]}"
+        printf 'mux_version = %s\nmux_framesize = %s\nmux_recievebuffer = %s\nmux_streambuffer = %s\n' "${BH_OPTS[MUX_VERSION]}" "${BH_OPTS[MUX_FRAME]}" "${BH_OPTS[MUX_RECEIVE]}" "${BH_OPTS[MUX_STREAM]}"
+    fi
+    if [[ "$transport" == tcp || "$transport" == tcpmux ]]; then
+        [ "${BH_OPTS[MTU]}" = 0 ] || mss=$((BH_OPTS[MTU]-60))
+        printf 'nodelay = %s\nmss = %s\nso_rcvbuf = %s\nso_sndbuf = %s\n' "${BH_OPTS[NODELAY]}" "$mss" "${BH_OPTS[RCVBUF]}" "${BH_OPTS[SNDBUF]}"
+    fi
+    if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == *mux ]]; then printf 'proxy_protocol = %s\n' "${BH_OPTS[PROXY]}"; fi
+}
+
+bh_validate_tls_pair() {
+    local cert="$1" key="$2" certpub keypub
+    command -v openssl >/dev/null 2>&1 || { echo 'Install openssl for WSS / WSSMUX.' >&2; return 1; }
+    [ -f "$cert" ] && [ -f "$key" ] || return 1
+    openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || return 1
+    certpub=$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null) || return 1
+    keypub=$(openssl pkey -in "$key" -passin pass: -pubout 2>/dev/null) || return 1
+    [ -n "$certpub" ] && [ "$certpub" = "$keypub" ]
+}
+
+bh_service_ready() {
+    local unit="$1" i
+    for i in 1 2 3 4; do sleep 0.4; systemctl is-active --quiet "$unit" || return 1; done
+}
+
+bh_start_screen() {
+    clear
+    draw_header
+}
+
+bh_ensure_download_tools() {
+    local need_zip="${1:-0}" missing=() log
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then missing+=(curl); fi
+    if [ "$need_zip" = 1 ] && ! command -v unzip >/dev/null 2>&1; then missing+=(unzip); fi
+    [ -s /etc/ssl/certs/ca-certificates.crt ] || missing+=(ca-certificates)
+    [ "${#missing[@]}" -gt 0 ] || return 0
+    command -v apt-get >/dev/null 2>&1 || { echo "Install the missing packages: ${missing[*]}" >&2; return 1; }
+    echo -e "  ${DIM}● Installing download prerequisites: ${missing[*]}...${NC}"
+    log=$(mktemp "$SECURE_TMP/rh-deps.XXXXXX") || return 1
+    apt-get update -q > "$log" 2>&1 || true
+    if ! apt-get install -y -q "${missing[@]}" >> "$log" 2>&1; then
+        echo 'Download prerequisites could not be installed:' >&2
+        tail -n 6 "$log" >&2; rm -f "$log"; return 1
+    fi
+    rm -f "$log"
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || return 1
+    [ "$need_zip" != 1 ] || command -v unzip >/dev/null 2>&1 || return 1
+    [ -s /etc/ssl/certs/ca-certificates.crt ] || { echo 'System CA certificate bundle is missing.' >&2; return 1; }
+}
+
+bh_download() {
+    local url="$1" dest="$2" expected="${3:-}" tmp log tool family rc=1 code permanent=false
+    [[ "$url" == https://* ]] || { echo 'Download requires an HTTPS URL.' >&2; return 1; }
+    [[ -z "$expected" || "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Invalid expected SHA256.' >&2; return 1; }
+    tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
+    log=$(mktemp "$SECURE_TMP/rh-download.XXXXXX") || { rm -f "$tmp"; return 1; }
+    local -a args=()
+    for tool in curl wget; do
+        command -v "$tool" >/dev/null 2>&1 || continue
+        for family in auto ipv4; do
+            args=(); [ "$family" != ipv4 ] || args=(-4)
+            : > "$tmp"
+            echo -e "  ${DIM}● Downloading with $tool ($family)...${NC}"
+            if [ "$tool" = curl ]; then
+                code=$(curl "${args[@]}" -fsSL --proto '=https' --proto-redir '=https' \
+                    --connect-timeout 10 --max-time 120 --retry 1 -w '%{http_code}' -o "$tmp" "$url" 2> "$log"); rc=$?
+                if [ "$rc" = 22 ] && [[ "$code" =~ ^(400|401|403|404|410)$ ]]; then permanent=true; fi
+            else
+                wget "${args[@]}" --https-only --timeout=30 --tries=2 -O "$tmp" "$url" 2> "$log"; rc=$?
+                [ "$rc" != 8 ] || permanent=true
+            fi
+            if [ "$rc" = 0 ] && [ -s "$tmp" ]; then
+                if [ -n "$expected" ] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" != "${expected,,}" ]; then
+                    echo 'Downloaded package SHA256 does not match; installation refused.' >&2
+                    rm -f "$tmp" "$log"; return 1
+                fi
+                mv -f "$tmp" "$dest"; rc=$?
+                rm -f "$log"; return "$rc"
+            fi
+            [ "$permanent" != true ] || break
+        done
+        [ "$permanent" != true ] || break
+    done
+    echo 'Backhaul download failed:' >&2
+    if [ -s "$log" ]; then tail -n 4 "$log" >&2; else echo 'The server returned an empty file or no downloader is available.' >&2; fi
+    rm -f "$tmp" "$log"; return 1
+}
+
+generate_ssl_cert() {
+    command -v openssl >/dev/null 2>&1 || { echo 'Install openssl before using WSS / WSSMUX.' >&2; return 1; }
+    if bh_validate_tls_pair "$CERT_DIR/wssmux.crt" "$CERT_DIR/wssmux.key"; then return 0; fi
+    local work; work=$(mktemp -d "$SECURE_TMP/bh-cert.XXXXXX") || return 1
+    mkdir -p "$CERT_DIR" || { rm -rf "$work"; return 1; }
+    if ! openssl req -x509 -newkey rsa:2048 -keyout "$work/key" -out "$work/cert" -days 3650 -nodes \
+        -subj "/CN=mdesign-backhaul" -addext "subjectAltName=DNS:mdesign-backhaul,IP:127.0.0.1,IP:::1" >/dev/null 2>&1 || \
+        ! bh_validate_tls_pair "$work/cert" "$work/key" || \
+        ! mt_install_files 600 "$work/cert" "$CERT_DIR/wssmux.crt" "$work/key" "$CERT_DIR/wssmux.key"; then
+        rm -rf "$work"; echo 'TLS certificate generation failed.' >&2; return 1
+    fi
+    rm -rf "$work"
+}
+
+bh_validate_package() {
+    local source="$1" stage item count=0
+    mt_valid_elf "$source" && return 0
+    stage=$(mktemp -d "$SECURE_TMP/rh-validate.XXXXXX") || return 1
+    if ! mt_extract_archive "$source" "$stage"; then rm -rf "$stage"; return 1; fi
+    while IFS= read -r item; do
+        mt_valid_elf "$item" && count=$((count+1))
+    done < <(find "$stage" -type f \( -name '*backhaul*' -o -name '*bh*' \))
+    rm -rf "$stage"
+    [ "$count" = 1 ]
 }
 
 install_core_from_source() {
-    local src_choice="$1" arch target dl_url kind=url
-    arch=$(uname -m)
-    case "$arch" in x86_64) target=amd64;; aarch64|arm64) target=arm64;; *) echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1;; esac
+    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0
+    triplet=$(case "$(uname -m)" in x86_64) echo amd64;; aarch64|arm64) echo arm64;; *) exit 1;; esac) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
+    asset="backhaul_linux_${triplet}.tar.gz"
+    local -a urls=()
     case "$src_choice" in
-        1|2)
-            local asset="backhaul_linux_${target}.tar.gz"
-            dl_url="https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset"
-            [ "$src_choice" != 2 ] || dl_url="https://c107328.parspack.net/c107328/MTunnel/packages/$asset"
-            ;;
-        3) echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r dl_url; [ -n "$dl_url" ] || return 0;;
-        4) dl_url="$LOCAL_DIR/packages/bh"; kind=local;;
+        1) urls=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset"); need_zip=0;;
+        2)
+            urls=("https://c107328.parspack.net/c107328/MTunnel/packages/$asset")
+            # The unqualified mirror binary is the bundled x86_64 build only.
+            [ "$triplet" != amd64 ] || urls+=("https://c107328.parspack.net/c107328/MTunnel/packages/bh")
+            urls+=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset")
+            need_zip=0;;
+        3)
+            echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r url || return 0
+            url="${url//$'\r'/}"; [ -n "$url" ] || return 0
+            [[ "$url" == https://* ]] || { echo 'Use an HTTPS direct link.' >&2; return 1; }
+            urls=("$url"); need_zip=0;;
+        4)
+            kind=local
+            for item in "$LOCAL_DIR/packages/bh" "$LOCAL_DIR/packages/backhaul" "$LOCAL_DIR/packages/$asset"; do
+                [ -f "$item" ] || continue
+                if [[ "$item" != *.tar.gz && "$item" != *.zip ]] && ! mt_valid_elf "$item"; then continue; fi
+                source="$item"; break
+            done
+            [ -n "$source" ] || { echo "No compatible Backhaul binary or $asset found in $LOCAL_DIR/packages." >&2; return 1; }
+            [[ "$source" != *.zip ]] || need_zip=1;;
         *) return 0;;
     esac
-    echo -e "  ${DIM}● Preparing Backhaul Core...${NC}"
-    if mt_update_core "bh" "mbackhaul" "$dl_url" "$kind" "${EXPECTED_SHA256:-}"; then
+    # Do not require internet/download utilities for a local binary.
+    if [ "$kind" = url ]; then bh_ensure_download_tools "$need_zip" || return 1
+    elif [ "$need_zip" = 1 ] && ! command -v unzip >/dev/null 2>&1; then
+        echo 'Install unzip to use a local ZIP; an unpacked local binary needs no download tools.' >&2; return 1
+    fi
+    echo -e "  ${DIM}● Preparing Backhaul Core ($triplet)...${NC}"
+    if [ "$kind" = url ]; then
+        work=$(mktemp -d "$SECURE_TMP/rh-package.XXXXXX") || return 1
+        source=""
+        for url in "${urls[@]}"; do
+            local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
+            echo -e "  ${DIM}● Source: $source_host${NC}"
+            if bh_download "$url" "$work/package" "${EXPECTED_SHA256:-}"; then
+                if bh_validate_package "$work/package"; then source="$work/package"; break
+                else echo 'Downloaded file is not a compatible Backhaul binary/archive.' >&2; fi
+            fi
+            [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
+        done
+        [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
+    fi
+    if [ -n "${EXPECTED_SHA256:-}" ]; then
+        if ! [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || [ "$(sha256sum "$source" | cut -d' ' -f1)" != "${EXPECTED_SHA256,,}" ]; then
+            [ -z "$work" ] || rm -rf "$work"
+            echo 'Package SHA256 does not match; previous installation preserved.' >&2; return 1
+        fi
+    fi
+    if mt_update_core bh mbackhaul "$source" local "${EXPECTED_SHA256:-}"; then
+        [ -z "$work" ] || rm -rf "$work"
         echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else
-        echo -e "  ${R}✖ Core update failed. Previous installation preserved.${NC}" >&2
+        [ -z "$work" ] || rm -rf "$work"
+        echo -e "  ${R}✖ Package extraction, validation or service restart failed. Previous installation preserved.${NC}" >&2
         return 1
     fi
 }
@@ -937,7 +1232,7 @@ menu_install_core() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/bh)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
@@ -949,23 +1244,26 @@ menu_install_core() {
 check_first_run_core() {
     if ! is_bh_core_valid; then
         local first_prompt_flag="$CONF_DIR/.core_prompted"
-        if [ ! -f "$first_prompt_flag" ]; then
-            touch "$first_prompt_flag"
+        if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
             echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "  ${B}│${NC}   ${R}● Backhaul Core binary is NOT installed on this machine!${NC}                 ${B}│${NC}"
+            echo -e "  ${B}│${NC}   ${R}● Backhaul Core binary is NOT installed on this machine!${NC}                  ${B}│${NC}"
             echo -e "  ${B}│${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${B}│${NC}"
             echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
             echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
             echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/bh)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
             echo -e "  ${DIM}│${NC}"
             echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
-                install_core_from_source "$init_opt"
+                if install_core_from_source "$init_opt"; then printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
+                else rm -f "$first_prompt_flag"; return 1; fi
+            elif [[ "$init_opt" = q || -z "$init_opt" ]]; then
+                printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
+            else return 1
             fi
         fi
     fi
@@ -1139,6 +1437,20 @@ bh_clear_forwarder() {
 }
 
 bh_apply_forwarder() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    local fd rc
+    exec {fd}>"$CONF_DIR/.forwarder-firewall.lock" || return 1
+    flock -x "$fd" || { exec {fd}>&-; return 1; }
+    bh_apply_forwarder_locked "$1"; rc=$?
+    if [ "$rc" != 0 ]; then
+        bh_clear_forwarder "$1"
+        echo "Backhaul forwarder firewall failed for $1; partial rules removed. Check iptables/ip6tables errors above." >&2
+    fi
+    exec {fd}>&-
+    return "$rc"
+}
+
+bh_apply_forwarder_locked() {
     [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
     local name="$1" meta="$CONF_DIR/$1.meta" mode bind spec pair public private host rhs bin proto chain
     [ -f "$meta" ] || return 1
@@ -1150,7 +1462,8 @@ bh_apply_forwarder() {
     spec=$(bh_meta_value BACKEND_PORTS "$meta"); [ -n "$spec" ] || return 1
     local -a pairs=() bins=(iptables) protos=(tcp) match=(); IFS=, read -ra pairs <<< "$spec"
     [ "$bind" != :: ] || bins+=(ip6tables)
-    [ "$(bh_meta_value ENABLE_UDP "$meta")" != true ] || protos+=(udp)
+    if [ "$(bh_meta_value TRANSPORT "$meta")" = udp ]; then protos=(udp)
+    elif [ "$(bh_meta_value TRANSPORT "$meta")" = tcp ] && [ "$(bh_meta_value ENABLE_UDP "$meta")" = true ]; then protos+=(udp); fi
     chain=$(bh_forward_chain "$name")
     for bin in "${bins[@]}"; do
         command -v "$bin" >/dev/null 2>&1 || return 1
@@ -1166,7 +1479,17 @@ bh_apply_forwarder() {
             done
         done
         "$bin" -w 5 -t filter -I INPUT 1 -j "${chain}G" || return 1
-        [ "$mode" = iptables ] || continue
+        if [ "$mode" = mporter ]; then
+            # The frontend has a public listener too; accept its configured ports
+            # before a host firewall's later INPUT drop/reject rules.
+            while IFS='|' read -r public host rhs; do
+                if [ "$bin" = ip6tables ]; then mt_valid_ipv6 "$host" || continue
+                else [ "$host" = :: ] || mt_valid_ipv4 "$host" || continue; fi
+                match=(); [[ "$host" = 0.0.0.0 || "$host" = :: ]] || match=(-d "$host")
+                "$bin" -w 5 -t filter -A "${chain}G" "${match[@]}" -p tcp --dport "$public" -j ACCEPT || return 1
+            done < <(bh_expanded_ports "$(bh_meta_value PORTS "$meta")" "$(bh_meta_value BIND_HOST "$meta")")
+            continue
+        fi
         "$bin" -w 5 -t nat -N "$chain" || return 1
         while IFS='|' read -r public host rhs; do
             if [ "$bin" = ip6tables ]; then mt_valid_ipv6 "$host" || continue
@@ -1201,7 +1524,8 @@ bh_activate_config() {
         existing=true
     fi
     if ! write_bh_config "$@"; then rm -rf "$saved"; return 1; fi
-    systemctl restart "mbackhaul@$name" && systemctl is-active --quiet "mbackhaul@$name" || rc=1
+    systemctl restart "mbackhaul@$name" && bh_service_ready "mbackhaul@$name" || rc=1
+    if [ "$rc" != 0 ]; then journalctl -u "mbackhaul@$name" -n 8 --no-pager >&2; fi
     if [ "$rc" != 0 ] && [ "$existing" = true ]; then
         systemctl stop "mbackhaul@$name" >/dev/null 2>&1 || true
         if mt_install_files 600 "$saved/meta" "$CONF_DIR/$name.meta" "$saved/config" "$CONF_DIR/$name.toml" && systemctl restart "mbackhaul@$name" && systemctl is-active --quiet "mbackhaul@$name"; then
@@ -1342,6 +1666,7 @@ bh_write_config_locked() {
     [ -z "$token" ] && token="mdesign_token"
     [ -z "$enable_udp" ] && enable_udp="true"
 
+    bh_load_options "$CONF_DIR/${name}.meta" "${11:-}" || return 1
     local bind_host="${9:-}" BIND_HOST='0.0.0.0' work final_toml final_meta
     if [ -f "$CONF_DIR/${name}.meta" ]; then
         BIND_HOST=$(sed -n 's/^BIND_HOST=//p' "$CONF_DIR/${name}.meta")
@@ -1351,13 +1676,18 @@ bh_write_config_locked() {
     mt_valid_port "$port" && [[ "$role" =~ ^[12]$ ]] || return 1
     [ "$role" != 2 ] || mt_valid_host "$r_ip" || return 1
     validate_bh_ports "$ports_str" 0 || return 1
-    [[ "$name" =~ ^[A-Za-z0-9_-]+$ && "$transport" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux)$ && "$enable_udp" =~ ^(true|false)$ ]] || return 1
+    [[ "$name" =~ ^[A-Za-z0-9_-]+$ && "$transport" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ && "$enable_udp" =~ ^(true|false)$ ]] || return 1
     [[ "$token" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
     local forwarder="${10:-}" old_forwarder old_ports
     old_forwarder=$(bh_meta_value FORWARDER "$CONF_DIR/${name}.meta")
     forwarder="${forwarder:-${old_forwarder:-backhaul}}"
     [ "$role" = 1 ] || forwarder=backhaul
     [[ "$forwarder" =~ ^(backhaul|iptables|mporter)$ ]] || return 1
+    if [ "$transport" = udp ] && [ "$forwarder" = mporter ]; then
+        echo 'UDP transport requires Backhaul or iptables forwarding; MPorter targets here are TCP.' >&2; return 1
+    fi
+    if [ "$transport" = udp ]; then enable_udp=true
+    elif [ "$transport" != tcp ]; then enable_udp=false; fi
     local other pair private public host rhs
     local -A requested=(); local -a pairs=()
     if [ "$role" = 1 ]; then
@@ -1400,6 +1730,7 @@ bh_write_config_locked() {
     echo "BACKEND_IP=$BH_BACKEND_IP" >> "$meta"
     echo "BACKEND_PORTS=$BH_BACKEND_PORTS" >> "$meta"
     echo "BACKEND_BIND=$BH_BACKEND_BIND" >> "$meta"
+    local key; for key in "${!BH_OPTS[@]}"; do printf 'ADV_%s=%s\n' "$key" "${BH_OPTS[$key]}"; done >> "$meta"
 
     > "$toml"
 
@@ -1409,35 +1740,17 @@ bh_write_config_locked() {
         echo "transport = \"${transport}\"" >> "$toml"
         echo "accept_udp = ${enable_udp}" >> "$toml"
         echo "token = \"${token}\"" >> "$toml"
-        echo "keepalive_period = 75" >> "$toml"
-        echo "nodelay = true" >> "$toml"
-        echo "heartbeat = 40" >> "$toml"
-        echo "channel_size = 4096" >> "$toml"
-        
-        if [ "$transport" != "tcp" ]; then
-            echo "mux_con = 8" >> "$toml"
-            echo "mux_version = 1" >> "$toml"
-            echo "mux_framesize = 32768" >> "$toml"
-            echo "mux_recievebuffer = 4194304" >> "$toml"
-            echo "mux_streambuffer = 65536" >> "$toml"
+        bh_emit_options "$role" "$transport" >> "$toml"
+        if [[ "$transport" == wss || "$transport" == wssmux ]]; then
+            local cert="${BH_OPTS[TLS_CERT]}" tls_key="${BH_OPTS[TLS_KEY]}"
+            if [ -z "$cert" ]; then
+                generate_ssl_cert || { rm -rf "$work"; return 1; }
+                cert="$CERT_DIR/wssmux.crt"; tls_key="$CERT_DIR/wssmux.key"
+            fi
+            bh_validate_tls_pair "$cert" "$tls_key" || { echo 'TLS certificate/key is expired, unreadable or mismatched.' >&2; rm -rf "$work"; return 1; }
+            printf 'tls_cert = "%s"\ntls_key = "%s"\n' "$cert" "$tls_key" >> "$toml"
         fi
-        
-        if [ "$transport" == "tcp" ] || [ "$transport" == "tcpmux" ]; then
-            echo "mss = 1360" >> "$toml"
-            echo "so_rcvbuf = 4194304" >> "$toml"
-            echo "so_sndbuf = 4194304" >> "$toml"
-        fi
-        
-        if [ "$transport" == "wssmux" ]; then
-            generate_ssl_cert
-            echo "tls_cert = \"${CERT_DIR}/wssmux.crt\"" >> "$toml"
-            echo "tls_key = \"${CERT_DIR}/wssmux.key\"" >> "$toml"
-        fi
-        
-        echo "sniffer = false" >> "$toml"
-        echo "web_port = 0" >> "$toml"
-        echo "log_level = \"info\"" >> "$toml"
-        
+
         local port_lines
         if [ "$forwarder" = backhaul ]; then
             port_lines=$(bh_port_lines "$ports_str" "$bind_host") || { rm -rf "$work"; return 1; }
@@ -1447,34 +1760,9 @@ bh_write_config_locked() {
     else
         echo "[client]" >> "$toml"
         echo "remote_addr = \"$(mt_hostport "$r_ip" "$port")\"" >> "$toml"
-        if [ "$transport" == "wsmux" ] || [ "$transport" == "wssmux" ]; then
-            echo "edge_ip = \"\"" >> "$toml"
-        fi
         echo "transport = \"${transport}\"" >> "$toml"
         echo "token = \"${token}\"" >> "$toml"
-        echo "connection_pool = 8" >> "$toml"
-        echo "aggressive_pool = false" >> "$toml"
-        echo "keepalive_period = 75" >> "$toml"
-        echo "nodelay = true" >> "$toml"
-        echo "retry_interval = 3" >> "$toml"
-        echo "dial_timeout = 10" >> "$toml"
-        
-        if [ "$transport" != "tcp" ]; then
-            echo "mux_version = 1" >> "$toml"
-            echo "mux_framesize = 32768" >> "$toml"
-            echo "mux_recievebuffer = 4194304" >> "$toml"
-            echo "mux_streambuffer = 65536" >> "$toml"
-        fi
-        
-        if [ "$transport" == "tcp" ] || [ "$transport" == "tcpmux" ]; then
-            echo "mss = 1360" >> "$toml"
-            echo "so_rcvbuf = 4194304" >> "$toml"
-            echo "so_sndbuf = 4194304" >> "$toml"
-        fi
-        
-        echo "sniffer = false" >> "$toml"
-        echo "web_port = 0" >> "$toml"
-        echo "log_level = \"info\"" >> "$toml"
+        bh_emit_options "$role" "$transport" >> "$toml"
     fi
 
     mt_install_files 600 "$meta" "$final_meta" "$toml" "$final_toml" || { rm -rf "$work"; return 1; }
@@ -1969,7 +2257,7 @@ render_mbackhaul_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Edit Remote Host / IP Address${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit Ports / Forwarder${NC} ${DIM}(Iran Server)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Change Transport Protocol${NC} ${DIM}(Hot-Swap)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Transport & Advanced Settings${NC} ${DIM}(Hot-Swap)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Auth Token (Secret)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Edit Tunnel Link Port${NC} ${DIM}(Connection Port)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Toggle UDP Support${NC} ${DIM}(Iran Server)${NC}"
@@ -2001,6 +2289,7 @@ while true; do
     
     case $opt in
         1) 
+           bh_start_screen
            echo -e "\n  ${DIM}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
                echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read s_type
@@ -2009,16 +2298,9 @@ while true; do
            done
            [[ "$s_type" == "q" ]] && continue
            
-           while true; do
-               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
-               echo -ne "  ${C}● Transport Protocol [1-4]: ${NC}"; read tr_choice
-               tr_choice=$(echo "$tr_choice" | tr -d '\r')
-               [[ "$tr_choice" =~ ^[1-4]$ ]] && break
-           done
-           
-           tr_val="tcp"
-           case $tr_choice in 1) tr_val="tcp" ;; 2) tr_val="tcpmux" ;; 3) tr_val="wsmux" ;; 4) tr_val="wssmux" ;; esac
-           
+           bh_select_transport || continue
+           tr_val="$BH_TRANSPORT"
+
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. bh1): ${NC}"; read suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            t_name="bh_${suffix}"
@@ -2056,17 +2338,19 @@ while true; do
                done
            fi
            
-           gen_tok=$(head -c 8 /dev/urandom | xxd -p)
+           gen_tok=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
            echo -ne "  ${C}● Auth Token [Default ${gen_tok}]: ${NC}"; read u_tok
            u_tok=$(echo "$u_tok" | tr -dc 'a-zA-Z0-9_-')
            tok=${u_tok:-$gen_tok}
 
-           u_udp="true"
+           u_udp="false"
            fwd_ports=""
            if [ "$s_type" == "1" ]; then
-               echo -ne "  ${C}●${NC} ${W}Enable UDP Support (Gaming/VoIP/DNS)? [Y/n] (Default: Y): ${NC}"; read enable_udp
-               enable_udp=$(echo "$enable_udp" | tr -d '\r ')
-               [[ "${enable_udp,,}" =~ ^(n|no)$ ]] && u_udp="false" || u_udp="true"
+               if [ "$tr_val" = udp ]; then u_udp=true
+               elif [ "$tr_val" = tcp ]; then
+                   echo -ne "  ${C}●${NC} ${W}Accept UDP applications over TCP too? [y/N]: ${NC}"; read -r enable_udp
+                   [[ "${enable_udp,,}" != y && "${enable_udp,,}" != yes ]] || u_udp=true
+               fi
 
                # رفع باگ ۲: اعتبارسنجی دقیق پورت‌های فوروارد سرور ایران
                while true; do
@@ -2078,8 +2362,15 @@ while true; do
            
            BH_FORWARDER=backhaul
            if [ "$s_type" = 1 ]; then bh_choose_forwarder || continue; fi
+           if [ "$tr_val" = udp ] && [ "$BH_FORWARDER" = mporter ]; then
+               echo -e "  ${Y}● UDP needs Backhaul or iptables; choose again.${NC}"
+               bh_choose_forwarder || continue
+           fi
+           bh_advanced_wizard "$t_name" "$s_type" "$tr_val" || continue
            systemctl enable "mbackhaul@${t_name}" >/dev/null 2>&1
-           bh_activate_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports" "$u_udp" "$bind_host" "$BH_FORWARDER" || { echo -e "  ${R}● Tunnel was not deployed; check the error above.${NC}"; sleep 2; continue; }
+           bh_activate_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports" "$u_udp" "$bind_host" "$BH_FORWARDER" "$BH_SETTINGS_FILE"; deploy_rc=$?
+           rm -f "$BH_SETTINGS_FILE"
+           [ "$deploy_rc" = 0 ] || { echo -e "  ${R}● Tunnel was not deployed; check the error above.${NC}"; sleep 2; continue; }
            if systemctl is-active --quiet "mbackhaul@${t_name}"; then mt_ask_bbr_on_create; fi
            if systemctl is-active --quiet "mbackhaul@${t_name}"; then
                echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"
@@ -2128,6 +2419,7 @@ while true; do
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN" .meta)
            ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul
+           BH_SETTINGS_FILE=""
            source "$SELECTED_TUN" 2>/dev/null
            [ -z "$ENABLE_UDP" ] && ENABLE_UDP="true"
            
@@ -2158,20 +2450,15 @@ while true; do
                fi
                
            elif [[ "$opt" == "5" ]]; then
-               echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC} | ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC} | ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC} | ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
-               echo -ne "  ${C}● Select New Transport [1-4]: ${NC}"; read tr_choice
-               tr_choice=$(echo "$tr_choice" | tr -d '\r')
-               if [[ ! "$tr_choice" =~ ^[1-4]$ ]]; then
-                   echo -e "  ${R}Invalid option.${NC}"; sleep 1; continue
+               bh_start_screen
+               echo -e "\n  ${DIM}┌─[ TRANSPORT & ADVANCED SETTINGS ]${NC}"
+               echo -ne "  ${C}Change transport? [y/N; current: $TRANSPORT] ❯❯ ${NC}"; read -r change_transport
+               if [[ "${change_transport,,}" == y || "${change_transport,,}" == yes ]]; then
+                   bh_select_transport || continue; TRANSPORT="$BH_TRANSPORT"
                fi
-               
-               if [ "$tr_choice" == "1" ]; then TRANSPORT="tcp"
-               elif [ "$tr_choice" == "2" ]; then TRANSPORT="tcpmux"
-               elif [ "$tr_choice" == "3" ]; then TRANSPORT="wsmux"
-               elif [ "$tr_choice" == "4" ]; then TRANSPORT="wssmux"; fi
-               
-               echo -e "  ${Y}⚠ Target protocol changed to ${TRANSPORT^^}. Make sure to update the peer!${NC}"
-               clean_bh_counters "$t_name"
+               if [ "$TRANSPORT" = udp ] && [ "$FORWARDER" = mporter ]; then bh_choose_forwarder "$FORWARDER" || continue; FORWARDER="$BH_FORWARDER"; fi
+               bh_advanced_wizard "$t_name" "$ROLE" "$TRANSPORT" || continue
+               echo -e "  ${Y}⚠ Update the peer to use matching transport / MUX settings.${NC}"
 
            elif [[ "$opt" == "6" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Auth Token / Secret [Current: ${Y}${TOKEN}${W}]: ${NC}"; read n_tok
@@ -2204,6 +2491,7 @@ while true; do
 
            elif [[ "$opt" == "8" ]]; then
                if [ "$ROLE" == "1" ]; then
+                   if [ "$TRANSPORT" != tcp ]; then echo -e "  ${Y}● UDP acceptance is available on TCP; UDP transport is always UDP-only.${NC}"; sleep 2; continue; fi
                    if [ "${FORWARDER:-backhaul}" = mporter ]; then
                        echo -e "  ${Y}● MPorter forwards TCP here; select Backhaul or iptables for UDP.${NC}"; sleep 2; continue
                    fi
@@ -2258,7 +2546,9 @@ while true; do
                zero_bh_counters "$t_name"
            fi
            
-           bh_activate_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS" "$ENABLE_UDP" "$BIND_HOST" "${FORWARDER:-backhaul}" || { sleep 2; continue; }
+           bh_activate_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS" "$ENABLE_UDP" "$BIND_HOST" "${FORWARDER:-backhaul}" "$BH_SETTINGS_FILE"; update_rc=$?
+           rm -f "$BH_SETTINGS_FILE"
+           [ "$update_rc" = 0 ] || { sleep 2; continue; }
            if systemctl is-active --quiet mbackhaul@$t_name; then
                echo -e "  ${G}✔ Tunnel updated and service restarted successfully.${NC}"
                bh_show_forwarder "$t_name"

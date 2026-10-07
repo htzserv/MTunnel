@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="12.0.4"
+MODULE_VERSION="12.0.5"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -606,18 +606,16 @@ mt_monitor_wait() {
 }
 
 mt_tunnels_info_menu() {
-    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
     local extra_label='Live Service Logs'
     mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
     case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
-        "$header"
-        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
+        "$details" --no-pause
+        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
@@ -626,10 +624,8 @@ mt_tunnels_info_menu() {
         [ "$rc" -le 128 ] || continue
         [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) "$details";;
-            2) "$live";;
-            3) mt_run_tool minterface --scope "$kind" --render;;
-            4) "$extra_view";;
+            1) mt_run_tool minterface --scope "$kind" --render;;
+            2) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -645,6 +641,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1009,7 +1006,7 @@ state_init() {
 }
 
 state_lock() { exec 9>"$LOCK_FILE" || return 1; flock -w 20 -x 9 || { exec 9>&-; return 1; }; }
-state_unlock() { flock -u 9 2>/dev/null || true; exec 9>&- 2>/dev/null || true; }
+state_unlock() { flock -u 9 2>/dev/null || true; { exec 9>&-; } 2>/dev/null || true; }
 
 # state_apply [jq args...] <filter>
 state_apply() {
@@ -1646,9 +1643,10 @@ health_check_backend() {
 
 # Read-only scan (no config/state rewrites). Output is written atomically.
 health_scan() {
+    state_lock || return 1
     mss_reapply_all >/dev/null 2>&1 || true
-    local tmp p ip rp eng iface
-    tmp=$(mktemp /run/.mporter-health.XXXXXX) || return 1
+    local tmp p ip rp eng iface rc=0
+    tmp=$(mktemp /run/.mporter-health.XXXXXX) || { state_unlock; return 1; }
     while IFS='|' read -r p ip rp eng; do
         iface=""
         if command -v jq >/dev/null 2>&1 && [ -s "$STATE_FILE" ]; then
@@ -1657,7 +1655,10 @@ health_scan() {
         [ -z "$iface" ] || [ "$iface" = "unknown" ] && iface=$(route_dev "$ip")
         health_check_backend "$iface" "$ip" "$rp" 2 >> "$tmp"
     done < <(collect_mappings | awk -F'|' '$4=="HAP" && $2!="127.0.0.1" && $2!="::1"')
-    chmod 644 "$tmp"; mv -f "$tmp" "$HEALTH_FILE"
+    chmod 644 "$tmp" && mv -f "$tmp" "$HEALTH_FILE" || rc=1
+    rm -f "$tmp"
+    state_unlock
+    return "$rc"
 }
 
 show_health_matrix() {
@@ -2169,12 +2170,266 @@ show_table() {
 # Edit mappings (was missing in v10)
 # ==========================================================
 
+# Change managed forwarding destinations without rebuilding their port mappings.
+mp_replace_ip_config() { # kind source destination old new
+    local kind="$1" src="$2" dst="$3" old="$4" new="$5" prefix="$5"
+    case "$kind" in
+        HAP)
+            is_v6 "$new" && prefix="ipv6@$new"
+            awk -v old="$old" -v new="$prefix" '
+                /^[^ \t#]/ { managed=0 }
+                /^backend[ \t]+bk_[0-9]+[ \t]*$/ { managed=1 }
+                managed && $1=="server" {
+                    addr=$3; sub(/^ipv[46]@/,"",addr)
+                    k=match(addr,/:[0-9]+$/)
+                    host=substr(addr,1,k-1); gsub(/\[|\]/,"",host)
+                    if (k && tolower(host)==old) {
+                        pos=index($0,$3)
+                        $0=substr($0,1,pos-1) new substr(addr,k) substr($0,pos+length($3))
+                    }
+                } { print }' "$src" > "$dst";;
+        GST)
+            is_v6 "$new" && prefix="[$new]"
+            jq --arg old "$old" --arg new "$prefix" '
+                .ServeNodes |= map(. as $node |
+                  (if type=="string" then try capture("^(?<head>tcp://[^/]*/)(?<ip>\\[[0-9a-fA-F:]+\\]|[0-9.]+):(?<port>[0-9]+)(?<tail>.*)$") catch null else null end) as $m |
+                  if $m!=null and (($m.ip|gsub("[\\[\\]]";"")|ascii_downcase)==$old)
+                  then $m.head+$new+":"+$m.port+$m.tail else $node end)' "$src" > "$dst";;
+        RLM)
+            is_v6 "$new" && prefix="[$new]"
+            jq --arg old "$old" --arg new "$prefix" '
+                .endpoints |= map(. as $entry |
+                  (try (.remote|capture("^\\[?(?<ip>[^\\]]+?)\\]?:(?<port>[0-9]+)$")) catch null) as $m |
+                  if $m!=null and ($m.ip|ascii_downcase)==$old
+                  then .remote=$new+":"+$m.port else $entry end)' "$src" > "$dst";;
+        IPT|OBFS_NAT|OBFS_GOST)
+            awk -v old="$old" -v new="$new" -v kind="$kind" '
+                function replace_literal(s,a,b, k,out) {
+                    out=""; while ((k=index(s,a))>0) {out=out substr(s,1,k-1) b; s=substr(s,k+length(a))}
+                    return out s
+                }
+                {
+                    line=$0
+                    tagged=(kind=="IPT" && (index(line,"\"MPORTER_NAT_" old "\"") || index(line,"\\\"MPORTER_NAT_" old "\\\""))) ||
+                           (kind!="IPT" && (index(line,"# MP_OBFS ip=" old " ") || index(line,"# MP_CNT ip=" old " ")))
+                    if (tagged) {
+                        if (kind=="OBFS_GOST") {
+                            # Only the -L destination is changed; -F is the transport peer.
+                            n=split(line,a,/ +/)
+                            for(i=1;i<n;i++) if(a[i]=="-L") {
+                                ep=a[i+1]; k=match(ep, /:[0-9]+$/)
+                                slash=0; for(j=1;j<=length(ep);j++) if(substr(ep,j,1)=="/") slash=j
+                                host=substr(ep,slash+1,k-slash-1); gsub(/\[|\]/,"",host)
+                                if(k && tolower(host)==old) {
+                                    repl=substr(ep,1,slash) (index(new,":")?"["new"]":new) substr(ep,k)
+                                    line=replace_literal(line,"-L " ep,"-L " repl)
+                                }
+                            }
+                        } else {
+                            line=" "line" "
+                            line=replace_literal(line," -d "old" "," -d "new" ")
+                            line=replace_literal(line," -s "old" "," -s "new" ")
+                            ep=(index(old,":")?"["old"]":old)
+                            repl=(index(new,":")?"["new"]":new)
+                            line=replace_literal(line," --to-destination "ep":"," --to-destination "repl":")
+                            line=substr(line,2,length(line)-2)
+                            line=replace_literal(line,"\"MPORTER_NAT_"old"\"","\"MPORTER_NAT_"new"\"")
+                            line=replace_literal(line,"\\\"MPORTER_NAT_"old"\\\"","\\\"MPORTER_NAT_"new"\\\"")
+                        }
+                        line=replace_literal(line,"ip="old" ","ip="new" ")
+                    }
+                    print line
+                }' "$src" > "$dst";;
+        STATE)
+            local dev; dev=$(route_dev "$new"); dev="${dev:-unknown}"
+            jq --arg old "$old" --arg new "$new" --arg dev "$dev" --arg now "$(date -Is)" '
+                .mappings |= map(if .target_ip==$old then .target_ip=$new | .interface=$dev | .updated_at=$now else . end) |
+                .backends |= map(select(.target_ip!=$old)) |
+                .pools |= map((all(.targets[]?; .ip==$old)) as $single |
+                  .targets |= map(if .ip==$old then .ip=$new else . end) |
+                  if $single then .interface=$dev else . end) | .updated_at=$now' "$src" > "$dst";;
+        HEALTH)
+            awk -F'\t' -v old="$old" '$2!=old' "$src" > "$dst";;
+        *) return 1;;
+    esac
+}
+
+mp_check_replaced_nat() { # new target; verify DNAT reached the running firewall
+    local target="$1" p ip rp engine bin
+    bin=$(ipt_bin_for "$target")
+    while IFS='|' read -r p ip rp engine; do
+        [ "$engine" == IPT ] && [ "$ip" == "$target" ] || continue
+        "$bin" -w 5 -t nat -C PREROUTING -p tcp --dport "$p" -m addrtype --dst-type LOCAL \
+            -m comment --comment "MPORTER_NAT_$target" -j DNAT --to-destination "$(hostport "$target" "$rp")" || return 1
+    done < <(collect_mappings)
+}
+
+mp_reload_replaced_config() { # kind new target
+    case "$1" in
+        HAP) haproxy_reload_safe;;
+        GST) systemctl restart gost && systemctl is-active --quiet gost;;
+        RLM) systemctl restart realm && systemctl is-active --quiet realm;;
+        IPT) systemctl restart mporter-iptables && mp_check_replaced_nat "$2";;
+        OBFS_NAT|OBFS_GOST) systemctl restart mporter-obfs && systemctl is-active --quiet mporter-obfs;;
+        *) return 0;;
+    esac
+}
+
+mp_replace_target_ip() { # replace this IP in every MPorter-owned mapping/pool
+    local old new rows affected stage failed=0 idx kind path candidate backup
+    old=$(mt_normalize_host "$1"); new=$(mt_normalize_host "$2")
+    valid_target_ip "$old" && valid_target_ip "$new" && [ "$old" != "$new" ] || return 1
+    command -v jq >/dev/null 2>&1 || return 1
+    state_init || return 1
+    state_lock || return 1
+    rows=$(collect_mappings)
+    affected=$(printf '%s\n' "$rows" | awk -F'|' -v old="$old" '$2==old')
+    [ -n "$affected" ] || { echo 'No managed mappings use this IP.' >&2; state_unlock; return 1; }
+    # A repeated destination within the same engine/local port changes pool weighting.
+    if printf '%s\n' "$rows" | awk -F'|' -v old="$old" -v new="$new" '
+        $2==old {a[$1"|"$4]=1} $2==new {b[$1"|"$4]=1}
+        END {for(k in a) if(b[k]) exit 0; exit 1}'; then
+        echo 'The new IP already exists in an affected mapping/pool.' >&2; state_unlock; return 1
+    fi
+    local obfs_used=0
+    obfs_targets | awk -F'|' -v old="$old" '$1==old {found=1} END{exit !found}' && obfs_used=1
+    if { is_v6 "$old" && ! is_v6 "$new"; } || { ! is_v6 "$old" && is_v6 "$new"; }; then
+        if [ "$obfs_used" == 1 ] || [[ "$affected" == *'|IPT'* ]]; then
+            echo 'Kernel NAT / OBFS mappings require an IP of the same address family.' >&2; state_unlock; return 1
+        fi
+    fi
+    stage=$(mktemp -d "$SECURE_TMP/replace-ip.XXXXXX") || { state_unlock; return 1; }
+    chmod 700 "$stage"
+    local -a paths=("$H_CONF" "$G_CONF" "$R_CONF" "$IPT_CONF" "$OBFS_DIR/nat.sh" "$OBFS_DIR/gost.sh" "$STATE_FILE" "$HEALTH_FILE")
+    local -a kinds=(HAP GST RLM IPT OBFS_NAT OBFS_GOST STATE HEALTH) changed=() candidates=() staged_paths=()
+    for idx in "${!paths[@]}"; do
+        path="${paths[$idx]}"; kind="${kinds[$idx]}"; [ -f "$path" ] || continue
+        case "$kind" in
+            HAP|GST|RLM|IPT) [[ "$affected" == *"|$kind"* ]] || continue;;
+            OBFS_*) [ "$obfs_used" == 1 ] || continue;;
+        esac
+        backup="$stage/$idx.old"
+        cp -p "$path" "$backup" || { failed=1; break; }
+        candidate=$(mktemp "$(dirname "$path")/.mporter-replace.XXXXXX") || { failed=1; break; }
+        candidates+=("$candidate")
+        staged_paths[$idx]="$candidate"
+        cp -p "$path" "$candidate" && mp_replace_ip_config "$kind" "$backup" "$candidate" "$old" "$new" || { failed=1; break; }
+        cmp -s "$backup" "$candidate" && continue
+        case "$kind" in
+            HAP) command -v haproxy >/dev/null 2>&1 && haproxy_test_config "$candidate" || failed=1;;
+            GST|RLM|STATE) jq -e 'type=="object"' "$candidate" >/dev/null 2>&1 || failed=1;;
+            IPT|OBFS_NAT|OBFS_GOST) bash -n "$candidate" || failed=1;;
+        esac
+        [ "$failed" == 0 ] || break
+        changed+=("$idx|$candidate")
+    done
+    # Old, untagged OBFS rules cannot safely be rewritten as modern rules.
+    if [ "$obfs_used" == 1 ]; then
+        local obfs_nat_changed=0 obfs_gost_changed=0 entry
+        for entry in "${changed[@]}"; do
+            [ "${entry%%|*}" != 4 ] || obfs_nat_changed=1
+            [ "${entry%%|*}" != 5 ] || obfs_gost_changed=1
+        done
+        [ "$obfs_nat_changed" == 1 ] && [ "$obfs_gost_changed" == 1 ] || {
+            echo 'Legacy/incomplete OBFS rules must be reconfigured before changing this IP.' >&2; failed=1;
+        }
+    fi
+    if [ "$failed" == 0 ]; then
+        local expected prepared
+        expected=$(printf '%s\n' "$rows" | awk -F'|' -v OFS='|' -v old="$old" -v new="$new" '$2==old {$2=new} {print}' | sort)
+        prepared=$(H_CONF="${staged_paths[0]:-$H_CONF}" G_CONF="${staged_paths[1]:-$G_CONF}" \
+            R_CONF="${staged_paths[2]:-$R_CONF}" IPT_CONF="${staged_paths[3]:-$IPT_CONF}" collect_mappings | sort)
+        [ "$expected" == "$prepared" ] || { echo 'Mapping validation failed; no files replaced.' >&2; failed=1; }
+    fi
+    local committed=0 rollback_failed=0 reload_failed=0 int_trap term_trap cancelled_signal=''
+    int_trap=$(trap -p INT); term_trap=$(trap -p TERM)
+    trap 'failed=1; cancelled_signal=INT' INT
+    trap 'failed=1; cancelled_signal=TERM' TERM
+    if [ "$failed" == 0 ]; then
+        for entry in "${changed[@]}"; do
+            [ "$failed" == 0 ] || break
+            idx="${entry%%|*}"; candidate="${entry#*|}"
+            if mv -f "$candidate" "${paths[$idx]}"; then committed=1; else failed=1; break; fi
+        done
+        if [ "$failed" == 0 ]; then
+            local obfs_reloaded=0
+            for entry in "${changed[@]}"; do
+                [ "$failed" == 0 ] || break
+                idx="${entry%%|*}"; kind="${kinds[$idx]}"
+                case "$kind" in OBFS_*) [ "$obfs_reloaded" == 0 ] || continue; obfs_reloaded=1;; esac
+                mp_reload_replaced_config "$kind" "$new" || { failed=1; break; }
+            done
+        fi
+    fi
+    if [ "$failed" != 0 ] && [ "$committed" == 1 ]; then
+        for entry in "${changed[@]}"; do
+            idx="${entry%%|*}"; path="${paths[$idx]}"
+            candidate=$(mktemp "$(dirname "$path")/.mporter-restore.XXXXXX") || { rollback_failed=1; continue; }
+            candidates+=("$candidate")
+            cp -p "$stage/$idx.old" "$candidate" && mv -f "$candidate" "$path" || rollback_failed=1
+        done
+        for entry in "${changed[@]}"; do
+            idx="${entry%%|*}"
+            mp_reload_replaced_config "${kinds[$idx]}" "$old" || reload_failed=1
+        done
+    fi
+    for candidate in "${candidates[@]}"; do rm -f "$candidate"; done
+    state_unlock
+    if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
+    if [ -n "$term_trap" ]; then eval "$term_trap"; else trap - TERM; fi
+    if [ "$rollback_failed" != 0 ]; then
+        echo "Rollback needs attention; original files retained in $stage." >&2; return 1
+    fi
+    rm -rf "$stage"
+    [ "$cancelled_signal" != TERM ] || kill -s TERM "$$"
+    if [ "$failed" != 0 ]; then
+        echo 'IP change failed; previous configuration retained/restored.' >&2
+        [ "$reload_failed" == 0 ] || echo 'An original service could not be restarted; inspect its logs.' >&2
+        return 1
+    fi
+    local iface; iface=$(route_dev "$new"); [ -z "$iface" ] || apply_scoped_mss "$iface"
+    return 0
+}
+
+change_target_ip_menu() {
+    draw_header
+    echo -e "\n  ${DIM}┌─[ CHANGE TARGET IP ]${NC}"
+    local rows=() ips=() old new idx confirm ports row
+    mapfile -t rows < <(collect_mappings)
+    mapfile -t ips < <(printf '%s\n' "${rows[@]}" | awk -F'|' 'NF==4 && $2!~/^127\./ && $2!="::1" {print $2}' | sort -u)
+    [ ${#ips[@]} -gt 0 ] || { echo -e "  ${Y}● No managed target IPs found.${NC}"; sleep 1.5; return 0; }
+    for idx in "${!ips[@]}"; do
+        ports=$(printf '%s\n' "${rows[@]}" | awk -F'|' -v ip="${ips[$idx]}" '$2==ip {print $1}' | sort -nu | paste -sd,)
+        printf "  ${DIM}├─${NC} ${W}%s${NC} ${DIM}❯${NC} ${C}%s${NC} ${DIM}(ports: %s)${NC}\n" "$((idx+1))" "${ips[$idx]}" "$ports"
+    done
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -ne "  ${C}Select Target ❯❯ ${NC}"; read -r idx || return 0
+    case "$idx" in 0|q|Q|'') return 0;; esac
+    [[ "$idx" =~ ^[0-9]{1,5}$ ]] || { echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; return 0; }
+    idx=$((10#$idx)); [ "$idx" -ge 1 ] && [ "$idx" -le "${#ips[@]}" ] || return 0
+    old="${ips[$((idx-1))]}"
+    echo -ne "  ${C}●${NC} ${W}New Target IP (IPv4/IPv6 | q: cancel): ${NC}"; read -r new || return 0
+    case "$new" in q|Q|'') return 0;; esac
+    new=$(mt_normalize_host "$new")
+    valid_target_ip "$new" && [ "$new" != "$old" ] || { echo -e "  ${R}✖ Invalid or unchanged IP.${NC}"; sleep 1.5; return 0; }
+    echo -e "  ${DIM}● Replaces ${W}$old${DIM} with ${W}$new${DIM} in all its MPorter mappings and load-balancer pools.${NC}"
+    echo -e "  ${DIM}● Ports and forwarding settings are retained. Services will reload/restart.${NC}"
+    echo -ne "  ${C}●${NC} ${W}Apply? [y/N]: ${NC}"; read -r confirm || return 0
+    case "${confirm,,}" in y|yes) ;; *) return 0;; esac
+    if mp_replace_target_ip "$old" "$new"; then echo -e "  ${G}✔ Target IP changed successfully.${NC}";
+    else echo -e "  ${R}✖ Target IP could not be changed. See the error above.${NC}"; fi
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r _
+    return 0
+}
+
+
 edit_mapping() {
     draw_header
     echo -e "\n  ${DIM}┌─[ EDIT MAPPINGS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add Port Mappings${NC} ${DIM}(Strict 1-to-1 wizard)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove a Single Local Port${NC} ${DIM}(all engines)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Disable OBFS on a Port${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Change Target IP (Keep Ports / Settings)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     local e_opt idx; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r e_opt
     case "$e_opt" in
@@ -2201,6 +2456,7 @@ edit_mapping() {
             [ -n "$idx" ] && [ -n "${orows[$idx]:-}" ] || { echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; }
             obfs_filter port "${orows[$idx]#*|}"; obfs_reload; state_reconcile >/dev/null 2>&1
             echo -e "  ${G}● OBFS disabled on port ${orows[$idx]#*|} (mapping kept).${NC}"; sleep 1.5 ;;
+        4) change_target_ip_menu ;;
         *) return ;;
     esac
 }
@@ -2422,7 +2678,7 @@ while true; do
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Add Port Mappings (Strict 1-to-1)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Smart Loadbalance (Multi-IP / Failover / Health)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Add/Del/OBFS)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Ports / Target IP / OBFS)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Delete & Purge Mappings (By Interface/IP/All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"

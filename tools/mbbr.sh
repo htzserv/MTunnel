@@ -2,7 +2,7 @@
 # --- MDesign BBR Accelerator Core (mbbr.sh) v12.0.3 ---
 # [Features: Async Background Checker | MDesign UI Spacing | Minimal OTA]
 
-MODULE_VERSION="12.0.4"
+MODULE_VERSION="12.0.5"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -583,18 +583,16 @@ mt_monitor_wait() {
 }
 
 mt_tunnels_info_menu() {
-    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
     local extra_label='Live Service Logs'
     mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
     case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
-        "$header"
-        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
+        "$details" --no-pause
+        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
@@ -603,10 +601,8 @@ mt_tunnels_info_menu() {
         [ "$rc" -le 128 ] || continue
         [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) "$details";;
-            2) "$live";;
-            3) mt_run_tool minterface --scope "$kind" --render;;
-            4) "$extra_view";;
+            1) mt_run_tool minterface --scope "$kind" --render;;
+            2) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -622,6 +618,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 

@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="12.0.4"
+MODULE_VERSION="12.0.5"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -583,18 +583,16 @@ mt_monitor_wait() {
 }
 
 mt_tunnels_info_menu() {
-    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
     local extra_label='Live Service Logs'
     mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
     case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
-        "$header"
-        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
+        "$details" --no-pause
+        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
@@ -603,10 +601,8 @@ mt_tunnels_info_menu() {
         [ "$rc" -le 128 ] || continue
         [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) "$details";;
-            2) "$live";;
-            3) mt_run_tool minterface --scope "$kind" --render;;
-            4) "$extra_view";;
+            1) mt_run_tool minterface --scope "$kind" --render;;
+            2) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -622,6 +618,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1303,7 +1300,9 @@ show_tunnel_registry() {
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
-    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+    if [ "${1:-}" != --no-pause ]; then
+        echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+    fi
 }
 
 show_live_radar() {
@@ -1471,7 +1470,7 @@ check_first_run_core
 setup_systemd
 
 show_tunnels_info() {
-    mt_tunnels_info_menu rathole draw_header show_tunnel_registry show_live_radar show_tunnel_logs
+    mt_tunnels_info_menu rathole draw_header show_tunnel_registry show_tunnel_logs
 }
 
 show_tunnel_logs() {
@@ -1515,14 +1514,16 @@ render_mrathole_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}Tunnels Info And Specs${NC}"
     echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Live Monitor${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_system_tools 11 12
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
+    mt_render_tunnel_system_tools 12 13
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -1646,7 +1647,7 @@ EOF
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
 
-        3|4|5|6|7|8|13|14|9)
+        3|4|5|6|7|8|14|15|9)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; BIND_HOST="0.0.0.0"
@@ -1742,14 +1743,14 @@ EOF
                    echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
                fi
                
-           elif [[ "$opt" == "13" ]]; then
+           elif [[ "$opt" == "14" ]]; then
                manage_cron "$t_name"; continue
                
            elif [[ "$opt" == "9" ]]; then
                [ "$TYPE" == 1 ] || continue
                mt_ask_bind_host || continue; BIND_HOST="$MT_BIND_HOST"
 
-           elif [[ "$opt" == "14" ]]; then
+           elif [[ "$opt" == "15" ]]; then
                zero_rat_counters "$t_name"
            fi
            
@@ -1774,11 +1775,12 @@ EOF
            ;;
 
         10) show_tunnels_info ;;
-        15) menu_install_core ;;
-        16) self_update_module ;;
-        17) uninstall_mrathole ;;
-        11) mt_run_tool mhealer --scope rathole ;;
-        12) mt_run_tool mbbr --from-tunnel ;;
+        16) menu_install_core ;;
+        17) self_update_module ;;
+        18) uninstall_mrathole ;;
+        12) mt_run_tool mhealer --scope rathole ;;
+        13) mt_run_tool mbbr --from-tunnel ;;
+        11) show_live_radar ;;
         0) break ;;
     esac
 done

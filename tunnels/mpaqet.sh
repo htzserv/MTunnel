@@ -2,7 +2,7 @@
 # --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v12.0.3 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="12.0.4"
+MODULE_VERSION="12.0.5"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -583,18 +583,16 @@ mt_monitor_wait() {
 }
 
 mt_tunnels_info_menu() {
-    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
     local extra_label='Live Service Logs'
     mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
     case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
-        "$header"
-        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
+        "$details" --no-pause
+        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
@@ -603,10 +601,8 @@ mt_tunnels_info_menu() {
         [ "$rc" -le 128 ] || continue
         [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) "$details";;
-            2) "$live";;
-            3) mt_run_tool minterface --scope "$kind" --render;;
-            4) "$extra_view";;
+            1) mt_run_tool minterface --scope "$kind" --render;;
+            2) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -622,6 +618,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1756,7 +1753,9 @@ show_tunnel_registry() {
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
-    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+    if [ "${1:-}" != --no-pause ]; then
+        echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+    fi
 }
 
 show_live_radar() {
@@ -1882,7 +1881,7 @@ check_first_run_core
 setup_systemd_service
 
 show_tunnels_info() {
-    mt_tunnels_info_menu paqet draw_header show_tunnel_registry show_live_radar show_tunnel_logs
+    mt_tunnels_info_menu paqet draw_header show_tunnel_registry show_tunnel_logs
 }
 
 show_tunnel_logs() {
@@ -1927,13 +1926,15 @@ render_mpaqet_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Tunnels Info And Specs${NC}"
     echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Live Monitor${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_system_tools 12 13
-    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
+    mt_render_tunnel_system_tools 13 14
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -2385,12 +2386,13 @@ EOF
            ;;
 
         11) show_tunnels_info ;;
-        14) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
-        15) menu_install_core ;;
-        16) self_update_module ;;
-        17) uninstall_mpaqet ;;
-        12) mt_run_tool mhealer --scope paqet ;;
-        13) mt_run_tool mbbr --from-tunnel ;;
+        15) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
+        16) menu_install_core ;;
+        17) self_update_module ;;
+        18) uninstall_mpaqet ;;
+        13) mt_run_tool mhealer --scope paqet ;;
+        14) mt_run_tool mbbr --from-tunnel ;;
+        12) show_live_radar ;;
         0) break ;;
     esac
 done

@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="12.0.4"
+MODULE_VERSION="12.0.5"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -589,18 +589,16 @@ mt_monitor_wait() {
 }
 
 mt_tunnels_info_menu() {
-    local kind="$1" header="$2" details="$3" live="$4" extra_view="$5" choice rc
+    local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
     local extra_label='Live Service Logs'
     mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
     case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
-        "$header"
-        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
+        "$details" --no-pause
+        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
         echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Tunnel Details & Settings${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Live Monitor${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
@@ -609,10 +607,8 @@ mt_tunnels_info_menu() {
         [ "$rc" -le 128 ] || continue
         [ "$rc" -eq 0 ] || return 0
         case "${choice//$'\r'/}" in
-            1) "$details";;
-            2) "$live";;
-            3) mt_run_tool minterface --scope "$kind" --render;;
-            4) "$extra_view";;
+            1) mt_run_tool minterface --scope "$kind" --render;;
+            2) "$extra_view";;
             0|q|Q) return 0;;
         esac
     done
@@ -628,6 +624,7 @@ mt_config_value() {
 
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+
 
 
 
@@ -1854,7 +1851,9 @@ show_tunnel_details() {
 
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯\n"
     done
-    echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r dummy
+    if [ "${1:-}" != --no-pause ]; then
+        echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r dummy
+    fi
 }
 
 menu_delete_tunnels() {
@@ -2268,7 +2267,7 @@ update_available_badge() {
 }
 
 show_tunnels_info() {
-    mt_tunnels_info_menu gre draw_mgre_header show_tunnel_details show_live_monitor show_traffic_monitor
+    mt_tunnels_info_menu gre draw_mgre_header show_tunnel_details show_traffic_monitor
 }
 
 show_live_monitor() {
@@ -2298,17 +2297,19 @@ render_mgre_menu() {
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Edit Core Subnet Base${NC}"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Edit MTU & MSS${NC}"
     echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${W}Live Monitor${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SECURITY ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Tunnel${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only GRE)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${M}IPsec Encryption (ESP) per Tunnel${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${R}Firewall Guard (Peer-Only GRE)${NC} $([ -f "$GUARD_FLAG" ] && echo -e "${G}[ON]${NC}" || echo -e "${DIM}[OFF]${NC}")"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_system_tools 14 15
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
+    mt_render_tunnel_system_tools 15 16
+    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${G}OTA Update${NC} $(update_available_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${W}Backup & Restore Configs${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}19${NC}${DIM}❯${NC} ${R}Uninstall MGRE${NC} ${DIM}(Purge All)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
@@ -2617,7 +2618,7 @@ while true; do
            echo -e "\n  ${DIM}┌─[ MTU & TCP MSS CONFIGURATION: ${W}${T_NAME}${DIM} ]${NC}"
            echo -e "  ${DIM}│${NC} Current Live MTU : ${Y}${cur_mtu}${NC}"
            echo -e "  ${DIM}│${NC} Valid Range      : ${W}${min_mtu} - ${max_mtu}${NC}"
-           echo -e "  ${DIM}│${NC} Profiles         : ${W}1436${NC} (Default IR) | ${W}1360${NC} (Iran Broadband) | ${W}900-1200${NC} (Heavy Fragmentation)"
+           echo -e "  ${DIM}│${NC} Profiles         : ${W}1437${NC} (Default IR) | ${W}1361${NC} (Iran Broadband) | ${W}900-1200${NC} (Heavy Fragmentation)"
            echo -e "  ${DIM}└─${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter New MTU (${min_mtu}-${max_mtu}) [Enter for Default]: ${NC}"; read -r new_mtu
            new_mtu=$(echo "$new_mtu" | tr -dc '0-9')
@@ -2650,13 +2651,14 @@ while true; do
            fi ;;
 
         5) show_tunnels_info ;;
-        16) self_update_module ;;
-        18) uninstall_mgre ;;
-        12) menu_encrypt ;;
-        13) menu_guard ;;
-        14) mt_run_tool mhealer --scope gre ;;
-        17) menu_backup_restore ;;
-        15) mt_run_tool mbbr --from-tunnel ;;
+        17) self_update_module ;;
+        19) uninstall_mgre ;;
+        13) menu_encrypt ;;
+        14) menu_guard ;;
+        15) mt_run_tool mhealer --scope gre ;;
+        18) menu_backup_restore ;;
+        16) mt_run_tool mbbr --from-tunnel ;;
+        12) show_live_monitor ;;
         0) break ;;
     esac
 done

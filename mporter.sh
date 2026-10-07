@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="12.0.5"
+MODULE_VERSION="12.0.6"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -682,7 +682,7 @@ WATCHDOG_SCRIPT="/usr/local/bin/mporter-watchdog.sh"
 APT_OPTS=(-o Acquire::ForceIPv4=true -o DPkg::Lock::Timeout=180 -y -q)
 
 MP_HEADLESS=false
-case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-apply) MP_HEADLESS=true ;; esac
+case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-apply|--backhaul-in-use) MP_HEADLESS=true ;; esac
 
 if [ "$(id -u)" -ne 0 ] && [ "${MPORTER_LIB:-0}" != "1" ]; then echo "MPorter must be run as root."; exit 1; fi
 
@@ -1030,6 +1030,79 @@ state_remove_port() {
 }
 
 # All live mappings from engine configs: "port|target_ip|target_port|ENGINE" (target may be IPv4 or IPv6)
+# Discover application-tunnel ingress published by MBackhaul (same server only).
+mp_bh_records() {
+    local meta name target spec pair public private bind valid
+    for meta in "${MP_BH_DIR:-/etc/mbackhaul/tunnels}"/*.meta; do
+        [ -f "$meta" ] || continue
+        name=$(basename "$meta" .meta); [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+        [ "$(read_conf_value "$meta" ROLE)" = 1 ] && [ "$(read_conf_value "$meta" FORWARDER)" = mporter ] || continue
+        target=$(read_conf_value "$meta" BACKEND_IP)
+        [[ "$target" =~ ^127\.77\.[0-9]+\.[0-9]+$ ]] && valid_ipv4 "$target" || continue
+        bind=$(read_conf_value "$meta" BACKEND_BIND); [[ "$bind" = :: || "$bind" = 0.0.0.0 ]] || continue
+        spec=$(read_conf_value "$meta" BACKEND_PORTS); [ -n "$spec" ] || continue
+        local -a pairs=(); local -A seen=(); IFS=, read -ra pairs <<< "$spec"; valid=true
+        for pair in "${pairs[@]}"; do
+            public="${pair%:*}"; private="${pair##*:}"
+            if ! [[ "$pair" =~ ^[0-9]+:[0-9]+$ ]] || ! valid_port "$public" || ! valid_port "$private" || [ "$public" = "$private" ] || [ -n "${seen[$public]:-}" ]; then valid=false; break; fi
+            seen[$public]=1
+        done
+        [ "$valid" = true ] || continue
+        printf '%s|%s|%s\n' "$name" "$target" "$meta"
+    done
+}
+
+mp_bh_meta_for_ip() {
+    local name target meta
+    while IFS='|' read -r name target meta; do
+        [ "$target" = "$1" ] || continue
+        printf '%s\n' "$meta"; return 0
+    done < <(mp_bh_records)
+    return 1
+}
+
+mp_bh_target_port() {
+    local meta="$1" public="$2" pair
+    local -a pairs=(); IFS=, read -ra pairs <<< "$(read_conf_value "$meta" BACKEND_PORTS)"
+    for pair in "${pairs[@]}"; do
+        [ "${pair%:*}" != "$public" ] || { printf '%s\n' "${pair##*:}"; return 0; }
+    done
+    return 1
+}
+
+mp_bh_choose_target() {
+    local records=() item name ip meta choice i pair
+    mapfile -t records < <(mp_bh_records)
+    [ "${#records[@]}" -gt 0 ] || return 1
+    echo -e "\n  ${DIM}┌─[ BACKHAUL TARGETS (TCP) ]${NC}"
+    for i in "${!records[@]}"; do
+        IFS='|' read -r name ip meta <<< "${records[$i]}"
+        printf "  ${DIM}├─${NC} ${W}%s${NC} ${DIM}❯${NC} ${C}%-20s${NC} ${G}%s${NC}\n" "$i" "$name" "$ip"
+    done
+    echo -ne "  ${DIM}└─${NC} ${C}Select index [q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    mt_valid_index "$choice" "${#records[@]}" || return 1
+    IFS='|' read -r MP_BH_NAME MP_BH_IP MP_BH_META <<< "${records[$((10#$choice))]}"
+    MP_BH_PUBLIC_PORTS=""
+    local -a pairs=(); IFS=, read -ra pairs <<< "$(read_conf_value "$MP_BH_META" BACKEND_PORTS)"
+    for pair in "${pairs[@]}"; do
+        MP_BH_PUBLIC_PORTS+="${MP_BH_PUBLIC_PORTS:+,}${pair%:*}"
+        printf "  ${DIM}├─${NC} ${W}%-5s${NC} ${DIM}❯${NC} ${G}%s:%s${NC}\n" "${pair%:*}" "$MP_BH_IP" "${pair##*:}"
+    done
+    echo -e "  ${DIM}Only ports configured in Backhaul can be selected; the local destination port is automatic.${NC}"
+}
+
+mp_bh_redirect_rules() {
+    local ip="$1" p="$2" rp="$3" meta="$4" bin bind
+    valid_ipv4 "$ip" && [[ "$ip" == 127.77.* ]] && valid_port "$p" && valid_port "$rp" || return 1
+    bind=$(read_conf_value "$meta" BACKEND_BIND)
+    local -a bins=(iptables); [ "$bind" != :: ] || bins+=(ip6tables)
+    for bin in "${bins[@]}"; do
+        command -v "$bin" >/dev/null 2>&1 || return 1
+        printf '%s\n' "$bin -w 5 -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$ip\" -j REDIRECT --to-ports $rp"
+        printf '%s\n' "$bin -w 5 -t nat -A OUTPUT -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$ip\" -j REDIRECT --to-ports $rp"
+    done
+}
+
 collect_mappings() {
     if [ -f "$H_CONF" ]; then
         awk '/^[^ \t#]/ {b=""}
@@ -1045,6 +1118,9 @@ collect_mappings() {
         [ -f "$R_CONF" ] && jq -r '.endpoints[]? | select(.listen and .remote) | (.listen|tostring|split(":")|last) as $p | (.remote|tostring|capture("^\\[?(?<ip>[^\\]]+?)\\]?:(?<rp>[0-9]+)$")) as $r | "\($p)|\($r.ip|ascii_downcase)|\($r.rp)|RLM"' "$R_CONF" 2>/dev/null
     fi
     [ -f "$IPT_CONF" ] && grep -E -- '-A PREROUTING' "$IPT_CONF" 2>/dev/null | sed -nE 's/.*--dport ([0-9]+) .*MPORTER_NAT_([0-9a-fA-F:.]+)\\?".*--to-destination \[?[0-9a-fA-F:.]+\]?:([0-9]+).*/\1|\2|\3|IPT/p'
+    # IPv4 REDIRECT is the canonical row; optional IPv6 rule has the same target.
+    [ -f "$IPT_CONF" ] && sed -nE 's/^iptables .*--dport ([0-9]+) .*MPORTER_NAT_(127\.77\.[0-9]+\.[0-9]+)".*-j REDIRECT --to-ports ([0-9]+).*/\1|\2|\3|IPT/p' "$IPT_CONF" | awk -F'|' '!seen[$0]++'
+    return 0
 }
 
 # OBFS targets "ip|port" (v11 tags + legacy v10 lines)
@@ -1414,9 +1490,10 @@ purge_port_core() {
 build_iptables_runner() {
     cat <<'EOF_IPT' > /usr/local/bin/mporter-iptables.sh
 #!/bin/bash
+set -e
 for bin in iptables ip6tables; do
     command -v "$bin" >/dev/null 2>&1 || continue
-    for spec in "nat PREROUTING" "nat POSTROUTING" "filter FORWARD"; do
+    for spec in "nat PREROUTING" "nat OUTPUT" "nat POSTROUTING" "filter FORWARD"; do
         set -- $spec
         "$bin" -t "$1" -L "$2" -n --line-numbers 2>/dev/null | awk -v tag="MPORTER_NAT_" '$1~/^[0-9]+$/ && index($0,tag){print $1}' | sort -rn | while read -r num; do "$bin" -w 5 -t "$1" -D "$2" "$num"; done
     done
@@ -1685,7 +1762,8 @@ show_health_matrix() {
 # ==========================================================
 
 get_iface_info() {
-    local target_ip=$1 iface subnet
+    local target_ip=$1 iface subnet meta
+    if meta=$(mp_bh_meta_for_ip "$target_ip"); then echo "BACKHAUL|$(basename "$meta" .meta)"; return; fi
     iface=$(route_dev "$target_ip")
     if [ -z "$iface" ] || [ "$iface" == "lo" ]; then
         local check_iface=""
@@ -1743,7 +1821,7 @@ format_engine() {
 
 # "port|ip|ENGINE" for every mapping incl. tunnel Core-NAT, loopback excluded
 all_mapping_rows() {
-    { collect_mappings | awk -F'|' '{print $1"|"$2"|"$4}'; tunnel_ext_entries; } | awk -F'|' 'NF==3 && $2 !~ /^127\./ && $2 != "::1"' | sort -u
+    { collect_mappings | awk -F'|' '{print $1"|"$2"|"$4}'; tunnel_ext_entries; } | awk -F'|' 'NF==3 && $2 != "127.0.0.1" && $2 != "::1"' | sort -u
 }
 
 get_stats() {
@@ -1857,7 +1935,18 @@ smart_map() {
     local gre_ifs=(); mapfile -t gre_ifs < <(tunnel_ifaces)
     local target_ip="" selected_if="Manual" is_auto_all=false auto_peers=() if_choice ip_choice custom_target
 
-    if [ ${#gre_ifs[@]} -eq 0 ]; then
+    local bh_meta="" bh_choice="" rp
+    MP_BH_META=""; MP_BH_IP=""; MP_BH_PUBLIC_PORTS=""
+    if [ -n "$(mp_bh_records)" ]; then
+        echo -e "\n  ${DIM}├─${NC} ${W}b${NC} ${DIM}❯${NC} ${M}Backhaul Targets${NC}"
+        echo -ne "  ${C}Destination [b: Backhaul, Enter: Interfaces / Manual] ❯❯ ${NC}"; read -r bh_choice
+        if [[ "$bh_choice" = b || "$bh_choice" = B ]]; then
+            mp_bh_choose_target || return
+            bh_meta="$MP_BH_META"; target_ip="$MP_BH_IP"; selected_if=lo
+        elif [ -n "$bh_choice" ]; then return; fi
+    fi
+    if [ -n "$bh_meta" ]; then :
+    elif [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -ne "  ${DIM}╰─❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read -r target_ip
     else
         echo -e "\n  ${B}╭────────────────── Available Interfaces ────────────────────╮${NC}"
@@ -1902,14 +1991,31 @@ smart_map() {
     target_ip="${target_ip//[[:space:]]/}"; target_ip="${target_ip#[}"; target_ip="${target_ip%]}"; target_ip="${target_ip,,}"
     if [ "$is_auto_all" = false ] && ! valid_target_ip "$target_ip"; then echo -e "  ${R}● Invalid IP format! (IPv4 or global/ULA IPv6; link-local is not allowed)${NC}"; sleep 1.5; return; fi
 
+    if [ "$is_auto_all" = false ] && [ -z "$bh_meta" ] && bh_meta=$(mp_bh_meta_for_ip "$target_ip"); then selected_if=lo; fi
+    if [ -n "$bh_meta" ]; then
+        local -a bh_pairs=(); local pair
+        MP_BH_PUBLIC_PORTS=""; IFS=, read -ra bh_pairs <<< "$(read_conf_value "$bh_meta" BACKEND_PORTS)"
+        for pair in "${bh_pairs[@]}"; do MP_BH_PUBLIC_PORTS+="${MP_BH_PUBLIC_PORTS:+,}${pair%:*}"; done
+        systemctl is-active --quiet "mbackhaul@$(basename "$bh_meta" .meta)" || { echo -e "  ${R}● Start this Backhaul tunnel first.${NC}"; sleep 2; return; }
+    elif [[ "$target_ip" == 127.77.* ]]; then
+        echo -e "  ${R}● This reserved Backhaul address is not registered.${NC}"; sleep 2; return
+    fi
     local raw_ports clean_ports
-    echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443): ${NC}"; read -r raw_ports
+    echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443)${MP_BH_PUBLIC_PORTS:+ [Enter: $MP_BH_PUBLIC_PORTS]}: ${NC}"; read -r raw_ports
+    raw_ports="${raw_ports:-$MP_BH_PUBLIC_PORTS}"
     clean_ports=$(parse_ports "$raw_ports")
+    if [ -n "$bh_meta" ]; then
+        for p in $clean_ports; do
+            mp_bh_target_port "$bh_meta" "$p" >/dev/null || { echo -e "  ${R}● Port $p is not configured in Backhaul.${NC}"; sleep 2; return; }
+        done
+    fi
     [ -n "$clean_ports" ] || { echo -e "  ${R}● No valid ports (1-65535).${NC}"; sleep 1.5; return; }
 
     echo -e "\n  ${Y}● Applying Strict 1-to-1 Mappings...${NC}"
     echo -e "  ${B}╭──────────────┬─────────┬────────────────────────────────────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "Local Port" "Engine" "Target IP"
+    local target_title="Target IP"
+    [ -z "$bh_meta" ] || target_title="Target IP / Port"
+    printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "Local Port" "Engine" "$target_title"
     echo -e "  ${B}├──────────────┼─────────┼────────────────────────────────────────────┤${NC}"
 
     declare -A map_target=()
@@ -1918,27 +2024,36 @@ smart_map() {
         1) work=$(mp_tmp hap); cp -f "$H_CONF" "$work"; eng_name="HAProxy" ;;
         2) work=$(mp_tmp gost); cp -f "$G_CONF" "$work"; eng_name="Gost" ;;
         3) work=$(mp_tmp realm); cp -f "$R_CONF" "$work"; eng_name="Realm" ;;
-        4) eng_name="Iptable" ;;
+        4) work=$(mp_tmp ipt); cp -f "$IPT_CONF" "$work"; eng_name="Iptable" ;;
     esac
 
     for p in $clean_ports; do
         t="$target_ip"
         [ "$is_auto_all" = true ] && t="${auto_peers[$((port_idx % ${#auto_peers[@]}))]}"
+        rp="$p"
+        [ -z "$bh_meta" ] || rp=$(mp_bh_target_port "$bh_meta" "$p") || return
         owner=$(port_owner "$p")
         if [ -n "$owner" ]; then printf "  ${B}│${NC} ${R}%-12s${NC} ${B}│${NC} ${DIM}%-7s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "$p" "-" "Skipped ($owner)"; continue; fi
         case "$fwd_engine" in
-            1) printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind *:$p" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    server srv_$p $(hap_addr "$t" "$p") check inter 5s" >> "$work" ;;
-            2) jq --arg node "tcp://:$p/$(hostport "$t" "$p")" '.ServeNodes = ((.ServeNodes // []) + [$node])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
-            3) jq --arg lp "0.0.0.0:$p" --arg rp "$(hostport "$t" "$p")" '.endpoints = ((.endpoints // []) + [{listen:$lp, remote:$rp}])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
-            4) local ipb; ipb=$(ipt_bin_for "$t")
-               ipt_add+="$ipb -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$t\" -j DNAT --to-destination $(hostport "$t" "$p")"$'\n'
+            1) printf '%s\n' "frontend ft_$p" "    mode tcp" "    bind *:$p" "    default_backend bk_$p" "backend bk_$p" "    mode tcp" "    server srv_$p $(hap_addr "$t" "$rp") check inter 5s" >> "$work" ;;
+            2) jq --arg node "tcp://:$p/$(hostport "$t" "$rp")" '.ServeNodes = ((.ServeNodes // []) + [$node])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
+            3) jq --arg lp "0.0.0.0:$p" --arg rp "$(hostport "$t" "$rp")" '.endpoints = ((.endpoints // []) + [{listen:$lp, remote:$rp}])' "$work" > "$work.n" && mv -f "$work.n" "$work" ;;
+            4) if [ -n "$bh_meta" ]; then
+                   local rules; rules=$(mp_bh_redirect_rules "$t" "$p" "$rp" "$bh_meta") || return
+                   ipt_add+="$rules"$'\n'
+               else
+               local ipb; ipb=$(ipt_bin_for "$t")
+               ipt_add+="$ipb -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$t\" -j DNAT --to-destination $(hostport "$t" "$rp")"$'\n'
                ipt_add+="$ipb -t nat -A POSTROUTING -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j MASQUERADE"$'\n'
                ipt_add+="$ipb -I FORWARD -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
                ipt_add+="$ipb -I FORWARD -s $t -p tcp --sport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
-               if is_v6 "$t"; then enable_v6_forwarding; command -v ip6tables >/dev/null 2>&1 || echo -e "  ${Y}⚠ ip6tables not found: IPv6 Kernel NAT rule for $t will not apply.${NC}"; fi ;;
+               if is_v6 "$t"; then enable_v6_forwarding; command -v ip6tables >/dev/null 2>&1 || echo -e "  ${Y}⚠ ip6tables not found: IPv6 Kernel NAT rule for $t will not apply.${NC}"; fi
+               fi ;;
         esac
         map_target[$p]="$t"; mapped_ports+=("$p")
-        printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "$eng_name" "$t"
+        local display_target="$t"
+        [ -z "$bh_meta" ] || display_target="$(hostport "$t" "$rp")"
+        printf "  ${B}│${NC} ${G}%-12s${NC} ${B}│${NC} ${C}%-7s${NC} ${B}│${NC} ${W}%-42s${NC} ${B}│${NC}\n" "$p" "$eng_name" "$display_target"
         port_idx=$((port_idx + 1))
     done
     echo -e "  ${B}╰──────────────┴─────────┴────────────────────────────────────────────╯${NC}"
@@ -1952,7 +2067,15 @@ smart_map() {
         1) hap_commit "$work" || ok=false ;;
         2) json_engine_commit "$G_CONF" "$work" gost || ok=false ;;
         3) json_engine_commit "$R_CONF" "$work" realm || ok=false ;;
-        4) printf '%s' "$ipt_add" >> "$IPT_CONF"; systemctl restart mporter-iptables >/dev/null 2>&1 || ok=false ;;
+        4) local previous; previous=$(mp_tmp ipt-backup)
+           cp -p "$IPT_CONF" "$previous"
+           printf '%s' "$ipt_add" >> "$work"
+           build_iptables_runner >/dev/null 2>&1
+           if ! bash -n "$work" || ! mt_install_files 750 "$work" "$IPT_CONF" || ! systemctl restart mporter-iptables || ! systemctl is-active --quiet mporter-iptables; then
+               mt_install_files 750 "$previous" "$IPT_CONF" && systemctl restart mporter-iptables >/dev/null 2>&1
+               ok=false
+           fi
+           rm -f "$previous" "$work" ;;
     esac
     if [ "$ok" = false ]; then
         echo -e "  ${R}✖ Engine failed to apply the change; previous configuration restored.${NC}"
@@ -1960,14 +2083,14 @@ smart_map() {
     fi
     setup_mporter_service
 
-    if [ "$fwd_engine" == "1" ] || [ "$fwd_engine" == "4" ]; then
+    if [ -z "$bh_meta" ] && { [ "$fwd_engine" == "1" ] || [ "$fwd_engine" == "4" ]; }; then
         local enable_obfs; echo -ne "\n  ${C}●${NC} ${W}Enable Strict OBFS Stealth for these ports? (y/n): ${NC}"; read -r enable_obfs
         if [[ "${enable_obfs,,}" == "y" ]]; then obfs_setup "$fwd_engine" "$selected_if" map_target "${mapped_ports[@]}"; fi
     fi
 
     state_reconcile >/dev/null 2>&1 || true
     state_sync_interface_metadata >/dev/null 2>&1 || true
-    [ "$selected_if" != "Manual" ] && apply_scoped_mss "$selected_if"
+    [ -z "$bh_meta" ] && [ "$selected_if" != "Manual" ] && apply_scoped_mss "$selected_if"
     echo -ne "\n  ${G}● Success! Press Enter...${NC}"; read -r _
 }
 
@@ -2279,6 +2402,9 @@ mp_replace_target_ip() { # replace this IP in every MPorter-owned mapping/pool
     local old new rows affected stage failed=0 idx kind path candidate backup
     old=$(mt_normalize_host "$1"); new=$(mt_normalize_host "$2")
     valid_target_ip "$old" && valid_target_ip "$new" && [ "$old" != "$new" ] || return 1
+    if [[ "$old" == 127.77.* || "$new" == 127.77.* ]]; then
+        echo 'Backhaul destinations have dedicated port mappings. Remove and re-add through the Backhaul target selector.' >&2; return 1
+    fi
     command -v jq >/dev/null 2>&1 || return 1
     state_init || return 1
     state_lock || return 1
@@ -2396,7 +2522,7 @@ change_target_ip_menu() {
     echo -e "\n  ${DIM}┌─[ CHANGE TARGET IP ]${NC}"
     local rows=() ips=() old new idx confirm ports row
     mapfile -t rows < <(collect_mappings)
-    mapfile -t ips < <(printf '%s\n' "${rows[@]}" | awk -F'|' 'NF==4 && $2!~/^127\./ && $2!="::1" {print $2}' | sort -u)
+    mapfile -t ips < <(printf '%s\n' "${rows[@]}" | awk -F'|' 'NF==4 && $2!="127.0.0.1" && $2!="::1" {print $2}' | sort -u)
     [ ${#ips[@]} -gt 0 ] || { echo -e "  ${Y}● No managed target IPs found.${NC}"; sleep 1.5; return 0; }
     for idx in "${!ips[@]}"; do
         ports=$(printf '%s\n' "${rows[@]}" | awk -F'|' -v ip="${ips[$idx]}" '$2==ip {print $1}' | sort -nu | paste -sd,)
@@ -2408,6 +2534,10 @@ change_target_ip_menu() {
     [[ "$idx" =~ ^[0-9]{1,5}$ ]] || { echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; return 0; }
     idx=$((10#$idx)); [ "$idx" -ge 1 ] && [ "$idx" -le "${#ips[@]}" ] || return 0
     old="${ips[$((idx-1))]}"
+    if [[ "$old" == 127.77.* ]]; then
+        echo -e "  ${Y}● Backhaul uses dedicated destination ports. Remove this mapping and select its new Backhaul target in Add Port Mappings.${NC}"
+        echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r _; return 0
+    fi
     echo -ne "  ${C}●${NC} ${W}New Target IP (IPv4/IPv6 | q: cancel): ${NC}"; read -r new || return 0
     case "$new" in q|Q|'') return 0;; esac
     new=$(mt_normalize_host "$new")
@@ -2435,7 +2565,7 @@ edit_mapping() {
     case "$e_opt" in
         1) smart_map ;;
         2)
-            local rows=(); mapfile -t rows < <(collect_mappings | awk -F'|' '$2 !~ /^127\./ && $2 != "::1" {print $1"|"$4}' | sort -u | awk -F'|' '{a[$1]=a[$1] (a[$1]?"/":"") $2} END {for (k in a) print k"|"a[k]}' | sort -t'|' -k1,1n)
+            local rows=(); mapfile -t rows < <(collect_mappings | awk -F'|' '$2 != "127.0.0.1" && $2 != "::1" {print $1"|"$4}' | sort -u | awk -F'|' '{a[$1]=a[$1] (a[$1]?"/":"") $2} END {for (k in a) print k"|"a[k]}' | sort -t'|' -k1,1n)
             [ ${#rows[@]} -gt 0 ] || { echo -e "  ${R}● No MPorter mappings found.${NC}"; sleep 1.5; return; }
             echo -e "\n  ${B}╭────────────── Local Ports ──────────────╮${NC}"
             local i; for i in "${!rows[@]}"; do printf "  ${B}│${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-7s${NC} ${DIM}%-24s${NC} ${B}│${NC}\n" "$i" "${rows[$i]%%|*}" "${rows[$i]#*|}"; done
@@ -2473,7 +2603,7 @@ purge_menu() {
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     local p_opt idx confirm; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r p_opt; p_opt="${p_opt//[^0-3]/}"
 
-    local all_ips; all_ips=$(collect_mappings | cut -d'|' -f2 | grep -v -E '^(127\.|::1$)' | sort -uV)
+    local all_ips; all_ips=$(collect_mappings | cut -d'|' -f2 | grep -v -E '^(127\.0\.0\.1|::1)$' | sort -uV)
 
     case $p_opt in
         1)
@@ -2599,7 +2729,7 @@ nuclear_wipe() {
     for u in haproxy gost realm mporter-obfs mporter-iptables mporter-watchdog mporter; do systemctl stop "$u" 2>/dev/null; systemctl disable "$u" 2>/dev/null; done
     DEBIAN_FRONTEND=noninteractive apt-get purge "${APT_OPTS[@]}" haproxy >/dev/null 2>&1
     obfs_flush_rules
-    ipt_flush_tag nat PREROUTING MPORTER_NAT_; ipt_flush_tag nat POSTROUTING MPORTER_NAT_; ipt_flush_tag filter FORWARD MPORTER_NAT_
+    ipt_flush_tag nat PREROUTING MPORTER_NAT_; ipt_flush_tag nat OUTPUT MPORTER_NAT_; ipt_flush_tag nat POSTROUTING MPORTER_NAT_; ipt_flush_tag filter FORWARD MPORTER_NAT_
     ipt_flush_tag mangle OUTPUT MPORTER_MSS_; ipt_flush_tag mangle FORWARD MPORTER_MSS_
     rm -f /etc/sysctl.d/99-mporter-ipv6.conf
     rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /usr/local/bin/realm /etc/realm "$OBFS_DIR" "$IPT_DIR" "$STATE_DIR" "$SECURE_TMP" "$HEALTH_FILE" \
@@ -2614,6 +2744,11 @@ nuclear_wipe() {
 # ==========================================================
 
 case "${1:-}" in
+    --backhaul-in-use)
+        [[ "${2:-}" == 127.77.* ]] && valid_ipv4 "$2" || exit 2
+        if [ -s "$G_CONF" ] || [ -s "$R_CONF" ]; then command -v jq >/dev/null 2>&1 || exit 2; fi
+        collect_mappings | awk -F'|' -v ip="$2" '$2==ip {found=1} END {exit !found}'
+        exit $? ;;
     --health-scan) health_scan; exit 0 ;;
     --boot-apply)  mss_reapply_all; exit 0 ;;
     --state-sync)  state_reconcile; rc=$?; state_sync_interface_metadata; exit $rc ;;
@@ -2626,7 +2761,10 @@ case "${1:-}" in
         state_sync_interface_metadata >/dev/null 2>&1 || true
         if command -v jq >/dev/null 2>&1 && [ -s "$STATE_FILE" ]; then
             mapfile -t orphan_ips < <(jq -r '.mappings[]? | select(.interface != "" and .interface != "unknown") | [.target_ip, .interface] | @tsv' "$STATE_FILE" 2>/dev/null | \
-                while IFS=$'\t' read -r ip iface; do ip link show "$iface" >/dev/null 2>&1 || echo "$ip"; done | sort -u)
+                while IFS=$'\t' read -r ip iface; do
+                    if [[ "$ip" == 127.77.* ]]; then mp_bh_meta_for_ip "$ip" >/dev/null || echo "$ip"
+                    else ip link show "$iface" >/dev/null 2>&1 || echo "$ip"; fi
+                done | sort -u)
             for ip in "${orphan_ips[@]}"; do [ -n "$ip" ] && purge_ip_core "$ip"; done
             [ ${#orphan_ips[@]} -gt 0 ] && restart_all_engines
         fi

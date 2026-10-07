@@ -2,7 +2,7 @@
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="12.0.5"
+MODULE_VERSION="12.0.6"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -653,6 +653,8 @@ ensure_dependencies() {
     local missing=()
     command -v crontab >/dev/null 2>&1 || missing+=("cron")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
+    command -v iptables >/dev/null 2>&1 || missing+=("iptables")
+    command -v flock >/dev/null 2>&1 || missing+=("util-linux")
     if [ ${#missing[@]} -gt 0 ]; then
         apt-get update -y -q >/dev/null 2>&1
         apt-get install -y -q "${missing[@]}" >/dev/null 2>&1
@@ -995,6 +997,230 @@ zero_bh_counters() {
     done
 }
 
+# Backhaul remains the transport; external forwarders use separate local ingress ports.
+bh_meta_value() {
+    [ -f "$2" ] || return 0
+    mt_config_value "$1" "$2"
+}
+
+bh_expanded_ports() {
+    local list="$1" bind="$2" raw lhs rhs host start end p
+    local -a items=(); IFS=, read -ra items <<< "$list"
+    for raw in "${items[@]}"; do
+        raw="${raw// /}"; lhs="${raw%%=*}"; rhs=""
+        [[ "$raw" != *=* ]] || rhs="${raw#*=}"
+        host="$bind"
+        if [[ "$lhs" == *:* ]]; then
+            host=$(mt_normalize_host "${lhs%:*}"); start="${lhs##*:}"; end="$start"
+        else start="${lhs%-*}"; end="${lhs#*-}"; fi
+        for ((p=10#$start;p<=10#$end;p++)); do
+            printf '%s|%s|%s\n' "$p" "$host" "${rhs:-127.0.0.1:$p}"
+        done
+    done
+}
+
+bh_choose_forwarder() {
+    local choice current="${1:-backhaul}"
+    echo -e "\n  ${DIM}┌─[ FORWARDING ENGINE ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Backhaul (Built-in TCP / UDP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}iptables (TCP / UDP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}MPorter (Select its TCP engine separately)${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Select [Enter: ${current}, q: cancel] ❯❯ ${NC}"
+    read -r choice || return 1
+    case "${choice//$'\r'/}" in
+        1) BH_FORWARDER=backhaul;; 2) BH_FORWARDER=iptables;; 3) BH_FORWARDER=mporter;;
+        '') BH_FORWARDER="$current";; *) return 1;;
+    esac
+}
+
+bh_backend_in_use() {
+    local ip rc; ip=$(bh_meta_value BACKEND_IP "$CONF_DIR/$1.meta")
+    [[ "$ip" == 127.77.* ]] && [ -x /usr/bin/mporter ] || return 1
+    # Older MPorter has no read-only probe; don't accidentally open its menu.
+    grep -q '^mp_bh_records()' /usr/bin/mporter || return 0
+    /usr/bin/mporter --backhaul-in-use "$ip"; rc=$?
+    [ "$rc" != 1 ]
+}
+
+bh_prepare_backend() {
+    # Called while the config writer holds the allocation lock.
+    local name="$1" ports="$2" bind="$3" link_port="$4" conf spec pair public host rhs candidate n ip
+    local -a pairs=()
+    local old; old=$(bh_meta_value BACKEND_PORTS "$CONF_DIR/$name.meta")
+    BH_BACKEND_IP=$(bh_meta_value BACKEND_IP "$CONF_DIR/$name.meta")
+    local -A reserved=() old_ports=() ips=() publics=()
+    while IFS='|' read -r public host rhs; do publics[$public]=1; done < <(bh_expanded_ports "$ports" "$bind")
+    [ "${#publics[@]}" -le 1024 ] || { echo 'External forwarding supports up to 1024 ports per tunnel.' >&2; return 1; }
+    for conf in "$CONF_DIR"/*.meta; do
+        [ -f "$conf" ] || continue
+        ip=$(bh_meta_value BACKEND_IP "$conf"); [ -z "$ip" ] || ips[$ip]=1
+        n=$(bh_meta_value TUN_PORT "$conf"); if mt_valid_port "$n"; then reserved[$n]=1; fi
+        while IFS='|' read -r public host rhs; do reserved[$public]=1; done < <(bh_expanded_ports "$(bh_meta_value PORTS "$conf")" "$(bh_meta_value BIND_HOST "$conf")")
+        spec=$(bh_meta_value BACKEND_PORTS "$conf")
+        IFS=, read -ra pairs <<< "$spec"
+        for pair in "${pairs[@]}"; do
+            public="${pair%:*}"; n="${pair##*:}"
+            mt_valid_port "$public" && mt_valid_port "$n" || continue
+            if [ "$conf" = "$CONF_DIR/$name.meta" ]; then old_ports[$public]="$n"; fi
+            reserved[$n]=1
+        done
+    done
+    if ! [[ "$BH_BACKEND_IP" =~ ^127\.77\.[0-9]+\.[0-9]+$ ]] || ! mt_valid_ipv4 "$BH_BACKEND_IP"; then
+        BH_BACKEND_IP=""
+        for ((n=1;n<65535;n++)); do
+            ip="127.77.$((n/256)).$((n%256))"
+            [ -n "${ips[$ip]:-}" ] || { BH_BACKEND_IP="$ip"; break; }
+        done
+    fi
+    [ -n "$BH_BACKEND_IP" ] || return 1
+    BH_BACKEND_PORTS=""; BH_BACKEND_LINES=""; candidate=45000
+    BH_BACKEND_BIND=0.0.0.0
+    if [ -r /proc/net/if_inet6 ] && grep -q . /proc/net/if_inet6; then BH_BACKEND_BIND=::; fi
+    command -v iptables >/dev/null 2>&1 || { echo 'Install iptables before selecting an external forwarder.' >&2; return 1; }
+    [ "$BH_BACKEND_BIND" != :: ] || command -v ip6tables >/dev/null 2>&1 || return 1
+    while IFS='|' read -r public host rhs; do
+        n="${old_ports[$public]:-}"
+        if [ -n "$n" ] && { [ "$n" = "$link_port" ] || [ -n "${publics[$n]:-}" ]; }; then
+            if bh_backend_in_use "$name"; then
+                echo 'An existing backend port conflicts with a requested port. Remove its MPorter mappings first.' >&2; return 1
+            fi
+            n=""
+        fi
+        if [ -z "$n" ]; then
+            while [ "$candidate" -le 60999 ]; do
+                if [ -z "${reserved[$candidate]:-}" ] && [ -z "${publics[$candidate]:-}" ] && [ "$candidate" != "$link_port" ] && ! mt_port_busy "$candidate" any; then break; fi
+                candidate=$((candidate+1))
+            done
+            [ "$candidate" -le 60999 ] || { echo 'No free backend ports in 45000-60999.' >&2; return 1; }
+            n="$candidate"; reserved[$n]=1; candidate=$((candidate+1))
+        fi
+        BH_BACKEND_PORTS+="${BH_BACKEND_PORTS:+,}$public:$n"
+        BH_BACKEND_LINES+="${BH_BACKEND_LINES:+, }\"$(mt_hostport "$BH_BACKEND_BIND" "$n")=$rhs\""
+    done < <(bh_expanded_ports "$ports" "$bind")
+}
+
+bh_show_forwarder() {
+    local name="$1" meta="$CONF_DIR/$1.meta" mode ip pair
+    mode=$(bh_meta_value FORWARDER "$meta")
+    echo -e "  ${DIM}├─${NC} ${W}Forwarder:${NC} ${C}${mode:-backhaul}${NC}"
+    [ "$mode" = mporter ] || return 0
+    ip=$(bh_meta_value BACKEND_IP "$meta")
+    echo -e "  ${DIM}├─${NC} ${W}MPorter Target IP:${NC} ${G}$ip${NC} ${DIM}(this server only)${NC}"
+    local -a pairs=(); IFS=, read -ra pairs <<< "$(bh_meta_value BACKEND_PORTS "$meta")"
+    for pair in "${pairs[@]}"; do
+        printf "  ${DIM}├─${NC} ${W}%-5s${NC} ${DIM}❯${NC} ${G}%s:%s${NC} ${DIM}(TCP)${NC}\n" "${pair%:*}" "$ip" "${pair##*:}"
+    done
+    echo -e "  ${DIM}└─${NC} ${W}Open MPorter > Add Port Mappings > Backhaul Targets; ports are matched automatically.${NC}"
+}
+
+bh_forward_chain() {
+    local hash; hash=$(printf '%s' "$1" | sha256sum); printf 'MBHF_%s' "${hash:0:16}"
+}
+
+bh_clear_forwarder() {
+    [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    local chain bin parent table; chain=$(bh_forward_chain "$1")
+    for bin in iptables ip6tables; do
+        command -v "$bin" >/dev/null 2>&1 || continue
+        for table in filter nat; do
+            if [ "$table" = filter ]; then
+                while "$bin" -w 5 -t filter -C INPUT -j "${chain}G" 2>/dev/null; do "$bin" -w 5 -t filter -D INPUT -j "${chain}G" || return 1; done
+                "$bin" -w 5 -t filter -F "${chain}G" 2>/dev/null || true
+                "$bin" -w 5 -t filter -X "${chain}G" 2>/dev/null || true
+            else
+                for parent in PREROUTING OUTPUT; do
+                    while "$bin" -w 5 -t nat -C "$parent" -j "$chain" 2>/dev/null; do "$bin" -w 5 -t nat -D "$parent" -j "$chain" || return 1; done
+                done
+                "$bin" -w 5 -t nat -F "$chain" 2>/dev/null || true
+                "$bin" -w 5 -t nat -X "$chain" 2>/dev/null || true
+            fi
+        done
+    done
+}
+
+bh_apply_forwarder() {
+    [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    local name="$1" meta="$CONF_DIR/$1.meta" mode bind spec pair public private host rhs bin proto chain
+    [ -f "$meta" ] || return 1
+    mode=$(bh_meta_value FORWARDER "$meta"); mode="${mode:-backhaul}"
+    [[ "$mode" =~ ^(backhaul|iptables|mporter)$ ]] || return 1
+    bh_clear_forwarder "$name" || return 1
+    [ "$mode" != backhaul ] && [ "$(bh_meta_value ROLE "$meta")" = 1 ] || return 0
+    bind=$(bh_meta_value BACKEND_BIND "$meta"); [[ "$bind" = :: || "$bind" = 0.0.0.0 ]] || return 1
+    spec=$(bh_meta_value BACKEND_PORTS "$meta"); [ -n "$spec" ] || return 1
+    local -a pairs=() bins=(iptables) protos=(tcp) match=(); IFS=, read -ra pairs <<< "$spec"
+    [ "$bind" != :: ] || bins+=(ip6tables)
+    [ "$(bh_meta_value ENABLE_UDP "$meta")" != true ] || protos+=(udp)
+    chain=$(bh_forward_chain "$name")
+    for bin in "${bins[@]}"; do
+        command -v "$bin" >/dev/null 2>&1 || return 1
+        # Guard is installed before the process listens; private ingress is local/DNAT only.
+        "$bin" -w 5 -t filter -N "${chain}G" || return 1
+        for pair in "${pairs[@]}"; do
+            public="${pair%:*}"; private="${pair##*:}"
+            mt_valid_port "$public" && mt_valid_port "$private" || return 1
+            for proto in "${protos[@]}"; do
+                "$bin" -w 5 -t filter -A "${chain}G" -i lo -p "$proto" --dport "$private" -j ACCEPT || return 1
+                "$bin" -w 5 -t filter -A "${chain}G" -p "$proto" --dport "$private" -m conntrack --ctstatus DNAT -j ACCEPT || return 1
+                "$bin" -w 5 -t filter -A "${chain}G" -p "$proto" --dport "$private" -j DROP || return 1
+            done
+        done
+        "$bin" -w 5 -t filter -I INPUT 1 -j "${chain}G" || return 1
+        [ "$mode" = iptables ] || continue
+        "$bin" -w 5 -t nat -N "$chain" || return 1
+        while IFS='|' read -r public host rhs; do
+            if [ "$bin" = ip6tables ]; then mt_valid_ipv6 "$host" || continue
+            else [ "$host" = :: ] || mt_valid_ipv4 "$host" || continue; fi
+            private=""
+            for pair in "${pairs[@]}"; do [ "${pair%:*}" != "$public" ] || private="${pair##*:}"; done
+            mt_valid_port "$private" || return 1
+            match=(); [[ "$host" = 0.0.0.0 || "$host" = :: ]] || match=(-d "$host")
+            for proto in "${protos[@]}"; do
+                "$bin" -w 5 -t nat -A "$chain" "${match[@]}" -p "$proto" --dport "$public" -m addrtype --dst-type LOCAL -j REDIRECT --to-ports "$private" || return 1
+            done
+        done < <(bh_expanded_ports "$(bh_meta_value PORTS "$meta")" "$(bh_meta_value BIND_HOST "$meta")")
+        "$bin" -w 5 -t nat -A PREROUTING -j "$chain" || return 1
+        "$bin" -w 5 -t nat -A OUTPUT -j "$chain" || return 1
+    done
+}
+
+bh_delete_forwarder() {
+    local ip; ip=$(bh_meta_value BACKEND_IP "$CONF_DIR/$1.meta")
+    if [[ "$ip" == 127.77.* ]] && [ -x /usr/bin/mporter ]; then
+        /usr/bin/mporter --purge-ip "$ip" || return 1
+        bh_backend_in_use "$1" && { echo 'MPorter still uses this target; deletion cancelled.' >&2; return 1; }
+    fi
+    bh_clear_forwarder "$1"
+}
+
+bh_activate_config() {
+    local name="$1" saved rc=0 existing=false
+    saved=$(mktemp -d "$SECURE_TMP/bh-rollback.XXXXXX") || return 1
+    if [ -f "$CONF_DIR/$name.meta" ] && [ -f "$CONF_DIR/$name.toml" ]; then
+        cp -p "$CONF_DIR/$name.meta" "$saved/meta" && cp -p "$CONF_DIR/$name.toml" "$saved/config" || { rm -rf "$saved"; return 1; }
+        existing=true
+    fi
+    if ! write_bh_config "$@"; then rm -rf "$saved"; return 1; fi
+    systemctl restart "mbackhaul@$name" && systemctl is-active --quiet "mbackhaul@$name" || rc=1
+    if [ "$rc" != 0 ] && [ "$existing" = true ]; then
+        systemctl stop "mbackhaul@$name" >/dev/null 2>&1 || true
+        if mt_install_files 600 "$saved/meta" "$CONF_DIR/$name.meta" "$saved/config" "$CONF_DIR/$name.toml" && systemctl restart "mbackhaul@$name" && systemctl is-active --quiet "mbackhaul@$name"; then
+            clean_bh_counters "$name"
+            setup_bh_counters "$name" "$(bh_meta_value TUN_PORT "$saved/meta")" "$(bh_meta_value REMOTE_IP "$saved/meta")" "$(bh_meta_value ROLE "$saved/meta")" "$(bh_meta_value BIND_HOST "$saved/meta")"
+            echo 'Forwarder failed to start; previous tunnel configuration restored.' >&2
+        else
+            echo "Rollback failed. Previous configuration is saved in $saved" >&2; return 1
+        fi
+    fi
+    rm -rf "$saved"
+    return "$rc"
+}
+
+case "${1:-}" in
+    --apply-forwarder) bh_apply_forwarder "${2:-}"; exit $?;;
+    --clear-forwarder) bh_clear_forwarder "${2:-}"; exit $?;;
+esac
+
 if [[ "$1" == "--apply" ]]; then
     for conf in "$CONF_DIR"/*.meta; do
         [ -f "$conf" ] || continue
@@ -1092,6 +1318,15 @@ bh_port_lines() {
 }
 
 write_bh_config() {
+    local fd rc
+    exec {fd}>"$CONF_DIR/.forwarder-allocation.lock" || return 1
+    flock -x "$fd" || { exec {fd}>&-; return 1; }
+    bh_write_config_locked "$@"; rc=$?
+    exec {fd}>&-
+    return "$rc"
+}
+
+bh_write_config_locked() {
     local name="$(echo "$1" | tr -d '\r\n')"
     local role="$(echo "$2" | tr -d '\r\n')"
     local transport="$(echo "$3" | tr -d '\r\n')"
@@ -1118,6 +1353,37 @@ write_bh_config() {
     validate_bh_ports "$ports_str" 0 || return 1
     [[ "$name" =~ ^[A-Za-z0-9_-]+$ && "$transport" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux)$ && "$enable_udp" =~ ^(true|false)$ ]] || return 1
     [[ "$token" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    local forwarder="${10:-}" old_forwarder old_ports
+    old_forwarder=$(bh_meta_value FORWARDER "$CONF_DIR/${name}.meta")
+    forwarder="${forwarder:-${old_forwarder:-backhaul}}"
+    [ "$role" = 1 ] || forwarder=backhaul
+    [[ "$forwarder" =~ ^(backhaul|iptables|mporter)$ ]] || return 1
+    local other pair private public host rhs
+    local -A requested=(); local -a pairs=()
+    if [ "$role" = 1 ]; then
+        while IFS='|' read -r public host rhs; do requested[$public]=1; done < <(bh_expanded_ports "$ports_str" "$bind_host")
+    fi
+    for other in "$CONF_DIR"/*.meta; do
+        [ -f "$other" ] && [ "$other" != "$CONF_DIR/$name.meta" ] || continue
+        IFS=, read -ra pairs <<< "$(bh_meta_value BACKEND_PORTS "$other")"
+        for pair in "${pairs[@]}"; do
+            private="${pair##*:}"
+            mt_valid_port "$private" || continue
+            if [ "$port" = "$private" ] || [ -n "${requested[$private]:-}" ]; then
+                echo "Port $private is reserved for $(basename "$other" .meta)'s local backend." >&2; return 1
+            fi
+        done
+    done
+    old_ports=$(bh_meta_value PORTS "$CONF_DIR/${name}.meta")
+    if { [ "$forwarder" != "${old_forwarder:-backhaul}" ] || [ "$ports_str" != "$old_ports" ]; } && bh_backend_in_use "$name"; then
+        echo 'Remove this Backhaul target from MPorter before changing its ports or forwarder.' >&2; return 1
+    fi
+    BH_BACKEND_IP=""; BH_BACKEND_PORTS=""; BH_BACKEND_BIND=""; BH_BACKEND_LINES=""
+    if [ "$forwarder" != backhaul ]; then
+        [ -n "$ports_str" ] || { echo 'External forwarding needs at least one port.' >&2; return 1; }
+        bh_prepare_backend "$name" "$ports_str" "$bind_host" "$port" || return 1
+        if [ "$forwarder" = mporter ]; then enable_udp=false; fi
+    fi
     work=$(mktemp -d "$SECURE_TMP/bh-config.XXXXXX") || return 1
     final_toml="$CONF_DIR/${name}.toml"; final_meta="$CONF_DIR/${name}.meta"
     local toml="$work/config.toml" meta="$work/meta"
@@ -1130,6 +1396,10 @@ write_bh_config() {
     echo "TOKEN=$token" >> "$meta"
     echo "PORTS=$ports_str" >> "$meta"
     echo "ENABLE_UDP=$enable_udp" >> "$meta"
+    echo "FORWARDER=$forwarder" >> "$meta"
+    echo "BACKEND_IP=$BH_BACKEND_IP" >> "$meta"
+    echo "BACKEND_PORTS=$BH_BACKEND_PORTS" >> "$meta"
+    echo "BACKEND_BIND=$BH_BACKEND_BIND" >> "$meta"
 
     > "$toml"
 
@@ -1168,7 +1438,10 @@ write_bh_config() {
         echo "web_port = 0" >> "$toml"
         echo "log_level = \"info\"" >> "$toml"
         
-        local port_lines; port_lines=$(bh_port_lines "$ports_str" "$bind_host") || { rm -rf "$work"; return 1; }
+        local port_lines
+        if [ "$forwarder" = backhaul ]; then
+            port_lines=$(bh_port_lines "$ports_str" "$bind_host") || { rm -rf "$work"; return 1; }
+        else port_lines="$BH_BACKEND_LINES"; fi
         echo "ports = [ ${port_lines} ]" >> "$toml"
 
     else
@@ -1226,7 +1499,9 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=root
+ExecStartPre=/usr/bin/mbackhaul --apply-forwarder %i
 ExecStart=/usr/local/bin/bh -c /etc/mbackhaul/tunnels/%i.toml
+ExecStopPost=/usr/bin/mbackhaul --clear-forwarder %i
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
@@ -1398,7 +1673,7 @@ show_tunnel_registry() {
     for conf in "$CONF_DIR"/*.meta; do
         [ ! -f "$conf" ] && continue
         local t_name=$(basename "$conf" .meta)
-        ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"
+        ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul
         source "$conf" 2>/dev/null
         
         local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
@@ -1472,6 +1747,7 @@ show_tunnel_registry() {
         fi
         
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n"
+        [ "$ROLE" != 1 ] || bh_show_forwarder "$t_name"
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
@@ -1601,6 +1877,11 @@ uninstall_mbackhaul() {
     systemctl disable mbackhaul@* mbackhaul-apply.service 2>/dev/null
     killall -9 bh 2>/dev/null
 
+    local meta
+    for meta in "$CONF_DIR"/*.meta; do
+        [ -f "$meta" ] || continue
+        bh_delete_forwarder "$(basename "$meta" .meta)" || return 1
+    done
     echo -e "  ${DIM}● [2/6] Purging iptables traffic counters...${NC}"
     local bin chain direction
     for bin in iptables ip6tables; do
@@ -1687,7 +1968,7 @@ render_mbackhaul_menu() {
     echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Edit Remote Host / IP Address${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit Port Mappings${NC} ${DIM}(Iran Server)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit Ports / Forwarder${NC} ${DIM}(Iran Server)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Change Transport Protocol${NC} ${DIM}(Hot-Swap)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Auth Token (Secret)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Edit Tunnel Link Port${NC} ${DIM}(Connection Port)${NC}"
@@ -1741,6 +2022,9 @@ while true; do
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. bh1): ${NC}"; read suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            t_name="bh_${suffix}"
+           if [ -f "$CONF_DIR/$t_name.meta" ]; then
+               echo -e "  ${R}● This tunnel name already exists.${NC}"; sleep 2; continue
+           fi
            
            def_p=8443; [ "$tr_val" == "tcpmux" ] && def_p=9443; [ "$tr_val" == "wssmux" ] && def_p=9743
            while true; do
@@ -1792,11 +2076,16 @@ while true; do
                done
            fi
            
-           write_bh_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports" "$u_udp" "$bind_host" || continue
+           BH_FORWARDER=backhaul
+           if [ "$s_type" = 1 ]; then bh_choose_forwarder || continue; fi
            systemctl enable "mbackhaul@${t_name}" >/dev/null 2>&1
-           systemctl restart "mbackhaul@${t_name}"
+           bh_activate_config "$t_name" "$s_type" "$tr_val" "$t_port" "$r_ip" "$tok" "$fwd_ports" "$u_udp" "$bind_host" "$BH_FORWARDER" || { echo -e "  ${R}● Tunnel was not deployed; check the error above.${NC}"; sleep 2; continue; }
            if systemctl is-active --quiet "mbackhaul@${t_name}"; then mt_ask_bbr_on_create; fi
-           echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"; sleep 2 ;;
+           if systemctl is-active --quiet "mbackhaul@${t_name}"; then
+               echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"
+               bh_show_forwarder "$t_name"
+               echo -ne "  ${DIM}Press Enter to continue...${NC}"; read -r _
+           else echo -e "  ${R}● Tunnel failed to start; check its logs.${NC}"; sleep 2; fi ;;
            
         2)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
@@ -1816,6 +2105,7 @@ while true; do
                        crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
                        crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
                    fi
+                   bh_delete_forwarder "$t_name" || continue
                    rm -f "$conf" "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${t_name}_restart.sh"
                done
                echo -e "  ${G}All Tunnels Purged!${NC}"; sleep 1.5
@@ -1829,6 +2119,7 @@ while true; do
                    crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
                    crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
                fi
+               bh_delete_forwarder "$t_name" || continue
                rm -f "${configs[$del_idx]}" "$CONF_DIR/${t_name}.toml" "$CONF_DIR/${t_name}_restart.sh"
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
@@ -1836,7 +2127,7 @@ while true; do
         3|4|5|6|7|8|9|15|16|10)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN" .meta)
-           ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"
+           ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul
            source "$SELECTED_TUN" 2>/dev/null
            [ -z "$ENABLE_UDP" ] && ENABLE_UDP="true"
            
@@ -1857,12 +2148,11 @@ while true; do
                    while true; do
                        echo -ne "  ${C}●${NC} ${W}New Port Mappings (e.g. 443=127.0.0.1:443) [Current: ${PORTS:-None}]: ${NC}"; read n_ports
                        n_ports=$(echo "$n_ports" | tr -d '\r')
-                       if [ -z "$n_ports" ]; then
-                           echo -e "  ${Y}● No changes made.${NC}"; break
-                       fi
+                       if [ -z "$n_ports" ]; then break; fi
                        validate_bh_ports "$n_ports" "1" "$PORTS" && { PORTS="$n_ports"; break; }
                    done
-                   [ -z "$n_ports" ] && continue
+                   bh_choose_forwarder "${FORWARDER:-backhaul}" || continue
+                   FORWARDER="$BH_FORWARDER"
                else
                    echo -e "  ${Y}● Client role doesn't use port mappings.${NC}"; sleep 1.5; continue
                fi
@@ -1914,6 +2204,9 @@ while true; do
 
            elif [[ "$opt" == "8" ]]; then
                if [ "$ROLE" == "1" ]; then
+                   if [ "${FORWARDER:-backhaul}" = mporter ]; then
+                       echo -e "  ${Y}● MPorter forwards TCP here; select Backhaul or iptables for UDP.${NC}"; sleep 2; continue
+                   fi
                    if [ "$ENABLE_UDP" == "true" ]; then
                        ENABLE_UDP="false"
                        echo -e "  ${Y}● UDP forwarding Disabled.${NC}"
@@ -1965,10 +2258,11 @@ while true; do
                zero_bh_counters "$t_name"
            fi
            
-           write_bh_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS" "$ENABLE_UDP" "$BIND_HOST" || continue
-           systemctl restart mbackhaul@$t_name
+           bh_activate_config "$t_name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$PORTS" "$ENABLE_UDP" "$BIND_HOST" "${FORWARDER:-backhaul}" || { sleep 2; continue; }
            if systemctl is-active --quiet mbackhaul@$t_name; then
-               echo -e "  ${G}✔ Tunnel updated and service restarted successfully.${NC}"; sleep 1.5
+               echo -e "  ${G}✔ Tunnel updated and service restarted successfully.${NC}"
+               bh_show_forwarder "$t_name"
+               echo -ne "  ${DIM}Press Enter to continue...${NC}"; read -r _
            else
                echo -e "  ${R}✖ Tunnel failed to start. Please check logs!${NC}"; sleep 2
            fi

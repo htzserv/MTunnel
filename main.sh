@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v12.0.3 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="13.0.0"
+MODULE_VERSION="13.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -707,54 +707,76 @@ NEED_LIVE_HEADER_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 trap 'NEED_LIVE_HEADER_REFRESH=true' SIGUSR2
 
-UPDATE_CHECK_INTERVAL=30
+UPDATE_CHECK_INTERVAL=60
 STATS_CHECK_INTERVAL=5
 
+# Each installed script is checked against both publish locations, like MGRE/MXLAN.
+# Compare the highest valid version, not the first mirror that happens to respond.
+mt_main_fetch_version() {
+    local url="$1" payload version
+    if command -v curl >/dev/null 2>&1; then
+        payload=$(curl -fsSL -H 'Cache-Control: no-cache' --connect-timeout 3 --max-time 7 "$url" 2>/dev/null) || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        payload=$(wget -qO- --header='Cache-Control: no-cache' --timeout=7 "$url" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)".*/\1/p' | head -n 1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
 check_single_module_silent() {
-    local mod="$1"
-    local rel_path="$2"
+    local mod="$1" rel_path="$2" local_file cur_v remote_gh remote_mirror rem_v cb
     local out_file="$SECURE_TMP/.chk_${mod}"
     rm -f "$out_file"
 
-    local local_file="$LOCAL_DIR/$rel_path"
-    [ ! -f "$local_file" ] && [ -f "/usr/bin/$mod" ] && local_file="/usr/bin/$mod"
+    # The version actually running is authoritative; /root/mtunnel may have an old staged copy.
+    local_file="/usr/bin/$mod"
+    [ "$mod" != main ] || local_file="$MTUNNEL_PATH"
+    [ -f "$local_file" ] || local_file="$LOCAL_DIR/$rel_path"
+    cur_v=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)".*/\1/p' "$local_file" 2>/dev/null | head -n 1)
+    [[ "$cur_v" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || cur_v='0.0.0'
 
-    local cur_v=""
-    [ -f "$local_file" ] && cur_v=$(grep -m1 '^MODULE_VERSION=' "$local_file" | cut -d'"' -f2)
-    [ -z "$cur_v" ] && cur_v="0.0.0"
-
-    local cb="?t=$(date +%s%N)"
-    local rem_v=""
-    if command -v curl >/dev/null 2>&1; then
-        rem_v=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-    elif command -v wget >/dev/null 2>&1; then
-        rem_v=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    cb="?t=$(date +%s)"
+    remote_gh=$(mt_main_fetch_version "$REPO_SCRIPTS/$rel_path$cb")
+    remote_mirror=$(mt_main_fetch_version "$MIRROR_SCRIPTS/$rel_path$cb")
+    rem_v=$(printf '%s\n' "$remote_gh" "$remote_mirror" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -n 1)
+    # Retain a previously verified version during short network outages.
+    local good_cache="$SECURE_TMP/.last_remote_${mod}"
+    if [ -n "$rem_v" ]; then
+        printf '%s\n' "$rem_v" > "$good_cache"
+    elif [ -s "$good_cache" ]; then
+        rem_v=$(cat "$good_cache")
     fi
-
     if [ -n "$rem_v" ] && mt_is_newer_version "$rem_v" "$cur_v"; then
-        echo "${mod}:${cur_v}:${rem_v}" > "$out_file"
+        printf '%s:%s:%s\n' "$mod" "$cur_v" "$rem_v" > "$out_file"
     fi
 }
 
 check_all_updates_round() {
-    local pids=()
+    local mod p f
+    local -a pids=()
     for mod in "${!MOD_MAP[@]}"; do
         check_single_module_silent "$mod" "${MOD_MAP[$mod]}" &
         pids+=("$!")
     done
-    for p in "${pids[@]}"; do
-        wait "$p" 2>/dev/null
-    done
+    for p in "${pids[@]}"; do wait "$p" 2>/dev/null || true; done
 
-    : > "$UPDATE_FILE.new"
-    for mod in "${!MOD_MAP[@]}"; do
-        local f="$SECURE_TMP/.chk_${mod}"
-        [ -s "$f" ] && cat "$f" >> "$UPDATE_FILE.new"
+    local next="$SECURE_TMP/.modules_update_status.new.$$"
+    : > "$next"
+    for mod in "${ALL_MODULES[@]}"; do
+        f="$SECURE_TMP/.chk_${mod}"
+        [ -s "$f" ] && cat "$f" >> "$next"
         rm -f "$f"
     done
-    mv -f "$UPDATE_FILE.new" "$UPDATE_FILE" 2>/dev/null
-
-    kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+    # Repaint only when the badges actually change, not every polling cycle.
+    if ! cmp -s "$next" "$UPDATE_FILE"; then
+        mv -f "$next" "$UPDATE_FILE"
+        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null || true
+    else
+        rm -f "$next"
+    fi
 }
 
 update_watcher_loop() {
@@ -856,12 +878,93 @@ collect_system_vitals() {
     mv -f "$sys_target" "$SECURE_TMP/.main_sys_stats" 2>/dev/null
 }
 
+# An active Backhaul listener does not know its peer address from its metadata.
+# Read the connected endpoint, including bracketed IPv6 peers, from ss.
+mt_main_bh_connected_peer() {
+    local port="$1" endpoint
+    mt_valid_port "$port" || return 1
+    endpoint=$(ss -Htn state established "( sport = :$port )" 2>/dev/null | awk 'NR==1 {print $5}')
+    if [ -z "$endpoint" ]; then
+        endpoint=$(ss -tn src ":$port" 2>/dev/null | awk '$1=="ESTAB" {print $5;exit}')
+    fi
+    [ -n "$endpoint" ] || return 1
+    if [[ "$endpoint" == \[*\]:* ]]; then
+        endpoint="${endpoint%]:*}"; endpoint="${endpoint#[}"
+    elif [[ "$endpoint" == *:* ]]; then
+        endpoint="${endpoint%:*}"
+    fi
+    mt_valid_host "$endpoint" || return 1
+    printf '%s\n' "$endpoint"
+}
+
+# Emits peer RTT and ICMP packet loss. RTT marked * is based on an established
+# TCP socket (when ICMP is blocked), not a synthetic ICMP measurement.
+mt_main_bh_ping_stats() {
+    local peer="$1" port="$2" data loss avg rtt
+    if ! mt_valid_host "$peer"; then printf '%s\n' '---|---'; return 0; fi
+    if [[ "$peer" == *:* ]]; then
+        data=$(timeout 2 ping -6 -n -c 1 -W 1 "$peer" 2>/dev/null)
+    else
+        data=$(timeout 2 ping -n -c 1 -W 1 "$peer" 2>/dev/null)
+    fi
+    avg=$(printf '%s\n' "$data" | sed -n 's/.*time=\([0-9.]*\).*/\1/p' | head -n 1)
+    loss=$(printf '%s\n' "$data" | sed -n 's/.* \([0-9][0-9]*\)% packet loss.*/\1/p' | head -n 1)
+    if [[ "$avg" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s|%s\n' "$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')" "${loss:-0}"
+        return 0
+    fi
+    # ss reports the retransmission-aware estimated TCP RTT of the *existing*
+    # Backhaul session; no additional connection to the service is opened.
+    rtt=$(ss -nti state established 2>/dev/null | awk -v peer="$peer" '
+      index($0,peer) {matched=1; next}
+      matched && /rtt:/ {
+        part=substr($0,index($0,"rtt:")+4); sub(/[^0-9.].*$/, "", part);
+        if (part ~ /^[0-9]+([.][0-9]+)?$/) {print part; exit}
+      }
+      matched && /ESTAB/ {matched=0}
+    ')
+    if [[ "$rtt" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s|---\n' "$(awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}')"
+    else
+        printf '%s\n' '---|---'
+    fi
+}
+
 collect_active_tunnels_stats() {
     local tmp_target="$SECURE_TMP/.main_tun_stats.tmp"
     > "$tmp_target"
     local count=0
 
-    # 1. GRE
+    # 1. Backhaul
+    if [ "$count" -lt 3 ]; then
+        for conf in /etc/mbackhaul/tunnels/*.meta; do
+            [ -f "$conf" ] || continue
+            local t_name=$(basename "$conf" .meta)
+            ROLE=""; TUN_PORT=""; REMOTE_IP=""; PORTS=""; source "$conf" 2>/dev/null
+            systemctl is-active --quiet "mbackhaul@${t_name}" || continue
+
+            local pure="${t_name#bh_}"
+            local peer_ip="$REMOTE_IP" avg="---" loss="---" stats
+            if [ "$ROLE" == "1" ] || ! mt_valid_host "$peer_ip"; then
+                peer_ip=$(mt_main_bh_connected_peer "$TUN_PORT")
+                [ -n "$peer_ip" ] || peer_ip="Listening"
+            fi
+            if mt_valid_host "$peer_ip"; then
+                stats=$(mt_main_bh_ping_stats "$peer_ip" "$TUN_PORT")
+                IFS='|' read -r avg loss <<< "$stats"
+            fi
+
+            local fwd_str="OFF"
+            [ -n "$PORTS" ] && fwd_str="ACT"
+            [ "$ROLE" == "2" ] && fwd_str="CLI"
+
+            echo "BH|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|bh_${t_name}|${fwd_str}" >> "$tmp_target"
+            ((count++))
+            [ "$count" -ge 3 ] && break 2
+        done
+    fi
+
+    # 2. GRE
     for conf in /etc/mgre/tunnels/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; T_NAME=""; REMOTE_PUB=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
@@ -903,7 +1006,7 @@ collect_active_tunnels_stats() {
         [ "$count" -ge 3 ] && break 2
     done
 
-    # 2. VXLAN
+    # 3. VXLAN
     if [ "$count" -lt 3 ]; then
         for conf in /etc/mgre/vxlan/*.conf; do
             [ -f "$conf" ] || continue
@@ -942,46 +1045,6 @@ collect_active_tunnels_stats() {
             else fwd_str="GW"; fi
 
             echo "VXLAN|${pure:-$VX_NAME}|${REMOTE_PUB}|${vip_stat}|${avg}|${loss}|${VX_NAME}|${fwd_str}" >> "$tmp_target"
-            ((count++))
-            [ "$count" -ge 3 ] && break 2
-        done
-    fi
-
-    # 3. Backhaul
-    if [ "$count" -lt 3 ]; then
-        for conf in /etc/mbackhaul/tunnels/*.meta; do
-            [ -f "$conf" ] || continue
-            local t_name=$(basename "$conf" .meta)
-            ROLE=""; TUN_PORT=""; REMOTE_IP=""; PORTS=""; source "$conf" 2>/dev/null
-            systemctl is-active --quiet "mbackhaul@${t_name}" || continue
-
-            local pure="${t_name#bh_}"
-            local peer_ip="$REMOTE_IP"
-            if [ "$ROLE" == "1" ]; then
-                local conn=$(ss -tn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-                peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                [ -z "$peer_ip" ] && peer_ip="Listening"
-            fi
-
-            local avg="---" loss="0"
-            if [[ "$peer_ip" =~ ^[0-9.]+$ ]]; then
-                local ping_res=$(timeout 2 ping -c 2 -i 0.2 -W 1 "$peer_ip" 2>/dev/null)
-                loss=$(echo "$ping_res" | grep -oP '[0-9]+(?=% packet loss)')
-                [ -z "$loss" ] && loss="100"
-                if echo "$ping_res" | grep -q "min/avg/max"; then
-                    avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    if [ -n "$avg" ]; then
-                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                        avg="${avg}ms"
-                    fi
-                fi
-            fi
-
-            local fwd_str="OFF"
-            [ -n "$PORTS" ] && fwd_str="ACT"
-            [ "$ROLE" == "2" ] && fwd_str="CLI"
-
-            echo "BH|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|bh_${t_name}|${fwd_str}" >> "$tmp_target"
             ((count++))
             [ "$count" -ge 3 ] && break 2
         done
@@ -1284,7 +1347,12 @@ draw_header_lines_only() {
 
     if [ "$shown" -eq 0 ]; then
         printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\033[K\n" "No active tunnels or fabrics deployed across the ecosystem."
+        shown=1
     fi
+    while [ "$shown" -lt 3 ]; do
+        printf "  ${B}│${NC}  %-111s  ${B}│${NC}\033[K\n" ""
+        ((shown++))
+    done
     printf "  ${B}╰${border}╯${NC}\033[K\n"
 }
 
@@ -1443,26 +1511,32 @@ ensure_module() {
 
 run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
 
+# Accept a complete release bundle or a partial patch archive.
+# Every included module is validated and staged before any file is replaced.
 install_bundle_scripts() {
     local source="$1" mod rel candidate target cur new
-    local -a files=()
+    local -a files=() present=()
     [ -d "$source" ] || return 1
     for mod in "${ALL_MODULES[@]}"; do
-        rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"; target="/usr/bin/$mod"
+        rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"
+        [ -f "$candidate" ] || continue
+        present+=("$mod")
+        target="/usr/bin/$mod"
         [ "$mod" != main ] || target="$MTUNNEL_PATH"
-        mt_validate_script "$candidate" || return 1
+        mt_validate_script "$candidate" || { echo "Invalid module in patch: $rel" >&2; return 1; }
         cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
         new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
         if mt_is_newer_version "$cur" "$new"; then echo "Refusing downgrade: $mod" >&2; return 1; fi
         files+=("$candidate" "$LOCAL_DIR/$rel" "$candidate" "$target")
     done
+    [ "${#present[@]}" -gt 0 ] || { echo 'No recognized module files in archive.' >&2; return 1; }
     mt_install_files 755 "${files[@]}" || return 1
     if [ "${2:-0}" == 1 ]; then
         local current=0 version
-        for mod in "${ALL_MODULES[@]}"; do
+        for mod in "${present[@]}"; do
             current=$((current+1)); rel="${MOD_MAP[$mod]}"
             version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/$rel")
-            draw_item_progress "$current" "${#ALL_MODULES[@]}" "$mod" "$version"
+            draw_item_progress "$current" "${#present[@]}" "$mod" "$version"
         done
     fi
     return 0

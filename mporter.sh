@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="13.0.0"
+MODULE_VERSION="13.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -862,19 +862,33 @@ download_file() {
     mp_download "$1" "$2"
 }
 
+mp_fetch_remote_version() {
+    local url="$1" payload version
+    if command -v curl >/dev/null 2>&1; then
+        payload=$(curl -fsSL --connect-timeout 3 --max-time 7 "$url" 2>/dev/null) || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        payload=$(wget -qO- --timeout=7 "$url" 2>/dev/null) || return 1
+    else return 1; fi
+    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)".*/\1/p' | head -n 1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
 check_update_bg() {
-    local cache="$SECURE_TMP/.mporter_remote_ver"
-    if [ -f "$cache" ] && [ $(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 3600 ]; then return 0; fi
-    local cb="?t=$(date +%s)" remote_ver="" url tmp
-    tmp=$(mp_tmp ver) || return 0
-    for url in "https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh${cb}" "https://c107328.parspack.net/c107328/MTunnel/mporter.sh${cb}"; do
-        if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 3 --max-time 6 -o "$tmp" "$url" 2>/dev/null
-        else wget -q --timeout=6 -O "$tmp" "$url" 2>/dev/null; fi
-        remote_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp" 2>/dev/null | cut -d'"' -f2 | tr -cd '0-9A-Za-z.-')
-        [ -n "$remote_ver" ] && break
+    local cb="?t=$(date +%s)" gh mirror latest cache="$SECURE_TMP/.mporter_remote_ver"
+    gh=$(mp_fetch_remote_version "https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh${cb}")
+    mirror=$(mp_fetch_remote_version "https://c107328.parspack.net/c107328/MTunnel/mporter.sh${cb}")
+    latest=$(printf '%s\n' "$gh" "$mirror" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -n 1)
+    [ -n "$latest" ] || return 0
+    [ -f "$cache" ] && [ "$(cat "$cache")" = "$latest" ] && return 0
+    printf '%s\n' "$latest" > "$cache"
+}
+
+mp_update_watcher_loop() {
+    while true; do
+        check_update_bg
+        sleep 60
     done
-    rm -f "$tmp"
-    [ -n "$remote_ver" ] && echo "$remote_ver" > "$cache"
 }
 
 self_update_module() {
@@ -929,6 +943,7 @@ self_update_module() {
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
     [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
+    [ -z "${MP_UPDATE_WATCHER_PID:-}" ] || kill "$MP_UPDATE_WATCHER_PID" 2>/dev/null || true
     exec "$INSTALL_PATH" "$@"
 }
 
@@ -3013,22 +3028,61 @@ show_mporter_info() {
 }
 
 setup_mporter_service
-check_update_bg >/dev/null 2>&1 &
+mp_update_watcher_loop >/dev/null 2>&1 &
+MP_UPDATE_WATCHER_PID=$!
+trap 'kill "${MP_UPDATE_WATCHER_PID:-}" 2>/dev/null || true' EXIT
 state_init >/dev/null 2>&1 || true
 ensure_haproxy_base >/dev/null 2>&1 || true
 
 # BEGIN MTUNNEL WORKSPACE V13
 # Embedded in each module: no external library or sourced setup-link code.
+# Stable v12 visual grammar: keep the original module header untouched,
+# use the original MDesign palette and grouped tree-navigation for new features.
 mt_workspace_screen() { "$MT_HEADER"; }
-mt_workspace_row() { printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "$C" "$2" "$NC"; }
-mt_workspace_menu() { # title, id|label|action ...; sets MT_ACTION
+mt_workspace_color() {
+    local label="${1,,}"
+    case "$label" in
+        *uninstall*|*delete*|*purge*|*wipe*) printf '%s' "$R" ;;
+        *update*|*install*|*bbr*|*mtu*|*restart*|*backup*|*restore*) printf '%s' "$Y" ;;
+        *info*|*specs*|*security*|*encryption*|*secret*|*token*|*guard*) printf '%s' "$M" ;;
+        *forward*|*balance*|*virtual\ ip*|*recovery*|*create\ from*|*peer\ setup*) printf '%s' "$G" ;;
+        *monitor*|*check*|*health*) printf '%s' "$W" ;;
+        *) printf '%s' "$C" ;;
+    esac
+}
+mt_workspace_row() {
+    local num="$1" label="$2" color="${3:-}"
+    [ -n "$color" ] || color=$(mt_workspace_color "$label")
+    printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$num" "$NC" "$DIM" "$NC" "$color" "$label" "$NC"
+}
+mt_workspace_top_start() {
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ $1 ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+}
+mt_workspace_top_section() {
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ $1 ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+}
+mt_workspace_top_end() {
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+}
+mt_workspace_menu() { # Title, then id|label|action entries; returns MT_ACTION.
     local title="$1" entry id label action choice; shift
     while true; do
         mt_workspace_screen
-        echo -e "\n  ${DIM}┌─[ ${title} ]${NC}\n  ${DIM}│${NC}"
-        for entry in "$@"; do IFS='|' read -r id label action <<< "$entry"; mt_workspace_row "$id" "$label"; done
-        echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Go Back${NC}\n"
-        read -r -p "  Select ❯❯ " choice || return 1
+        echo -e "\n  ${DIM}┌─[ ${title} ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        for entry in "$@"; do
+            IFS='|' read -r id label action <<< "$entry"
+            mt_workspace_row "$id" "$label"
+        done
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Go Back${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"
+        read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
         for entry in "$@"; do
             IFS='|' read -r id label action <<< "$entry"
@@ -3037,7 +3091,7 @@ mt_workspace_menu() { # title, id|label|action ...; sets MT_ACTION
         echo -e "  ${R}✖ Invalid selection.${NC}"
     done
 }
-mt_workspace_pause() { read -r -p '  Press Enter to continue...' _ || true; }
+mt_workspace_pause() { echo -ne "  ${DIM}Press Enter to continue...${NC}"; read -r _ || true; }
 
 MT_HEADER=draw_header; MT_SECTION=""
 mt_workspace_route() {
@@ -3067,22 +3121,57 @@ mp_backup_configs() {
     (umask 077; tar -czf "$dest" -C / -- "${files[@]}") && echo "  Saved: $dest"
     mt_workspace_pause
 }
+mp_workspace_update_badge() {
+    local rv file="$SECURE_TMP/.mporter_remote_ver"
+    [ -s "$file" ] || return 0
+    rv=$(tr -d '\r\n ' < "$file")
+    mt_is_newer_version "$rv" "$MODULE_VERSION" && printf ' (v%s available)' "$rv"
+    return 0
+}
+
+# Live refresh preserves input already typed while the update check runs.
+mp_read_main_menu() {
+    local buffer="" char rc seen="" current="" resultvar="$1"
+    [ -f "$SECURE_TMP/.mporter_remote_ver" ] && read -r seen < "$SECURE_TMP/.mporter_remote_ver"
+    printf '  MPorter ❯❯ '
+    while true; do
+        current=""
+        [ -f "$SECURE_TMP/.mporter_remote_ver" ] && read -r current < "$SECURE_TMP/.mporter_remote_ver"
+        if [ "$current" != "$seen" ]; then
+            seen="$current"
+            render_mporter_menu
+            printf '  MPorter ❯❯ %s' "$buffer"
+        fi
+        IFS= read -rsn1 -t 0.2 char
+        rc=$?
+        [ "$rc" -eq 0 ] || continue
+        if [ -z "$char" ] || [ "$char" = $'\r' ]; then printf '\n'; break; fi
+        if [ "$char" = $'\x7f' ] || [ "$char" = $'\b' ]; then
+            if [ -n "$buffer" ]; then buffer="${buffer%?}"; printf '\b \b'; fi
+            continue
+        fi
+        buffer+="$char"; printf '%s' "$char"
+    done
+    printf -v "$resultvar" '%s' "$buffer"
+}
+
 render_mporter_menu() {
-    mt_workspace_screen
-    echo -e "\n  ${DIM}┌─[ MPORTER WORKSPACE ]${NC}\n  ${DIM}│${NC}"
+    mt_workspace_top_start "PROVISION & MANAGE"
     mt_workspace_row 1 "Create & Forward"
     mt_workspace_row 2 "Edit & Manage"
+    mt_workspace_top_section "MONITORING & DETAILS"
     mt_workspace_row 3 "Tunnels Info And Specs"
+    mt_workspace_top_section "SYSTEM OPERATIONS"
     mt_workspace_row 4 "System"
-    mt_workspace_row 5 "Update and Local Install"
+    mt_workspace_row 5 "Update and Local Install $(mp_workspace_update_badge)"
     mt_workspace_row 6 "Backup Configs"
     mt_workspace_row 7 "Uninstall Engines & Purge"
-    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    mt_workspace_top_end
 }
 
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
-    else render_mporter_menu; read -r -p '  MPorter ❯❯ ' opt || break; fi
+    else render_mporter_menu; mp_read_main_menu opt || break; fi
     mt_workspace_route "$opt" || continue
     if [ "$MT_ACTION" = bbr ]; then mt_run_tool mbbr --from-tunnel; continue; fi
     if [ "$MT_ACTION" = backup ]; then mp_backup_configs; continue; fi

@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="13.0.2"
+MODULE_VERSION="13.0.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -683,7 +683,7 @@ draw_installer_header() {
 }
 
 installer_main() {
-    local source_dir='' root='' with_cores=0 launch=1 patch_mode=0 remote='' work path name target cur next item
+    local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
     local script_file="${BASH_SOURCE[0]}" script_dir
     script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mweb:tools/mweb.sh mstats:tools/mstats.sh mhealer:tools/mhealer.sh minterface:tools/minterface.sh mbbr:tools/mbbr.sh mdiag:tools/mdiag.sh mshield:tools/mshield.sh linktest:tools/linktest.sh)
@@ -692,15 +692,13 @@ installer_main() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; shift 2;;
-            --patch) patch_mode=1; launch=0; shift;;
             --root) [ "$#" -ge 2 ] || return 1; root="${2%/}"; launch=0; shift 2;;
             --with-cores) with_cores=1; shift;;
             --no-launch) launch=0; shift;;
             --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; shift 2;;
             --help|-h)
-                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE] [--patch] [--no-launch]'
+                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from GitHub.'
-                echo '--patch: update only modules in a local patch directory (existing install required).'
                 echo 'Optional local binaries: --with-cores. Test installation: --root DIR.'
                 return 0;;
             *) echo "Unknown option: $1" >&2; return 1;;
@@ -708,10 +706,6 @@ installer_main() {
     done
     if [ -n "$root" ]; then [[ "$root" == /* && "$root" != / && "$root" != *'/../'* ]] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
-    if [ "$patch_mode" = 1 ]; then
-        [ "$with_cores" = 0 ] && [ -z "$remote" ] || { echo '--patch is for local scripts only.' >&2; return 1; }
-        [ -f "$root/usr/bin/mtunnel" ] || { echo '--patch requires an existing MTunnel installation.' >&2; return 1; }
-    fi
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
         elif [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
@@ -743,7 +737,6 @@ installer_main() {
     for item in "${modules[@]}"; do
         name="${item%%:*}"; path="${item#*:}"; target="$root/usr/bin/$name"
         [ "$name" != main ] || target="$root/usr/bin/mtunnel"
-        if [ "$patch_mode" = 1 ] && [ ! -f "$source_dir/$path" ]; then continue; fi
         mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
         if mt_validate_script "$target" 2>/dev/null; then
             cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
@@ -768,26 +761,6 @@ installer_main() {
             mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
             files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")
         done
-    fi
-    [ "${#files[@]}" -gt 0 ] || { echo 'No valid modules in the patch.' >&2; return 1; }
-    if [ "$patch_mode" = 1 ]; then
-        # Snapshot existing installed scripts (not configs) before replacing any.
-        local mod_path backup_dir backup_path backup_root
-        local -a previous=()
-        backup_root="${root:-/}"
-        for item in "${modules[@]}"; do
-            name="${item%%:*}"; path="${item#*:}"
-            [ -f "$source_dir/$path" ] || continue
-            mod_path="usr/bin/$name"; [ "$name" != main ] || mod_path='usr/bin/mtunnel'
-            [ -f "$backup_root/$mod_path" ] && previous+=("$mod_path")
-        done
-        backup_dir="$backup_root/root/mtunnel/backups"
-        mkdir -p "$backup_dir" || return 1
-        backup_path="$backup_dir/mtunnel-before-patch-$(date +%Y%m%d-%H%M%S)-$$.tar.gz"
-        if [ "${#previous[@]}" -gt 0 ]; then
-            (umask 077; tar -czf "$backup_path" -C "$backup_root" -- "${previous[@]}") || { rm -f "$backup_path"; echo 'Pre-patch backup failed. Nothing overwritten.' >&2; return 1; }
-            echo "  Existing scripts backup: $backup_path"
-        fi
     fi
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
     if [ "$launch" == 1 ]; then

@@ -2,7 +2,7 @@
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="13.0.2"
+MODULE_VERSION="13.0.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -770,34 +770,28 @@ read_with_refresh() {
     printf -v "$__resultvar" '%s' "$buffer"
 }
 
-# Fetch from both official and mirror sources; keep the highest version.
-# Unreachable mirrors leave the previous good cache intact.
-mt_mbackhaul_remote_version() {
-    local url="$1" payload version
-    if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL --connect-timeout 3 --max-time 7 "$url" 2>/dev/null) || return 1
-    elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --timeout=7 "$url" 2>/dev/null) || return 1
-    else return 1; fi
-    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)".*/\1/p' | head -n 1)
-    [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
-    printf '%s\n' "$version"
-}
-
 check_update_bg() {
-    local cb="?t=$(date +%s)" gh mirror latest cache="$SECURE_TMP/.mbackhaul_remote_ver"
-    gh=$(mt_mbackhaul_remote_version "https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mbackhaul.sh${cb}")
-    mirror=$(mt_mbackhaul_remote_version "https://c107328.parspack.net/c107328/MTunnel/tunnels/mbackhaul.sh${cb}")
-    latest=$(printf '%s\n' "$gh" "$mirror" | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -V | tail -n 1)
-    [ -n "$latest" ] || return 1
-    [ -f "$cache" ] && [ "$(cat "$cache")" = "$latest" ] && return 1
-    printf '%s\n' "$latest" > "$cache"
+    local cb="?t=$(date +%s)"
+    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mbackhaul.sh${cb}"
+    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mbackhaul.sh${cb}"
+    local remote_ver=""
+    
+    if command -v curl >/dev/null 2>&1; then
+        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    elif command -v wget >/dev/null 2>&1; then
+        remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    fi
+    
+    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mbackhaul_remote_ver"
 }
 
 update_watcher_loop() {
     while true; do
-        if check_update_bg && [ -f "$SECURE_TMP/.mbackhaul_in_menu" ]; then
-            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null || true
+        check_update_bg
+        if [ -f "$SECURE_TMP/.mbackhaul_in_menu" ]; then
+            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
         fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
@@ -1078,7 +1072,6 @@ bh_service_ready() {
 }
 
 bh_start_screen() {
-    clear
     draw_header
 }
 
@@ -2250,62 +2243,48 @@ show_tunnel_logs() {
 
 # BEGIN MTUNNEL WORKSPACE V13
 # Embedded in each module: no external library or sourced setup-link code.
-# Stable v12 visual grammar: keep the original module header untouched,
-# use the original MDesign palette and grouped tree-navigation for new features.
 mt_workspace_screen() { "$MT_HEADER"; }
-mt_workspace_color() {
-    local label="${1,,}"
-    case "$label" in
-        *uninstall*|*delete*|*purge*|*wipe*) printf '%s' "$R" ;;
-        *update*|*install*|*bbr*|*mtu*|*restart*|*backup*|*restore*) printf '%s' "$Y" ;;
-        *info*|*specs*|*security*|*encryption*|*secret*|*token*|*guard*) printf '%s' "$M" ;;
-        *forward*|*balance*|*virtual\ ip*|*recovery*|*create\ from*|*peer\ setup*) printf '%s' "$G" ;;
-        *monitor*|*check*|*health*) printf '%s' "$W" ;;
-        *) printf '%s' "$C" ;;
-    esac
-}
+# Keep the stable palette, tree layout and aligned one/two-digit option numbers.
 mt_workspace_row() {
-    local num="$1" label="$2" color="${3:-}"
-    [ -n "$color" ] || color=$(mt_workspace_color "$label")
-    printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$num" "$NC" "$DIM" "$NC" "$color" "$label" "$NC"
+    printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b%b\n' \
+        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$2" "$NC" "${4:-}"
 }
-mt_workspace_top_start() {
-    mt_workspace_screen
-    echo -e "\n  ${DIM}┌─[ $1 ]${NC}"
-    echo -e "  ${DIM}│${NC}"
+mt_workspace_group() {
+    if [ "${2:-}" = first ]; then
+        printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$1" "$NC"
+    else
+        printf '  %b│%b\n  %b├─[ %s ]%b\n' "$DIM" "$NC" "$DIM" "$1" "$NC"
+    fi
+    printf '  %b│%b\n' "$DIM" "$NC"
 }
-mt_workspace_top_section() {
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ $1 ]${NC}"
-    echo -e "  ${DIM}│${NC}"
+mt_workspace_footer() {
+    printf '  %b│%b\n  %b└─%b %b0%b %b❯%b %b%s%b\n\n' \
+        "$DIM" "$NC" "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
 }
-mt_workspace_top_end() {
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
-}
-mt_workspace_menu() { # Title, then id|label|action entries; returns MT_ACTION.
-    local title="$1" entry id label action choice; shift
+mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
+    local title="$1" entry id label action color choice; shift
     while true; do
         mt_workspace_screen
-        echo -e "\n  ${DIM}┌─[ ${title} ]${NC}"
-        echo -e "  ${DIM}│${NC}"
+        mt_workspace_group "$title" first
         for entry in "$@"; do
-            IFS='|' read -r id label action <<< "$entry"
-            mt_workspace_row "$id" "$label"
+            IFS='|' read -r id label action color <<< "$entry"
+            mt_workspace_row "$id" "$label" "$color"
         done
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Go Back${NC}\n"
-        echo -ne "  ${C}Select ❯❯ ${NC}"
+        mt_workspace_footer 'Go Back'
+        printf '  %bSelect ❯❯ %b' "$C" "$NC"
         read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
         for entry in "$@"; do
-            IFS='|' read -r id label action <<< "$entry"
+            IFS='|' read -r id label action color <<< "$entry"
             if [ "$choice" = "$id" ]; then MT_ACTION="$action"; return 0; fi
         done
         echo -e "  ${R}✖ Invalid selection.${NC}"
     done
 }
-mt_workspace_pause() { echo -ne "  ${DIM}Press Enter to continue...${NC}"; read -r _ || true; }
+mt_workspace_pause() {
+    printf '  %bPress Enter to continue...%b' "$DIM" "$NC"
+    read -r _ || true
+}
 mt_link_read() { # read flat metadata as data, never source it
     local value
     value=$(awk -v k="$2" 'index($0,k"=")==1 {sub(/^[^=]*=/,"");print;exit}' "$1")
@@ -2644,18 +2623,20 @@ mt_workspace_update_badge() {
     local rv file="$SECURE_TMP/.mbackhaul_remote_ver"
     [ -f "$file" ] || return 0
     rv=$(tr -d '\r\n ' < "$file")
-    mt_is_newer_version "$rv" "$MODULE_VERSION" && printf ' %b' "${Y}(Update Available: v${rv})${NC}"
+    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
+        printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
+    fi
     return 0
 }
 MT_KIND=backhaul; MT_HEADER=draw_header; MT_SECTION=""
 mt_workspace_route() {
     local section="$1"
     case "$section" in
-        1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Backhaul Setup|1" "2|Create From Peer Link|97" "3|Generate Peer Setup Link|98" || { MT_SECTION=""; return 1; };;
-        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3" "2|Transport & Advanced Settings|5" "3|Auth Token|6" "4|Link Port|7" "5|Tunnel Name|9" "6|Listen Address|10" "7|Delete Tunnels|2" || { MT_SECTION=""; return 1; };;
-        3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Mappings & Forwarder (Native / iptables / MPorter)|4" "2|UDP Acceptance|8" || { MT_SECTION=""; return 1; };;
-        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13" "2|BBR Settings|14" "3|Scheduled Restart|15" "4|Restart & Zero Counters|16" "5|Check Selected Tunnel|99" || { MT_SECTION=""; return 1; };;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|18" "2|Install / Update Engine (Online / Local)|17" || { MT_SECTION=""; return 1; };;
+        1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Backhaul Setup|1|${G}" "2|Create From Peer Link|97|${G}" "3|Generate Peer Setup Link|98|${M}" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Transport & Advanced Settings|5|${M}" "3|Auth Token|6|${G}" "4|Link Port|7|${C}" "5|Tunnel Name|9|${W}" "6|Listen Address|10|${C}" "7|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
+        3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Mappings & Forwarder (Native / iptables / MPorter)|4|${Y}" "2|UDP Acceptance|8|${C}" || { MT_SECTION=""; return 1; };;
+        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Scheduled Restart|15|${Y}" "4|Restart & Zero Counters|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
+        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|18|${G}" "2|Install / Update Engine (Online / Local)|17|${M}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
         6) MT_ACTION=12;;
         8) MT_ACTION=96;;
@@ -2666,21 +2647,20 @@ mt_workspace_route() {
 }
 
 render_mbackhaul_menu() {
-    mt_workspace_top_start "PROVISION & MANAGE"
-    mt_workspace_row 1 "Create Tunnel"
-    mt_workspace_top_section "CONFIGURATION & EDITING"
-    mt_workspace_row 2 "Edit & Manage"
-    mt_workspace_row 3 "Forwarding"
-    mt_workspace_top_section "SECURITY & OPTIMIZATION"
-    mt_workspace_row 4 "System & Security"
-    mt_workspace_top_section "MONITORING & DETAILS"
-    mt_workspace_row 5 "Tunnels Info And Specs"
-    mt_workspace_row 6 "Live Monitor"
-    mt_workspace_top_section "SYSTEM OPERATIONS"
-    mt_workspace_row 7 "Update and Local Install $(mt_workspace_update_badge)"
-    mt_workspace_row 8 "Backup Configs"
-    mt_workspace_row 9 "Uninstall MBACKHAUL"
-    mt_workspace_top_end
+    mt_workspace_screen
+    mt_workspace_group 'PROVISION & MANAGE' first
+    mt_workspace_row 1 'Create Tunnel' "$G"
+    mt_workspace_row 2 'Edit & Manage' "$Y"
+    mt_workspace_row 3 'Forwarding' "$Y"
+    mt_workspace_group 'CONFIGURATION & MONITORING'
+    mt_workspace_row 4 'System & Security' "$M"
+    mt_workspace_row 5 'Tunnels Info And Specs' "$W"
+    mt_workspace_row 6 'Live Monitor' "$C"
+    mt_workspace_group 'SYSTEM OPERATIONS'
+    mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 8 'Backup Configs' "$W"
+    mt_workspace_row 9 'Uninstall MBACKHAUL' "$R"
+    mt_workspace_footer 'Return to Main Core'
 }
 
 while true; do
@@ -2695,7 +2675,7 @@ while true; do
         97) mt_link_import; continue;;
         98) mt_link_export; continue;;
         99) mt_workspace_health; continue;;
-        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save" || continue; mt_workspace_backup; continue;;
+        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
     esac
     # Every edit/forwarding action gets a private config restore point first.
     if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then
@@ -2704,7 +2684,6 @@ while true; do
     opt="$MT_ACTION"
     case $opt in
         1) 
-           mt_workspace_screen
            bh_start_screen
            echo -e "\n  ${DIM}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 

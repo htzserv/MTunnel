@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="13.0.2"
+MODULE_VERSION="13.0.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -2280,62 +2280,48 @@ show_live_monitor() {
 
 # BEGIN MTUNNEL WORKSPACE V13
 # Embedded in each module: no external library or sourced setup-link code.
-# Stable v12 visual grammar: keep the original module header untouched,
-# use the original MDesign palette and grouped tree-navigation for new features.
 mt_workspace_screen() { "$MT_HEADER"; }
-mt_workspace_color() {
-    local label="${1,,}"
-    case "$label" in
-        *uninstall*|*delete*|*purge*|*wipe*) printf '%s' "$R" ;;
-        *update*|*install*|*bbr*|*mtu*|*restart*|*backup*|*restore*) printf '%s' "$Y" ;;
-        *info*|*specs*|*security*|*encryption*|*secret*|*token*|*guard*) printf '%s' "$M" ;;
-        *forward*|*balance*|*virtual\ ip*|*recovery*|*create\ from*|*peer\ setup*) printf '%s' "$G" ;;
-        *monitor*|*check*|*health*) printf '%s' "$W" ;;
-        *) printf '%s' "$C" ;;
-    esac
-}
+# Keep the stable palette, tree layout and aligned one/two-digit option numbers.
 mt_workspace_row() {
-    local num="$1" label="$2" color="${3:-}"
-    [ -n "$color" ] || color=$(mt_workspace_color "$label")
-    printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$num" "$NC" "$DIM" "$NC" "$color" "$label" "$NC"
+    printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b%b\n' \
+        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$2" "$NC" "${4:-}"
 }
-mt_workspace_top_start() {
-    mt_workspace_screen
-    echo -e "\n  ${DIM}┌─[ $1 ]${NC}"
-    echo -e "  ${DIM}│${NC}"
+mt_workspace_group() {
+    if [ "${2:-}" = first ]; then
+        printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$1" "$NC"
+    else
+        printf '  %b│%b\n  %b├─[ %s ]%b\n' "$DIM" "$NC" "$DIM" "$1" "$NC"
+    fi
+    printf '  %b│%b\n' "$DIM" "$NC"
 }
-mt_workspace_top_section() {
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ $1 ]${NC}"
-    echo -e "  ${DIM}│${NC}"
+mt_workspace_footer() {
+    printf '  %b│%b\n  %b└─%b %b0%b %b❯%b %b%s%b\n\n' \
+        "$DIM" "$NC" "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
 }
-mt_workspace_top_end() {
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
-}
-mt_workspace_menu() { # Title, then id|label|action entries; returns MT_ACTION.
-    local title="$1" entry id label action choice; shift
+mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
+    local title="$1" entry id label action color choice; shift
     while true; do
         mt_workspace_screen
-        echo -e "\n  ${DIM}┌─[ ${title} ]${NC}"
-        echo -e "  ${DIM}│${NC}"
+        mt_workspace_group "$title" first
         for entry in "$@"; do
-            IFS='|' read -r id label action <<< "$entry"
-            mt_workspace_row "$id" "$label"
+            IFS='|' read -r id label action color <<< "$entry"
+            mt_workspace_row "$id" "$label" "$color"
         done
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Go Back${NC}\n"
-        echo -ne "  ${C}Select ❯❯ ${NC}"
+        mt_workspace_footer 'Go Back'
+        printf '  %bSelect ❯❯ %b' "$C" "$NC"
         read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
         for entry in "$@"; do
-            IFS='|' read -r id label action <<< "$entry"
+            IFS='|' read -r id label action color <<< "$entry"
             if [ "$choice" = "$id" ]; then MT_ACTION="$action"; return 0; fi
         done
         echo -e "  ${R}✖ Invalid selection.${NC}"
     done
 }
-mt_workspace_pause() { echo -ne "  ${DIM}Press Enter to continue...${NC}"; read -r _ || true; }
+mt_workspace_pause() {
+    printf '  %bPress Enter to continue...%b' "$DIM" "$NC"
+    read -r _ || true
+}
 mt_link_read() { # read flat metadata as data, never source it
     local value
     value=$(awk -v k="$2" 'index($0,k"=")==1 {sub(/^[^=]*=/,"");print;exit}' "$1")
@@ -2684,18 +2670,20 @@ mt_workspace_update_badge() {
     local rv file="$SECURE_TMP/.mgre_remote_ver"
     [ -f "$file" ] || return 0
     rv=$(tr -d '\r\n ' < "$file")
-    mt_is_newer_version "$rv" "$MODULE_VERSION" && printf ' %b' "${Y}(Update Available: v${rv})${NC}"
+    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
+        printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
+    fi
     return 0
 }
 MT_KIND=gre; MT_HEADER=draw_mgre_header; MT_SECTION=""
 mt_workspace_route() {
     local section="$1"
     case "$section" in
-        1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Setup (GRE / GRE6 / IPIP)|1" "2|Create From Peer Link|97" "3|Generate Peer Setup Link|98" || { MT_SECTION=""; return 1; };;
-        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Tunnel Name|7" "2|Public IPs|8" "3|Token / Secret|9" "4|Core Subnet|10" "5|MTU & MSS|11" "6|Virtual IP Manager|2" "7|Delete Tunnels|6" || { MT_SECTION=""; return 1; };;
-        3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Forwarding / Selected IPs / Load Balance|4" "2|MPorter Forwarders|3" || { MT_SECTION=""; return 1; };;
-        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|IPsec Encryption|13" "2|Firewall Guard|14" "3|Auto Recovery|15" "4|BBR Settings|16" "5|Check Selected Tunnel|99" || { MT_SECTION=""; return 1; };;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|17" || { MT_SECTION=""; return 1; };;
+        1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Setup (GRE / GRE6 / IPIP)|1|${C}" "2|Create From Peer Link|97|${G}" "3|Generate Peer Setup Link|98|${M}" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Tunnel Name|7|${W}" "2|Public IPs|8|${C}" "3|Token / Secret|9|${M}" "4|Core Subnet|10|${Y}" "5|MTU & MSS|11|${C}" "6|Virtual IP Manager|2|${G}" "7|Delete Tunnels|6|${R}" || { MT_SECTION=""; return 1; };;
+        3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Forwarding / Selected IPs / Load Balance|4|${G}" "2|MPorter Forwarders|3|${C}" || { MT_SECTION=""; return 1; };;
+        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|IPsec Encryption|13|${M}" "2|Firewall Guard|14|${R}" "3|Auto Recovery|15|${G}" "4|BBR Settings|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
+        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=5;;
         6) MT_ACTION=12;;
         8) MT_ACTION=18;;
@@ -2706,21 +2694,20 @@ mt_workspace_route() {
 }
 
 render_mgre_menu() {
-    mt_workspace_top_start "PROVISION & MANAGE"
-    mt_workspace_row 1 "Create Tunnel"
-    mt_workspace_top_section "CONFIGURATION & EDITING"
-    mt_workspace_row 2 "Edit & Manage"
-    mt_workspace_row 3 "Forwarding"
-    mt_workspace_top_section "SECURITY & OPTIMIZATION"
-    mt_workspace_row 4 "System & Security"
-    mt_workspace_top_section "MONITORING & DETAILS"
-    mt_workspace_row 5 "Tunnels Info And Specs"
-    mt_workspace_row 6 "Live Monitor"
-    mt_workspace_top_section "SYSTEM OPERATIONS"
-    mt_workspace_row 7 "Update and Local Install $(mt_workspace_update_badge)"
-    mt_workspace_row 8 "Backup & Restore"
-    mt_workspace_row 9 "Uninstall MGRE"
-    mt_workspace_top_end
+    mt_workspace_screen
+    mt_workspace_group 'PROVISION & MANAGE' first
+    mt_workspace_row 1 'Create Tunnel' "$C"
+    mt_workspace_row 2 'Edit & Manage' "$Y"
+    mt_workspace_row 3 'Forwarding' "$G"
+    mt_workspace_group 'CONFIGURATION & MONITORING'
+    mt_workspace_row 4 'System & Security' "$M"
+    mt_workspace_row 5 'Tunnels Info And Specs' "$M"
+    mt_workspace_row 6 'Live Monitor' "$W"
+    mt_workspace_group 'SYSTEM OPERATIONS'
+    mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 8 'Backup & Restore' "$W"
+    mt_workspace_row 9 'Uninstall MGRE' "$R"
+    mt_workspace_footer 'Return to Main Core'
 }
 
 while true; do
@@ -2739,7 +2726,7 @@ while true; do
         97) mt_link_import; continue;;
         98) mt_link_export; continue;;
         99) mt_workspace_health; continue;;
-        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save" || continue; mt_workspace_backup; continue;;
+        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
     esac
     # Every edit/forwarding action gets a private config restore point first.
     if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then

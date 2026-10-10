@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v14 ---
+# --- MTunnel MRathole | Reverse Tunnel Engine v14.0.1 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -646,7 +647,8 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 [ -f "/usr/local/bin/mrathole" ] && rm -f "/usr/local/bin/mrathole" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
-chmod 700 "$SECURE_TMP" 2>/dev/null
+chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
+find "$CONF_DIR" -maxdepth 3 -type f -exec chmod 600 {} + 2>/dev/null || true
 rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
 ensure_dependencies() {
@@ -712,7 +714,9 @@ read_with_refresh() {
         rc=$?
 
         if [ $rc -ne 0 ]; then
-            continue
+            [ "$rc" -eq 142 ] && continue
+            rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
+            return "$rc"
         fi
 
         if [[ -z "$char" ]]; then
@@ -1480,7 +1484,7 @@ manage_cron() {
     if [[ "$cr_opt" == "1" ]]; then
         echo -ne "  ${C}●${NC} ${W}Restart interval in hours (e.g. 2, 4, 6): ${NC}"; read interval
         interval=$(echo "$interval" | tr -d '\r')
-        [[ ! "$interval" =~ ^[0-9]+$ ]] && echo -e "  ${R}Invalid interval!${NC}" && sleep 1.5 && return
+        [[ "$interval" =~ ^[0-9]+$ ]] && ((10#$interval >= 1 && 10#$interval <= 24)) || { echo -e "  ${R}Invalid interval! Use 1-24 hours.${NC}"; sleep 1.5; return; }
         
         echo "#!/bin/bash" > "$cron_script"
         echo "systemctl kill -s SIGKILL mrathole@${t_name}" >> "$cron_script"
@@ -1490,7 +1494,11 @@ manage_cron() {
         if command -v crontab >/dev/null 2>&1; then
             local cron_tmp="$SECURE_TMP/crontab.$$"
             crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
-            echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
+            if [ "$interval" -eq 24 ]; then
+                echo "0 0 * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
+            else
+                echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
+            fi
             crontab "$cron_tmp"; rm -f "$cron_tmp"
             echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
         else
@@ -1606,7 +1614,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V13
+# BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -1950,7 +1958,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V13
+# END MTUNNEL WORKSPACE V14.0.1
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1

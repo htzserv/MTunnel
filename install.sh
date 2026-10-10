@@ -1,6 +1,7 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -705,7 +706,11 @@ installer_main() {
             *) echo "Unknown option: $1" >&2; return 1;;
         esac
     done
-    if [ -n "$root" ]; then [[ "$root" == /* && "$root" != / && "$root" != *'/../'* ]] || return 1
+    if [ -n "$root" ]; then
+        [[ "$root" == /* && "$root" != / ]] || return 1
+        [[ ! "$root" =~ (^|/)\.\.(/|$) && ! "$root" =~ (^|/)\.(/|$) ]] || { echo 'Unsafe --root path.' >&2; return 1; }
+        root=$(readlink -m -- "$root") || return 1
+        [ "$root" != / ] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"

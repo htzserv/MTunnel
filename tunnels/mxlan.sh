@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MXLAN | VXLAN Fabric Engine v14 ---
+# --- MTunnel MXLAN | VXLAN Fabric Engine v14.0.1 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,8 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -119,12 +120,18 @@ mt_tcp_probe() {
 }
 
 mt_list_has_port() {
-    local item; local -a parts=()
+    local item a b target="$2"; local -a parts=()
+    mt_valid_port "$target" || return 1
+    target=$((10#$target))
     IFS=, read -ra parts <<< "$1"
     for item in "${parts[@]}"; do
         [[ "$item" == *"="* ]] && item="${item%%=*}"
-        [[ "$item" == *:* ]] && item="${item##*:}"
-        mt_valid_port "$item" && ((10#$item == 10#$2)) && return 0
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((target >= a && target <= b)) && return 0
+        elif mt_valid_port "$item" && ((10#$item == target)); then
+            return 0
+        fi
     done
     return 1
 }
@@ -139,15 +146,22 @@ mt_port_busy() {
 }
 
 mt_validate_port_list() {
-    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item
+    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item a b p
     local -A seen=(); local -a parts=()
     [ -z "$list" ] && return 0
-    [[ "$list" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+    [[ "$list" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || return 1
     IFS=, read -ra parts <<< "$list"
     for item in "${parts[@]}"; do
-        mt_valid_port "$item" || return 1
-        item=$((10#$item)); [ -z "${seen[$item]:-}" ] || return 1; seen[$item]=1
-        if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$item" && mt_port_busy "$item" "$proto"; then return 1; fi
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((a >= 1 && b <= 65535 && a < b)) || return 1
+        else
+            mt_valid_port "$item" || return 1; a=$((10#$item)); b=$a
+        fi
+        for ((p=a; p<=b; p++)); do
+            [ -z "${seen[$p]:-}" ] || return 1; seen[$p]=1
+            if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$p" && mt_port_busy "$p" "$proto"; then return 1; fi
+        done
     done
 }
 
@@ -537,6 +551,8 @@ mt_validate_tunnel_conf() {
         if [ "$TUN_PROTO" == 6to4 ]; then mt_valid_ipv6 "$LOCAL_IP6" && mt_valid_ipv6 "$REMOTE_IP6" || return 1; fi
     else
         [[ "$VX_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$BR_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$VNI_ID" =~ ^[0-9]{1,8}$ && "$FAB_PROTO" =~ ^(ipv4|ipv6)$ ]] && ((10#$VNI_ID >= 1 && 10#$VNI_ID <= 16777215)) || return 1
+        local mx_restore_max=1450; [ "$FAB_PROTO" != ipv6 ] || mx_restore_max=1430
+        [ -z "$CUSTOM_MTU" ] || ((10#$CUSTOM_MTU >= 900 && 10#$CUSTOM_MTU <= mx_restore_max)) || return 1
         mt_valid_ipv4 "$CORE_SUBNET.1" || return 1
         if [ "$FAB_PROTO" == ipv6 ]; then mt_valid_ipv6 "$LOCAL_PUB6" && mt_valid_ipv6 "$REMOTE_PUB6" || return 1
         else mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1; fi
@@ -652,6 +668,8 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 [ -f "/usr/local/bin/mxlan" ] && rm -f "/usr/local/bin/mxlan" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
+find "$CONF_DIR" -maxdepth 2 -type f -exec chmod 600 {} + 2>/dev/null || true
 chmod 700 "$SECURE_TMP" 2>/dev/null
 
 # ======================================================================
@@ -834,17 +852,16 @@ build_fwd_rules() {
             for ((idx=0; idx<n; idx++)); do
                 dst="${live[$idx]}"; rem=$((n - idx))
                 if [ "$rem" -gt 1 ]; then
-                    iptables -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m statistic --mode nth --every "$rem" --packet 0 -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null
+                    iptables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m statistic --mode nth --every "$rem" --packet 0 -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || return 1
                 else
-                    iptables -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null
+                    iptables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || return 1
                 fi
-                iptables -t nat -A POSTROUTING -o "$tif" -p "$proto" -m "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j MASQUERADE 2>/dev/null
-                iptables -t filter -A FORWARD -o "$tif" -p "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j ACCEPT 2>/dev/null
+                iptables -w 5 -t nat -A POSTROUTING -o "$tif" -p "$proto" -m "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j MASQUERADE 2>/dev/null || return 1
+                iptables -w 5 -t filter -A FORWARD -o "$tif" -p "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j ACCEPT 2>/dev/null || return 1
             done
         done
     done
 }
-
 # ---- IPsec (ESP transport) encryption, keys derived from the Master Token on both peers ----
 xfrm_state_file() { echo "$SECURE_TMP/.mxlan_xfrm_$1"; }
 
@@ -1042,7 +1059,8 @@ read_with_refresh() {
         rc=$?
 
         if [ $rc -ne 0 ]; then
-            continue
+            [ "$rc" -eq 142 ] && continue
+            return "$rc"
         fi
 
         if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
@@ -1413,10 +1431,19 @@ remove_ports() {
     echo "${out%,}"
 }
 
+mxlan_apply_fail_cleanup() {
+    local vx="$1" br="$2"
+    [ -n "$vx" ] || return 0
+    clean_fwd_rules "$vx"; clean_mss_rules "$vx"; xfrm_clear "$vx"
+    ip link del "$vx" >/dev/null 2>&1 || true
+    [ -n "$br" ] && ip link del "$br" >/dev/null 2>&1 || true
+}
+
 apply_fabric() {
     local conf="$1"
     [ ! -s "$conf" ] && return
     local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" VNI_ID="" BR_NAME="" VX_NAME="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4"
+    mt_validate_tunnel_conf "$conf" vxlan || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
     [ -z "$VX_NAME" ] || [ -z "$BR_NAME" ] && return
     mx_endpoints
@@ -1452,38 +1479,38 @@ apply_fabric() {
     [ "$eff_mtu" -lt "$MX_MTU_MIN" ] && eff_mtu=$MX_MTU_MIN
     [ "$eff_mtu" -gt "$fab_max" ] && eff_mtu=$fab_max
 
-    ip link show "$BR_NAME" >/dev/null 2>&1 || ip link add "$BR_NAME" type bridge || return 1
-    ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null
-    ip link set "$BR_NAME" up 2>/dev/null
+    ip link show "$BR_NAME" >/dev/null 2>&1 || ip link add "$BR_NAME" type bridge || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
+    ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
+    ip link set "$BR_NAME" up 2>/dev/null || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
 
     local -a vx_args=(type vxlan id "$VNI_ID")
     [ -n "$eth_iface" ] && vx_args+=(dev "$eth_iface")
     vx_args+=(remote "$EP_R")
     [ "$has_local" == "1" ] && vx_args+=(local "$EP_L")
     vx_args+=(dstport 4789)
-    if [ "$keep_vx" == 0 ]; then ip link add "$VX_NAME" "${vx_args[@]}" || return 1; fi
+    if [ "$keep_vx" == 0 ]; then ip link add "$VX_NAME" "${vx_args[@]}" || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }; fi
     printf '%s\n' "$layout" > "$layout_file"
 
-    ip link set dev "$VX_NAME" mtu "$eff_mtu" 2>/dev/null
-    ip link set "$VX_NAME" master "$BR_NAME" 2>/dev/null
-    [ "$ENCRYPT" == 1 ] || ip link set "$VX_NAME" up || return 1
-    ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null
+    ip link set dev "$VX_NAME" mtu "$eff_mtu" 2>/dev/null || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
+    ip link set "$VX_NAME" master "$BR_NAME" 2>/dev/null || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
+    [ "$ENCRYPT" == 1 ] || ip link set "$VX_NAME" up || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
+    ip link set dev "$BR_NAME" mtu "$eff_mtu" 2>/dev/null || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
     local core_file="$SECURE_TMP/.mxlan_core_$BR_NAME" old_core
     old_core=$(cat "$core_file" 2>/dev/null || true)
     if [ -n "$old_core" ] && [ "$old_core" != "${local_br_ip}/24" ] && mt_valid_ipv4 "${old_core%/*}" && [[ "$old_core" == */24 ]]; then
         ip -4 addr del "$old_core" dev "$BR_NAME" 2>/dev/null || true
     fi
-    ip addr replace "${local_br_ip}/24" dev "$BR_NAME" || return 1
+    ip addr replace "${local_br_ip}/24" dev "$BR_NAME" || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
     printf '%s\n' "${local_br_ip}/24" > "$core_file"
-    iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$BR_NAME" -m comment --comment "MXLAN_MSS_$VX_NAME" -j TCPMSS --set-mss $((eff_mtu - 40)) 2>/dev/null
+    iptables -w 5 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$BR_NAME" -m comment --comment "MXLAN_MSS_$VX_NAME" -j TCPMSS --set-mss $((eff_mtu - 40)) 2>/dev/null || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
 
     if [ "$ENCRYPT" == "1" ]; then
         if ! xfrm_apply "$VX_NAME" "$TYPE" "$EP_L" "$EP_R" "$TUN_SECRET" proto udp dport 4789; then
-            ip link set "$VX_NAME" down; echo "Requested encryption failed; $VX_NAME stopped." >&2; return 1
+            ip link set "$VX_NAME" down; echo "Requested encryption failed; $VX_NAME stopped." >&2; mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1
         fi
     fi
 
-    ip link set "$VX_NAME" up || return 1
+    ip link set "$VX_NAME" up || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
 
     if is_uint "$MAX_IPS" && [ "$MAX_IPS" -gt 0 ]; then
         local nip tip clash
@@ -1496,8 +1523,8 @@ apply_fabric() {
         done < <(vip_targets "$SYNC_KEY" "$MAX_IPS" "$TYPE")
     fi
 
-    mxlan_apply_fwd "$conf"
-    rebuild_guard
+    mxlan_apply_fwd "$conf" || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
+    rebuild_guard || { mxlan_apply_fail_cleanup "$VX_NAME" "$BR_NAME"; return 1; }
 }
 
 apply_all_fabrics() {
@@ -1570,7 +1597,7 @@ manage_port_forwarding() {
                 grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
                 echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp"
                 echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
-                mv "${target_conf}.tmp" "$target_conf"
+                mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
                 apply_fabric "$target_conf"
@@ -1586,7 +1613,7 @@ manage_port_forwarding() {
                 grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
                 echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp"
                 echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
-                mv "${target_conf}.tmp" "$target_conf"
+                mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
                 apply_fabric "$target_conf"
                 echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
@@ -1599,7 +1626,7 @@ manage_port_forwarding() {
                 grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
                 echo "FWD_TCP=$new_tcp" >> "${target_conf}.tmp"
                 echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp"
-                mv "${target_conf}.tmp" "$target_conf"
+                mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
                 apply_fabric "$target_conf"
@@ -1825,6 +1852,7 @@ clean_mss_rules() {
 mxlan_apply_fwd() {
     local conf="$1"
     local TYPE="" VX_NAME="" CORE_SUBNET="" VNI_ID="" BR_NAME="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" FWD_TARGETS=''
+    mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
     clean_fwd_rules "$VX_NAME"
     [ "$TYPE" == "1" ] || return 0
@@ -2031,9 +2059,15 @@ restore_validated_backup() {
     local archive="$1" stage conf rollback failed=0
     stage=$(mt_stage_backup "$archive" "vxlan") || return 1
     # Validate tunnel identity/role/endpoints before stopping any live interface.
+    local -A seen_vni=() seen_sub=()
+    local VNI_ID CORE_SUBNET
     for conf in "$stage/vxlan"/*.conf; do
         [ -f "$conf" ] || continue
         if ! mt_validate_tunnel_conf "$conf" vxlan; then rm -rf "$stage"; return 1; fi
+        VNI_ID=""; CORE_SUBNET=""; source "$conf"
+        [ -z "${seen_vni[$VNI_ID]:-}" ] || { echo "Duplicate VNI_ID in backup: $VNI_ID" >&2; rm -rf "$stage"; return 1; }
+        [ -z "${seen_sub[$CORE_SUBNET]:-}" ] || { echo "Duplicate core subnet in backup: $CORE_SUBNET" >&2; rm -rf "$stage"; return 1; }
+        seen_vni[$VNI_ID]=1; seen_sub[$CORE_SUBNET]=1
     done
     backup_configs >/dev/null || { rm -rf "$stage"; return 1; }
     rollback=$(mktemp -d "${CONF_DIR}.rollback.XXXXXX") || { rm -rf "$stage"; return 1; }
@@ -2041,6 +2075,8 @@ restore_validated_backup() {
     for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done
     rm -f "$CONF_DIR"/*.conf
     cp -a "$stage/vxlan/." "$CONF_DIR/" || failed=1
+    chmod 700 "$CONF_DIR" 2>/dev/null
+    find "$CONF_DIR" -maxdepth 1 -type f -name '*.conf' -exec chmod 600 {} + 2>/dev/null || failed=1
     [ "$failed" != 0 ] || apply_all_fabrics || failed=1
     if [ "$failed" != 0 ]; then
         for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done
@@ -2118,7 +2154,7 @@ show_live_monitor() {
     done
 }
 
-# BEGIN MTUNNEL WORKSPACE V13
+# BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -2279,7 +2315,7 @@ mt_link_field_valid() {
         TUN_ID) mt_link_uint "$val" 0 16777215;;
         VNI_ID) mt_link_uint "$val" 1 16777215;;
         MAX_IPS) mt_link_uint "$val" 0 64;;
-        CUSTOM_MTU) [ -z "$val" ] || mt_link_uint "$val" 512 9000;;
+        CUSTOM_MTU) [ -z "$val" ] || mt_link_uint "$val" 900 9000;;
         ENCRYPT) [[ "$val" =~ ^[01]$ ]];;
         ADV_LOG) [[ "$val" =~ ^(trace|debug|info|warn|error)$ ]];;
         ADV_KEEPALIVE|ADV_HEARTBEAT|ADV_CHANNEL|ADV_POOL|ADV_RETRY|ADV_DIAL|ADV_MUX_CON|ADV_MUX_VERSION|ADV_MUX_FRAME|ADV_MUX_RECEIVE|ADV_MUX_STREAM|ADV_MTU|ADV_MSS|ADV_RCVBUF|ADV_SNDBUF) mt_link_uint "$val" 0 1073741824;;
@@ -2467,7 +2503,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V13
+# END MTUNNEL WORKSPACE V14.0.1
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1
@@ -2503,7 +2539,7 @@ mt_link_deploy_locked() {
         read -r min max def <<< "$(mgre_mtu_limits "$proto")"
     else
         grep -q "^VNI_ID=${MT_LINK_DATA[VNI_ID]}$" "$CONF_DIR"/*.conf 2>/dev/null && { echo 'VNI already in use.' >&2; return 1; }
-        min=576; max=1450; [ "$proto" != ipv6 ] || max=1430
+        min=$MX_MTU_MIN; max=1450; [ "$proto" != ipv6 ] || max=1430
     fi
     if [ -n "${MT_LINK_DATA[CUSTOM_MTU]:-}" ]; then mt_link_uint "${MT_LINK_DATA[CUSTOM_MTU]}" "$min" "$max" || { echo 'MTU outside protocol limits.' >&2; return 1; }; fi
     # Existing vIP generator uses IPv4 pairs; IPIP6->6 carries only IPv6 payload.
@@ -2671,7 +2707,8 @@ while true; do
                    custom_ip=$(echo "$custom_ip" | tr -dc '0-9.')
                    if [ -n "$custom_ip" ] && ! is_ipv4 "$custom_ip"; then echo -e "  ${R}✖ Invalid IPv4 address.${NC}"; continue; fi
                    [ -n "$custom_ip" ] && auto_lip=$custom_ip
-                   break
+                   is_ipv4 "$auto_lip" && break
+                   echo -e "  ${R}✖ No valid local IPv4 was auto-detected. Enter it manually.${NC}"
                done
                [[ "$custom_ip" == "q" ]] && continue
                local_ip="$auto_lip"
@@ -2737,7 +2774,7 @@ while true; do
            fi
 
            cust_mtu=""
-           mtu_min=576; mtu_max=1450; [ "$fab_proto" != ipv6 ] || mtu_max=1430
+           mtu_min=$MX_MTU_MIN; mtu_max=1450; [ "$fab_proto" != ipv6 ] || mtu_max=1430
            while true; do
                mt_ask cust_mtu "Manual MTU [$mtu_min-$mtu_max; Enter: protocol default; q: back]: " || break
                [[ "$cust_mtu" == q || -z "$cust_mtu" ]] && break
@@ -2787,7 +2824,7 @@ while true; do
                        echo "FWD_TCP=$fwd_tcp" >> "${conf_path}.tmp"
                        echo "FWD_UDP=$fwd_udp" >> "${conf_path}.tmp"
                        echo "LB_MODE=$run_lb" >> "${conf_path}.tmp"
-                       mv "${conf_path}.tmp" "$conf_path"
+                       mv "${conf_path}.tmp" "$conf_path" && chmod 600 "$conf_path"
                        
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            mt_choose_fwd_targets "$conf_path" "${core_sub}.2" "$(mt_config_value SYNC_KEY "$conf_path")" "$(mt_config_value MAX_IPS "$conf_path")" "$s_type" || true

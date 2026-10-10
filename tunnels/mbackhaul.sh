@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- MTunnel MBackhaul | Multiplexer Engine v14 ---
+# --- MTunnel MBackhaul | Multiplexer Engine v14.0.1 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -253,9 +254,10 @@ mt_counter_sum() {
 }
 
 mt_setup_counter_pair() {
-    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" bin addr family
+    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" proto="${7:-tcp}" bin addr family
     local -a addresses=() input=() output=()
     mt_valid_port "$port" || return 1
+    [[ "$proto" =~ ^(tcp|udp)$ ]] || return 1
     if [ "$role" == 1 ]; then
         input=(--dport "$port"); output=(--sport "$port")
         if [[ "$bind" == *:* ]]; then addresses=('::'); else addresses=('0.0.0.0'); fi
@@ -271,10 +273,10 @@ mt_setup_counter_pair() {
         bin=iptables; [[ "$addr" == *:* ]] && bin=ip6tables
         command -v "$bin" >/dev/null 2>&1 || continue
         if [ "$role" != 1 ]; then input=(-s "$addr" --sport "$port"); output=(-d "$addr" --dport "$port"); fi
-        "$bin" -w 5 -t mangle -C INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
-        "$bin" -w 5 -t mangle -C OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
     done
 }
 
@@ -646,7 +648,8 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 [ -f "/usr/local/bin/mbackhaul" ] && rm -f "/usr/local/bin/mbackhaul" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
-chmod 700 "$SECURE_TMP" 2>/dev/null
+chmod 700 "$CONF_DIR" "$CERT_DIR" "$SECURE_TMP" 2>/dev/null
+find "$CONF_DIR" "$CERT_DIR" -maxdepth 2 -type f -exec chmod 600 {} + 2>/dev/null || true
 rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null
 
 ensure_dependencies() {
@@ -691,7 +694,7 @@ validate_bh_ports() {
             else mt_valid_port "$rhs" || return 1; fi
         fi
         if [[ "$lhs" == *:* ]]; then
-            host="${lhs%:*}"; port="${lhs##*:}"
+            host=$(mt_normalize_host "${lhs%:*}"); port="${lhs##*:}"
             mt_valid_ipv4 "$host" || mt_valid_ipv6 "$host" || return 1
             start="$port"; end="$port"
         elif [[ "$lhs" == *-* ]]; then start="${lhs%-*}"; end="${lhs#*-}"
@@ -746,7 +749,9 @@ read_with_refresh() {
         rc=$?
 
         if [ $rc -ne 0 ]; then
-            continue
+            [ "$rc" -eq 142 ] && continue
+            rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null
+            return "$rc"
         fi
 
         if [[ -z "$char" ]]; then
@@ -1275,7 +1280,10 @@ check_first_run_core() {
 }
 
 setup_bh_counters() {
-    mt_setup_counter_pair MBH "$1" "$2" "$3" "$4" "${5:-0.0.0.0}"
+    local proto
+    proto=$(bh_meta_value TRANSPORT "$CONF_DIR/$1.meta" 2>/dev/null)
+    [ "$proto" = udp ] || proto=tcp
+    mt_setup_counter_pair MBH "$1" "$2" "$3" "$4" "${5:-0.0.0.0}" "$proto"
 }
 
 clean_bh_counters() {
@@ -1575,10 +1583,18 @@ check_bh_connection() {
     local known_active="$2"
     local meta="$CONF_DIR/${t_name}.meta"
     [ ! -f "$meta" ] && { echo "OFFLINE"; return; }
-    
-    ROLE=""; TUN_PORT=""; REMOTE_IP=""; source "$meta" 2>/dev/null
+
+    ROLE=""; TUN_PORT=""; REMOTE_IP=""; TRANSPORT="tcp"; source "$meta" 2>/dev/null
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
+    if [ "$TRANSPORT" = udp ]; then
+        # UDP has no TCP ESTABLISHED state. Packet counters are the link-activity signal.
+        local rx tx; rx=$(get_bh_rx "$t_name"); tx=$(get_bh_tx "$t_name")
+        if (( ${rx:-0} + ${tx:-0} > 0 )); then echo "ONLINE"
+        elif [ "$ROLE" == "1" ]; then echo "WAITING"
+        else echo "CONNECTING"; fi
+        return
+    fi
     if [ "$ROLE" == "1" ]; then
         if ss -tn src ":$TUN_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "ONLINE"; else echo "WAITING"; fi
     else
@@ -1624,7 +1640,7 @@ get_peer_ping() {
 }
 
 bh_port_lines() {
-    local list="$1" bind="$2" raw lhs rhs start end port mapped output=''
+    local list="$1" bind="$2" raw lhs rhs host start end port mapped output=''
     local -a items=()
     [ -n "$list" ] || { printf ''; return 0; }
     IFS=, read -ra items <<< "$list"
@@ -1632,8 +1648,9 @@ bh_port_lines() {
         raw="${raw// /}"; lhs="${raw%%=*}"; rhs=''
         [[ "$raw" != *=* ]] || rhs="${raw#*=}"
         if [[ "$lhs" == *:* ]]; then
-            mapped="$raw"
-            [ -n "$rhs" ] || mapped="$lhs=127.0.0.1:${lhs##*:}"
+            host=$(mt_normalize_host "${lhs%:*}")
+            port="${lhs##*:}"
+            mapped="$(mt_hostport "$host" "$port")=${rhs:-127.0.0.1:$port}"
             output+="${output:+, }\"$mapped\""
         else
             start="${lhs%-*}"; end="${lhs#*-}"
@@ -2124,7 +2141,7 @@ manage_cron() {
     if [[ "$cr_opt" == "1" ]]; then
         echo -ne "  ${C}●${NC} ${W}Restart interval in hours (e.g. 2, 4, 6): ${NC}"; read interval
         interval=$(echo "$interval" | tr -d '\r')
-        [[ ! "$interval" =~ ^[0-9]+$ ]] && echo -e "  ${R}Invalid interval!${NC}" && sleep 1.5 && return
+        [[ "$interval" =~ ^[0-9]+$ ]] && ((10#$interval >= 1 && 10#$interval <= 24)) || { echo -e "  ${R}Invalid interval! Use 1-24 hours.${NC}"; sleep 1.5; return; }
         
         echo "#!/bin/bash" > "$cron_script"
         echo "systemctl kill -s SIGKILL mbackhaul@${t_name}" >> "$cron_script"
@@ -2134,7 +2151,11 @@ manage_cron() {
         if command -v crontab >/dev/null 2>&1; then
             local cron_tmp="$SECURE_TMP/crontab.$$"
             crontab -l 2>/dev/null | grep -v "mbackhaul@${t_name}" > "$cron_tmp"
-            echo "0 */${interval} * * * $cron_script #mbackhaul@${t_name}" >> "$cron_tmp"
+            if [ "$interval" -eq 24 ]; then
+                echo "0 0 * * * $cron_script #mbackhaul@${t_name}" >> "$cron_tmp"
+            else
+                echo "0 */${interval} * * * $cron_script #mbackhaul@${t_name}" >> "$cron_tmp"
+            fi
             crontab "$cron_tmp"; rm -f "$cron_tmp"
             echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
         else
@@ -2247,7 +2268,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V13
+# BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -2591,7 +2612,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V13
+# END MTUNNEL WORKSPACE V14.0.1
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1

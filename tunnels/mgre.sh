@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v14 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v14.0.1 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,8 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -119,12 +120,18 @@ mt_tcp_probe() {
 }
 
 mt_list_has_port() {
-    local item; local -a parts=()
+    local item a b target="$2"; local -a parts=()
+    mt_valid_port "$target" || return 1
+    target=$((10#$target))
     IFS=, read -ra parts <<< "$1"
     for item in "${parts[@]}"; do
         [[ "$item" == *"="* ]] && item="${item%%=*}"
-        [[ "$item" == *:* ]] && item="${item##*:}"
-        mt_valid_port "$item" && ((10#$item == 10#$2)) && return 0
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((target >= a && target <= b)) && return 0
+        elif mt_valid_port "$item" && ((10#$item == target)); then
+            return 0
+        fi
     done
     return 1
 }
@@ -139,15 +146,22 @@ mt_port_busy() {
 }
 
 mt_validate_port_list() {
-    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item
+    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item a b p
     local -A seen=(); local -a parts=()
     [ -z "$list" ] && return 0
-    [[ "$list" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+    [[ "$list" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || return 1
     IFS=, read -ra parts <<< "$list"
     for item in "${parts[@]}"; do
-        mt_valid_port "$item" || return 1
-        item=$((10#$item)); [ -z "${seen[$item]:-}" ] || return 1; seen[$item]=1
-        if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$item" && mt_port_busy "$item" "$proto"; then return 1; fi
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((a >= 1 && b <= 65535 && a < b)) || return 1
+        else
+            mt_valid_port "$item" || return 1; a=$((10#$item)); b=$a
+        fi
+        for ((p=a; p<=b; p++)); do
+            [ -z "${seen[$p]:-}" ] || return 1; seen[$p]=1
+            if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$p" && mt_port_busy "$p" "$proto"; then return 1; fi
+        done
     done
 }
 
@@ -528,6 +542,7 @@ mt_validate_tunnel_conf() {
     [ -z "$CUSTOM_MTU" ] || { [[ "$CUSTOM_MTU" =~ ^[0-9]{3,5}$ ]] && ((10#$CUSTOM_MTU >= 512 && 10#$CUSTOM_MTU <= 65535)); } || return 1
     if [ "$kind" == gre ]; then
         [[ "$T_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$TUN_ID" =~ ^[0-9]{1,9}$ && "$TUN_PROTO" =~ ^(ipv4|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]] || return 1
+        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="10.76.$((10#$TUN_ID))"
         case "$TUN_PROTO" in
             gre6|ipip4to6|ipip6to6) mt_valid_ipv6 "${LOCAL_PUB6:-$LOCAL_IP6}" && mt_valid_ipv6 "${REMOTE_PUB6:-$REMOTE_IP6}" || return 1;;
             *) mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1;;
@@ -652,6 +667,8 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 [ -f "/usr/local/bin/mgre" ] && rm -f "/usr/local/bin/mgre" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
+find "$CONF_DIR" -maxdepth 2 -type f -exec chmod 600 {} + 2>/dev/null || true
 chmod 700 "$SECURE_TMP" 2>/dev/null
 
 # ======================================================================
@@ -833,17 +850,16 @@ build_fwd_rules() {
             for ((idx=0; idx<n; idx++)); do
                 dst="${live[$idx]}"; rem=$((n - idx))
                 if [ "$rem" -gt 1 ]; then
-                    iptables -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m statistic --mode nth --every "$rem" --packet 0 -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null
+                    iptables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m statistic --mode nth --every "$rem" --packet 0 -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || return 1
                 else
-                    iptables -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null
+                    iptables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || return 1
                 fi
-                iptables -t nat -A POSTROUTING -o "$tif" -p "$proto" -m "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j MASQUERADE 2>/dev/null
-                iptables -t filter -A FORWARD -o "$tif" -p "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j ACCEPT 2>/dev/null
+                iptables -w 5 -t nat -A POSTROUTING -o "$tif" -p "$proto" -m "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j MASQUERADE 2>/dev/null || return 1
+                iptables -w 5 -t filter -A FORWARD -o "$tif" -p "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j ACCEPT 2>/dev/null || return 1
             done
         done
     done
 }
-
 # ---- IPsec (ESP transport) encryption, keys derived from the Master Token on both peers ----
 xfrm_state_file() { echo "$SECURE_TMP/.mgre_xfrm_$1"; }
 
@@ -996,7 +1012,8 @@ mgre_core_ips() {
         if [ "$TYPE" == "1" ]; then CORE_LIP="${CORE_V6}::1"; CORE_TIP="${CORE_V6}::2"; else CORE_LIP="${CORE_V6}::2"; CORE_TIP="${CORE_V6}::1"; fi
     else
         CORE_PING="ping"
-        if [ "$TYPE" == "1" ]; then CORE_LIP="${CORE_SUBNET}.1"; CORE_TIP="${CORE_SUBNET}.2"; else CORE_LIP="${CORE_SUBNET}.2"; CORE_TIP="${CORE_SUBNET}.1"; fi
+        local core_sub="${CORE_SUBNET:-10.76.${TUN_ID}}"
+        if [ "$TYPE" == "1" ]; then CORE_LIP="${core_sub}.1"; CORE_TIP="${core_sub}.2"; else CORE_LIP="${core_sub}.2"; CORE_TIP="${core_sub}.1"; fi
     fi
 }
 
@@ -1090,7 +1107,8 @@ read_with_refresh() {
         rc=$?
 
         if [ $rc -ne 0 ]; then
-            continue
+            [ "$rc" -eq 142 ] && continue
+            return "$rc"
         fi
 
         if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
@@ -1473,10 +1491,19 @@ remove_ports() {
     echo "${out%,}"
 }
 
+mgre_apply_fail_cleanup() {
+    local name="$1"
+    [ -n "$name" ] || return 0
+    clean_fwd_rules "$name"; clean_mss_rules "$name"; xfrm_clear "$name"
+    ip link del "$name" >/dev/null 2>&1 || true
+    ip link del "sit_$name" >/dev/null 2>&1 || true
+}
+
 apply_tunnel() {
     local conf="$1"
     [ ! -s "$conf" ] && return
     local TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" CORE_V6="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0"
+    mt_validate_tunnel_conf "$conf" gre || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
     [ -z "$T_NAME" ] && return
     mgre_endpoints; mgre_core_ips
@@ -1526,26 +1553,26 @@ apply_tunnel() {
             ;;
     esac
 
-    ip link show "$T_NAME" >/dev/null 2>&1 || { echo "Failed to create $T_NAME." >&2; return 1; }
-    ip link set dev "$T_NAME" mtu "$eff_mtu" || return 1
-    [ "$ENCRYPT" == 1 ] || ip link set "$T_NAME" up || return 1
+    ip link show "$T_NAME" >/dev/null 2>&1 || { echo "Failed to create $T_NAME." >&2; mgre_apply_fail_cleanup "$T_NAME"; return 1; }
+    ip link set dev "$T_NAME" mtu "$eff_mtu" || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
+    [ "$ENCRYPT" == 1 ] || ip link set "$T_NAME" up || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
 
     if [ "$TUN_PROTO" == "ipip6to6" ]; then
-        ip -6 addr add "$CORE_LIP/64" dev "$T_NAME" nodad 2>/dev/null || ip -6 addr add "$CORE_LIP/64" dev "$T_NAME" 2>/dev/null
-        ip6tables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -m comment --comment "MGRE_MSS_$T_NAME" -j TCPMSS --set-mss $((eff_mtu - 60)) 2>/dev/null
+        ip -6 addr add "$CORE_LIP/64" dev "$T_NAME" nodad 2>/dev/null || ip -6 addr add "$CORE_LIP/64" dev "$T_NAME" 2>/dev/null || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
+        ip6tables -w 5 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -m comment --comment "MGRE_MSS_$T_NAME" -j TCPMSS --set-mss $((eff_mtu - 60)) 2>/dev/null || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
     else
-        ip addr add "$CORE_LIP/30" dev "$T_NAME" 2>/dev/null
-        iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -m comment --comment "MGRE_MSS_$T_NAME" -j TCPMSS --set-mss $((eff_mtu - 40)) 2>/dev/null
+        ip addr add "$CORE_LIP/30" dev "$T_NAME" 2>/dev/null || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
+        iptables -w 5 -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -o "$T_NAME" -m comment --comment "MGRE_MSS_$T_NAME" -j TCPMSS --set-mss $((eff_mtu - 40)) 2>/dev/null || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
     fi
 
     if [ "$ENCRYPT" == "1" ]; then
         local sel; sel=$(mgre_enc_selector "$TUN_PROTO")
         if [ -z "$sel" ] || ! xfrm_apply "$T_NAME" "$TYPE" "$EP_L" "$EP_R" "$TUN_SECRET" $sel; then
-            ip link set "$T_NAME" down; echo "Requested encryption failed; $T_NAME stopped." >&2; return 1
+            ip link set "$T_NAME" down; echo "Requested encryption failed; $T_NAME stopped." >&2; mgre_apply_fail_cleanup "$T_NAME"; return 1
         fi
     fi
 
-    ip link set "$T_NAME" up || return 1
+    ip link set "$T_NAME" up || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
 
     if [ "$TUN_PROTO" != "ipip6to6" ] && is_uint "$MAX_IPS" && [ "$MAX_IPS" -gt 0 ]; then
         local nip tip clash
@@ -1558,8 +1585,8 @@ apply_tunnel() {
         done < <(vip_targets "$SYNC_KEY" "$MAX_IPS" "$TYPE")
     fi
 
-    mgre_apply_fwd "$conf"
-    rebuild_guard
+    mgre_apply_fwd "$conf" || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
+    rebuild_guard || { mgre_apply_fail_cleanup "$T_NAME"; return 1; }
 }
 
 apply_all_tunnels() {
@@ -1645,7 +1672,7 @@ manage_port_forwarding() {
                 grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
                 echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp"
                 echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
-                mv "${target_conf}.tmp" "$target_conf"
+                mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
                 apply_tunnel "$target_conf"
@@ -1661,7 +1688,7 @@ manage_port_forwarding() {
                 grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
                 echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp"
                 echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp"
-                mv "${target_conf}.tmp" "$target_conf"
+                mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
                 apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
@@ -1674,7 +1701,7 @@ manage_port_forwarding() {
                 grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp"
                 echo "FWD_TCP=$new_tcp" >> "${target_conf}.tmp"
                 echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp"
-                mv "${target_conf}.tmp" "$target_conf"
+                mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
                 apply_tunnel "$target_conf"
@@ -2006,6 +2033,7 @@ mgre_mtu_limits() { # <proto> -> "min max default"
 mgre_apply_fwd() {
     local conf="$1"
     local TYPE="" T_NAME="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
+    mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
     clean_fwd_rules "$T_NAME"
     [ "$TYPE" == "1" ] || return 0
@@ -2041,7 +2069,7 @@ rebuild_guard() {
     iptables -N MGRE_GUARD 2>/dev/null
     ip6tables -N MGRE6_GUARD 2>/dev/null
     local conf TYPE REMOTE_PUB LOCAL_PUB REMOTE_PUB6 LOCAL_PUB6 REMOTE_IP6 LOCAL_IP6 TUN_PROTO
-    local h_ipip4=0 h_gre6=0 h_ip4in6=0 h_ip6in6=0 peers6=0
+    local h_gre4=0 h_6to4=0 h_ipip4=0 h_gre6=0 h_ip4in6=0 h_ip6in6=0 peers4=0 peers6=0
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; REMOTE_PUB=""; LOCAL_PUB=""; REMOTE_PUB6=""; LOCAL_PUB6=""; REMOTE_IP6=""; LOCAL_IP6=""; TUN_PROTO="ipv4"; source "$conf" 2>/dev/null
@@ -2051,14 +2079,18 @@ rebuild_guard() {
             ip6tables -A MGRE6_GUARD -s "$EP_R" -j ACCEPT; peers6=1
             case "$TUN_PROTO" in gre6) h_gre6=1 ;; ipip4to6) h_ip4in6=1 ;; ipip6to6) h_ip6in6=1 ;; esac
         else
-            is_ipv4 "$EP_R" && iptables -A MGRE_GUARD -s "$EP_R" -j ACCEPT
-            [ "$TUN_PROTO" == "ipip4to4" ] && h_ipip4=1
+            if is_ipv4 "$EP_R"; then iptables -w 5 -A MGRE_GUARD -s "$EP_R" -j ACCEPT; peers4=1; fi
+            case "$TUN_PROTO" in ipv4|"") h_gre4=1;; 6to4) h_6to4=1;; ipip4to4) h_ipip4=1;; esac
         fi
     done
-    iptables -A MGRE_GUARD -j DROP
-    iptables -I INPUT 1 -p gre -m comment --comment "MGRE_GUARD_HOOK" -j MGRE_GUARD
-    iptables -I INPUT 1 -p 41  -m comment --comment "MGRE_GUARD_HOOK" -j MGRE_GUARD
-    [ "$h_ipip4" -eq 1 ] && iptables -I INPUT 1 -p 4 -m comment --comment "MGRE_GUARD_HOOK" -j MGRE_GUARD
+    if [ "$peers4" -eq 1 ]; then
+        iptables -w 5 -A MGRE_GUARD -j DROP
+        [ "$h_gre4" -eq 1 ] && iptables -w 5 -I INPUT 1 -p gre -m comment --comment "MGRE_GUARD_HOOK" -j MGRE_GUARD
+        [ "$h_6to4" -eq 1 ] && iptables -w 5 -I INPUT 1 -p 41 -m comment --comment "MGRE_GUARD_HOOK" -j MGRE_GUARD
+        [ "$h_ipip4" -eq 1 ] && iptables -w 5 -I INPUT 1 -p 4 -m comment --comment "MGRE_GUARD_HOOK" -j MGRE_GUARD
+    else
+        iptables -X MGRE_GUARD 2>/dev/null
+    fi
     # IPv6 hooks only for the protocols actually used, so unrelated IPv6 tunnels on the host stay untouched
     if [ "$peers6" -eq 1 ]; then
         ip6tables -A MGRE6_GUARD -j DROP
@@ -2191,9 +2223,22 @@ restore_validated_backup() {
     local archive="$1" stage conf rollback failed=0
     stage=$(mt_stage_backup "$archive" "tunnels") || return 1
     # Validate tunnel identity/role/endpoints before stopping any live interface.
+    local -A seen_id=() seen_sub=() seen_sub6=()
+    local TUN_ID CORE_SUBNET CORE_V6 TUN_PROTO
     for conf in "$stage/tunnels"/*.conf; do
         [ -f "$conf" ] || continue
         if ! mt_validate_tunnel_conf "$conf" gre; then rm -rf "$stage"; return 1; fi
+        TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; source "$conf"
+        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="10.76.${TUN_ID}"
+        [ -z "${seen_id[$TUN_ID]:-}" ] || { echo "Duplicate TUN_ID in backup: $TUN_ID" >&2; rm -rf "$stage"; return 1; }
+        seen_id[$TUN_ID]=1
+        if [ "$TUN_PROTO" = ipip6to6 ]; then
+            [ -z "${seen_sub6[$CORE_V6]:-}" ] || { echo "Duplicate IPv6 core subnet in backup: $CORE_V6" >&2; rm -rf "$stage"; return 1; }
+            seen_sub6[$CORE_V6]=1
+        else
+            [ -z "${seen_sub[$CORE_SUBNET]:-}" ] || { echo "Duplicate core subnet in backup: $CORE_SUBNET" >&2; rm -rf "$stage"; return 1; }
+            seen_sub[$CORE_SUBNET]=1
+        fi
     done
     backup_configs >/dev/null || { rm -rf "$stage"; return 1; }
     rollback=$(mktemp -d "${CONF_DIR}.rollback.XXXXXX") || { rm -rf "$stage"; return 1; }
@@ -2201,6 +2246,8 @@ restore_validated_backup() {
     for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_tunnel "$conf"; done
     rm -f "$CONF_DIR"/*.conf
     cp -a "$stage/tunnels/." "$CONF_DIR/" || failed=1
+    chmod 700 "$CONF_DIR" 2>/dev/null
+    find "$CONF_DIR" -maxdepth 1 -type f -name '*.conf' -exec chmod 600 {} + 2>/dev/null || failed=1
     [ "$failed" != 0 ] || apply_all_tunnels || failed=1
     if [ "$failed" != 0 ]; then
         for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_tunnel "$conf"; done
@@ -2278,7 +2325,7 @@ show_live_monitor() {
     done
 }
 
-# BEGIN MTUNNEL WORKSPACE V13
+# BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -2631,7 +2678,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V13
+# END MTUNNEL WORKSPACE V14.0.1
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1
@@ -2844,7 +2891,8 @@ while true; do
                    custom_ip=$(echo "$custom_ip" | tr -dc '0-9.')
                    if [ -n "$custom_ip" ] && ! is_ipv4 "$custom_ip"; then echo -e "  ${R}✖ Invalid IPv4 address.${NC}"; continue; fi
                    [ -n "$custom_ip" ] && local_ip="$custom_ip"
-                   break
+                   is_ipv4 "$local_ip" && break
+                   echo -e "  ${R}✖ No valid local IPv4 was auto-detected. Enter it manually.${NC}"
                done
                [[ "$custom_ip" == "q" ]] && continue
                while true; do
@@ -3118,13 +3166,13 @@ while true; do
            if [ -z "$new_mtu" ]; then
                grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp"
                echo "CUSTOM_MTU=" >> "${SELECTED_CONF}.tmp"
-               mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
+               mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
                apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - 40)).${NC}"; sleep 1.8
            elif [ "$new_mtu" -ge "$min_mtu" ] && [ "$new_mtu" -le "$max_mtu" ] 2>/dev/null; then
                grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp"
                echo "CUSTOM_MTU=$new_mtu" >> "${SELECTED_CONF}.tmp"
-               mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF"
+               mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
                
                # 1. Update live interface immediately
                ip link set dev "$T_NAME" mtu "$new_mtu" 2>/dev/null

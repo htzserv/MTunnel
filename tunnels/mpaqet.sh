@@ -1,8 +1,9 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v14 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v14.0.1 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -646,6 +647,8 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 [ -f "/usr/local/bin/mpaqet" ] && rm -f "/usr/local/bin/mpaqet" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
+find "$CONF_DIR" -maxdepth 2 -type f -exec chmod 600 {} + 2>/dev/null || true
 chmod 700 "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null
 
@@ -690,7 +693,9 @@ read_with_refresh() {
         rc=$?
 
         if [ $rc -ne 0 ]; then
-            continue
+            [ "$rc" -eq 142 ] && continue
+            rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null
+            return "$rc"
         fi
 
         if [[ -z "$char" ]]; then
@@ -953,13 +958,13 @@ validate_paqet_ports() {
 
 setup_paqet_counters() {
     local name="$1"; local l_port="$2"
-    iptables -t mangle -C INPUT -p tcp --dport "$l_port" -m comment --comment "MPAQET_RX_${name}" >/dev/null 2>&1 || iptables -t mangle -A INPUT -p tcp --dport "$l_port" -m comment --comment "MPAQET_RX_${name}" 2>/dev/null
-    iptables -t mangle -C OUTPUT -p tcp --sport "$l_port" -m comment --comment "MPAQET_TX_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -p tcp --sport "$l_port" -m comment --comment "MPAQET_TX_${name}" 2>/dev/null
+    iptables -w 5 -t mangle -C INPUT -p tcp --dport "$l_port" -m comment --comment "MPAQET_RX_${name}" >/dev/null 2>&1 || iptables -w 5 -t mangle -A INPUT -p tcp --dport "$l_port" -m comment --comment "MPAQET_RX_${name}" 2>/dev/null
+    iptables -w 5 -t mangle -C OUTPUT -p tcp --sport "$l_port" -m comment --comment "MPAQET_TX_${name}" >/dev/null 2>&1 || iptables -w 5 -t mangle -A OUTPUT -p tcp --sport "$l_port" -m comment --comment "MPAQET_TX_${name}" 2>/dev/null
     
-    iptables -t raw -C PREROUTING -p tcp --dport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" >/dev/null 2>&1 || iptables -t raw -A PREROUTING -p tcp --dport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" 2>/dev/null
-    iptables -t raw -C OUTPUT -p tcp --sport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" >/dev/null 2>&1 || iptables -t raw -A OUTPUT -p tcp --sport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" 2>/dev/null
+    iptables -w 5 -t raw -C PREROUTING -p tcp --dport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" >/dev/null 2>&1 || iptables -w 5 -t raw -A PREROUTING -p tcp --dport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" 2>/dev/null
+    iptables -w 5 -t raw -C OUTPUT -p tcp --sport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" >/dev/null 2>&1 || iptables -w 5 -t raw -A OUTPUT -p tcp --sport "$l_port" -j NOTRACK -m comment --comment "MPAQET_RAW_${name}" 2>/dev/null
     
-    iptables -t mangle -C OUTPUT -p tcp --sport "$l_port" --tcp-flags RST RST -j DROP -m comment --comment "MPAQET_RST_${name}" >/dev/null 2>&1 || iptables -t mangle -A OUTPUT -p tcp --sport "$l_port" --tcp-flags RST RST -j DROP -m comment --comment "MPAQET_RST_${name}" 2>/dev/null
+    iptables -w 5 -t mangle -C OUTPUT -p tcp --sport "$l_port" --tcp-flags RST RST -j DROP -m comment --comment "MPAQET_RST_${name}" >/dev/null 2>&1 || iptables -w 5 -t mangle -A OUTPUT -p tcp --sport "$l_port" --tcp-flags RST RST -j DROP -m comment --comment "MPAQET_RST_${name}" 2>/dev/null
 }
 
 clean_paqet_counters() {
@@ -968,12 +973,12 @@ clean_paqet_counters() {
     rm -f "$SECURE_TMP/.mpaqet_link_${name}" "$SECURE_TMP/.mpaqet_peer_${name}" 2>/dev/null
     for chain in INPUT OUTPUT; do
         while read -r rulenum; do
-            [ -n "$rulenum" ] && iptables -t mangle -D "$chain" "$rulenum" 2>/dev/null
+            [ -n "$rulenum" ] && iptables -w 5 -t mangle -D "$chain" "$rulenum" 2>/dev/null
         done < <(iptables -t mangle -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MPAQET_(RX|TX|RST|PEER|LINK)_${name}( |\*/)" | awk '{print $1}' | tac)
     done
     for chain in PREROUTING OUTPUT; do
         while read -r rulenum; do
-            [ -n "$rulenum" ] && iptables -t raw -D "$chain" "$rulenum" 2>/dev/null
+            [ -n "$rulenum" ] && iptables -w 5 -t raw -D "$chain" "$rulenum" 2>/dev/null
         done < <(iptables -t raw -L "$chain" -n --line-numbers 2>/dev/null | grep -E "MPAQET_RAW_${name}( |\*/)" | awk '{print $1}' | tac)
     done
 }
@@ -1004,11 +1009,11 @@ setup_paqet_probe() {
     port=$(grep -m1 '^TUN_PORT=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     [[ "$port" =~ ^[0-9]+$ ]] || return 0
     if [ "$role" = "1" ]; then
-        iptables -t mangle -C INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1 || \
-        iptables -t mangle -A INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1
+        iptables -w 5 -t mangle -C INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1 || \
+        iptables -w 5 -t mangle -A INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1
     else
-        iptables -t mangle -C INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
-        iptables -t mangle -A INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
+        iptables -w 5 -t mangle -C INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
+        iptables -w 5 -t mangle -A INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
     fi
     return 0
 }
@@ -1346,6 +1351,7 @@ write_kcp_settings() {
         return 1
     fi
     mv -f "$tmp" "$yaml"
+    chmod 600 "$yaml" 2>/dev/null || return 1
     return 0
 }
 
@@ -1856,10 +1862,9 @@ uninstall_mpaqet() {
     killall -9 paqet 2>/dev/null
 
     echo -e "  ${DIM}● [2/5] Purging raw & mangle iptables rules...${NC}"
-    for tbl in mangle raw; do
-        iptables -t $tbl -S 2>/dev/null | grep -E "MPAQET_" | sed 's/^-A /-D /' | while read -r r; do
-            iptables -t $tbl $r 2>/dev/null
-        done
+    for chain in INPUT OUTPUT PREROUTING; do
+        mt_delete_tagged_rules iptables mangle "$chain" "MPAQET_" substring 2>/dev/null || true
+        mt_delete_tagged_rules iptables raw "$chain" "MPAQET_" substring 2>/dev/null || true
     done
 
     echo -e "  ${DIM}● [3/5] Removing systemd unit files...${NC}"
@@ -1896,7 +1901,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V13
+# BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -2240,7 +2245,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V13
+# END MTUNNEL WORKSPACE V14.0.1
 
 mt_link_paqet_values() {
     local yaml="$1" key val source
@@ -2483,12 +2488,14 @@ EOF
                -e "s|%KEY%|${key}|g" \
                "$CONF_DIR/${t_name}.yaml.tmp" > "$CONF_DIR/${t_name}.yaml"
            rm -f "$CONF_DIR/${t_name}.yaml.tmp"
+           chmod 600 "$CONF_DIR/${t_name}.yaml"
            if ! write_kcp_settings "$CONF_DIR/${t_name}.yaml" "$key" "aes-128-gcm"; then
                clean_paqet_counters "$t_name"; rm -f "$CONF_DIR/${t_name}.yaml"
                echo -e "  ${R}✖ Tunnel was NOT created (profile could not be written).${NC}"; sleep 2; continue
            fi
            
            echo -e "ROLE=1\nTUN_PORT=$t_port\nREMOTE_IP=0.0.0.0\nTCP_PORTS=\nPROFILE=$profile_name" > "$CONF_DIR/${t_name}.meta"
+           chmod 600 "$CONF_DIR/${t_name}.meta"
            
            setup_paqet_counters "$t_name" "$t_port"
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
@@ -2538,7 +2545,14 @@ EOF
            resolve_paqet_route "$r_ip" || { echo 'Cannot resolve the remote route/gateway MAC.' >&2; continue; }
            iface="$PQ_ROUTE_IFACE"; l_ip="$PQ_ROUTE_SRC"; gw_mac="$PQ_ROUTE_MAC"; r_ip="$PQ_ROUTE_TARGET"
 
-           echo -ne "  ${C}● Secret Key (from Server): ${NC}"; read key
+           while true; do
+               echo -ne "  ${C}● Secret Key (from Server): ${NC}"; read -r key
+               [[ "$key" == q ]] && break
+               key=$(echo "$key" | tr -dc 'A-Za-z0-9_=-')
+               [ -n "$key" ] && break
+               echo -e "  ${R}✖ Secret Key cannot be empty.${NC}"
+           done
+           [[ "$key" == q ]] && continue
            key=$(echo "$key" | tr -dc 'a-zA-Z0-9_=-')
            
            fwd_ports=""
@@ -2607,12 +2621,14 @@ EOF
                -e "s|%KEY%|${key}|g" \
                "$CONF_DIR/${t_name}.yaml.tmp" > "$CONF_DIR/${t_name}.yaml"
            rm -f "$CONF_DIR/${t_name}.yaml.tmp"
+           chmod 600 "$CONF_DIR/${t_name}.yaml"
            if ! write_kcp_settings "$CONF_DIR/${t_name}.yaml" "$key" "aes-128-gcm"; then
                clean_paqet_counters "$t_name"; rm -f "$CONF_DIR/${t_name}.yaml"
                echo -e "  ${R}✖ Tunnel was NOT created (profile could not be written).${NC}"; sleep 2; continue
            fi
 
            echo -e "ROLE=2\nTUN_PORT=$r_port\nREMOTE_IP=$r_ip\nTCP_PORTS=${meta_ports%,}\nPROFILE=$profile_name" > "$CONF_DIR/${t_name}.meta"
+           chmod 600 "$CONF_DIR/${t_name}.meta"
 
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
            systemctl restart "mpaqet@${t_name}"
@@ -2790,6 +2806,7 @@ EOF
                if [ -s "$tmp_yaml" ] && grep -q "role:" "$tmp_yaml"; then
                    clean_paqet_counters "$old_tname"
                    mv -f "$tmp_yaml" "$sel_cfg"
+                   chmod 600 "$sel_cfg"
 
                    new_meta_ports="${new_meta_ports%,}"
                    IFS=',' read -ra NP_ARR <<< "$new_meta_ports"

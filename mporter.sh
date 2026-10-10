@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v14 ---
+# --- MTunnel MPorter | Port Forwarding Manager v14.0.1 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
 # v12.0.3 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
@@ -25,7 +25,8 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="14"
+MODULE_VERSION="14.0.1"
+umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -1364,11 +1365,14 @@ json_engine_commit() {
 }
 
 json_edit() { # file filter [jq args...] : in-place, validated
-    local file="$1" filter="$2" tmp; shift 2
+    local file="$1" filter="$2" tmp rc=1; shift 2
     [ -f "$file" ] || return 0
     tmp=$(mp_tmp json) || return 1
-    if jq "$@" "$filter" "$file" > "$tmp" 2>/dev/null && jq -e 'type=="object"' "$tmp" >/dev/null 2>&1; then cat "$tmp" > "$file"; fi
+    if jq "$@" "$filter" "$file" > "$tmp" 2>/dev/null && jq -e 'type=="object"' "$tmp" >/dev/null 2>&1; then
+        cat "$tmp" > "$file" && rc=0
+    fi
     rm -f "$tmp"
+    return "$rc"
 }
 
 # ==========================================================
@@ -1382,11 +1386,11 @@ apply_scoped_mss() {
     if [ "$record" = true ]; then grep -qxF "$iface" "$MSS_FILE" 2>/dev/null || echo "$iface" >> "$MSS_FILE"; fi
     ip link show "$iface" >/dev/null 2>&1 || return 0
     for chain in OUTPUT FORWARD; do
-        iptables -t mangle -C "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-        iptables -t mangle -A "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+        iptables -w 5 -t mangle -C "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+        iptables -w 5 -t mangle -A "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
         command -v ip6tables >/dev/null 2>&1 || continue
-        ip6tables -t mangle -C "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
-        ip6tables -t mangle -A "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
+        ip6tables -w 5 -t mangle -C "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null || \
+        ip6tables -w 5 -t mangle -A "$chain" -o "$iface" -p tcp --tcp-flags SYN,RST SYN -m comment --comment "$tag" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null
     done
 }
 
@@ -1414,46 +1418,60 @@ obfs_reload() {
 
 # obfs_filter ip|port <value>: drop OBFS lines for a target IP or a local port (v11 tags + legacy lines)
 obfs_filter() {
-    local mode="$1" val="$2" f tmp
+    local mode="$1" val="$2" f tmp rc=0
     for f in "$OBFS_DIR/nat.sh" "$OBFS_DIR/gost.sh"; do
         [ -f "$f" ] || continue
         tmp=$(mp_tmp obfs) || return 1
-        awk -v mode="$mode" -v v="$val" '
+        if awk -v mode="$mode" -v v="$val" '
             function has(s) { return index($0, s) > 0 }
             function ends(s) { return length($0) >= length(s) && substr($0, length($0)-length(s)+1) == s }
             { drop=0
               if (mode=="ip") { if (has(" ip=" v " ") || has("-d " v " ") || has("-s " v " ") || has("/" v ":") || ends("_" v)) drop=1 }
               else            { if (has(" port=" v " ") || has("--dport " v " ") || has(":" v " -F ")) drop=1 }
-              if (!drop) print }' "$f" > "$tmp" && cat "$tmp" > "$f"
+              if (!drop) print }' "$f" > "$tmp" && cat "$tmp" > "$f"; then
+            :
+        else
+            rc=1
+        fi
         rm -f "$tmp"
     done
     # drop traffic counters of targets that have no OBFS port left
     f="$OBFS_DIR/nat.sh"
     if [ -f "$f" ]; then
         tmp=$(mp_tmp obfs) || return 1
-        awk 'NR==FNR { if (match($0, /MP_OBFS ip=[0-9a-fA-F:.]+ /)) live[substr($0, RSTART+11, RLENGTH-12)]=1; next }
-             { if (match($0, /MP_CNT ip=[0-9a-fA-F:.]+ /)) { s=substr($0, RSTART+10, RLENGTH-11); if (!(s in live)) next } print }' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"
+        if awk 'NR==FNR { if (match($0, /MP_OBFS ip=[0-9a-fA-F:.]+ /)) live[substr($0, RSTART+11, RLENGTH-12)]=1; next }
+             { if (match($0, /MP_CNT ip=[0-9a-fA-F:.]+ /)) { s=substr($0, RSTART+10, RLENGTH-11); if (!(s in live)) next } print }' "$f" "$f" > "$tmp" && cat "$tmp" > "$f"; then
+            :
+        else
+            rc=1
+        fi
         rm -f "$tmp"
     fi
+    return "$rc"
 }
 
 ipt_conf_filter() { # awk condition on $0 with vars ip/p ; removes matching lines from IPT_CONF
     [ -f "$IPT_CONF" ] || return 0
-    local tmp; tmp=$(mp_tmp ipt) || return 1
-    awk -v ip="$1" -v p="$2" '
+    local tmp rc=1; tmp=$(mp_tmp ipt) || return 1
+    if awk -v ip="$1" -v p="$2" '
         { tagged = (ip != "" && index($0, "\"MPORTER_NAT_" ip "\"") > 0) || (ip == "" && index($0, "MPORTER_NAT_") > 0)
           portm  = (p == "" || index($0, "--dport " p " ") > 0 || index($0, "--sport " p " ") > 0)
-          if (tagged && portm) next; print }' "$IPT_CONF" > "$tmp" && cat "$tmp" > "$IPT_CONF"
+          if (tagged && portm) next; print }' "$IPT_CONF" > "$tmp" && cat "$tmp" > "$IPT_CONF"; then
+        rc=0
+    fi
     rm -f "$tmp"
+    return "$rc"
 }
 
 restart_all_engines() {
-    [ -f "$H_CONF" ] && command -v haproxy >/dev/null 2>&1 && haproxy_reload_safe >/dev/null 2>&1
-    unit_exists gost && systemctl restart gost >/dev/null 2>&1
-    unit_exists realm && systemctl restart realm >/dev/null 2>&1
-    unit_exists mporter-iptables && systemctl restart mporter-iptables >/dev/null 2>&1
-    setup_mporter_service
-    obfs_reload
+    local rc=0
+    if [ -f "$H_CONF" ] && command -v haproxy >/dev/null 2>&1; then haproxy_reload_safe >/dev/null 2>&1 || rc=1; fi
+    unit_exists gost && systemctl restart gost >/dev/null 2>&1 || { unit_exists gost && rc=1 || true; }
+    unit_exists realm && systemctl restart realm >/dev/null 2>&1 || { unit_exists realm && rc=1 || true; }
+    unit_exists mporter-iptables && systemctl restart mporter-iptables >/dev/null 2>&1 || { unit_exists mporter-iptables && rc=1 || true; }
+    setup_mporter_service || rc=1
+    obfs_reload || rc=1
+    return "$rc"
 }
 
 # ==========================================================
@@ -1461,29 +1479,30 @@ restart_all_engines() {
 # ==========================================================
 
 purge_ip_core() {
-    local ip="$1" p
+    local ip="$1" p rc=0
     ip="${ip,,}"
     valid_ip "$ip" || return 1
     ensure_jq >/dev/null 2>&1 || true
     if [ -f "$H_CONF" ]; then
         local hports; hports=$(collect_mappings | awk -F'|' -v ip="$ip" '$4=="HAP" && $2==ip {print $1}' | sort -un | xargs)
         if [ -n "$hports" ]; then
-            local tmp empty=""; tmp=$(mp_tmp hap); cp -f "$H_CONF" "$tmp"
+            local tmp empty=""; tmp=$(mp_tmp hap) || return 1; cp -f "$H_CONF" "$tmp" || return 1
             for p in $hports; do
-                hap_remove_server "$p" "$ip" "$tmp" > "$tmp.n" && mv -f "$tmp.n" "$tmp"
+                hap_remove_server "$p" "$ip" "$tmp" > "$tmp.n" && mv -f "$tmp.n" "$tmp" || { rc=1; break; }
                 [ "$(hap_server_count "$p" "$tmp")" -eq 0 ] && empty+="$p "
             done
-            [ -n "$empty" ] && { hap_strip_ports "$empty" "$tmp" > "$tmp.n" && mv -f "$tmp.n" "$tmp"; }
-            hap_commit "$tmp" >/dev/null || true
+            if [ -n "$empty" ]; then hap_strip_ports "$empty" "$tmp" > "$tmp.n" && mv -f "$tmp.n" "$tmp" || rc=1; fi
+            [ "$rc" -ne 0 ] || hap_commit "$tmp" >/dev/null || rc=1
         fi
     fi
     if command -v jq >/dev/null 2>&1; then
-        json_edit "$G_CONF" '.ServeNodes = [.ServeNodes[]? | select((((capture("^tcp://[^/]*/(?<ip>\\[[0-9a-fA-F:]+\\]|[0-9.]+):") | .ip | gsub("[\\[\\]]";"") | ascii_downcase)) // "") != $ip)]' --arg ip "$ip"
-        json_edit "$R_CONF" '.endpoints = [.endpoints[]? | select((((.remote // "")|tostring|sub("\\]?:[0-9]+$";"")|sub("^\\[";"")|ascii_downcase)) != $ip)]' --arg ip "$ip"
+        json_edit "$G_CONF" '.ServeNodes = [.ServeNodes[]? | select((((capture("^tcp://[^/]*/(?<ip>\[[0-9a-fA-F:]+\]|[0-9.]+):") | .ip | gsub("[\[\]]";"") | ascii_downcase)) // "") != $ip)]' --arg ip "$ip" || rc=1
+        json_edit "$R_CONF" '.endpoints = [.endpoints[]? | select((((.remote // "")|tostring|sub("\]?:[0-9]+$";"")|sub("^\[";"")|ascii_downcase)) != $ip)]' --arg ip "$ip" || rc=1
     fi
-    ipt_conf_filter "$ip" ""
-    obfs_filter ip "$ip"
-    state_remove_target "$ip" >/dev/null 2>&1 || true
+    ipt_conf_filter "$ip" "" || rc=1
+    obfs_filter ip "$ip" || rc=1
+    state_remove_target "$ip" >/dev/null 2>&1 || rc=1
+    return "$rc"
 }
 
 purge_port_core() {
@@ -1509,18 +1528,37 @@ purge_port_core() {
 build_iptables_runner() {
     cat <<'EOF_IPT' > /usr/local/bin/mporter-iptables.sh
 #!/bin/bash
-set -e
+set -euo pipefail
+umask 077
+tmp=$(mktemp -d /run/mporter-iptables.XXXXXX 2>/dev/null || mktemp -d /tmp/mporter-iptables.XXXXXX)
+restore_rules() {
+    [ -s "$tmp/v4.save" ] && command -v iptables-restore >/dev/null 2>&1 && iptables-restore -w 5 < "$tmp/v4.save" || true
+    [ -s "$tmp/v6.save" ] && command -v ip6tables-restore >/dev/null 2>&1 && ip6tables-restore -w 5 < "$tmp/v6.save" || true
+}
+cleanup() { local rc=$?; [ "$rc" -eq 0 ] || restore_rules; rm -rf "$tmp"; exit "$rc"; }
+trap cleanup EXIT
+command -v iptables-save >/dev/null 2>&1 && command -v iptables-restore >/dev/null 2>&1 || { echo 'iptables save/restore tools are required.' >&2; exit 1; }
+iptables-save > "$tmp/v4.save"
+if command -v ip6tables >/dev/null 2>&1; then
+    command -v ip6tables-save >/dev/null 2>&1 && command -v ip6tables-restore >/dev/null 2>&1 || { echo 'ip6tables save/restore tools are required.' >&2; exit 1; }
+    ip6tables-save > "$tmp/v6.save"
+fi
 for bin in iptables ip6tables; do
     command -v "$bin" >/dev/null 2>&1 || continue
     for spec in "nat PREROUTING" "nat OUTPUT" "nat POSTROUTING" "filter FORWARD"; do
         set -- $spec
-        "$bin" -t "$1" -L "$2" -n --line-numbers 2>/dev/null | awk -v tag="MPORTER_NAT_" '$1~/^[0-9]+$/ && index($0,tag){print $1}' | sort -rn | while read -r num; do "$bin" -w 5 -t "$1" -D "$2" "$num"; done
+        while read -r num; do [ -n "$num" ] && "$bin" -w 5 -t "$1" -D "$2" "$num"; done < <("$bin" -t "$1" -L "$2" -n --line-numbers 2>/dev/null | awk -v tag="MPORTER_NAT_" '$1~/^[0-9]+$/ && index($0,tag){print $1}' | sort -rn)
     done
 done
-[ -f /etc/mporter/iptables_core/rules.sh ] && source /etc/mporter/iptables_core/rules.sh 2>/dev/null
+if [ -f /etc/mporter/iptables_core/rules.sh ]; then
+    bash -n /etc/mporter/iptables_core/rules.sh
+    source /etc/mporter/iptables_core/rules.sh
+fi
+trap - EXIT
+rm -rf "$tmp"
 exit 0
 EOF_IPT
-    chmod +x /usr/local/bin/mporter-iptables.sh
+    chmod 750 /usr/local/bin/mporter-iptables.sh
     cat <<'EOF_SRV_IPT' > /etc/systemd/system/mporter-iptables.service
 [Unit]
 Description=MPorter Kernel NAT Engine
@@ -1533,7 +1571,10 @@ ExecReload=/usr/local/bin/mporter-iptables.sh
 [Install]
 WantedBy=multi-user.target
 EOF_SRV_IPT
-    systemctl daemon-reload; systemctl enable mporter-iptables >/dev/null 2>&1; systemctl restart mporter-iptables >/dev/null 2>&1
+    chmod 644 /etc/systemd/system/mporter-iptables.service
+    systemctl daemon-reload
+    systemctl enable mporter-iptables >/dev/null 2>&1
+    systemctl restart mporter-iptables >/dev/null 2>&1 || return 1
     setup_mporter_service
 }
 
@@ -1795,6 +1836,7 @@ install_core_engines() {
         fi
     fi
     local install_failed=false
+    ensure_ipv4_forwarding || return 1
 
     echo -e "\n  ${DIM}┌─[ INITIALIZING INSTALLATION ]${NC}"
     (
@@ -2260,10 +2302,10 @@ smart_map() {
                    ipt_add+="$rules"$'\n'
                else
                local ipb; ipb=$(ipt_bin_for "$t")
-               ipt_add+="$ipb -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$t\" -j DNAT --to-destination $(hostport "$t" "$rp")"$'\n'
-               ipt_add+="$ipb -t nat -A POSTROUTING -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j MASQUERADE"$'\n'
-               ipt_add+="$ipb -I FORWARD -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
-               ipt_add+="$ipb -I FORWARD -s $t -p tcp --sport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
+               ipt_add+="$ipb -w 5 -t nat -A PREROUTING -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_NAT_$t\" -j DNAT --to-destination $(hostport "$t" "$rp")"$'\n'
+               ipt_add+="$ipb -w 5 -t nat -A POSTROUTING -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j MASQUERADE"$'\n'
+               ipt_add+="$ipb -w 5 -I FORWARD -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
+               ipt_add+="$ipb -w 5 -I FORWARD -s $t -p tcp --sport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
                if is_v6 "$t"; then enable_v6_forwarding; command -v ip6tables >/dev/null 2>&1 || echo -e "  ${Y}⚠ ip6tables not found: IPv6 Kernel NAT rule for $t will not apply.${NC}"; fi
                fi ;;
         esac
@@ -2343,16 +2385,16 @@ obfs_setup() {
         tag="# MP_OBFS ip=$t port=$p lport=$lport "
         if [ "$engine" = "1" ]; then
             # HAProxy dials target:p locally -> nat OUTPUT -> gost on loopback
-            echo "$ipb -t nat -A OUTPUT -d $t -p tcp --dport $p -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
+            echo "$ipb -w 5 -t nat -A OUTPUT -d $t -p tcp --dport $p -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
             echo "/usr/local/bin/gost -L tcp://$loop_l:$lport/$(hostport "$t" "$p") -F $method://$rfhp & $tag" >> "$OBFS_DIR/gost.sh"
         else
             # Kernel NAT traffic never reaches nat OUTPUT: catch it in PREROUTING before the DNAT rule
-            echo "$ipb -t nat -I PREROUTING 1 -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
+            echo "$ipb -w 5 -t nat -I PREROUTING 1 -p tcp --dport $p -m addrtype --dst-type LOCAL -m comment --comment \"MPORTER_OBFS_${lport}\" -j REDIRECT --to-ports $lport 2>/dev/null $tag" >> "$OBFS_DIR/nat.sh"
             echo "/usr/local/bin/gost -L tcp://:$lport/$(hostport "$t" "$p") -F $method://$rfhp & $tag" >> "$OBFS_DIR/gost.sh"
         fi
         if ! grep -qF "# MP_CNT ip=$t " "$OBFS_DIR/nat.sh"; then
-            echo "$ipb -t mangle -A OUTPUT -d $t -m comment --comment \"OBFS_CNT_TX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
-            echo "$ipb -t mangle -A INPUT -s $t -m comment --comment \"OBFS_CNT_RX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
+            echo "$ipb -w 5 -t mangle -A OUTPUT -d $t -m comment --comment \"OBFS_CNT_TX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
+            echo "$ipb -w 5 -t mangle -A INPUT -s $t -m comment --comment \"OBFS_CNT_RX_${ctag}\" 2>/dev/null # MP_CNT ip=$t iface=$ctag " >> "$OBFS_DIR/nat.sh"
         fi
         echo -e "  ${M}● OBFS${NC} $p ➔ $t ${DIM}(local $lport, $method://$rfhp)${NC}"
     done
@@ -2955,6 +2997,14 @@ nuclear_wipe() {
     # sysctl (ip_forward/BBR) is intentionally left in place: MDesign tunnels depend on it.
 }
 
+
+ensure_ipv4_forwarding() {
+    mkdir -p /etc/sysctl.d || return 1
+    printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/99-mporter-ipv4.conf || return 1
+    chmod 644 /etc/sysctl.d/99-mporter-ipv4.conf || return 1
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+}
+
 # ==========================================================
 # Headless entry points (no installer / update side effects)
 # ==========================================================
@@ -2966,11 +3016,13 @@ case "${1:-}" in
         collect_mappings | awk -F'|' -v ip="$2" '$2==ip {found=1} END {exit !found}'
         exit $? ;;
     --health-scan) health_scan; exit 0 ;;
-    --boot-apply)  mss_reapply_all; exit 0 ;;
+    --boot-apply)  ensure_ipv4_forwarding || exit $?; mss_reapply_all; exit $? ;;
     --state-sync)  state_reconcile; rc=$?; state_sync_interface_metadata; exit $rc ;;
     --purge-ip)
         valid_ip "${2:-}" || { echo "usage: mporter --purge-ip <IPv4|IPv6>"; exit 1; }
-        purge_ip_core "$2"; restart_all_engines; exit 0 ;;
+        purge_ip_core "$2" || exit $?
+        restart_all_engines || exit $?
+        exit 0 ;;
     --cleanup-orphans)
         # Only removes mappings whose recorded interface is truly gone.
         state_reconcile >/dev/null 2>&1 || true
@@ -3017,7 +3069,7 @@ check_update_bg >/dev/null 2>&1 &
 state_init >/dev/null 2>&1 || true
 ensure_haproxy_base >/dev/null 2>&1 || true
 
-# BEGIN MTUNNEL WORKSPACE V13
+# BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_workspace_screen() { "$MT_HEADER"; }
 # Keep the stable palette, tree layout and aligned one/two-digit option numbers.
@@ -3092,7 +3144,7 @@ mp_backup_configs() {
     dest="${dest:-$LOCAL_DIR/backups/mporter-$(date +%Y%m%d-%H%M%S).tar.gz}"
     [ ! -e "$dest" ] || { echo 'Backup file already exists.' >&2; return 1; }
     mkdir -p "$(dirname "$dest")" || return 1
-    for file in "$H_CONF" "$G_CONF" "$R_CONF" "$IPT_CONF" "$STATE_FILE" "${OBFS_CONF:-}"; do
+    for file in "$H_CONF" "$G_CONF" "$R_CONF" "$IPT_CONF" "$STATE_FILE" "$OBFS_DIR/nat.sh" "$OBFS_DIR/gost.sh"; do
         [ -n "$file" ] && [ -f "$file" ] || continue
         files+=("${file#/}")
     done

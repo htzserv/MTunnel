@@ -904,10 +904,16 @@ apply_bbr_optimization() {
 bh_select_transport() {
     local choice
     echo -e "\n  ${DIM}┌─[ TRANSPORT PROTOCOL ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}TCP${NC}       ${W}2${NC} ${DIM}❯${NC} ${C}TCPMUX${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}WSMUX${NC}     ${W}4${NC} ${DIM}❯${NC} ${G}WSSMUX (TLS)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}WS${NC}        ${W}6${NC} ${DIM}❯${NC} ${G}WSS (TLS)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}UDP (UDP applications only)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    local n label
+    for n in 1 2 3 4 5 6 7; do
+        case "$n" in
+            1) label=TCP;; 2) label=TCPMUX;; 3) label=WSMUX;; 4) label='WSSMUX (TLS)';;
+            5) label=WS;; 6) label='WSS (TLS)';; 7) label='UDP (UDP applications only)';;
+        esac
+        printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$n" "$NC" "$DIM" "$NC" "$W" "$label" "$NC"
+    done
+    echo -e "  ${DIM}│${NC}"
     echo -ne "  ${DIM}└─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
     case "$choice" in
         1) BH_TRANSPORT=tcp;; 2) BH_TRANSPORT=tcpmux;; 3) BH_TRANSPORT=wsmux;;
@@ -2669,7 +2675,7 @@ mt_workspace_route() {
         2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Transport & Advanced Settings|5|${M}" "3|Auth Token|6|${G}" "4|Link Port|7|${C}" "5|Tunnel Name|9|${W}" "6|Listen Address|10|${C}" "7|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Mappings & Forwarder (Native / iptables / MPorter)|4|${Y}" "2|UDP Acceptance|8|${C}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Scheduled Restart|15|${Y}" "4|Restart & Zero Counters|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|18|${G}" "2|Install / Update Engine (Online / Local)|17|${M}" || { MT_SECTION=""; return 1; };;
+        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|Instal / Update Script|18|${G}" "2|Install / Update Engine (Online / Local)|17|${M}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
         6) MT_ACTION=12;;
         8) MT_ACTION=96;;

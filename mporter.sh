@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v1.0.2 ---
+# --- MTunnel MPorter | Port Forwarding Manager v14 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
 # v12.0.3 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="14"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.0.2 ---
+# --- MTunnel Master Core | Central Dashboard v14 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="14"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

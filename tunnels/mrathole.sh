@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v1.0.2 ---
+# --- MTunnel MRathole | Reverse Tunnel Engine v14 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="14"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

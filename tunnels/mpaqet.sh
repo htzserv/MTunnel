@@ -1150,7 +1150,7 @@ mark_profile_custom() {
 ask_int() {   # ask_int VAR "label" default min max
     local __v="$1" label="$2" def="$3" min="$4" max="$5" ans
     while true; do
-        read -rp "  ${label} [${def}] (${min}-${max}): " ans || return 1
+        mt_ask ans "${label} [${def}] (${min}-${max}): " || return 1
         ans="${ans:-$def}"
         if [[ "$ans" =~ ^[0-9]+$ ]] && [ "$ans" -ge "$min" ] && [ "$ans" -le "$max" ]; then
             printf -v "$__v" '%s' "$ans"; return 0
@@ -1162,7 +1162,7 @@ ask_int() {   # ask_int VAR "label" default min max
 ask_bool() {  # ask_bool VAR "label" default(true|false)
     local __v="$1" label="$2" def="$3" ans
     while true; do
-        read -rp "  ${label} [${def}] (true/false): " ans || return 1
+        mt_ask ans "${label} [${def}] (true/false): " || return 1
         ans="${ans:-$def}"; ans="${ans,,}"
         if [ "$ans" = "true" ] || [ "$ans" = "false" ]; then printf -v "$__v" '%s' "$ans"; return 0; fi
         echo -e "  ${R}✖ Type true or false.${NC}"
@@ -1205,7 +1205,7 @@ choose_kcp_profile() {
             ask_int  KCP_RESEND       "resend"                       2         0 2 || return 1
             ask_int  KCP_NOCONGESTION "nocongestion (0=off 1=on)"    1         0 1 || return 1
             local mtu_in
-            read -rp "  MTU (Enter = keep current) (576-1500): " mtu_in || return 1
+            mt_ask mtu_in "MTU (Enter = keep current) (576-1500): " || return 1
             if [ -n "$mtu_in" ]; then
                 if [[ "$mtu_in" =~ ^[0-9]+$ ]] && [ "$mtu_in" -ge 576 ] && [ "$mtu_in" -le 1500 ]; then KCP_MTU="$mtu_in"
                 else echo -e "  ${R}✖ Invalid MTU - keeping the current one.${NC}"; fi
@@ -1224,7 +1224,7 @@ choose_kcp_profile() {
         7)
             if [ "$cores" -lt 4 ]; then
                 echo -e "  ${Y}⚠ This server has only ${cores} core(s). EXTREME is meant for 4+ cores; SPEED is safer here.${NC}"
-                local go; read -rp "  Use EXTREME anyway? [y/N]: " go
+                local go; mt_ask go "Use EXTREME anyway? [y/N]: "
                 [[ "${go,,}" == "y" ]] || return 1
             fi
             profile_defaults EXTREME "$role" ;;
@@ -1898,6 +1898,11 @@ show_tunnel_logs() {
 
 # BEGIN MTUNNEL WORKSPACE V13
 # Embedded in each module: no external library or sourced setup-link code.
+mt_ask() { # styled prompt: mt_ask VAR "text"
+    local __var="$1"; shift
+    printf '  %b●%b %b%s%b ' "$C" "$NC" "$W" "$*" "$NC"
+    read -r "$__var"
+}
 mt_workspace_screen() { "$MT_HEADER"; }
 # Keep the stable palette, tree layout and aligned one/two-digit option numbers.
 mt_workspace_row() {
@@ -2119,15 +2124,15 @@ mt_link_export() {
     fi
     if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
         host=$(get_local_ip)
-        read -r -p "  This server's reachable public IP/hostname [$host]: " dest || return 1
+        mt_ask dest "This server's reachable public IP/hostname [$host]: " || return 1
         host="${dest:-$host}"
         mt_valid_host "$host" && [[ "$host" != 0.0.0.0 && "$host" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
         MT_LINK_DATA[HOST]="$host"
         if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
-            read -r -p '  Peer server port mappings (e.g. 443=127.0.0.1:443): ' dest || return 1
+            mt_ask dest 'Peer server port mappings (e.g. 443=127.0.0.1:443): ' || return 1
             validate_bh_ports "$dest" 0 || return 1; MT_LINK_DATA[PORTS]="$dest"
         elif [ "$MT_KIND" = paqet ] && [ "$role" = 1 ]; then
-            read -r -p '  Peer client forwarded TCP ports (e.g. 443,8080): ' dest || return 1
+            mt_ask dest 'Peer client forwarded TCP ports (e.g. 443,8080): ' || return 1
             mt_link_ports "$dest" && [ -n "$dest" ] || return 1; MT_LINK_DATA[TCP_PORTS]="$dest"
         fi
     fi
@@ -2138,14 +2143,14 @@ mt_link_export() {
 }
 mt_link_offer() {
     local ans
-    read -r -p '  Generate a setup link for the peer now? [Y/n]: ' ans || return 0
+    mt_ask ans 'Generate a setup link for the peer now? [Y/n]: ' || return 0
     case "${ans,,}" in n|no) return 0;; esac
     mt_link_export "$1"
 }
 mt_link_import() {
     local link ans name
     mt_workspace_screen
-    read -r -p '  Paste Peer Setup Link (q: back): ' link || return 1
+    mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
     echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
@@ -2153,11 +2158,11 @@ mt_link_import() {
     printf '  Link port: %s | Transport: %s | vIPs: %s\n' "${MT_LINK_DATA[LINK_PORT]:--}" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "${MT_LINK_DATA[MAX_IPS]:--}"
     printf '  TCP ports: %s | UDP ports: %s\n' "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "${MT_LINK_DATA[UDP_PORTS]:--}"
     echo -e "  ${DIM}└─ Secret is hidden. Existing tunnels will not be overwritten.${NC}"
-    read -r -p "  Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " name || return 1
+    mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
     MT_LINK_DATA[NAME]="$name"
-    read -r -p '  Create this peer tunnel? [y/N]: ' ans || return 1
+    mt_ask ans 'Create this peer tunnel? [y/N]: ' || return 1
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
@@ -2168,10 +2173,10 @@ mt_link_import() {
 mt_workspace_vip() {
     local ans count
     MT_NEW_VIP_COUNT=0
-    read -r -p '  Create internal Virtual IPs for this tunnel? [y/N/q]: ' ans || return 1
+    mt_ask ans 'Create internal Virtual IPs for this tunnel? [y/N/q]: ' || return 1
     case "${ans,,}" in q) return 1;; n|no|'') return 0;; y|yes) ;; *) echo 'Type y, n or q.' >&2; mt_workspace_vip; return $?;; esac
     while true; do
-        read -r -p '  Virtual IP pair count [1] (1-64, q: back): ' count || return 1
+        mt_ask count 'Virtual IP pair count [1] (1-64, q: back): ' || return 1
         [ "$count" != q ] || return 1; count="${count:-1}"
         if mt_link_uint "$count" 1 64; then MT_NEW_VIP_COUNT=$((10#$count)); return 0; fi
         echo 'Enter a number between 1 and 64.'
@@ -2180,7 +2185,7 @@ mt_workspace_vip() {
 mt_workspace_backup() {
     local dest
     mt_workspace_screen
-    read -r -p "  Backup file [$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz]: " dest || return 1
+    mt_ask dest "Backup file [$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz]: " || return 1
     dest="${dest:-$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz}"
     mkdir -p "$(dirname "$dest")" || return 1
     [ ! -e "$dest" ] || { echo 'File already exists; choose another path.' >&2; return 1; }
@@ -2325,11 +2330,9 @@ render_mpaqet_menu() {
     mt_workspace_row 1 'Create Tunnel' "$G"
     mt_workspace_row 2 'Edit & Manage' "$Y"
     mt_workspace_row 3 'Forwarding' "$C"
-    mt_workspace_group 'CONFIGURATION & MONITORING'
     mt_workspace_row 4 'System & Security' "$M"
     mt_workspace_row 5 'Tunnels Info And Specs' "$M"
     mt_workspace_row 6 'Live Monitor' "$G"
-    mt_workspace_group 'SYSTEM OPERATIONS'
     mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
     mt_workspace_row 8 'Backup Configs' "$W"
     mt_workspace_row 9 'Uninstall MPAQET' "$R"

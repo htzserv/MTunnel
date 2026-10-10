@@ -3105,9 +3105,7 @@ render_mporter_menu() {
     mt_workspace_group 'PROVISION & MANAGE' first
     mt_workspace_row 1 'Create & Forward' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
-    mt_workspace_group 'MONITORING & DETAILS'
     mt_workspace_row 3 'Tunnels Info And Specs' "$M"
-    mt_workspace_group 'SYSTEM OPERATIONS'
     mt_workspace_row 4 'System' "$C"
     mt_workspace_row 5 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
     mt_workspace_row 6 'Backup Configs' "$W"

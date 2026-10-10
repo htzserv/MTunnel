@@ -2280,6 +2280,11 @@ show_live_monitor() {
 
 # BEGIN MTUNNEL WORKSPACE V13
 # Embedded in each module: no external library or sourced setup-link code.
+mt_ask() { # styled prompt: mt_ask VAR "text"
+    local __var="$1"; shift
+    printf '  %b●%b %b%s%b ' "$C" "$NC" "$W" "$*" "$NC"
+    read -r "$__var"
+}
 mt_workspace_screen() { "$MT_HEADER"; }
 # Keep the stable palette, tree layout and aligned one/two-digit option numbers.
 mt_workspace_row() {
@@ -2501,15 +2506,15 @@ mt_link_export() {
     fi
     if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
         host=$(get_local_ip)
-        read -r -p "  This server's reachable public IP/hostname [$host]: " dest || return 1
+        mt_ask dest "This server's reachable public IP/hostname [$host]: " || return 1
         host="${dest:-$host}"
         mt_valid_host "$host" && [[ "$host" != 0.0.0.0 && "$host" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
         MT_LINK_DATA[HOST]="$host"
         if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
-            read -r -p '  Peer server port mappings (e.g. 443=127.0.0.1:443): ' dest || return 1
+            mt_ask dest 'Peer server port mappings (e.g. 443=127.0.0.1:443): ' || return 1
             validate_bh_ports "$dest" 0 || return 1; MT_LINK_DATA[PORTS]="$dest"
         elif [ "$MT_KIND" = paqet ] && [ "$role" = 1 ]; then
-            read -r -p '  Peer client forwarded TCP ports (e.g. 443,8080): ' dest || return 1
+            mt_ask dest 'Peer client forwarded TCP ports (e.g. 443,8080): ' || return 1
             mt_link_ports "$dest" && [ -n "$dest" ] || return 1; MT_LINK_DATA[TCP_PORTS]="$dest"
         fi
     fi
@@ -2518,16 +2523,13 @@ mt_link_export() {
     echo -e "  ${Y}● Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
     mt_workspace_pause
 }
-mt_link_offer() {
-    local ans
-    read -r -p '  Generate a setup link for the peer now? [Y/n]: ' ans || return 0
-    case "${ans,,}" in n|no) return 0;; esac
+mt_link_offer() { # always generate the peer link after a tunnel is created
     mt_link_export "$1"
 }
 mt_link_import() {
     local link ans name
     mt_workspace_screen
-    read -r -p '  Paste Peer Setup Link (q: back): ' link || return 1
+    mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
     echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
@@ -2535,14 +2537,21 @@ mt_link_import() {
     printf '  Link port: %s | Transport: %s | vIPs: %s\n' "${MT_LINK_DATA[LINK_PORT]:--}" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "${MT_LINK_DATA[MAX_IPS]:--}"
     printf '  TCP ports: %s | UDP ports: %s\n' "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "${MT_LINK_DATA[UDP_PORTS]:--}"
     echo -e "  ${DIM}└─ Secret is hidden. Existing tunnels will not be overwritten.${NC}"
-    read -r -p "  Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " name || return 1
+    mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
     MT_LINK_DATA[NAME]="$name"
-    read -r -p '  Create this peer tunnel? [y/N]: ' ans || return 1
+    mt_ask ans 'Create this peer tunnel? [y/N]: ' || return 1
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
+        # Imported on the IRAN side (ROLE 1): ask about forwarding, same rule as local creation.
+        if [ "$MT_KIND" = gre ] && [ "${MT_LINK_DATA[ROLE]}" = 1 ] && [ "${MT_LINK_DATA[PROTO]}" != ipip6to6 ]; then
+            local new_conf
+            new_conf=$(grep -l "^TUN_ID=${MT_LINK_DATA[TUN_ID]}$" "$CONF_DIR"/*.conf 2>/dev/null | head -1)
+            mt_ask ans 'Do you want to configure Port Forwarding / Load Balancer now? (y/n): ' || ans=n
+            case "${ans,,}" in y|yes) [ -n "$new_conf" ] && manage_port_forwarding "$new_conf";; esac
+        fi
         mt_ask_bbr_on_create
     else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
     mt_workspace_pause
@@ -2550,10 +2559,10 @@ mt_link_import() {
 mt_workspace_vip() {
     local ans count
     MT_NEW_VIP_COUNT=0
-    read -r -p '  Create internal Virtual IPs for this tunnel? [y/N/q]: ' ans || return 1
+    mt_ask ans 'Create internal Virtual IPs for this tunnel? [y/N/q]: ' || return 1
     case "${ans,,}" in q) return 1;; n|no|'') return 0;; y|yes) ;; *) echo 'Type y, n or q.' >&2; mt_workspace_vip; return $?;; esac
     while true; do
-        read -r -p '  Virtual IP pair count [1] (1-64, q: back): ' count || return 1
+        mt_ask count 'Virtual IP pair count [1] (1-64, q: back): ' || return 1
         [ "$count" != q ] || return 1; count="${count:-1}"
         if mt_link_uint "$count" 1 64; then MT_NEW_VIP_COUNT=$((10#$count)); return 0; fi
         echo 'Enter a number between 1 and 64.'
@@ -2562,7 +2571,7 @@ mt_workspace_vip() {
 mt_workspace_backup() {
     local dest
     mt_workspace_screen
-    read -r -p "  Backup file [$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz]: " dest || return 1
+    mt_ask dest "Backup file [$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz]: " || return 1
     dest="${dest:-$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz}"
     mkdir -p "$(dirname "$dest")" || return 1
     [ ! -e "$dest" ] || { echo 'File already exists; choose another path.' >&2; return 1; }
@@ -2683,7 +2692,7 @@ mt_workspace_route() {
         2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Tunnel Name|7|${W}" "2|Public IPs|8|${C}" "3|Token / Secret|9|${M}" "4|Core Subnet|10|${Y}" "5|MTU & MSS|11|${C}" "6|Virtual IP Manager|2|${G}" "7|Delete Tunnels|6|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Forwarding / Selected IPs / Load Balance|4|${G}" "2|MPorter Forwarders|3|${C}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|IPsec Encryption|13|${M}" "2|Firewall Guard|14|${R}" "3|Auto Recovery|15|${G}" "4|BBR Settings|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" || { MT_SECTION=""; return 1; };;
+        7) MT_ACTION=17;;
         5) MT_ACTION=5;;
         6) MT_ACTION=12;;
         8) MT_ACTION=18;;
@@ -2699,12 +2708,10 @@ render_mgre_menu() {
     mt_workspace_row 1 'Create Tunnel' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
     mt_workspace_row 3 'Forwarding' "$G"
-    mt_workspace_group 'CONFIGURATION & MONITORING'
     mt_workspace_row 4 'System & Security' "$M"
-    mt_workspace_row 5 'Tunnels Info And Specs' "$M"
+    mt_workspace_row 5 'Tunnel Info & Specs' "$M"
     mt_workspace_row 6 'Live Monitor' "$W"
-    mt_workspace_group 'SYSTEM OPERATIONS'
-    mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 7 'Update & Local Install' "$G" "$(mt_workspace_update_badge)"
     mt_workspace_row 8 'Backup & Restore' "$W"
     mt_workspace_row 9 'Uninstall MGRE' "$R"
     mt_workspace_footer 'Return to Main Core'
@@ -2826,7 +2833,7 @@ while true; do
            cust_mtu=""
            read -r mtu_min mtu_max mtu_def <<< "$(mgre_mtu_limits "$tun_proto")"
            while true; do
-               read -r -p "  Manual MTU [$mtu_min-$mtu_max; Enter: protocol default; q: back]: " cust_mtu || break
+               mt_ask cust_mtu "Manual MTU [$mtu_min-$mtu_max; Enter: protocol default; q: back]: " || break
                [[ "$cust_mtu" == q || -z "$cust_mtu" ]] && break
                mt_link_uint "$cust_mtu" "$mtu_min" "$mtu_max" && break
                echo '  MTU is outside the protocol range.'

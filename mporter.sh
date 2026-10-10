@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="12.0.8"
+MODULE_VERSION="13.0.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -3017,34 +3017,76 @@ check_update_bg >/dev/null 2>&1 &
 state_init >/dev/null 2>&1 || true
 ensure_haproxy_base >/dev/null 2>&1 || true
 
+# BEGIN MTUNNEL WORKSPACE V13
+# Embedded in each module: no external library or sourced setup-link code.
+mt_workspace_screen() { "$MT_HEADER"; }
+mt_workspace_row() { printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "$C" "$2" "$NC"; }
+mt_workspace_menu() { # title, id|label|action ...; sets MT_ACTION
+    local title="$1" entry id label action choice; shift
+    while true; do
+        mt_workspace_screen
+        echo -e "\n  ${DIM}┌─[ ${title} ]${NC}\n  ${DIM}│${NC}"
+        for entry in "$@"; do IFS='|' read -r id label action <<< "$entry"; mt_workspace_row "$id" "$label"; done
+        echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Go Back${NC}\n"
+        read -r -p "  Select ❯❯ " choice || return 1
+        case "$choice" in 0|q|Q) return 1;; esac
+        for entry in "$@"; do
+            IFS='|' read -r id label action <<< "$entry"
+            if [ "$choice" = "$id" ]; then MT_ACTION="$action"; return 0; fi
+        done
+        echo -e "  ${R}✖ Invalid selection.${NC}"
+    done
+}
+mt_workspace_pause() { read -r -p '  Press Enter to continue...' _ || true; }
+
+MT_HEADER=draw_header; MT_SECTION=""
+mt_workspace_route() {
+    case "$1" in
+        1) MT_SECTION=1; mt_workspace_menu "CREATE & FORWARD" "1|Add Port Mappings|3" "2|Load Balance / Failover / Selected IPs|4" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Edit Ports / Target IP / OBFS|5" "2|Delete Mappings|6" || { MT_SECTION=""; return 1; };;
+        3) MT_ACTION=7;;
+        4) MT_SECTION=4; mt_workspace_menu "SYSTEM" "1|Restart Services|8" "2|BBR Settings|bbr" || { MT_SECTION=""; return 1; };;
+        5) MT_SECTION=5; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|9" "2|Install / Update Engines (Online / Local)|1" || { MT_SECTION=""; return 1; };;
+        6) MT_SECTION=6; mt_workspace_menu "BACKUP" "1|Save Mapping Config Backup|backup" || { MT_SECTION=""; return 1; };;
+        7) MT_ACTION=2;;
+        0) MT_ACTION=0;;
+        *) return 1;;
+    esac
+}
+mp_backup_configs() {
+    local dest file; local -a files=()
+    read -r -p "  Backup file [$LOCAL_DIR/backups/mporter-$(date +%Y%m%d-%H%M%S).tar.gz]: " dest || return 1
+    dest="${dest:-$LOCAL_DIR/backups/mporter-$(date +%Y%m%d-%H%M%S).tar.gz}"
+    [ ! -e "$dest" ] || { echo 'Backup file already exists.' >&2; return 1; }
+    mkdir -p "$(dirname "$dest")" || return 1
+    for file in "$H_CONF" "$G_CONF" "$R_CONF" "$IPT_CONF" "$STATE_FILE" "${OBFS_CONF:-}"; do
+        [ -n "$file" ] && [ -f "$file" ] || continue
+        files+=("${file#/}")
+    done
+    [ "${#files[@]}" -gt 0 ] || { echo 'No mapping configs found.' >&2; return 1; }
+    (umask 077; tar -czf "$dest" -C / -- "${files[@]}") && echo "  Saved: $dest"
+    mt_workspace_pause
+}
+render_mporter_menu() {
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ MPORTER WORKSPACE ]${NC}\n  ${DIM}│${NC}"
+    mt_workspace_row 1 "Create & Forward"
+    mt_workspace_row 2 "Edit & Manage"
+    mt_workspace_row 3 "Tunnels Info And Specs"
+    mt_workspace_row 4 "System"
+    mt_workspace_row 5 "Update and Local Install"
+    mt_workspace_row 6 "Backup Configs"
+    mt_workspace_row 7 "Uninstall Engines & Purge"
+    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+}
+
 while true; do
-    badge=""
-    if [ -f "$SECURE_TMP/.mporter_remote_ver" ]; then
-        rv=$(tr -d '\r\n ' < "$SECURE_TMP/.mporter_remote_ver")
-        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && mt_is_newer_version "$rv" "$MODULE_VERSION"; then badge=" ${Y}(Update Available ➔ v${rv})${NC}"; fi
-    fi
-
-    draw_header
-    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Install & Configure Quad-Core System${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Uninstall Engines & Purge (Nuclear Wipe)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Add Port Mappings (Strict 1-to-1)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Smart Loadbalance (Multi-IP / Failover / Health)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Edit Mappings (Ports / Target IP / OBFS)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${R}Delete & Purge Mappings (By Interface/IP/All)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${M}Tunnels Info And Specs${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Manual Restart Services${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Workspace${NC}\n"
-
-    opt=""; echo -ne "  ${C}MPorter ❯❯ ${NC}"; read -r -t 30 opt; opt="${opt//[^0-9]/}"
+    if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
+    else render_mporter_menu; read -r -p '  MPorter ❯❯ ' opt || break; fi
+    mt_workspace_route "$opt" || continue
+    if [ "$MT_ACTION" = bbr ]; then mt_run_tool mbbr --from-tunnel; continue; fi
+    if [ "$MT_ACTION" = backup ]; then mp_backup_configs; continue; fi
+    opt="$MT_ACTION"
     case $opt in
         1) install_core_engines ;;
         2) echo -ne "  ${R}● Nuclear Wipe? (y/n) ❯❯ ${NC}"; read -r confirm

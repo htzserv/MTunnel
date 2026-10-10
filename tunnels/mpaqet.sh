@@ -2,7 +2,7 @@
 # --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v12.0.3 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="12.0.5"
+MODULE_VERSION="13.0.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -1172,7 +1172,7 @@ ask_bool() {  # ask_bool VAR "label" default(true|false)
 choose_kcp_profile() {
     local role="$1" current="${2:-BALANCED}" choice sub cores
     cores=$(cpu_cores)
-    clear
+    mt_workspace_screen
     echo -e "\n  ${B}╭──────────────────────── KCP PROFILE ────────────────────────╮${NC}"
     echo -e "  ${B}│${NC} ${W}CPU-aware presets. MTU is never changed by a profile.${NC}"
     echo -e "  ${B}├─────────────────────────────────────────────────────────────┤${NC}"
@@ -1896,56 +1896,441 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-render_mpaqet_menu() {
-    badge=""
-    if [ -f "$SECURE_TMP/.mpaqet_remote_ver" ]; then
-        rv=$(cat "$SECURE_TMP/.mpaqet_remote_ver" | tr -d '\r\n ')
-        if [ "$rv" != "Unknown" ] && is_newer_version "$rv" "$MODULE_VERSION"; then
-            badge=" ${Y}(Update Available: v${rv})${NC}"
+# BEGIN MTUNNEL WORKSPACE V13
+# Embedded in each module: no external library or sourced setup-link code.
+mt_workspace_screen() { "$MT_HEADER"; }
+mt_workspace_row() { printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "$C" "$2" "$NC"; }
+mt_workspace_menu() { # title, id|label|action ...; sets MT_ACTION
+    local title="$1" entry id label action choice; shift
+    while true; do
+        mt_workspace_screen
+        echo -e "\n  ${DIM}┌─[ ${title} ]${NC}\n  ${DIM}│${NC}"
+        for entry in "$@"; do IFS='|' read -r id label action <<< "$entry"; mt_workspace_row "$id" "$label"; done
+        echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Go Back${NC}\n"
+        read -r -p "  Select ❯❯ " choice || return 1
+        case "$choice" in 0|q|Q) return 1;; esac
+        for entry in "$@"; do
+            IFS='|' read -r id label action <<< "$entry"
+            if [ "$choice" = "$id" ]; then MT_ACTION="$action"; return 0; fi
+        done
+        echo -e "  ${R}✖ Invalid selection.${NC}"
+    done
+}
+mt_workspace_pause() { read -r -p '  Press Enter to continue...' _ || true; }
+mt_link_read() { # read flat metadata as data, never source it
+    local value
+    value=$(awk -v k="$2" 'index($0,k"=")==1 {sub(/^[^=]*=/,"");print;exit}' "$1")
+    printf '%s' "$value"
+}
+mt_link_uint() { [[ "$1" =~ ^[0-9]{1,10}$ ]] && ((10#$1 >= $2 && 10#$1 <= $3)); }
+mt_link_ports() {
+    local spec="$1" p; local -a a=(); local -A seen=()
+    [ -z "$spec" ] && return 0
+    [[ "$spec" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+    IFS=, read -ra a <<< "$spec"
+    [ "${#a[@]}" -le 128 ] || return 1
+    for p in "${a[@]}"; do mt_valid_port "$p" || return 1; p=$((10#$p)); [[ ! -v seen[$p] ]] || return 1; seen[$p]=1; done
+}
+mt_link_field_valid() {
+    local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,=-]*$'
+    # Reject whitespace, control bytes, shell syntax, quotes, paths and unknown keys.
+    [ "${#val}" -le 4096 ] && [[ "$val" =~ $safe ]] || return 1
+    case "$key" in
+        ROLE) [[ "$val" =~ ^[12]$ ]];;
+        NAME) [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]];;
+        BIND_HOST) [[ "$val" = 0.0.0.0 || "$val" = :: ]];;
+        EXPIRES) mt_link_uint "$val" 1 9999999999;;
+        CORE_V6) [ -z "$val" ] || mt_valid_ipv6 "$val::1";;
+        HOST|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|LOCAL_IP6|REMOTE_IP6|REMOTE_V4)
+            [ -z "$val" ] || mt_valid_host "$val";;
+        TOKEN|TUN_SECRET|SYNC_KEY) [[ "$val" =~ ^[A-Za-z0-9_=-]{1,256}$ ]];;
+        LINK_PORT) mt_valid_port "$val";;
+        TCP_PORTS|UDP_PORTS) mt_link_ports "$val";;
+        TRANSPORT) [[ "$val" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ ]];;
+        PORTS) return 0;;
+        ENABLE_UDP|ADV_AGGRESSIVE|ADV_NODELAY|ADV_PROXY|KCP_WDELAY|KCP_ACKNODELAY) [[ "$val" =~ ^(true|false)$ ]];;
+        PROTO) [[ "$val" =~ ^(ipv4|ipv6|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]];;
+        CORE_SUBNET) mt_valid_ipv4 "$val.1";;
+        TUN_ID) mt_link_uint "$val" 0 16777215;;
+        VNI_ID) mt_link_uint "$val" 1 16777215;;
+        MAX_IPS) mt_link_uint "$val" 0 64;;
+        CUSTOM_MTU) [ -z "$val" ] || mt_link_uint "$val" 512 9000;;
+        ENCRYPT) [[ "$val" =~ ^[01]$ ]];;
+        ADV_LOG) [[ "$val" =~ ^(trace|debug|info|warn|error)$ ]];;
+        ADV_KEEPALIVE|ADV_HEARTBEAT|ADV_CHANNEL|ADV_POOL|ADV_RETRY|ADV_DIAL|ADV_MUX_CON|ADV_MUX_VERSION|ADV_MUX_FRAME|ADV_MUX_RECEIVE|ADV_MUX_STREAM|ADV_MTU|ADV_MSS|ADV_RCVBUF|ADV_SNDBUF) mt_link_uint "$val" 0 1073741824;;
+        PROFILE) [[ "$val" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME|NORMAL|FAST|FAST2|FAST3|MANUAL|CUSTOM)$ ]];;
+        BLOCK) [[ "$val" =~ ^(aes-128-gcm|aes|aes-128|aes-192|aes-256|salsa20|blowfish|twofish|cast5|3des|tea|xtea|xor|sm4|none)$ ]];;
+        KCP_MODE) [[ "$val" =~ ^(normal|fast|fast2|fast3|manual)$ ]];;
+        KCP_CONN) mt_link_uint "$val" 1 32;;
+        KCP_MTU) mt_link_uint "$val" 576 1500;;
+        KCP_NODELAY|KCP_NOCONGESTION) [[ "$val" =~ ^[01]$ ]];;
+        KCP_RESEND) mt_link_uint "$val" 0 2;;
+        KCP_INTERVAL) mt_link_uint "$val" 10 5000;;
+        KCP_RCVWND|KCP_SNDWND) mt_link_uint "$val" 128 32768;;
+        KCP_STREAMBUF|KCP_SMUXBUF|KCP_PCAP_SOCKBUF) mt_link_uint "$val" 65536 268435456;;
+        KCP_TCPBUF|KCP_UDPBUF) mt_link_uint "$val" 1024 1048576;;
+        KCP_DSHARD|KCP_PSHARD|KCP_SMUXKALIVE) mt_link_uint "$val" 0 65535;;
+        *) return 1;;
+    esac
+}
+mt_link_validate() {
+    local key required
+    [[ "$MT_KIND" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
+    local allowed=' ROLE NAME HOST EXPIRES '
+    case "$MT_KIND" in
+        gre) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET CORE_V6 TUN_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
+        vxlan) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET VNI_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
+        backhaul) allowed+=' TOKEN LINK_PORT TRANSPORT PORTS ENABLE_UDP BIND_HOST ADV_KEEPALIVE ADV_HEARTBEAT ADV_CHANNEL ADV_POOL ADV_RETRY ADV_DIAL ADV_AGGRESSIVE ADV_NODELAY ADV_LOG ADV_MUX_CON ADV_MUX_VERSION ADV_MUX_FRAME ADV_MUX_RECEIVE ADV_MUX_STREAM ADV_MTU ADV_MSS ADV_RCVBUF ADV_SNDBUF ADV_PROXY ';;
+        rathole) allowed+=' TOKEN LINK_PORT TCP_PORTS UDP_PORTS BIND_HOST ';;
+        paqet) allowed+=' TOKEN LINK_PORT TCP_PORTS PROFILE BLOCK KCP_MODE KCP_CONN KCP_MTU KCP_RCVWND KCP_SNDWND KCP_SMUXBUF KCP_STREAMBUF KCP_PCAP_SOCKBUF KCP_TCPBUF KCP_UDPBUF KCP_NODELAY KCP_WDELAY KCP_ACKNODELAY KCP_INTERVAL KCP_RESEND KCP_NOCONGESTION KCP_DSHARD KCP_PSHARD KCP_SMUXKALIVE ';;
+    esac
+    for key in "${!MT_LINK_DATA[@]}"; do
+        [[ "$allowed" == *" $key "* ]] || { echo "Unexpected $MT_KIND field: $key" >&2; return 1; }
+    done
+    for key in "${!MT_LINK_DATA[@]}"; do mt_link_field_valid "$key" "${MT_LINK_DATA[$key]}" || { echo "Invalid setup field: $key" >&2; return 1; }; done
+    required='ROLE NAME HOST EXPIRES'
+    case "$MT_KIND" in
+        gre) required+=' PROTO TUN_SECRET CORE_SUBNET TUN_ID MAX_IPS ENCRYPT';;
+        vxlan) required+=' PROTO TUN_SECRET CORE_SUBNET VNI_ID MAX_IPS ENCRYPT';;
+        backhaul) required+=' TOKEN LINK_PORT TRANSPORT PORTS ENABLE_UDP';;
+        rathole) required+=' TOKEN LINK_PORT TCP_PORTS UDP_PORTS';;
+        paqet) required+=' TOKEN LINK_PORT TCP_PORTS PROFILE BLOCK KCP_MODE KCP_CONN KCP_MTU KCP_RCVWND KCP_SNDWND KCP_SMUXBUF KCP_STREAMBUF KCP_PCAP_SOCKBUF KCP_TCPBUF KCP_UDPBUF';;
+    esac
+    for key in $required; do [[ -v MT_LINK_DATA[$key] ]] || { echo "Missing setup field: $key" >&2; return 1; }; done
+    [ -n "${MT_LINK_DATA[HOST]}" ] && mt_valid_host "${MT_LINK_DATA[HOST]}" || return 1
+    ((10#${MT_LINK_DATA[EXPIRES]} >= $(date +%s))) || { echo 'Setup link has expired; generate a new link.' >&2; return 1; }
+    return 0
+}
+mt_link_encode() {
+    mt_link_validate || return 1
+    local raw encoded checksum key
+    raw=$(for key in "${!MT_LINK_DATA[@]}"; do printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"; done | LC_ALL=C sort)
+    encoded=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+    checksum=$(printf '%s' "1/$MT_KIND/$encoded" | sha256sum); checksum="${checksum%% *}"
+    printf 'mtunnel://1/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
+}
+mt_link_decode() {
+    local link="$1" rest kind encoded checksum actual raw padded canonical key val
+    link="${link//$'\r'/}"
+    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
+    declare -gA MT_LINK_DATA=()
+    [ "${#link}" -le 32768 ] && [[ "$link" == mtunnel://1/* ]] || return 1
+    rest="${link#mtunnel://1/}"; kind="${rest%%/*}"; rest="${rest#*/}"
+    [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
+    [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
+    encoded="${rest%.*}"; checksum="${rest##*.}"
+    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ && "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
+    actual=$(printf '%s' "1/$kind/$encoded" | sha256sum); [ "${actual%% *}" = "$checksum" ] || { echo 'Setup link checksum failed.' >&2; return 1; }
+    padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) return 1;; esac
+    raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || return 1
+    canonical=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+    [ "$canonical" = "$encoded" ] || return 1 # rejects NULs/noncanonical/trailing newlines
+    while IFS='=' read -r key val; do
+        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+        [[ ! -v MT_LINK_DATA[$key] ]] || return 1
+        mt_link_field_valid "$key" "$val" || return 1
+        MT_LINK_DATA[$key]="$val"
+    done <<< "$raw"
+    mt_link_validate
+}
+mt_link_select() {
+    case "$MT_KIND" in
+        gre) select_tunnel_interactive || return 1; MT_LINK_CONF="$SELECTED_CONF";;
+        vxlan) select_fabric_interactive || return 1; MT_LINK_CONF="$SELECTED_CONF";;
+        backhaul) select_tunnel || return 1; MT_LINK_CONF="$SELECTED_TUN";;
+        rathole) select_tunnel || return 1; MT_LINK_CONF="$SELECTED_TUN/meta.conf";;
+        paqet) select_tunnel || return 1; MT_LINK_CONF="${SELECTED_TUN%.yaml}.meta";;
+    esac
+    [ -f "$MT_LINK_CONF" ]
+}
+mt_link_export() {
+    local conf="${1:-}" host name role key ttl link dest
+    [ -n "$conf" ] || { mt_link_select || return 1; conf="$MT_LINK_CONF"; }
+    [ -f "$conf" ] || return 1
+    declare -gA MT_LINK_DATA=()
+    case "$MT_KIND" in
+        rathole) name=$(basename "$(dirname "$conf")"); role=$(mt_link_read "$conf" TYPE);;
+        gre|vxlan) name=$(basename "$conf" .conf); role=$(mt_link_read "$conf" TYPE);;
+        *) name=$(basename "$conf" .meta); role=$(mt_link_read "$conf" ROLE);;
+    esac
+    [[ "$role" =~ ^[12]$ ]] || return 1
+    MT_LINK_DATA[ROLE]=$((3-role)); MT_LINK_DATA[NAME]="$name"
+    MT_LINK_DATA[EXPIRES]=$(($(date +%s)+604800))
+    case "$MT_KIND" in
+        gre|vxlan)
+            for key in TUN_SECRET SYNC_KEY CORE_SUBNET CORE_V6 TUN_ID VNI_ID MAX_IPS CUSTOM_MTU ENCRYPT; do
+                case "$MT_KIND:$key" in gre:VNI_ID|vxlan:TUN_ID|vxlan:CORE_V6) continue;; esac
+                MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key")
+            done
+            MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[SYNC_KEY]:-${MT_LINK_DATA[TUN_SECRET]}}"
+            if [ "$MT_KIND" = gre ]; then MT_LINK_DATA[PROTO]=$(mt_link_read "$conf" TUN_PROTO); else MT_LINK_DATA[PROTO]=$(mt_link_read "$conf" FAB_PROTO); fi
+            MT_LINK_DATA[PROTO]="${MT_LINK_DATA[PROTO]:-ipv4}"
+            MT_LINK_DATA[ENCRYPT]="${MT_LINK_DATA[ENCRYPT]:-0}"
+            for key in LOCAL_PUB LOCAL_PUB6 LOCAL_IP6; do
+                dest="REMOTE${key#LOCAL}"; MT_LINK_DATA[$dest]=$(mt_link_read "$conf" "$key"); MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$dest")
+            done
+            MT_LINK_DATA[HOST]="${MT_LINK_DATA[REMOTE_PUB6]:-${MT_LINK_DATA[REMOTE_PUB]}}"
+            ;;
+        backhaul)
+            for key in TOKEN TRANSPORT PORTS ENABLE_UDP; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done
+            MT_LINK_DATA[LINK_PORT]=$(mt_link_read "$conf" TUN_PORT)
+            # Machine-local TLS paths and client CDN overrides are deliberately not exported.
+            while IFS='=' read -r key host; do
+                case "$key" in ADV_TLS_CERT|ADV_TLS_KEY|ADV_EDGE) continue;; ADV_*) MT_LINK_DATA[$key]="$host";; esac
+            done < "$conf"
+            ;;
+        rathole)
+            for key in TOKEN LINK_PORT TCP_PORTS UDP_PORTS; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done;;
+        paqet)
+            MT_LINK_DATA[LINK_PORT]=$(mt_link_read "$conf" TUN_PORT)
+            MT_LINK_DATA[TCP_PORTS]=$(mt_link_read "$conf" TCP_PORTS)
+            MT_LINK_DATA[PROFILE]=$(get_tunnel_profile "$name")
+            MT_LINK_DATA[TOKEN]=$(get_yaml_value key "$CONF_DIR/$name.yaml")
+            MT_LINK_DATA[BLOCK]=$(get_yaml_value block "$CONF_DIR/$name.yaml")
+            mt_link_paqet_values "$CONF_DIR/$name.yaml" || return 1;;
+    esac
+    if [[ "$MT_KIND" == backhaul || "$MT_KIND" == rathole ]]; then
+        host=$(mt_link_read "$conf" REMOTE_IP)
+        MT_LINK_DATA[BIND_HOST]=0.0.0.0
+        [[ "$host" != *:* ]] || MT_LINK_DATA[BIND_HOST]=::
+    fi
+    if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
+        host=$(get_local_ip)
+        read -r -p "  This server's reachable public IP/hostname [$host]: " dest || return 1
+        host="${dest:-$host}"
+        mt_valid_host "$host" && [[ "$host" != 0.0.0.0 && "$host" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
+        MT_LINK_DATA[HOST]="$host"
+        if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
+            read -r -p '  Peer server port mappings (e.g. 443=127.0.0.1:443): ' dest || return 1
+            validate_bh_ports "$dest" 0 || return 1; MT_LINK_DATA[PORTS]="$dest"
+        elif [ "$MT_KIND" = paqet ] && [ "$role" = 1 ]; then
+            read -r -p '  Peer client forwarded TCP ports (e.g. 443,8080): ' dest || return 1
+            mt_link_ports "$dest" && [ -n "$dest" ] || return 1; MT_LINK_DATA[TCP_PORTS]="$dest"
         fi
     fi
+    link=$(mt_link_encode) || { echo 'Cannot export these settings safely.' >&2; return 1; }
+    echo -e "\n  ${G}● Peer Setup Link (valid for 7 days):${NC}\n$link"
+    echo -e "  ${Y}● Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
+    mt_workspace_pause
+}
+mt_link_offer() {
+    local ans
+    read -r -p '  Generate a setup link for the peer now? [Y/n]: ' ans || return 0
+    case "${ans,,}" in n|no) return 0;; esac
+    mt_link_export "$1"
+}
+mt_link_import() {
+    local link ans name
+    mt_workspace_screen
+    read -r -p '  Paste Peer Setup Link (q: back): ' link || return 1
+    [ "$link" != q ] || return 0
+    mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
+    echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
+    printf '  Module: %s | Role: %s | Peer: %s\n' "$MT_KIND" "${MT_LINK_DATA[ROLE]}" "${MT_LINK_DATA[HOST]}"
+    printf '  Link port: %s | Transport: %s | vIPs: %s\n' "${MT_LINK_DATA[LINK_PORT]:--}" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "${MT_LINK_DATA[MAX_IPS]:--}"
+    printf '  TCP ports: %s | UDP ports: %s\n' "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "${MT_LINK_DATA[UDP_PORTS]:--}"
+    echo -e "  ${DIM}└─ Secret is hidden. Existing tunnels will not be overwritten.${NC}"
+    read -r -p "  Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " name || return 1
+    name="${name:-${MT_LINK_DATA[NAME]}}"
+    mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
+    MT_LINK_DATA[NAME]="$name"
+    read -r -p '  Create this peer tunnel? [y/N]: ' ans || return 1
+    [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
+    if mt_link_deploy; then
+        echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
+        mt_ask_bbr_on_create
+    else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
+    mt_workspace_pause
+}
+mt_workspace_vip() {
+    local ans count
+    MT_NEW_VIP_COUNT=0
+    read -r -p '  Create internal Virtual IPs for this tunnel? [y/N/q]: ' ans || return 1
+    case "${ans,,}" in q) return 1;; n|no|'') return 0;; y|yes) ;; *) echo 'Type y, n or q.' >&2; mt_workspace_vip; return $?;; esac
+    while true; do
+        read -r -p '  Virtual IP pair count [1] (1-64, q: back): ' count || return 1
+        [ "$count" != q ] || return 1; count="${count:-1}"
+        if mt_link_uint "$count" 1 64; then MT_NEW_VIP_COUNT=$((10#$count)); return 0; fi
+        echo 'Enter a number between 1 and 64.'
+    done
+}
+mt_workspace_backup() {
+    local dest
+    mt_workspace_screen
+    read -r -p "  Backup file [$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz]: " dest || return 1
+    dest="${dest:-$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz}"
+    mkdir -p "$(dirname "$dest")" || return 1
+    [ ! -e "$dest" ] || { echo 'File already exists; choose another path.' >&2; return 1; }
+    (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
+    mt_workspace_pause
+}
+# END MTUNNEL WORKSPACE V13
 
-    draw_header
-    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup Server Tunnel${NC} ${DIM}(Kharej Raw Listener)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Setup Client Tunnel${NC} ${DIM}(Iran Port Forward)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC} ${DIM}(Specific / ALL)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Edit Secret Key${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}KCP Profile${NC} ${DIM}(normal / fast / fast2 / fast3 / manual)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit MTU Size${NC} ${DIM}(1000-1500)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${Y}Edit Connection Count${NC} ${DIM}(conn: 1-32)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${M}Edit Encryption${NC} ${DIM}(aes-128-gcm, aes-256, none)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Edit Forwarded Ports${NC} ${DIM}(Client Only)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${M}Tunnels Info And Specs${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Live Monitor${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    mt_render_tunnel_system_tools 13 14
-    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Restart Service & Zero Counters${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${M}Install / Update MPaqet Core${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}17${NC}${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}├─${NC} ${W}18${NC}${DIM}❯${NC} ${R}Uninstall MPaqet${NC} ${DIM}(Purge All)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+mt_link_paqet_values() {
+    local yaml="$1" key val source
+    for key in MODE CONN MTU RCVWND SNDWND SMUXBUF STREAMBUF TCPBUF UDPBUF NODELAY WDELAY ACKNODELAY INTERVAL RESEND NOCONGESTION DSHARD PSHARD SMUXKALIVE; do
+        source="${key,,}"; val=$(get_yaml_value "$source" "$yaml")
+        [ -z "$val" ] || MT_LINK_DATA[KCP_$key]="$val"
+    done
+    val=$(get_yaml_value sockbuf "$yaml"); MT_LINK_DATA[KCP_PCAP_SOCKBUF]="${val:-8388608}"
+    # Older minimal configurations rely on the engine defaults, rather than explicit buffers/windows.
+    : "${MT_LINK_DATA[KCP_CONN]:=4}" "${MT_LINK_DATA[KCP_MTU]:=1350}" "${MT_LINK_DATA[KCP_RCVWND]:=1024}" "${MT_LINK_DATA[KCP_SNDWND]:=1024}"
+    : "${MT_LINK_DATA[KCP_SMUXBUF]:=16777216}" "${MT_LINK_DATA[KCP_STREAMBUF]:=2097152}" "${MT_LINK_DATA[KCP_TCPBUF]:=8192}" "${MT_LINK_DATA[KCP_UDPBUF]:=4096}"
+    if [ "${MT_LINK_DATA[KCP_MODE]}" = manual ]; then
+        : "${MT_LINK_DATA[KCP_NODELAY]:=0}" "${MT_LINK_DATA[KCP_WDELAY]:=true}" "${MT_LINK_DATA[KCP_ACKNODELAY]:=false}" "${MT_LINK_DATA[KCP_INTERVAL]:=30}" "${MT_LINK_DATA[KCP_RESEND]:=2}" "${MT_LINK_DATA[KCP_NOCONGESTION]:=1}"
+    fi
+}
+mt_link_deploy_locked() {
+    mt_link_validate || return 1
+    local name="pq_${MT_LINK_DATA[NAME]#pq_}" role="${MT_LINK_DATA[ROLE]}" port="${MT_LINK_DATA[LINK_PORT]}" host="${MT_LINK_DATA[HOST]}" key="${MT_LINK_DATA[TOKEN]}" block="${MT_LINK_DATA[BLOCK]}" target p variable yaml meta tmp unit
+    yaml="$CONF_DIR/$name.yaml"; meta="$CONF_DIR/$name.meta"; unit="mpaqet@$name"
+    [ ! -e "$yaml" ] && [ ! -e "$meta" ] || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
+    [ "$role" != 1 ] || { ! mt_port_busy "$port" && paqet_port_available "$port"; } || return 1
+    if [ "$role" = 2 ]; then
+        validate_paqet_ports "${MT_LINK_DATA[TCP_PORTS]}" || return 1
+        mt_list_has_port "${MT_LINK_DATA[TCP_PORTS]}" "$port" && { echo 'A forwarded port matches the link port.' >&2; return 1; }
+        target="$host"
+    else target=1.1.1.1; fi
+    resolve_paqet_route "$target" || { echo 'Cannot resolve the IPv4 route / gateway MAC.' >&2; return 1; }
+    [[ "$PQ_ROUTE_IFACE" =~ ^[A-Za-z0-9_.:-]{1,15}$ ]] || return 1
+    tmp=$(mktemp "$SECURE_TMP/peer-paqet.XXXXXX") || return 1
+    {
+        printf 'role: "%s"\nlog:\n  level: "info"\n' "$([ "$role" = 1 ] && echo server || echo client)"
+        if [ "$role" = 1 ]; then printf 'listen:\n  addr: ":%s"\n' "$port"
+        else
+            printf 'forward:\n'
+            IFS=, read -ra MT_PQ_PORTS <<< "${MT_LINK_DATA[TCP_PORTS]}"
+            for p in "${MT_PQ_PORTS[@]}"; do printf '  - listen: "0.0.0.0:%s"\n    target: "127.0.0.1:%s"\n    protocol: "tcp"\n' "$p" "$p"; done
+            printf 'server:\n  addr: "%s:%s"\n' "$PQ_ROUTE_TARGET" "$port"
+        fi
+        printf 'network:\n  interface: "%s"\n  ipv4:\n    addr: "%s:%s"\n    router_mac: "%s"\n  tcp:\n    local_flag: ["PA"]\n' "$PQ_ROUTE_IFACE" "$PQ_ROUTE_SRC" "$([ "$role" = 1 ] && echo "$port" || echo 0)" "$PQ_ROUTE_MAC"
+        [ "$role" != 2 ] || printf '    remote_flag: ["PA"]\n'
+        printf 'transport:\n  protocol: "kcp"\n  kcp:\n    key: "%s"\n    block: "%s"\n    mode: "%s"\n    mtu: %s\n' "$key" "$block" "${MT_LINK_DATA[KCP_MODE]}" "${MT_LINK_DATA[KCP_MTU]}"
+        for variable in DSHARD PSHARD SMUXKALIVE; do
+            [ -z "${MT_LINK_DATA[KCP_$variable]:-}" ] || printf '    %s: %s\n' "${variable,,}" "${MT_LINK_DATA[KCP_$variable]}"
+        done
+    } > "$tmp"
+    # Copy only validated scalar settings into the existing KCP writer.
+    for variable in MODE CONN MTU RCVWND SNDWND SMUXBUF STREAMBUF PCAP_SOCKBUF TCPBUF UDPBUF NODELAY WDELAY ACKNODELAY INTERVAL RESEND NOCONGESTION; do
+        printf -v "KCP_$variable" '%s' "${MT_LINK_DATA[KCP_$variable]:-}"
+    done
+    if [ "$KCP_MODE" = manual ]; then
+        for variable in NODELAY WDELAY ACKNODELAY INTERVAL RESEND NOCONGESTION; do
+            mt_link_field_valid "KCP_$variable" "${MT_LINK_DATA[KCP_$variable]:-}" || { rm -f "$tmp"; return 1; }
+        done
+    fi
+    if ! write_kcp_settings "$tmp" "$key" "$block"; then rm -f "$tmp"; return 1; fi
+    (umask 077; set -o noclobber; cat "$tmp" > "$yaml") 2>/dev/null || { rm -f "$tmp"; return 1; }; rm -f "$tmp"
+    {
+        printf 'ROLE=%s\nTUN_PORT=%s\nREMOTE_IP=%s\nTCP_PORTS=%s\nPROFILE=%s\n' "$role" "$port" "$host" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[PROFILE]}"
+    } > "$meta"; chmod 600 "$meta"
+    if [ "$role" = 1 ]; then setup_paqet_counters "$name" "$port"
+    else
+        for p in "${MT_PQ_PORTS[@]}"; do setup_paqet_counters "$name" "$p"; done
+        setup_paqet_probe "$name" "$PQ_ROUTE_TARGET" "$port"
+    fi
+    if ! systemctl restart "$unit" || ! mt_workspace_service_ready "$unit"; then
+        journalctl -u "$unit" -n 8 --no-pager >&2; systemctl stop "$unit"; clean_paqet_counters "$name"; rm -f "$yaml" "$meta"; return 1
+    fi
+    systemctl enable "$unit" >/dev/null 2>&1
+}
+mt_workspace_service_ready() {
+    local attempt
+    for attempt in 1 2 3 4; do sleep .4; systemctl is-active --quiet "$1" || return 1; done
+}
+mt_workspace_health() {
+    mt_link_select || return 1
+    local name; name=$(basename "$MT_LINK_CONF" .meta)
+    mt_workspace_screen
+    systemctl status "mpaqet@$name" --no-pager -l
+    journalctl -u "mpaqet@$name" -n 12 --no-pager
+    echo '  Paqet uses raw packets. A TCP connect probe cannot verify the raw link.'
+    echo '  Use Live Monitor for packet activity and test an actual forwarded application from the peer.'
+    mt_workspace_pause
+}
+
+mt_link_deploy() {
+    local fd rc
+    exec {fd}>"$SECURE_TMP/$MT_KIND-peer-setup.lock" || return 1
+    flock -x "$fd" || { exec {fd}>&-; return 1; }
+    mt_link_deploy_locked; rc=$?
+    exec {fd}>&-
+    return "$rc"
+}
+
+mt_workspace_auto_backup() {
+    local dest module="m$MT_KIND"
+    [ "$MT_KIND" != vxlan ] || module=mxlan
+    [ "$MT_KIND" != paqet ] || module=mpaqet
+    mkdir -p "$LOCAL_DIR/backups" || return 1
+    chmod 700 "$LOCAL_DIR/backups"
+    dest=$(mktemp "$LOCAL_DIR/backups/$module-before-edit-$(date +%Y%m%d-%H%M%S)-XXXXXX.tgz") || return 1
+    if ! tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")"; then rm -f "$dest"; return 1; fi
+    chmod 600 "$dest"
+    printf '  Config restore point: %s\n' "$dest"
+}
+mt_workspace_update_badge() {
+    local rv file="$SECURE_TMP/.mpaqet_remote_ver"
+    [ -f "$file" ] || return 0
+    rv=$(tr -d '\r\n ' < "$file")
+    mt_is_newer_version "$rv" "$MODULE_VERSION" && printf '(v%s available)' "$rv"
+    return 0
+}
+MT_KIND=paqet; MT_HEADER=draw_header; MT_SECTION=""
+mt_workspace_route() {
+    local section="$1"
+    case "$section" in
+        1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Server Setup (Kharej)|1" "2|Manual Client Setup (Iran)|2" "3|Create From Peer Link|97" "4|Generate Peer Setup Link|98" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Secret Key|4" "2|KCP Profile / Manual Settings|5" "3|MTU Size|6" "4|Connection Count|7" "5|Encryption|8" "6|Tunnel Name|10" "7|Delete Tunnels|3" || { MT_SECTION=""; return 1; };;
+        3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Forwarded TCP Ports (Client)|9" || { MT_SECTION=""; return 1; };;
+        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13" "2|BBR Settings|14" "3|Restart & Zero Counters|15" "4|Check Selected Tunnel|99" || { MT_SECTION=""; return 1; };;
+        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|17" "2|Install / Update Engine (Online / Local)|16" || { MT_SECTION=""; return 1; };;
+        5) MT_ACTION=11;;
+        6) MT_ACTION=12;;
+        8) MT_ACTION=96;;
+        9) MT_ACTION=18;;
+        0) MT_ACTION=0;;
+        *) return 1;;
+    esac
+}
+
+render_mpaqet_menu() {
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ MPAQET WORKSPACE ]${NC}\n  ${DIM}│${NC}"
+    mt_workspace_row 1 "Create Tunnel"
+    mt_workspace_row 2 "Edit & Manage"
+    mt_workspace_row 3 "Forwarding"
+    mt_workspace_row 4 "System & Security"
+    mt_workspace_row 5 "Tunnels Info And Specs"
+    mt_workspace_row 6 "Live Monitor"
+    mt_workspace_row 7 "Update and Local Install $(mt_workspace_update_badge)"
+    mt_workspace_row 8 "Backup Configs"
+    mt_workspace_row 9 "Uninstall MPAQET"
+    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
 
 while true; do
-    render_mpaqet_menu
-    read_with_refresh "  ${C}PAQET ❯❯ ${NC}" opt render_mpaqet_menu
-    opt=$(echo "$opt" | tr -d '\r')
-    
+    if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
+    else
+        render_mpaqet_menu
+        read_with_refresh "  ${C}MPAQET ❯❯ ${NC}" opt render_mpaqet_menu || break
+        opt="${opt//$'\r'/}"
+    fi
+    mt_workspace_route "$opt" || continue
+    case "$MT_ACTION" in
+        97) mt_link_import; continue;;
+        98) mt_link_export; continue;;
+        99) mt_workspace_health; continue;;
+        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save" || continue; mt_workspace_backup; continue;;
+    esac
+    # Every edit/forwarding action gets a private config restore point first.
+    if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then
+        mt_workspace_auto_backup || { echo 'Could not save the config restore point; operation cancelled.' >&2; mt_workspace_pause; continue; }
+    fi
+    opt="$MT_ACTION"
     case $opt in
         1)
+           mt_workspace_screen
            echo -e "\n  ${DIM}┌─[ DEPLOY SERVER TUNNEL ]${NC}"
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. srv1): ${NC}"; read suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
@@ -1975,8 +2360,7 @@ while true; do
                break
            done
            
-           s_key=$(head -c 16 /dev/urandom | xxd -p 2>/dev/null)
-           [ -z "$s_key" ] && s_key=$(tr -dc 'a-f0-9' </dev/urandom | head -c 16)
+           s_key=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
            echo -ne "  ${C}● Secret Key [Default ${s_key}]: ${NC}"; read u_key
            u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-')
            key=${u_key:-$s_key}
@@ -2028,6 +2412,7 @@ EOF
            sleep 1.5
            if systemctl is-active --quiet "mpaqet@${t_name}"; then
                mt_ask_bbr_on_create
+               mt_link_offer "$CONF_DIR/$t_name.meta"
                echo -e "\n  ${G}● Paqet Server Tunnel Deployed! Key: ${key}${NC}"; sleep 2
            else
                echo -e "\n  ${R}✖ Failed to start! Checking logs...${NC}"
@@ -2037,6 +2422,7 @@ EOF
            ;;
            
         2)
+           mt_workspace_screen
            echo -e "\n  ${DIM}┌─[ DEPLOY CLIENT TUNNEL ]${NC}"
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. cl1): ${NC}"; read suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
@@ -2149,6 +2535,7 @@ EOF
            sleep 1.5
            if systemctl is-active --quiet "mpaqet@${t_name}"; then
                mt_ask_bbr_on_create
+               mt_link_offer "$CONF_DIR/$t_name.meta"
                echo -e "\n  ${G}● Paqet Client Tunnel Deployed!${NC}"; sleep 2
            else
                echo -e "\n  ${R}✖ Failed to start! Checking logs...${NC}"

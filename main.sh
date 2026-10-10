@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MDesign Master Core | Central Dashboard v12.0.3 ---
+# --- MTunnel Master Core | Central Dashboard v1.0.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="13.6.0"
+MODULE_VERSION="1.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -552,7 +552,7 @@ mt_run_tool() {
             return $?
         fi
     done
-    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
     return 1
 }
 
@@ -1445,12 +1445,16 @@ run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
 
 install_bundle_scripts() {
     local source="$1" mod rel candidate target cur new
-    local -a files=()
+    local -a files=() mods=()
     [ -d "$source" ] || return 1
     for mod in "${ALL_MODULES[@]}"; do
+        rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"
+        mt_validate_script "$candidate" && mods+=("$mod")
+    done
+    [ "${#mods[@]}" -gt 0 ] || { echo 'No valid MTunnel scripts found in the local bundle.' >&2; return 1; }
+    for mod in "${mods[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"; target="/usr/bin/$mod"
         [ "$mod" != main ] || target="$MTUNNEL_PATH"
-        mt_validate_script "$candidate" || return 1
         cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
         new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
         if mt_is_newer_version "$cur" "$new"; then echo "Refusing downgrade: $mod" >&2; return 1; fi
@@ -1458,11 +1462,11 @@ install_bundle_scripts() {
     done
     mt_install_files 755 "${files[@]}" || return 1
     if [ "${2:-0}" == 1 ]; then
-        local current=0 version
-        for mod in "${ALL_MODULES[@]}"; do
+        local current=0 version total="${#mods[@]}"
+        for mod in "${mods[@]}"; do
             current=$((current+1)); rel="${MOD_MAP[$mod]}"
             version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/$rel")
-            draw_item_progress "$current" "${#ALL_MODULES[@]}" "$mod" "$version"
+            draw_item_progress "$current" "$total" "$mod" "$version"
         done
     fi
     return 0
@@ -1532,7 +1536,7 @@ fetch_package_group() {
 
 render_ota_menu() {
     draw_main_header
-    echo -e "\n  ${DIM}┌─[ Update and Local Install ]${NC}"
+    echo -e "\n  ${DIM}┌─[ Update & Local Install ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SCRIPT CORE ENGINE UPDATES ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1939,31 +1943,28 @@ use_peer_code() {
 
 render_main_menu() {
     draw_main_header
-    echo -e "\n  ${DIM}┌─[ QUICK ACTIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}0${NC} ${DIM}❯${NC} ${G}Use Peer Code${NC}"
-    echo -e "  ${DIM}│${NC}"
     echo -e "\n  ${DIM}┌─[ TUNNEL INFRASTRUCTURE ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}GRE / GRE6 / IPIP Tunnel${NC} $(module_update_badge mgre)"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric${NC} $(module_update_badge mxlan)"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Rathole Reverse Tunnel${NC} $(module_update_badge mrathole)"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Backhaul Multiplexer${NC} $(module_update_badge mbackhaul)"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel${NC} $(module_update_badge mpaqet)"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC}  ${DIM}❯${NC} ${G}Use Peer Code${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC}  ${DIM}❯${NC} ${C}GRE / GRE6 / IPIP Tunnel${NC} $(module_update_badge mgre)"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC}  ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric${NC} $(module_update_badge mxlan)"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC}  ${DIM}❯${NC} ${R}Rathole Reverse Tunnel${NC} $(module_update_badge mrathole)"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC}  ${DIM}❯${NC} ${G}Backhaul Multiplexer${NC} $(module_update_badge mbackhaul)"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC}  ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel${NC} $(module_update_badge mpaqet)"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ ROUTING, MONITORING & BENCHMARK ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC} $(module_update_badge mporter)"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${B}Bandwidth Radar & Web UI${NC} $(module_update_badge mstats)"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${C}Two-Way Link & Port Filter Scanner (LinkTest)${NC} $(module_update_badge linktest)"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}iPerf3 Bandwidth Benchmark${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC}  ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC} $(module_update_badge mporter)"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC}  ${DIM}❯${NC} ${B}Bandwidth Radar & Web UI${NC} $(module_update_badge mstats)"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC}  ${DIM}❯${NC} ${C}Two-Way Link & Port Filter Scanner (LinkTest)${NC} $(module_update_badge linktest)"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${C}iPerf3 Bandwidth Benchmark${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Update and Local Install${NC} $(module_update_badge main)"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC} ${DIM}❯${NC} ${G}Update & Local Install${NC} $(module_update_badge main)"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
+    echo -e "  ${DIM}└─${NC} ${W}q${NC}  ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
 }
 
 show_local_install() {
@@ -1985,19 +1986,19 @@ while true; do
     opt=$(echo "$opt" | tr -d '\r ')
 
     case $opt in
-        1) run_mod "mgre" ;;
-        2) run_mod "mxlan" ;;
-        3) run_mod "mrathole" ;;
-        4) run_mod "mbackhaul" ;;
-        5) run_mod "mpaqet" ;;
-        6) run_mod "mporter" ;;
-        7) run_mod "mstats" ;;
-        8) run_mod "linktest" ;;
-        9) run_iperf3 ;;
-        0) use_peer_code ;;
+        1) use_peer_code ;;
+        2) run_mod "mgre" ;;
+        3) run_mod "mxlan" ;;
+        4) run_mod "mrathole" ;;
+        5) run_mod "mbackhaul" ;;
+        6) run_mod "mpaqet" ;;
+        7) run_mod "mporter" ;;
+        8) run_mod "mstats" ;;
+        9) run_mod "linktest" ;;
+        10) run_iperf3 ;;
         q|Q) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
-        10) show_ota_update_hub ;;
-        11)
+        11) show_ota_update_hub ;;
+        12)
             draw_main_header
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"

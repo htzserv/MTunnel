@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.3 ---
+# --- MTunnel MBackhaul | Multiplexer Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="13.6.0"
+MODULE_VERSION="1.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -552,7 +552,7 @@ mt_run_tool() {
             return $?
         fi
     done
-    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
     return 1
 }
 
@@ -809,7 +809,7 @@ self_update_module() {
     [ -f "$SECURE_TMP/.mbackhaul_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mbackhaul_remote_ver" | tr -d '\r\n ')
 
     local gh_text="${C}Official GitHub Server${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
         gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
     else
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
@@ -1965,7 +1965,7 @@ draw_header() {
 
 show_tunnel_registry() {
     draw_header
-    echo -e "\n  ${Y}● Tunnels Info And Specs:${NC}"
+    echo -e "\n  ${Y}● Tunnel Info & Specs:${NC}"
     local count=0
     for conf in "$CONF_DIR"/*.meta; do
         [ ! -f "$conf" ] && continue
@@ -2281,7 +2281,7 @@ mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
             IFS='|' read -r id label action color <<< "$entry"
             mt_workspace_row "$id" "$label" "$color"
         done
-        mt_workspace_footer 'Go Back'
+        mt_workspace_footer 'Return to Previous Menu'
         printf '  %bSelect ❯❯ %b' "$C" "$NC"
         read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
@@ -2695,13 +2695,13 @@ mt_workspace_route() {
         2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Transport & Advanced Settings|5|${M}" "3|Auth Token|6|${G}" "4|Link Port|7|${C}" "5|Tunnel Name|9|${W}" "6|Listen Address|10|${C}" "7|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Mappings & Forwarder (Native / iptables / MPorter)|4|${Y}" "2|UDP Acceptance|8|${C}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Scheduled Restart|15|${Y}" "4|Restart & Zero Counters|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|18|${G}" "2|Install / Update Engine (Online / Local)|17|${M}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
         6) MT_ACTION=12;;
+        7) MT_SECTION=7; mt_workspace_menu "UPDATE & LOCAL INSTALL" "1|OTA Update / Local Script|18|${G}" "2|Install / Update Engine (Online / Local)|17|${M}" || { MT_SECTION=""; return 1; };;
         8) MT_ACTION=96;;
-        9) MT_ACTION=19;;
+        9) MT_ACTION=201;;
         10) MT_SECTION=2; MT_ACTION=2; MT_SHORTCUT=1;;
-        11) MT_ACTION=201;;
+        11) MT_ACTION=19;;
         0) MT_ACTION=0;;
         *) return 1;;
     esac
@@ -2710,17 +2710,17 @@ mt_workspace_route() {
 render_mbackhaul_menu() {
     mt_workspace_screen
     mt_workspace_group 'PROVISION & MANAGE' first
-    mt_workspace_row 1 'Create Tunnel' "$G"
+    mt_workspace_row 1 'Create Tunnel' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
-    mt_workspace_row 10 'Delete Tunnels' "$R"
-    mt_workspace_row 11 'Logs' "$Y"
-    mt_workspace_row 3 'Forwarding' "$Y"
+    mt_workspace_row 3 'Forwarding' "$G"
     mt_workspace_row 4 'System & Security' "$M"
-    mt_workspace_row 5 'Tunnels Info And Specs' "$W"
+    mt_workspace_row 5 'Tunnel Info & Specs' "$M"
     mt_workspace_row 6 'Live Monitor' "$C"
-    mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
-    mt_workspace_row 8 'Backup Configs' "$W"
-    mt_workspace_row 9 'Uninstall MBACKHAUL' "$R"
+    mt_workspace_row 7 'Update & Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 8 'Backup & Restore' "$W"
+    mt_workspace_row 9 'Logs' "$Y"
+    mt_workspace_row 10 'Delete Tunnels' "$R"
+    mt_workspace_row 11 'Uninstall MBACKHAUL' "$R"
     mt_workspace_footer 'Return to Main Core'
 }
 
@@ -2738,7 +2738,7 @@ while true; do
         98) mt_link_export; continue;;
         99) mt_workspace_health; continue;;
         201) mt_main_logs; continue;;
-        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
+        96) mt_workspace_menu "BACKUP & RESTORE" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
     esac
     # Every edit/forwarding action gets a private config restore point first.
     if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then

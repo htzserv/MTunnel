@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MDesign Modular Core (mporter.sh) | MPorter Manager v12.0.3 ---
+# --- MTunnel MPorter | Port Forwarding Manager v1.0.2 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
 # v12.0.3 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="13.6.0"
+MODULE_VERSION="1.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -575,7 +575,7 @@ mt_run_tool() {
             return $?
         fi
     done
-    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
     return 1
 }
 
@@ -883,7 +883,7 @@ self_update_module() {
     [ -f "$SECURE_TMP/.mporter_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mporter_remote_ver")
 
     clear; echo -e "\n  ${DIM}┌─[ OTA Update (Script Only) ]${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
         echo -e "  ${DIM}├─${NC} ${Y}Update Available: v${MODULE_VERSION} ➔ v${remote_v}${NC}"
     else
         echo -e "  ${DIM}├─${NC} ${DIM}Current Version: v${MODULE_VERSION}${NC}"
@@ -2997,7 +2997,7 @@ show_mporter_info() {
     local choice
     while true; do
         draw_header
-        echo -e "\n  ${DIM}┌─[ Tunnels Info And Specs ]${NC}"
+        echo -e "\n  ${DIM}┌─[ Tunnel Info & Specs ]${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}IP / Port Mappings${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Backend Health Matrix${NC}"
@@ -3046,7 +3046,7 @@ mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
             IFS='|' read -r id label action color <<< "$entry"
             mt_workspace_row "$id" "$label" "$color"
         done
-        mt_workspace_footer 'Go Back'
+        mt_workspace_footer 'Return to Previous Menu'
         printf '  %bSelect ❯❯ %b' "$C" "$NC"
         read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
@@ -3078,9 +3078,9 @@ mt_workspace_route() {
         1) MT_SECTION=1; mt_workspace_menu "CREATE & FORWARD" "1|Add Port Mappings|3|${C}" "2|Load Balance / Failover / Selected IPs|4|${G}" || { MT_SECTION=""; return 1; };;
         2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Edit Ports / Target IP / OBFS|5|${Y}" "2|Delete Mappings|6|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_ACTION=7;;
-        4) MT_SECTION=4; mt_workspace_menu "SYSTEM" "1|Restart Services|8|${C}" "2|BBR Settings|bbr|${G}" || { MT_SECTION=""; return 1; };;
-        5) MT_SECTION=5; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|9|${G}" "2|Install / Update Engines (Online / Local)|1|${G}" || { MT_SECTION=""; return 1; };;
-        6) MT_SECTION=6; mt_workspace_menu "BACKUP" "1|Save Mapping Config Backup|backup|${W}" || { MT_SECTION=""; return 1; };;
+        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Restart Services|8|${C}" "2|BBR Settings|bbr|${G}" || { MT_SECTION=""; return 1; };;
+        5) MT_SECTION=5; mt_workspace_menu "UPDATE & LOCAL INSTALL" "1|OTA Update / Local Script|9|${G}" "2|Install / Update Engines (Online / Local)|1|${G}" || { MT_SECTION=""; return 1; };;
+        6) MT_SECTION=6; mt_workspace_menu "BACKUP & RESTORE" "1|Save Mapping Config Backup|backup|${W}" || { MT_SECTION=""; return 1; };;
         7) MT_ACTION=2;;
         0) MT_ACTION=0;;
         *) return 1;;
@@ -3105,11 +3105,11 @@ render_mporter_menu() {
     mt_workspace_group 'PROVISION & MANAGE' first
     mt_workspace_row 1 'Create & Forward' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
-    mt_workspace_row 3 'Tunnels Info And Specs' "$M"
-    mt_workspace_row 4 'System' "$C"
-    mt_workspace_row 5 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
-    mt_workspace_row 6 'Backup Configs' "$W"
-    mt_workspace_row 7 'Uninstall Engines & Purge' "$R"
+    mt_workspace_row 3 'Tunnel Info & Specs' "$M"
+    mt_workspace_row 4 'System & Security' "$M"
+    mt_workspace_row 5 'Update & Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 6 'Backup & Restore' "$W"
+    mt_workspace_row 7 'Uninstall MPORTER' "$R"
     mt_workspace_footer 'Return to Main Core'
 }
 

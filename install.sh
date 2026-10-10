@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="13.6.0"
+MODULE_VERSION="1.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -687,6 +687,7 @@ installer_main() {
     local script_file="${BASH_SOURCE[0]}" script_dir
     script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mweb:tools/mweb.sh mstats:tools/mstats.sh mhealer:tools/mhealer.sh minterface:tools/minterface.sh mbbr:tools/mbbr.sh mdiag:tools/mdiag.sh mshield:tools/mshield.sh linktest:tools/linktest.sh)
+    local -a active_modules=()
     local -a files=()
     local current=0 mod_ver
     while [ "$#" -gt 0 ]; do
@@ -733,8 +734,17 @@ installer_main() {
         done
         source_dir="$work/scripts"
     fi
-    [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
-    for item in "${modules[@]}"; do
+        [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
+    if [ -n "$remote" ]; then
+        active_modules=("${modules[@]}")
+    else
+        for item in "${modules[@]}"; do
+            path="${item#*:}"
+            mt_validate_script "$source_dir/$path" && active_modules+=("$item")
+        done
+        [ "${#active_modules[@]}" -gt 0 ] || { echo 'No valid MTunnel scripts were found in the local source.' >&2; return 1; }
+    fi
+    for item in "${active_modules[@]}"; do
         name="${item%%:*}"; path="${item#*:}"; target="$root/usr/bin/$name"
         [ "$name" != main ] || target="$root/usr/bin/mtunnel"
         mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
@@ -747,7 +757,7 @@ installer_main() {
         if [ -z "$remote" ]; then
             current=$((current+1))
             mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
+            draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
             echo ''
         fi
     done

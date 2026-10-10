@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MXLAN Layer-2 Fabric (mxlan.sh) | MDesign Core v12.0.3 ---
+# --- MTunnel MXLAN | VXLAN Fabric Engine v1.0.2 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="13.6.0"
+MODULE_VERSION="1.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -558,7 +558,7 @@ mt_run_tool() {
             return $?
         fi
     done
-    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
     return 1
 }
 
@@ -1324,11 +1324,11 @@ self_update_module() {
     local gh_text="${C}Official GitHub Server${NC}"
     local mirror_text="${G}ParsPack Iranian Mirror${NC}"
     if [ "$gh_ver" != "Unknown" ]; then
-        if [ "$gh_ver" != "$MODULE_VERSION" ]; then gh_text+="    ${Y}(v${MODULE_VERSION} ➔ v${gh_ver})${NC}"
+        if mt_is_newer_version "$gh_ver" "$MODULE_VERSION"; then gh_text+="    ${Y}(v${MODULE_VERSION} ➔ v${gh_ver})${NC}"
         else gh_text+="    ${DIM}(v${gh_ver})${NC}"; fi
     else gh_text+="    ${DIM}(version unavailable)${NC}"; fi
     if [ "$mirror_ver" != "Unknown" ]; then
-        if [ "$mirror_ver" != "$MODULE_VERSION" ]; then mirror_text+="    ${Y}(v${MODULE_VERSION} ➔ v${mirror_ver})${NC}"
+        if mt_is_newer_version "$mirror_ver" "$MODULE_VERSION"; then mirror_text+="    ${Y}(v${MODULE_VERSION} ➔ v${mirror_ver})${NC}"
         else mirror_text+="    ${DIM}(v${mirror_ver})${NC}"; fi
     else mirror_text+="    ${DIM}(version unavailable)${NC}"; fi
 
@@ -1628,7 +1628,7 @@ show_fabric_details() {
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return; }
 
-    echo -e "\n  ${Y}● Tunnels Info And Specs:${NC}"
+    echo -e "\n  ${Y}● Tunnel Info & Specs:${NC}"
     local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VNI_ID BR_NAME VX_NAME CORE_SUBNET LOCAL_PUB6 REMOTE_PUB6 FAB_PROTO
     local c_sub lip tip t_role t_sec left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 pad3 sp3 l4 pad4 sp4
     for conf in "${configs[@]}"; do
@@ -2152,7 +2152,7 @@ mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
             IFS='|' read -r id label action color <<< "$entry"
             mt_workspace_row "$id" "$label" "$color"
         done
-        mt_workspace_footer 'Go Back'
+        mt_workspace_footer 'Return to Previous Menu'
         printf '  %bSelect ❯❯ %b' "$C" "$NC"
         read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
@@ -2237,8 +2237,8 @@ mt_link_box() { # draws the peer code inside a plain box
 }
 mt_main_logs() {
     mt_workspace_screen
-    echo -e "\n  ${DIM}┌─[ WATCHDOG LOG (last 80 lines) ]${NC}\n  ${DIM}│${NC}"
-    if [ -s "/var/log/mxlan-watchdog.log" ]; then tail -n 80 "/var/log/mxlan-watchdog.log"; else echo -e "  ${DIM}└─${NC} ${W}No log entries yet.${NC}"; fi
+    echo -e "\n  ${DIM}┌─[ MXLAN SERVICE LOGS ]${NC}\n  ${DIM}│${NC}"
+    journalctl -u mxlan.service -n 80 --no-pager 2>/dev/null || echo -e "  ${DIM}└─${NC} ${W}No service log entries yet.${NC}"
     mt_workspace_pause
 }
 mt_link_read() { # read flat metadata as data, never source it
@@ -2578,16 +2578,16 @@ mt_workspace_route() {
     local section="$1"
     case "$section" in
         1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual VXLAN Setup|1|${C}" "2|Create From Peer Link|97|${G}" "3|Generate Peer Setup Link|98|${M}" || { MT_SECTION=""; return 1; };;
-        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Fabric Name|7|${W}" "2|Public IPs|8|${C}" "3|Token / Secret|9|${M}" "4|Core Subnet|10|${Y}" "5|MTU & MSS|11|${C}" "6|Virtual IP Manager|2|${G}" "7|Delete Fabrics|6|${R}" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Fabric Name|7|${W}" "2|Public IPs|8|${C}" "3|Token / Secret|9|${M}" "4|Core Subnet|10|${Y}" "5|MTU & MSS|11|${C}" "6|Virtual IP Manager|2|${G}" "7|Delete Tunnels|6|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Forwarding / Selected IPs / Load Balance|4|${G}" "2|MPorter Forwarders|3|${C}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|IPsec Encryption|13|${M}" "2|Firewall Guard|14|${R}" "3|Auto Recovery|15|${G}" "4|BBR Settings|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
-        7) MT_ACTION=17;;
         5) MT_ACTION=5;;
         6) MT_ACTION=12;;
+        7) MT_ACTION=17;;
         8) MT_ACTION=18;;
-        9) MT_ACTION=19;;
+        9) MT_ACTION=201;;
         10) MT_SECTION=2; MT_ACTION=6; MT_SHORTCUT=1;;
-        11) MT_ACTION=201;;
+        11) MT_ACTION=19;;
         0) MT_ACTION=0;;
         *) return 1;;
     esac
@@ -2598,15 +2598,15 @@ render_mxlan_menu() {
     mt_workspace_group 'PROVISION & MANAGE' first
     mt_workspace_row 1 'Create Tunnel' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
-    mt_workspace_row 10 'Delete Fabrics' "$R"
-    mt_workspace_row 11 'Logs' "$Y"
     mt_workspace_row 3 'Forwarding' "$G"
     mt_workspace_row 4 'System & Security' "$M"
-    mt_workspace_row 5 'Tunnels Info And Specs' "$M"
-    mt_workspace_row 6 'Live Monitor' "$W"
-    mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 5 'Tunnel Info & Specs' "$M"
+    mt_workspace_row 6 'Live Monitor' "$C"
+    mt_workspace_row 7 'Update & Local Install' "$G" "$(mt_workspace_update_badge)"
     mt_workspace_row 8 'Backup & Restore' "$W"
-    mt_workspace_row 9 'Uninstall MXLAN' "$R"
+    mt_workspace_row 9 'Logs' "$Y"
+    mt_workspace_row 10 'Delete Tunnels' "$R"
+    mt_workspace_row 11 'Uninstall MXLAN' "$R"
     mt_workspace_footer 'Return to Main Core'
 }
 
@@ -2628,7 +2628,7 @@ while true; do
         98) mt_link_export; continue;;
         99) mt_workspace_health; continue;;
         201) mt_main_logs; continue;;
-        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
+        96) mt_workspace_menu "BACKUP & RESTORE" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
     esac
     # Every edit/forwarding action gets a private config restore point first.
     if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then

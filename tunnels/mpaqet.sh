@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MPaqet Modular Core (mpaqet.sh) | Raw Packet Tunnel Engine v12.0.3 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="13.6.0"
+MODULE_VERSION="1.0.2"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -552,7 +552,7 @@ mt_run_tool() {
             return $?
         fi
     done
-    echo -e "  ${R}✖ ${name} is missing. Use Update and Local Install to install all scripts.${NC}" >&2
+    echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
     return 1
 }
 
@@ -1669,7 +1669,7 @@ EOF
 
 show_tunnel_registry() {
     draw_header
-    echo -e "\n  ${Y}● Tunnels Info And Specs:${NC}"
+    echo -e "\n  ${Y}● Tunnel Info & Specs:${NC}"
     local count=0
     for conf in "$CONF_DIR"/*.meta; do
         [ ! -f "$conf" ] && continue
@@ -1930,7 +1930,7 @@ mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
             IFS='|' read -r id label action color <<< "$entry"
             mt_workspace_row "$id" "$label" "$color"
         done
-        mt_workspace_footer 'Go Back'
+        mt_workspace_footer 'Return to Previous Menu'
         printf '  %bSelect ❯❯ %b' "$C" "$NC"
         read -r choice || return 1
         case "$choice" in 0|q|Q) return 1;; esac
@@ -2362,13 +2362,13 @@ mt_workspace_route() {
         2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Secret Key|4|${G}" "2|KCP Profile / Manual Settings|5|${C}" "3|MTU Size|6|${G}" "4|Connection Count|7|${Y}" "5|Encryption|8|${M}" "6|Tunnel Name|10|${W}" "7|Delete Tunnels|3|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Forwarded TCP Ports (Client)|9|${C}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Restart & Zero Counters|15|${G}" "4|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE AND LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" "2|Install / Update Engine (Online / Local)|16|${M}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
         6) MT_ACTION=12;;
+        7) MT_SECTION=7; mt_workspace_menu "UPDATE & LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" "2|Install / Update Engine (Online / Local)|16|${M}" || { MT_SECTION=""; return 1; };;
         8) MT_ACTION=96;;
-        9) MT_ACTION=18;;
+        9) MT_ACTION=201;;
         10) MT_SECTION=2; MT_ACTION=3; MT_SHORTCUT=1;;
-        11) MT_ACTION=201;;
+        11) MT_ACTION=18;;
         0) MT_ACTION=0;;
         *) return 1;;
     esac
@@ -2377,17 +2377,17 @@ mt_workspace_route() {
 render_mpaqet_menu() {
     mt_workspace_screen
     mt_workspace_group 'PROVISION & MANAGE' first
-    mt_workspace_row 1 'Create Tunnel' "$G"
+    mt_workspace_row 1 'Create Tunnel' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
-    mt_workspace_row 10 'Delete Tunnels' "$R"
-    mt_workspace_row 11 'Logs' "$Y"
-    mt_workspace_row 3 'Forwarding' "$C"
+    mt_workspace_row 3 'Forwarding' "$G"
     mt_workspace_row 4 'System & Security' "$M"
-    mt_workspace_row 5 'Tunnels Info And Specs' "$M"
-    mt_workspace_row 6 'Live Monitor' "$G"
-    mt_workspace_row 7 'Update and Local Install' "$G" "$(mt_workspace_update_badge)"
-    mt_workspace_row 8 'Backup Configs' "$W"
-    mt_workspace_row 9 'Uninstall MPAQET' "$R"
+    mt_workspace_row 5 'Tunnel Info & Specs' "$M"
+    mt_workspace_row 6 'Live Monitor' "$C"
+    mt_workspace_row 7 'Update & Local Install' "$G" "$(mt_workspace_update_badge)"
+    mt_workspace_row 8 'Backup & Restore' "$W"
+    mt_workspace_row 9 'Logs' "$Y"
+    mt_workspace_row 10 'Delete Tunnels' "$R"
+    mt_workspace_row 11 'Uninstall MPAQET' "$R"
     mt_workspace_footer 'Return to Main Core'
 }
 
@@ -2405,7 +2405,7 @@ while true; do
         98) mt_link_export; continue;;
         99) mt_workspace_health; continue;;
         201) mt_main_logs; continue;;
-        96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
+        96) mt_workspace_menu "BACKUP & RESTORE" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
     esac
     # Every edit/forwarding action gets a private config restore point first.
     if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then

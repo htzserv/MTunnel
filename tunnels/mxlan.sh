@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="13.5.0"
+MODULE_VERSION="13.6.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -2220,6 +2220,27 @@ mt_link_decode() {
     if [ "$ver" = 2 ] && [[ ! -v MT_LINK_DATA[SYNC_KEY] ]] && [[ -v MT_LINK_DATA[TUN_SECRET] ]]; then MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[TUN_SECRET]}"; fi
     mt_link_validate
 }
+mt_bbr_state() { [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo 1 || echo 0; }
+mt_ask_bbr_from_peer() { # peer had BBR on: offer the same here
+    local ans
+    echo -e "\n  ${DIM}● Peer server has BBR enabled.${NC}"
+    mt_ask ans 'Enable BBR on this server too? [y/N]: ' || return 0
+    case "${ans,,}" in y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the peer tunnel is retained.${NC}" >&2;; esac
+    return 0
+}
+mt_link_box() { # draws the peer code inside a plain box
+    local text="$1" line
+    line=$(printf '%*s' "$(( ${#text} + 4 ))" '' | tr ' ' '─')
+    echo -e "  ${DIM}╭${line}╮${NC}"
+    echo -e "  ${DIM}│${NC}  ${W}${text}${NC}  ${DIM}│${NC}"
+    echo -e "  ${DIM}╰${line}╯${NC}"
+}
+mt_main_logs() {
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ WATCHDOG LOG (last 80 lines) ]${NC}\n  ${DIM}│${NC}"
+    if [ -s "/var/log/mxlan-watchdog.log" ]; then tail -n 80 "/var/log/mxlan-watchdog.log"; else echo -e "  ${DIM}└─${NC} ${W}No log entries yet.${NC}"; fi
+    mt_workspace_pause
+}
 mt_link_read() { # read flat metadata as data, never source it
     local value
     value=$(awk -v k="$2" 'index($0,k"=")==1 {sub(/^[^=]*=/,"");print;exit}' "$1")
@@ -2240,6 +2261,7 @@ mt_link_field_valid() {
     [ "${#val}" -le 4096 ] && [[ "$val" =~ $safe ]] || return 1
     case "$key" in
         ROLE) [[ "$val" =~ ^[12]$ ]];;
+        BBR) [[ "$val" =~ ^[01]$ ]];;
         NAME) [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]];;
         BIND_HOST) [[ "$val" = 0.0.0.0 || "$val" = :: ]];;
         EXPIRES) mt_link_uint "$val" 1 9999999999;;
@@ -2279,7 +2301,7 @@ mt_link_field_valid() {
 mt_link_validate() {
     local key required
     [[ "$MT_KIND" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
-    local allowed=' ROLE NAME HOST EXPIRES '
+    local allowed=' ROLE NAME HOST EXPIRES BBR '
     case "$MT_KIND" in
         gre) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET CORE_V6 TUN_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
         vxlan) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET VNI_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
@@ -2326,6 +2348,7 @@ mt_link_export() {
     esac
     [[ "$role" =~ ^[12]$ ]] || return 1
     MT_LINK_DATA[ROLE]=$((3-role)); MT_LINK_DATA[NAME]="$name"
+    MT_LINK_DATA[BBR]=$(mt_bbr_state)
     MT_LINK_DATA[EXPIRES]=$(($(date +%s)+604800))
     case "$MT_KIND" in
         gre|vxlan)
@@ -2380,8 +2403,10 @@ mt_link_export() {
         fi
     fi
     link=$(mt_link_encode) || { echo 'Cannot export these settings safely.' >&2; return 1; }
-    echo -e "\n  ${G}● Peer Setup Link (valid for 7 days):${NC}\n$link"
-    echo -e "  ${Y}● Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${DIM}│${NC}"
+    mt_link_box "$link"
+    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${Y}Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
     mt_workspace_pause
 }
 mt_link_offer() {
@@ -2393,7 +2418,7 @@ mt_link_offer() {
 mt_link_import() {
     local link ans name
     mt_workspace_screen
-    mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1
+    if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1; fi
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
     echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
@@ -2416,7 +2441,7 @@ mt_link_import() {
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
-        mt_ask_bbr_on_create
+        if [ "${MT_LINK_DATA[BBR]:-0}" = 1 ]; then mt_ask_bbr_from_peer; else mt_ask_bbr_on_create; fi
     else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
     mt_workspace_pause
 }
@@ -2561,6 +2586,8 @@ mt_workspace_route() {
         6) MT_ACTION=12;;
         8) MT_ACTION=18;;
         9) MT_ACTION=19;;
+        10) MT_SECTION=2; MT_ACTION=6; MT_SHORTCUT=1;;
+        11) MT_ACTION=201;;
         0) MT_ACTION=0;;
         *) return 1;;
     esac
@@ -2571,6 +2598,8 @@ render_mxlan_menu() {
     mt_workspace_group 'PROVISION & MANAGE' first
     mt_workspace_row 1 'Create Tunnel' "$C"
     mt_workspace_row 2 'Edit & Manage' "$Y"
+    mt_workspace_row 10 'Delete Fabrics' "$R"
+    mt_workspace_row 11 'Logs' "$Y"
     mt_workspace_row 3 'Forwarding' "$G"
     mt_workspace_row 4 'System & Security' "$M"
     mt_workspace_row 5 'Tunnels Info And Specs' "$M"
@@ -2581,6 +2610,7 @@ render_mxlan_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
+if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
     else
@@ -2597,12 +2627,14 @@ while true; do
         97) mt_link_import; continue;;
         98) mt_link_export; continue;;
         99) mt_workspace_health; continue;;
+        201) mt_main_logs; continue;;
         96) mt_workspace_menu "BACKUP" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
     esac
     # Every edit/forwarding action gets a private config restore point first.
     if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then
         mt_workspace_auto_backup || { echo 'Could not save the config restore point; operation cancelled.' >&2; mt_workspace_pause; continue; }
     fi
+    [ "${MT_SHORTCUT:-}" = 1 ] && { MT_SECTION=""; MT_SHORTCUT=""; }
     opt="$MT_ACTION"
     case $opt in
         1) 

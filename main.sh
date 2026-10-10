@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v12.0.3 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="13.5.0"
+MODULE_VERSION="13.6.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -1920,8 +1920,29 @@ module_update_badge() {
     return 0
 }
 
+use_peer_code() {
+    local link kind mod
+    draw_main_header
+    echo -e "\n  ${DIM}┌─[ USE PEER CODE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Paste Peer Setup Link (q: back) ❯❯ ${NC}"; read -r link || return 0
+    link="${link//[$' \r\n\t']/}"
+    [[ "$link" == q || -z "$link" ]] && return 0
+    kind=$(printf '%s' "$link" | sed -n 's#^mtunnel://[12]/\([a-z]*\)/.*#\1#p')
+    case "$kind" in
+        gre) mod=mgre;; vxlan) mod=mxlan;; rathole) mod=mrathole;;
+        backhaul) mod=mbackhaul;; paqet) mod=mpaqet;;
+        *) echo -e "  ${R}✖ Not a valid peer link.${NC}"; read -r -p '  Press Enter to continue...' _; return 0;;
+    esac
+    MT_PEER_LINK="$link" run_mod "$mod"
+}
+
 render_main_menu() {
     draw_main_header
+    echo -e "\n  ${DIM}┌─[ QUICK ACTIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}0${NC} ${DIM}❯${NC} ${G}Use Peer Code${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "\n  ${DIM}┌─[ TUNNEL INFRASTRUCTURE ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}GRE / GRE6 / IPIP Tunnel${NC} $(module_update_badge mgre)"
@@ -1942,7 +1963,7 @@ render_main_menu() {
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${G}Update and Local Install${NC} $(module_update_badge main)"
     echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
+    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
 }
 
 show_local_install() {
@@ -1973,6 +1994,8 @@ while true; do
         7) run_mod "mstats" ;;
         8) run_mod "linktest" ;;
         9) run_iperf3 ;;
+        0) use_peer_code ;;
+        q|Q) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
         10) show_ota_update_hub ;;
         11)
             draw_main_header
@@ -2041,9 +2064,5 @@ while true; do
             fi
             ;;
 
-        0) 
-            kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
-            clear; exit 0
-            ;;
     esac
 done

@@ -2,7 +2,7 @@
 # --- MDesign BBR Accelerator Core (mbbr.sh) v12.0.3 ---
 # [Features: Async Background Checker | MDesign UI Spacing | Minimal OTA]
 
-MODULE_VERSION="12.0.5"
+MODULE_VERSION="13.5.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

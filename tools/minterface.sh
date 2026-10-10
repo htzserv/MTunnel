@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (minterface.sh) | Interface Mapper v12.0.3 ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="12.0.5"
+MODULE_VERSION="13.5.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

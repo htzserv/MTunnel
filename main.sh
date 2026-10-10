@@ -2,7 +2,7 @@
 # --- MDesign Master Core | Central Dashboard v12.0.3 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
 
-MODULE_VERSION="13.0.0"
+MODULE_VERSION="13.5.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

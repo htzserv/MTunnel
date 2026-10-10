@@ -2,7 +2,7 @@
 # --- MDesign Modular Core (mdiag.sh) | MDiag Omni-Scanner v12.0.3 (Full Edition) ---
 # [Features: Refined Spacing | Async Background Checker | Minimal OTA Badges]
 
-MODULE_VERSION="12.0.5"
+MODULE_VERSION="13.5.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.

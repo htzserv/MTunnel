@@ -2,7 +2,7 @@
 # --- MBackhaul Modular Core (mbackhaul.sh) | MDesign Ecosystem v12.0.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="13.0.0"
+MODULE_VERSION="13.5.0"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -2290,6 +2290,59 @@ mt_workspace_pause() {
     printf '  %bPress Enter to continue...%b' "$DIM" "$NC"
     read -r _ || true
 }
+mt_link_encode() {
+    mt_link_validate || return 1
+    local raw encoded checksum key
+    raw=$(for key in "${!MT_LINK_DATA[@]}"; do
+            [ "$key" = SYNC_KEY ] && [ "${MT_LINK_DATA[SYNC_KEY]}" = "${MT_LINK_DATA[TUN_SECRET]:-}" ] && continue
+            printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
+          done | LC_ALL=C sort)
+    encoded=$(printf '%s\n' "$raw" | gzip -9n | base64 -w0 | tr '+/' '-_' | tr -d '=')
+    checksum=$(printf '%s' "2/$MT_KIND/$encoded" | sha256sum); checksum="${checksum:0:16}"
+    printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
+}
+mt_link_decode() {
+    local link="$1" rest kind encoded checksum actual raw padded canonical key val ver
+    link="${link//$'\r'/}"
+    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
+    declare -gA MT_LINK_DATA=()
+    [ "${#link}" -le 32768 ] || return 1
+    case "$link" in
+        mtunnel://1/*) ver=1; rest="${link#mtunnel://1/}";;
+        mtunnel://2/*) ver=2; rest="${link#mtunnel://2/}";;
+        *) return 1;;
+    esac
+    kind="${rest%%/*}"; rest="${rest#*/}"
+    [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
+    [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
+    encoded="${rest%.*}"; checksum="${rest##*.}"
+    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    if [ "$ver" = 1 ]; then
+        [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
+        actual=$(printf '%s' "1/$kind/$encoded" | sha256sum); actual="${actual%% *}"
+    else
+        [[ "$checksum" =~ ^[a-f0-9]{16}$ ]] || return 1
+        actual=$(printf '%s' "2/$kind/$encoded" | sha256sum); actual="${actual:0:16}"
+    fi
+    [ "$actual" = "$checksum" ] || { echo 'Setup link checksum failed.' >&2; return 1; }
+    padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) return 1;; esac
+    if [ "$ver" = 1 ]; then
+        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || return 1
+        canonical=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
+        [ "$canonical" = "$encoded" ] || return 1 # rejects NULs/noncanonical/trailing newlines
+    else
+        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null | gunzip 2>/dev/null) || return 1
+    fi
+    while IFS='=' read -r key val; do
+        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+        [[ ! -v MT_LINK_DATA[$key] ]] || return 1
+        mt_link_field_valid "$key" "$val" || return 1
+        MT_LINK_DATA[$key]="$val"
+    done <<< "$raw"
+    # v2 links omit SYNC_KEY when it equals the tunnel secret; restore it here.
+    if [ "$ver" = 2 ] && [[ ! -v MT_LINK_DATA[SYNC_KEY] ]] && [[ -v MT_LINK_DATA[TUN_SECRET] ]]; then MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[TUN_SECRET]}"; fi
+    mt_link_validate
+}
 mt_link_read() { # read flat metadata as data, never source it
     local value
     value=$(awk -v k="$2" 'index($0,k"=")==1 {sub(/^[^=]*=/,"");print;exit}' "$1")
@@ -2373,38 +2426,6 @@ mt_link_validate() {
     [ -n "${MT_LINK_DATA[HOST]}" ] && mt_valid_host "${MT_LINK_DATA[HOST]}" || return 1
     ((10#${MT_LINK_DATA[EXPIRES]} >= $(date +%s))) || { echo 'Setup link has expired; generate a new link.' >&2; return 1; }
     return 0
-}
-mt_link_encode() {
-    mt_link_validate || return 1
-    local raw encoded checksum key
-    raw=$(for key in "${!MT_LINK_DATA[@]}"; do printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"; done | LC_ALL=C sort)
-    encoded=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
-    checksum=$(printf '%s' "1/$MT_KIND/$encoded" | sha256sum); checksum="${checksum%% *}"
-    printf 'mtunnel://1/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
-}
-mt_link_decode() {
-    local link="$1" rest kind encoded checksum actual raw padded canonical key val
-    link="${link//$'\r'/}"
-    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
-    declare -gA MT_LINK_DATA=()
-    [ "${#link}" -le 32768 ] && [[ "$link" == mtunnel://1/* ]] || return 1
-    rest="${link#mtunnel://1/}"; kind="${rest%%/*}"; rest="${rest#*/}"
-    [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
-    [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
-    encoded="${rest%.*}"; checksum="${rest##*.}"
-    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ && "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
-    actual=$(printf '%s' "1/$kind/$encoded" | sha256sum); [ "${actual%% *}" = "$checksum" ] || { echo 'Setup link checksum failed.' >&2; return 1; }
-    padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) return 1;; esac
-    raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || return 1
-    canonical=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
-    [ "$canonical" = "$encoded" ] || return 1 # rejects NULs/noncanonical/trailing newlines
-    while IFS='=' read -r key val; do
-        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
-        [[ ! -v MT_LINK_DATA[$key] ]] || return 1
-        mt_link_field_valid "$key" "$val" || return 1
-        MT_LINK_DATA[$key]="$val"
-    done <<< "$raw"
-    mt_link_validate
 }
 mt_link_select() {
     case "$MT_KIND" in
@@ -2499,15 +2520,22 @@ mt_link_import() {
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
     echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
-    printf '  Module: %s | Role: %s | Peer: %s\n' "$MT_KIND" "${MT_LINK_DATA[ROLE]}" "${MT_LINK_DATA[HOST]}"
-    printf '  Link port: %s | Transport: %s | vIPs: %s\n' "${MT_LINK_DATA[LINK_PORT]:--}" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "${MT_LINK_DATA[MAX_IPS]:--}"
-    printf '  TCP ports: %s | UDP ports: %s\n' "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "${MT_LINK_DATA[UDP_PORTS]:--}"
-    echo -e "  ${DIM}└─ Secret is hidden. Existing tunnels will not be overwritten.${NC}"
+    echo -e "  ${DIM}│${NC}"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
     mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
     MT_LINK_DATA[NAME]="$name"
-    mt_ask ans 'Create this peer tunnel? [y/N]: ' || return 1
+    mt_ask ans 'Is this correct? Create this peer tunnel? [y/N]: ' || return 1
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"

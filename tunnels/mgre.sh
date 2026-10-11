@@ -1355,8 +1355,7 @@ draw_mgre_header() {
             line="$(get_pure_tun_name "$T_NAME") [$(mgre_proto_tag "$TUN_PROTO")] | ${peer} | Ping ${p} | Loss ${loss}% | Up ${up}"
             printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"
         done
-        if [ "$cshown" -eq 0 ]; then line='No active tunnels configured on this host.'; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"; cshown=1; fi
-        while [ "$cshown" -lt 3 ]; do printf "  ${B}│${NC} %-*s ${B}│${NC}\n" "$((cw-2))" ''; ((cshown++)); done
+        if [ "$cshown" -eq 0 ]; then line='No active tunnels configured on this host.'; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"; fi
         echo -e "  ${B}╰${border}╯${NC}"
         return 0
     fi
@@ -1467,12 +1466,7 @@ draw_mgre_header() {
 
     if [ "$shown" -eq 0 ]; then
         printf "  ${B}│${NC}  ${DIM}● %-$((111+extra)).$((111+extra))s${NC}  ${B}│${NC}\n" "No active tunnels configured on this host."
-        shown=1
     fi
-    while [ "$shown" -lt 3 ]; do
-        printf "  ${B}│${NC}  %-$((113+extra))s  ${B}│${NC}\n" ""
-        ((shown++))
-    done
     echo -e "  ${B}╰${border}╯${NC}"
 }
 self_update_module() {
@@ -2530,6 +2524,40 @@ mt_sync_bbr_from_peer() {
     return 0
 }
 mt_ask_bbr_from_peer() { mt_sync_bbr_from_peer 1; }
+mt_clipboard_copy() {
+    local text="$1" encoded seq
+    command -v base64 >/dev/null 2>&1 || return 1
+    encoded=$(printf '%s' "$text" | base64 -w0 2>/dev/null) || return 1
+    # OSC 52 writes to the LOCAL terminal clipboard even when MTunnel runs over SSH.
+    # tmux/screen need passthrough wrappers; direct terminals receive OSC 52 as-is.
+    if [ -n "${TMUX:-}" ]; then
+        seq=$(printf '\033Ptmux;\033\033]52;c;%s\a\033\\' "$encoded")
+    elif [[ "${TERM:-}" == screen* ]]; then
+        seq=$(printf '\033P\033]52;c;%s\a\033\\' "$encoded")
+    else
+        seq=$(printf '\033]52;c;%s\a' "$encoded")
+    fi
+    if [ -w /dev/tty ]; then printf '%s' "$seq" > /dev/tty 2>/dev/null; else printf '%s' "$seq"; fi
+}
+mt_peer_copy_prompt() {
+    local link="$1" key
+    mt_clipboard_copy "$link" >/dev/null 2>&1 || true
+    echo -e "  ${G}●${NC} ${W}Peer Code sent to clipboard.${NC} ${DIM}(terminal support required)${NC}"
+    while true; do
+        printf '  %bC%b = Copy again   %bEnter%b = Continue ❯❯ ' "$C" "$NC" "$C" "$NC"
+        IFS= read -rsn1 key || return 0
+        case "$key" in
+            c|C)
+                mt_clipboard_copy "$link" >/dev/null 2>&1 || true
+                printf '\r\033[K  %b●%b %bCopy request sent again.%b\n' "$G" "$NC" "$W" "$NC"
+                ;;
+            ''|$'\n'|$'\r')
+                echo
+                return 0
+                ;;
+        esac
+    done
+}
 mt_link_box() {
     local text="$1" box_width=80 pad=5 inner_width text_width line chunk
     inner_width=$((box_width - 2))
@@ -2715,7 +2743,7 @@ mt_link_export() {
     echo -e "\n  ${DIM}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${DIM}│${NC}"
     mt_link_box "$link"
     echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${Y}Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
-    mt_workspace_pause
+    mt_peer_copy_prompt "$link"
 }
 mt_link_offer() { # always generate the peer link after a tunnel is created
     mt_link_export "$1"

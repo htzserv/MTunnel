@@ -1069,17 +1069,18 @@ mt_update_label() {
     else printf 'version unavailable'; fi
 }
 render_unified_update_menu() {
-    local gh_label mirror_label core_v
+    local gh_label mirror_label core_v core_tag=""
     gh_label=$(mt_update_label "$SECURE_TMP/.mrathole_remote_ver_github")
     mirror_label=$(mt_update_label "$SECURE_TMP/.mrathole_remote_ver_mirror")
     core_v=$(mt_core_version)
+    [ -n "$core_v" ] && [ "$core_v" != "not-installed" ] && core_tag=" ${G}(installed)${NC}"
     mt_workspace_screen
     echo -e "\n  ${DIM}┌─[ UPDATE & LOCAL INSTALL — MRATHOLE ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Core from Foreign / GitHub${NC} ${DIM}(installed: ${core_v} | target: 0.5.0)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Core from Iran Mirror${NC} ${DIM}(installed: ${core_v} | target: 0.5.0)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Script from Foreign / GitHub${NC} ${DIM}(${gh_label})${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Script from Iran Mirror${NC} ${DIM}(${mirror_label})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Install Script From Github${NC} ${DIM}(${gh_label})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install Script From Iranian Mirror${NC} ${DIM}(${mirror_label})${NC}"
     echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
     echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
     echo -e "  ${DIM}│${NC}"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v14.0.2 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.0.1 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="14.0.3"
+MODULE_VERSION="1.0.1"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -104,6 +104,8 @@ mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
+# True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
+mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -233,7 +235,7 @@ mt_install_script() {
         local current_version new_version
         current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
         new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_is_newer_version "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
+        if mt_downgrade_blocked "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
     fi
     files+=("$candidate" "$target")
     [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
@@ -349,7 +351,7 @@ mt_read_kv() {
     value=$(awk -v k="$key" 'index($0,k"=")==1 {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null) || return 1
     if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
     [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-    [[ "$value" =~ ^[A-Za-z0-9_.:/,=+%\[\]-]*$ ]] || return 1
+    [[ "$value" =~ ^[][A-Za-z0-9_.:/,=+%-]*$ ]] || return 1
     printf '%s' "$value"
 }
 mt_valid_fwd_targets() {

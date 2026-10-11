@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MBackhaul | Multiplexer Engine v14.0.2 ---
+# --- MTunnel MBackhaul | Multiplexer Engine v1.0.1 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="14.0.3"
+MODULE_VERSION="1.0.1"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -98,6 +98,8 @@ mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
+# True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
+mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -227,7 +229,7 @@ mt_install_script() {
         local current_version new_version
         current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
         new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_is_newer_version "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
+        if mt_downgrade_blocked "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
     fi
     files+=("$candidate" "$target")
     [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
@@ -343,7 +345,7 @@ mt_read_kv() {
     value=$(awk -v k="$key" 'index($0,k"=")==1 {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null) || return 1
     if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
     [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-    [[ "$value" =~ ^[A-Za-z0-9_.:/,=+%\[\]-]*$ ]] || return 1
+    [[ "$value" =~ ^[][A-Za-z0-9_.:/,=+%-]*$ ]] || return 1
     printf '%s' "$value"
 }
 mt_valid_fwd_targets() {
@@ -727,6 +729,8 @@ validate_bh_ports() {
 MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
+NEED_HDR=false
+trap 'NEED_HDR=true' SIGUSR2
 
 UPDATE_CHECK_INTERVAL=60
 
@@ -748,6 +752,10 @@ read_with_refresh() {
             fi
         fi
 
+        if [ "$NEED_HDR" = true ]; then
+            NEED_HDR=false
+            [ -n "$redraw_func" ] && refresh_header_live
+        fi
         IFS= read -rsn1 -t 0.3 char
         rc=$?
         if [ $rc -ne 0 ]; then
@@ -804,7 +812,7 @@ update_watcher_loop() {
 }
 if [[ "${1:-}" != --* ]]; then update_watcher_loop & fi
 WATCHER_PID=$!
-trap 'kill "$WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null' EXIT
+trap 'kill "$WATCHER_PID" ${HDR_PID:-} 2>/dev/null; rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null' EXIT
 
 self_update_module() {
     local src_opt custom_url dl_url tmp_file confirm
@@ -1859,6 +1867,115 @@ EOF
     fi
 }
 
+# ---- Per-tunnel header rows: background cache + in-place live refresh ----
+HDR_ROWS_FILE="$SECURE_TMP/.mbackhaul_hdr_rows"
+HDR_DRAWN_ROWS=0
+hdr_ping_probe() {
+    local ip="$1" res loss avg="---" bin="ping"
+    [[ "$ip" == *:* ]] && bin="ping -6"
+    res=$(timeout 3 $bin -c 2 -i 0.2 -W 1 "$ip" 2>/dev/null)
+    loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)'); [ -z "$loss" ] && loss=100
+    if echo "$res" | grep -q "min/avg/max"; then
+        avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
+        [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')ms" || avg="---"
+    fi
+    echo "${avg}|${loss}"
+}
+hdr_unit_uptime() {
+    local started now sec d h m
+    started=$(systemctl show "$1" --property=ActiveEnterTimestampMonotonic 2>/dev/null | cut -d= -f2)
+    if [[ "$started" =~ ^[0-9]+$ ]] && [ "$started" -gt 0 ]; then
+        now=$(awk '{printf "%d", $1*1000000}' /proc/uptime)
+        sec=$(( (now - started) / 1000000 )); [ "$sec" -lt 0 ] && sec=0
+        d=$(( sec / 86400 )); h=$(( (sec % 86400) / 3600 )); m=$(( (sec % 3600) / 60 ))
+        if [ "$d" -gt 0 ]; then printf "%dd %02dh" "$d" "$h"
+        elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
+        else printf "%dm" "$m"; fi
+        return
+    fi
+    echo "ACTIVE"
+}
+hdr_is_ip() { [[ "$1" =~ ^[0-9]+(\.[0-9]+){3}$ || ( "$1" == *:* && "$1" =~ ^[0-9A-Fa-f:]+$ ) ]]; }
+hdr_ss_peer() {
+    local conn peer
+    conn=$(ss -tn src ":$1" 2>/dev/null | awk '/^ESTAB/ {print $5; exit}')
+    peer=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+    echo "$peer"
+}
+hdr_conf_has() {
+    local v; v=$(sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1 | tr -d "\"' \r")
+    [ -n "$v" ]
+}
+collect_header_rows() {
+    local mode="${1:-}" tmp="$HDR_ROWS_FILE.tmp" conf name role port remote transport peer fwd up avg loss st act="" ina="" line
+    for conf in "$CONF_DIR"/*.meta; do
+        [ -f "$conf" ] || continue
+        name=$(basename "$conf" .meta)
+        role=$(mt_read_kv "$conf" ROLE 2>/dev/null) || role=""
+        port=$(mt_read_kv "$conf" TUN_PORT 2>/dev/null) || port=""
+        remote=$(mt_read_kv "$conf" REMOTE_IP 2>/dev/null) || remote=""
+        transport=$(mt_read_kv "$conf" TRANSPORT 2>/dev/null) || transport=""; [ -n "$transport" ] || transport=tcp
+        st=0; systemctl is-active --quiet "mbackhaul@${name}" 2>/dev/null && st=1
+        peer="$remote"
+        if [ "$st" = 1 ] && [ "$role" = 1 ]; then
+            if [ "$transport" = udp ]; then peer="UDP Listening"
+            else peer=$(hdr_ss_peer "$port"); [ -n "$peer" ] || peer="Listening"; fi
+        fi
+        [ -n "$peer" ] && [ "$peer" != "0.0.0.0" ] || peer="---"
+        avg="---"; loss="---"
+        if [ "$st" = 1 ] && hdr_is_ip "$peer"; then
+            if [ "$mode" = fast ]; then avg="..."; else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer")"; fi
+        fi
+        fwd="OFF"; hdr_conf_has "$conf" PORTS && fwd="ACT"; [ "$role" = 2 ] && fwd="CLI"
+        up="STOPPED"; [ "$st" = 1 ] && up=$(hdr_unit_uptime "mbackhaul@${name}")
+        line="${st}|${name}|${peer}|${avg}|${loss}|${up}|${fwd}"
+        if [ "$st" = 1 ]; then act+="${line}"$'\n'; else ina+="${line}"$'\n'; fi
+    done
+    printf '%s%s' "$act" "$ina" | head -n 3 > "$tmp"
+    mv -f "$tmp" "$HDR_ROWS_FILE" 2>/dev/null
+}
+hdr_rows_count() { [ -s "$HDR_ROWS_FILE" ] && wc -l < "$HDR_ROWS_FILE" || echo 0; }
+hdr_print_rows() {
+    local mtime now
+    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
+    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( now - mtime )) -gt 15 ]; then collect_header_rows fast; fi
+    HDR_DRAWN_ROWS=0
+    [ -s "$HDR_ROWS_FILE" ] || return 0
+    local border; printf -v border '%*s' 124 ''; border="${border// /─}"
+    printf "  ${B}├${border}┤${NC}\n"
+    local st name peer ping loss up fwd icon icol tag nt lcol fcol n=0 maxn
+    while IFS='|' read -r st name peer ping loss up fwd; do
+        [ -z "$name" ] && continue
+        ((n++)); [ "$n" -gt 3 ] && break
+        name="${name#bh_}"
+        tag="[BH]"; maxn=$(( 20 - ${#tag} - 1 ))
+        nt="${name:0:$maxn} ${tag}"
+        if [ "$st" = 1 ]; then icon="●"; icol="${G}"; else icon="○"; icol="${R}"; fi
+        lcol="${DIM}"
+        if [[ "$loss" =~ ^[0-9]+$ ]]; then
+            if [ "$loss" -eq 0 ]; then lcol="${G}"; elif [ "$loss" -lt 30 ]; then lcol="${Y}"; else lcol="${R}"; fi
+            loss="${loss}%"
+        fi
+        fcol="${DIM}"; [ "$fwd" != "OFF" ] && [ "$fwd" != "---" ] && fcol="${C}"
+        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
+            "$icol" "$icon" "$NC" "$nt" "${peer:----}" "${ping:----}" "$lcol" "${loss:----}" "$NC" "${up:----}" "$fcol" "${fwd:----}" "$NC"
+    done < "$HDR_ROWS_FILE"
+    HDR_DRAWN_ROWS=$(( n > 3 ? 3 : n ))
+}
+refresh_header_live() {
+    if [ "$(hdr_rows_count)" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
+    printf '\033[?25l\0337\033[1;1H'
+    HEADER_LIVE=1 draw_header
+    printf '\0338\033[?25h'
+}
+hdr_stats_loop() {
+    while true; do
+        collect_header_rows
+        [ -f "$SECURE_TMP/.mbackhaul_in_menu" ] && kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+        sleep 5
+    done
+}
+
 draw_header() {
     local s_ip=$(get_local_ip); local total_t=0; local active_t=0; local online_t=0
     local t_names=() units=()
@@ -1961,7 +2078,7 @@ draw_header() {
                 echo "$bg_val" > "$ping_cache"
                 rm -f "$ping_lock"
                 if [ -f "$SECURE_TMP/.mbackhaul_in_menu" ]; then
-                    kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+                    kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
                 fi
             ) &
         fi
@@ -1976,8 +2093,9 @@ draw_header() {
     [ "$pad_len" -lt 0 ] && pad_len=0
     local padding=$(printf '%*s' "$pad_len" "")
 
-    clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+    [ -z "${HEADER_LIVE:-}" ] && clear; echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC}${W}${title}${NC}${B}│${NC}${DIM} IP:${NC} ${W}${s_ip}${NC} ${B}│${NC}${DIM} Core:${NC} ${core_color}${core_raw}${NC} ${B}│${NC}${DIM} Peer Ping:${NC} ${g_color}${g_text}${NC} ${B}│${NC}${DIM} ACTIVE:${NC} ${act_color}${act_text}${NC} ${B}│${NC}${DIM} STATUS:${NC} ${stat_color}${stat_icon} ${stat_text}${NC}${padding}${B}│${NC}"
+    hdr_print_rows
     echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯${NC}"
 }
 
@@ -2709,6 +2827,7 @@ mt_workspace_update_badge() {
     fi
     return 0
 }
+if [[ "${1:-}" != --* ]]; then hdr_stats_loop & HDR_PID=$!; fi
 MT_KIND=backhaul; MT_HEADER=draw_header; MT_SECTION=""
 mt_workspace_route() {
     local section="$1"

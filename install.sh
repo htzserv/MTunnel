@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="14.0.3"
+MODULE_VERSION="1.0.1"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -96,6 +96,8 @@ mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
+# True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
+mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -225,7 +227,7 @@ mt_install_script() {
         local current_version new_version
         current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
         new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_is_newer_version "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
+        if mt_downgrade_blocked "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
     fi
     files+=("$candidate" "$target")
     [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
@@ -341,7 +343,7 @@ mt_read_kv() {
     value=$(awk -v k="$key" 'index($0,k"=")==1 {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null) || return 1
     if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
     [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-    [[ "$value" =~ ^[A-Za-z0-9_.:/,=+%\[\]-]*$ ]] || return 1
+    [[ "$value" =~ ^[][A-Za-z0-9_.:/,=+%-]*$ ]] || return 1
     printf '%s' "$value"
 }
 mt_valid_fwd_targets() {
@@ -706,7 +708,7 @@ installer_main() {
             --help|-h)
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from GitHub.'
-                echo 'Optional local binaries: --with-cores. Test installation: --root DIR.'
+                echo 'Optional local binaries: --with-cores. Test installation: --root DIR. Set MT_ALLOW_DOWNGRADE=1 to install an older version over a newer one.'
                 return 0;;
             *) echo "Unknown option: $1" >&2; return 1;;
         esac
@@ -761,7 +763,7 @@ installer_main() {
         if mt_validate_script "$target" 2>/dev/null; then
             cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
             next=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            mt_is_newer_version "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
+            mt_downgrade_blocked "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
         fi
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
         if [ -z "$remote" ]; then

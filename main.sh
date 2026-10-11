@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v14.0.2 ---
+# --- MTunnel Master Core | Central Dashboard v1.0.1 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="14.0.3"
+MODULE_VERSION="1.0.1"
 umask 077
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -96,6 +96,8 @@ mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
+# True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
+mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -225,7 +227,7 @@ mt_install_script() {
         local current_version new_version
         current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
         new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_is_newer_version "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
+        if mt_downgrade_blocked "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
     fi
     files+=("$candidate" "$target")
     [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
@@ -341,7 +343,7 @@ mt_read_kv() {
     value=$(awk -v k="$key" 'index($0,k"=")==1 {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null) || return 1
     if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
     [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-    [[ "$value" =~ ^[A-Za-z0-9_.:/,=+%\[\]-]*$ ]] || return 1
+    [[ "$value" =~ ^[][A-Za-z0-9_.:/,=+%-]*$ ]] || return 1
     printf '%s' "$value"
 }
 mt_valid_fwd_targets() {
@@ -824,7 +826,7 @@ collect_active_tunnels_stats() {
     # 1. GRE
     for conf in /etc/mgre/tunnels/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; T_NAME=""; REMOTE_PUB=""; CORE_SUBNET=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
+        TYPE=""; T_NAME=""; REMOTE_PUB=""; LOCAL_PUB=""; CORE_SUBNET=""; CORE_V6=""; TUN_ID=""; VNI_ID=""; TUN_PROTO="ipv4"; FAB_PROTO="ipv4"; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         
         ip link show "$T_NAME" >/dev/null 2>&1 || continue
@@ -862,7 +864,7 @@ collect_active_tunnels_stats() {
     if [ "$count" -lt 3 ]; then
         for conf in /etc/mgre/vxlan/*.conf; do
             [ -f "$conf" ] || continue
-                TYPE=""; VX_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
+                TYPE=""; VX_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; TUN_ID=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
             [ -z "$VX_NAME" ] && continue
             ip link show "$VX_NAME" >/dev/null 2>&1 || continue
             [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" == "down" ] && continue
@@ -1318,7 +1320,7 @@ download_file_to_cache() {
     if ! mt_download "$base_url/$rel_path" "$tmp" || ! mt_validate_script "$tmp"; then rm -f "$tmp"; return 1; fi
     local installed="/usr/bin/$mod"; [ "$mod" != main ] || installed="$MTUNNEL_PATH"
     local cur new; cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$installed" 2>/dev/null); new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp")
-    if mt_is_newer_version "$cur" "$new"; then rm -f "$tmp"; return 1; fi
+    if mt_downgrade_blocked "$cur" "$new"; then rm -f "$tmp"; return 1; fi
     mt_install_files 755 "$tmp" "$LOCAL_DIR/$rel_path"
     local rc=$?; rm -f "$tmp"; return "$rc"
 }
@@ -1384,7 +1386,7 @@ install_bundle_scripts() {
         [ "$mod" != main ] || target="$MTUNNEL_PATH"
         cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
         new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_is_newer_version "$cur" "$new"; then echo "Refusing downgrade: $mod" >&2; return 1; fi
+        if mt_downgrade_blocked "$cur" "$new"; then echo "Refusing downgrade: $mod" >&2; return 1; fi
         files+=("$candidate" "$LOCAL_DIR/$rel" "$candidate" "$target")
     done
     mt_install_files 755 "${files[@]}" || return 1

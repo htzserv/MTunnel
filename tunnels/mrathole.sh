@@ -1,646 +1,8 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v14.0.2 ---
+# --- MDesign Modular Core (mrathole.sh) | The Ultimate Rathole Engine V3.5.3 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="14.0.2"
-umask 077
-
-# BEGIN MTUNNEL SHARED HELPERS
-# Internal helpers; each distributed script contains its own copy.
-# Sourcing this file performs no network, filesystem, or service operations.
-mt_normalize_host() {
-    local host="$1"
-    if [[ "$host" == \[*\] ]]; then host="${host:1:${#host}-2}"; fi
-    printf '%s' "$host"
-}
-mt_valid_port() {
-    [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535))
-}
-
-mt_legacy_core_subnet() {
-    local id="$1" kind="${2:-gre}" n idx a b
-    [[ "$id" =~ ^[0-9]{1,9}$ ]] || return 1
-    n=$((10#$id))
-    if [ "$kind" == vxlan ]; then
-        if ((n <= 255)); then printf '10.88.%d' "$n"; return 0; fi
-        idx=$(((n - 256) % 32768))
-        a=$((128 + idx / 256)); b=$((idx % 256))
-    else
-        if ((n <= 255)); then printf '10.76.%d' "$n"; return 0; fi
-        # Extended GRE space uses 10.0.0.0/9 while reserving legacy 10.76/16 and 10.88/16.
-        idx=$(((n - 256) % 32256))
-        a=$((idx / 256)); b=$((idx % 256))
-        ((a >= 76)) && a=$((a + 1))
-        ((a >= 88)) && a=$((a + 1))
-    fi
-    printf '10.%d.%d' "$a" "$b"
-}
-mt_valid_ipv4() {
-    local part; local -a octets=()
-    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
-    IFS=. read -ra octets <<< "$1"
-    for part in "${octets[@]}"; do
-        [[ "$part" =~ ^[0-9]{1,3}$ ]] && ((10#$part <= 255)) || return 1
-    done
-}
-mt_valid_ipv6() {
-    local ip tail group rest count=0 extra=0
-    ip=$(mt_normalize_host "$1")
-    if [[ "$ip" == *%* ]]; then
-        [[ "${ip#*%}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
-        ip="${ip%%\%*}"
-    fi
-    [[ "$ip" == *:* ]] || return 1
-    if [[ "$ip" == *.* ]]; then
-        tail="${ip##*:}"; mt_valid_ipv4 "$tail" || return 1
-        ip="${ip%:*}:0:0"
-    fi
-    [[ "$ip" =~ ^[0-9a-fA-F:]+$ && "$ip" != *:::* ]] || return 1
-    [[ "$ip" != :* || "$ip" == ::* ]] || return 1
-    [[ "$ip" != *: || "$ip" == *:: ]] || return 1
-    rest="${ip/::/}"
-    [[ "$rest" != *::* ]] || return 1
-    if [[ "$ip" != *::* ]]; then
-        [[ "$ip" != :* && "$ip" != *: ]] || return 1
-    fi
-    local -a groups=()
-    IFS=: read -ra groups <<< "$ip"
-    for group in "${groups[@]}"; do
-        [ -z "$group" ] && continue
-        [[ "$group" =~ ^[0-9a-fA-F]{1,4}$ ]] || return 1
-        ((count+=1))
-    done
-    if [[ "$ip" == *::* ]]; then ((count < 8)); else ((count == 8)); fi
-}
-mt_valid_host() {
-    local host label
-    host=$(mt_normalize_host "$1")
-    [[ "$1" != \[*\] ]] || [[ "$host" == *:* ]] || return 1
-    [ -n "$host" ] && [ "${#host}" -le 253 ] || return 1
-    if [[ "$host" == *:* ]]; then mt_valid_ipv6 "$host"; return; fi
-    if [[ "$host" =~ ^[0-9.]+$ ]]; then mt_valid_ipv4 "$host"; return; fi
-    host="${host%.}"
-    [[ "$host" =~ ^[A-Za-z0-9.-]+$ && "$host" != *..* ]] || return 1
-    local -a labels=()
-    IFS=. read -ra labels <<< "$host"
-    for label in "${labels[@]}"; do
-        [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] && [ "${#label}" -le 63 ] || return 1
-    done
-}
-mt_hostport() {
-    local host; host=$(mt_normalize_host "$1")
-    if [[ "$host" == *:* ]]; then printf '[%s]:%s' "$host" "$2"; else printf '%s:%s' "$host" "$2"; fi
-}
-mt_valid_index() {
-    [[ "$1" =~ ^[0-9]{1,8}$ ]] && ((10#$1 < $2))
-}
-mt_is_newer_version() {
-    [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
-    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
-}
-mt_ask_bind_host() {
-    local choice host
-    echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(0.0.0.0)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(::)${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Specific IP${NC}"
-    echo -ne "  ${C}Select Address [1] ❯❯ ${NC}"; read -r choice
-    case "${choice:-1}" in
-        1) MT_BIND_HOST='0.0.0.0';;
-        2) MT_BIND_HOST='::';;
-        3) echo -ne "  ${C}●${NC} ${W}Listen IP: ${NC}"; read -r host
-           host=$(mt_normalize_host "$host")
-           mt_valid_ipv4 "$host" || mt_valid_ipv6 "$host" || return 1
-           MT_BIND_HOST="$host";;
-        *) return 1;;
-    esac
-}
-mt_tcp_probe() {
-    local host; host=$(mt_normalize_host "$1")
-    mt_valid_host "$host" && mt_valid_port "$2" || return 1
-    timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$2" 2>/dev/null
-}
-mt_list_has_port() {
-    local item a b target="$2"; local -a parts=()
-    mt_valid_port "$target" || return 1
-    target=$((10#$target))
-    IFS=, read -ra parts <<< "$1"
-    for item in "${parts[@]}"; do
-        [[ "$item" == *"="* ]] && item="${item%%=*}"
-        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
-            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
-            ((target >= a && target <= b)) && return 0
-        elif mt_valid_port "$item" && ((10#$item == target)); then
-            return 0
-        fi
-    done
-    return 1
-}
-mt_port_busy() {
-    local port="$1" proto="${2:-both}" opts='-Hln'
-    mt_valid_port "$port" || return 1
-    case "$proto" in tcp) opts+='t';; udp) opts+='u';; *) opts+='tu';; esac
-    ss "$opts" 2>/dev/null | awk -v p="$((10#$port))" '
-        { for (i=1;i<=NF;i++) if ($i ~ /:[0-9]+$/) {n=$i;sub(/^.*:/,"",n);if(n+0==p) found=1;break} }
-        END {exit !found}'
-}
-mt_validate_port_list() {
-    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item a b p
-    local -A seen=(); local -a parts=()
-    [ -z "$list" ] && return 0
-    [[ "$list" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || return 1
-    IFS=, read -ra parts <<< "$list"
-    for item in "${parts[@]}"; do
-        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
-            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
-            ((a >= 1 && b <= 65535 && a < b)) || return 1
-        else
-            mt_valid_port "$item" || return 1; a=$((10#$item)); b=$a
-        fi
-        for ((p=a; p<=b; p++)); do
-            [ -z "${seen[$p]:-}" ] || return 1; seen[$p]=1
-            if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$p" && mt_port_busy "$p" "$proto"; then return 1; fi
-        done
-    done
-}
-mt_validate_script() {
-    local file="$1" version
-    [ -s "$file" ] && head -n 1 "$file" | grep -qE '^#!(/bin/bash|/usr/bin/env bash)$' || return 1
-    bash -n "$file" || return 1
-    version=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$file")
-    [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
-}
-mt_download() {
-    local url="$1" dest="$2" expected="${3:-}" tmp rc=1
-    [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
-    tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "$url" && rc=0
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "$url" && rc=0
-    fi
-    if [ "$rc" != 0 ] || [ ! -s "$tmp" ]; then rm -f "$tmp"; return 1; fi
-    if [ -n "$expected" ]; then
-        [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" == "${expected,,}" ] || { rm -f "$tmp"; return 1; }
-    fi
-    mv -f "$tmp" "$dest"
-}
-# Stage all destinations first. Roll back every committed file if a rename fails.
-mt_install_files() {
-    local mode="$1"; shift
-    local src dest stage backup i j rc=0
-    local -a stages=() backups=() destinations=() existed=()
-    [ "$(( $# % 2 ))" == 0 ] || return 1
-    while [ "$#" -gt 0 ]; do
-        src="$1"; dest="$2"; shift 2
-        mkdir -p "$(dirname "$dest")" || { rc=1; break; }
-        stage=$(mktemp "${dest}.stage.XXXXXX") || { rc=1; break; }
-        stages+=("$stage"); destinations+=("$dest"); backups+=(""); existed+=(0)
-        i=$((${#stages[@]}-1))
-        if ! cat "$src" > "$stage" || ! chmod "$mode" "$stage"; then rc=1; break; fi
-        if [ -e "$dest" ] || [ -L "$dest" ]; then
-            backup=$(mktemp "${dest}.rollback.XXXXXX") || { rc=1; break; }
-            backups[$i]="$backup"; existed[$i]=1
-            rm -f "$backup"
-            if ! cp -p --no-dereference "$dest" "$backup"; then rc=1; break; fi
-        fi
-    done
-    if [ "$rc" == 0 ]; then
-        for i in "${!destinations[@]}"; do
-            if ! mv -f "${stages[$i]}" "${destinations[$i]}"; then
-                rc=1
-                for ((j=i-1;j>=0;j--)); do
-                    if [ "${existed[$j]}" == 1 ]; then mv -f "${backups[$j]}" "${destinations[$j]}"; else rm -f "${destinations[$j]}"; fi
-                done
-                break
-            fi
-        done
-    fi
-    for stage in "${stages[@]}" "${backups[@]}"; do [ -n "$stage" ] && rm -f "$stage"; done
-    return "$rc"
-}
-mt_install_script() {
-    local candidate="$1" rel="$2" target="$3" current="${4:-}"; local -a files=()
-    mt_validate_script "$candidate" || return 1
-    if mt_validate_script "$target" 2>/dev/null; then
-        local current_version new_version
-        current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
-        new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_is_newer_version "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
-    fi
-    files+=("$candidate" "$target")
-    [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
-    if [ -f "$current" ] && [ "$(readlink -f "$current")" != "$(readlink -f "$target")" ] && [ "$current" != "$LOCAL_DIR/$rel" ]; then files+=("$candidate" "$current"); fi
-    mt_install_files 755 "${files[@]}"
-}
-mt_valid_elf() {
-    local file="$1" machine arch
-    [ -f "$file" ] && [ "$(wc -c < "$file")" -gt 4096 ] || return 1
-    [ "$(od -An -tx1 -N4 "$file" | tr -d ' \n')" == 7f454c46 ] || return 1
-    machine=$(od -An -tu2 -j18 -N2 "$file" | tr -d ' \n'); arch=$(uname -m)
-    case "$arch:$machine" in x86_64:62|aarch64:183|arm64:183|armv7l:40|i686:3) return 0;; esac
-    return 1
-}
-mt_extract_archive() {
-    local archive="$1" dest="$2" list entry
-    list=$(mktemp "$dest/.entries.XXXXXX") || return 1
-    if tar -tzf "$archive" > "$list" 2>/dev/null; then
-        while IFS= read -r entry; do
-            case "/$entry/" in *'/../'*|*'/./../'*|//*|*'\\'*) rm -f "$list"; return 1;; esac
-        done < "$list"
-        # Reject symlinks, hard links and devices before extraction.
-        if tar -tvzf "$archive" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit !bad}'; then rm -f "$list"; return 1; fi
-        rm -f "$list"
-        tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$dest"
-    elif command -v unzip >/dev/null 2>&1 && unzip -Z1 "$archive" > "$list" 2>/dev/null; then
-        while IFS= read -r entry; do
-            case "/$entry/" in *'/../'*|//*|*'\\'*|*':'*) rm -f "$list"; return 1;; esac
-        done < "$list"
-        if unzip -Z -l "$archive" | awk '$1 ~ /^[lbcps]/ {bad=1} END {exit !bad}'; then rm -f "$list"; return 1; fi
-        rm -f "$list"; unzip -q "$archive" -d "$dest"
-    else rm -f "$list"; return 1; fi
-}
-mt_counter_sum() {
-    awk -v tag="$2" '{for(i=1;i<=NF;i++) if($i==tag){sum+=$2;break}} END {printf "%.0f\n",sum}' <<< "$1"
-}
-mt_setup_counter_pair() {
-    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" proto="${7:-tcp}" bin addr
-    local -a addresses=() input=() output=()
-    mt_valid_port "$port" || return 1
-    [[ "$proto" =~ ^(tcp|udp)$ ]] || return 1
-    if [ "$role" == 1 ]; then
-        input=(--dport "$port"); output=(--sport "$port")
-        if [[ "$bind" == *:* ]]; then addresses=('::'); else addresses=('0.0.0.0'); fi
-    else
-        remote=$(mt_normalize_host "$remote")
-        mt_valid_host "$remote" || return 1
-        if mt_valid_ipv4 "$remote" || mt_valid_ipv6 "$remote"; then addresses=("$remote")
-        else mapfile -t addresses < <({ getent ahostsv4 "$remote"; getent ahostsv6 "$remote"; } 2>/dev/null | awk '{print $1}' | sort -u); fi
-    fi
-    if [ "$role" == 1 ] && [ "$bind" == '::' ]; then addresses+=('0.0.0.0'); fi
-    for addr in "${addresses[@]}"; do
-        bin=iptables; [[ "$addr" == *:* ]] && bin=ip6tables
-        command -v "$bin" >/dev/null 2>&1 || continue
-        if [ "$role" != 1 ]; then input=(-s "$addr" --sport "$port"); output=(-d "$addr" --dport "$port"); fi
-        "$bin" -w 5 -t mangle -C INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
-        "$bin" -w 5 -t mangle -C OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
-    done
-}
-mt_tagged_rules() {
-    local bin="$1" table="$2" chain="$3" tag="$4" match="${5:-exact}"
-    "$bin" -t "$table" -L "$chain" -n --line-numbers 2>/dev/null |
-        awk -v tag="$tag" -v m="$match" '$1 ~ /^[0-9]+$/ {
-            if(m=="substring" && index($0,tag)) {print $1;next}
-            for(i=1;i<=NF;i++) if($i==tag || (m=="prefix" && index($i,tag)==1)){print $1;break}
-        }' | sort -rn
-}
-mt_delete_tagged_rules() {
-    local bin="$1" table="$2" chain="$3" tag="$4" match="${5:-exact}" num
-    while read -r num; do [ -n "$num" ] && "$bin" -w 5 -t "$table" -D "$chain" "$num" || return 1; done < <(mt_tagged_rules "$bin" "$table" "$chain" "$tag" "$match")
-    return 0
-}
-mt_milliseconds() { awk '{printf "%.0f\n", $1*1000}' /proc/uptime; }
-mt_rate() { local delta=$(($1-$2)); [ "$delta" -lt 0 ] && delta=0; local ms="$3"; [ "$ms" -gt 0 ] || ms=1; echo "$((delta*1000/ms))"; }
-mt_tunnel_addresses() {
-    local subnet
-    MT_LOCAL_PUBLIC="${LOCAL_PUB:-}"; MT_REMOTE_PUBLIC="${REMOTE_PUB:-}"
-    case "${TUN_PROTO:-ipv4}" in gre6|ipip4to6|ipip6to6) MT_LOCAL_PUBLIC="${LOCAL_PUB6:-${LOCAL_IP6:-}}"; MT_REMOTE_PUBLIC="${REMOTE_PUB6:-${REMOTE_IP6:-}}";; esac
-    if [ "${FAB_PROTO:-ipv4}" == ipv6 ]; then MT_LOCAL_PUBLIC="${LOCAL_PUB6:-}"; MT_REMOTE_PUBLIC="${REMOTE_PUB6:-}"; fi
-    if [ "${TUN_PROTO:-}" == ipip6to6 ]; then
-        [ -n "${CORE_V6:-}" ] || return 1
-        if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${CORE_V6}::1"; MT_CORE_PEER="${CORE_V6}::2"
-        else MT_CORE_LOCAL="${CORE_V6}::2"; MT_CORE_PEER="${CORE_V6}::1"; fi
-    else
-        subnet="${CORE_SUBNET:-}"
-        if [ -z "$subnet" ]; then
-            if [ -n "${VNI_ID:-}" ]; then subnet=$(mt_legacy_core_subnet "$VNI_ID" vxlan) || return 1
-            else subnet=$(mt_legacy_core_subnet "${TUN_ID:-}" gre) || return 1; fi
-        fi
-        if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${subnet}.1"; MT_CORE_PEER="${subnet}.2"
-        else MT_CORE_LOCAL="${subnet}.2"; MT_CORE_PEER="${subnet}.1"; fi
-    fi
-    mt_valid_ipv4 "$MT_CORE_PEER" || mt_valid_ipv6 "$MT_CORE_PEER"
-}
-mt_validate_conf() {
-    local file="$1" line key value
-    [ -s "$file" ] && bash -n "$file" || return 1
-    while IFS= read -r line || [ -n "$line" ]; do
-        [[ -z "$line" || "$line" == \#* ]] && continue
-        [[ "$line" =~ ^[A-Z][A-Z0-9_]*= ]] || return 1
-        key="${line%%=*}"; value="${line#*=}"
-        case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|FWD_TARGETS|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
-        if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
-        [[ "$value" =~ ^[A-Za-z0-9_:./=,+%-]*$ ]] || return 1
-        [ "$key" != FWD_TARGETS ] || mt_valid_fwd_targets "$value" || return 1
-    done < "$file"
-}
-mt_read_kv() {
-    local file="$1" key="$2" value
-    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
-    value=$(awk -v k="$key" 'index($0,k"=")==1 {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null) || return 1
-    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
-    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
-    [[ "$value" =~ ^[A-Za-z0-9_.:/,=+%\[\]-]*$ ]] || return 1
-    printf '%s' "$value"
-}
-mt_valid_fwd_targets() {
-    local spec="$1" ip
-    [[ -z "$spec" || "$spec" == all ]] && return 0
-    [[ "$spec" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
-    local -a ips=()
-    IFS=',' read -ra ips <<< "$spec"
-    for ip in "${ips[@]}"; do mt_valid_ipv4 "$ip" || return 1; done
-}
-mt_fwd_candidates() {
-    local core="$1" key="$2" max="${3:-0}" type="$4" pair ip seen="|$1|"
-    mt_valid_ipv4 "$core" && [[ "$max" =~ ^[0-9]{1,3}$ && "$type" == 1 ]] && ((10#$max <= 64)) || return 1
-    max=$((10#$max))
-    printf '%s\n' "$core"
-    while read -r pair; do
-        ip="${pair#* }"
-        mt_valid_ipv4 "$ip" || continue
-        [[ "$seen" == *"|$ip|"* ]] && continue
-        seen+="$ip|"; printf '%s\n' "$ip"
-    done < <(vip_targets "$key" "$max" "$type")
-}
-mt_fwd_selected() {
-    local spec="$1" lb="$2"; shift 2
-    local available ip seen='|' found=0
-    available=$(mt_fwd_candidates "$@") || return 1
-    mt_valid_fwd_targets "$spec" || return 1
-    if [ -z "$spec" ]; then
-        if [ "$lb" == 1 ]; then spec=all
-        else printf '%s\n' "$available" | head -n 1; return 0; fi
-    fi
-    if [ "$spec" == all ]; then printf '%s\n' "$available"; return 0; fi
-    local -a chosen=()
-    IFS=',' read -ra chosen <<< "$spec"
-    for ip in "${chosen[@]}"; do
-        if grep -qxF "$ip" <<< "$available" && [[ "$seen" != *"|$ip|"* ]]; then
-            seen+="$ip|"; printf '%s\n' "$ip"; found=1
-        fi
-    done
-    # Never substitute an unselected core/vIP when selected addresses disappear.
-    [ "$found" == 1 ]
-}
-mt_parse_fwd_choice() {
-    local choice="${1//$'\r'/}" item idx ip seen='|' result=''; shift
-    local -a available=("$@") parts=()
-    choice="${choice// /}"
-    MT_FWD_CHOICE=''
-    case "${choice,,}" in '') return 2;; q) return 2;; all|a|'*') MT_FWD_CHOICE=all; return 0;; esac
-    [[ "$choice" =~ ^[0-9.]+(,[0-9.]+)*$ ]] || return 1
-    IFS=',' read -ra parts <<< "$choice"
-    for item in "${parts[@]}"; do
-        if [[ "$item" == *.* ]]; then
-            mt_valid_ipv4 "$item" || return 1
-            ip="$item"
-            printf '%s\n' "${available[@]}" | grep -qxF "$ip" || return 1
-        else
-            [[ "$item" =~ ^[0-9]{1,3}$ ]] && ((10#$item >= 1 && 10#$item <= ${#available[@]})) || return 1
-            idx=$((10#$item-1)); ip="${available[$idx]}"
-        fi
-        [[ "$seen" == *"|$ip|"* ]] && continue
-        seen+="$ip|"; result+="${result:+,}$ip"
-    done
-    [ -n "$result" ] || return 1
-    MT_FWD_CHOICE="$result"
-}
-mt_save_fwd_selection() {
-    local file="$1" spec="$2" lb="$3" tmp rc=1
-    mt_validate_conf "$file" && mt_valid_fwd_targets "$spec" && [[ "$lb" =~ ^[01]$ ]] || return 1
-    tmp=$(mktemp "${file}.targets.XXXXXX") || return 1
-    if awk '!/^FWD_TARGETS=/ && !/^LB_MODE=/' "$file" > "$tmp" &&
-       printf 'FWD_TARGETS=%s\nLB_MODE=%s\n' "$spec" "$lb" >> "$tmp" &&
-       mt_validate_conf "$tmp" && mt_install_files 600 "$tmp" "$file"; then rc=0; fi
-    rm -f "$tmp"
-    return "$rc"
-}
-mt_choose_fwd_targets() {
-    local file="$1"; shift
-    local candidates selected choice rc spec lb count ip i label mark
-    candidates=$(mt_fwd_candidates "$@") || return 1
-    spec=$(mt_config_value FWD_TARGETS "$file"); lb=$(mt_config_value LB_MODE "$file")
-    selected=$(mt_fwd_selected "$spec" "$lb" "$@") || selected=''
-    local -a available=()
-    mapfile -t available <<< "$candidates"
-    while true; do
-        echo -e "\n  ${DIM}┌─[ FORWARDING & LOAD BALANCER TARGETS ]${NC}"
-        echo -e "  ${DIM}│${NC}"
-        for ((i=0; i<${#available[@]}; i++)); do
-            ip="${available[$i]}"; label=vIP; [ "$i" != 0 ] || label='Core Peer'
-            mark=''; grep -qxF "$ip" <<< "$selected" && mark=' [Selected]'
-            printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b %b(%s)%s%b\n' "$DIM" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$C" "$ip" "$NC" "$DIM" "$label" "$mark" "$NC"
-        done
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${G}All IPs (Core Peer + All vIPs)${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel / Keep Current${NC}\n"
-        echo -ne "  ${C}●${NC} ${W}Select IP(s) [e.g. 2 or 2,3 | a: all | Enter: keep]: ${NC}"
-        read -r choice || return 2
-        if mt_parse_fwd_choice "$choice" "${available[@]}"; then rc=0; else rc=$?; fi
-        [ "$rc" != 2 ] || return 2
-        if [ "$rc" != 0 ]; then echo -e "  ${R}✖ Select valid entries from this tunnel.${NC}"; continue; fi
-        spec="$MT_FWD_CHOICE"; count=0
-        if [ "$spec" == all ]; then count=${#available[@]}
-        else local -a chosen=(); IFS=',' read -ra chosen <<< "$spec"; count=${#chosen[@]}; fi
-        lb=0; [ "$count" -le 1 ] || lb=1
-        mt_save_fwd_selection "$file" "$spec" "$lb" || return 1
-        echo -e "  ${G}✔ Selected ${count} IP(s); $([ "$lb" == 1 ] && echo 'load balancing enabled' || echo 'direct forwarding enabled').${NC}"
-        return 0
-    done
-}
-mt_fwd_target_summary() {
-    local spec="$1" lb="$2" item count=0
-    if [ -z "$spec" ]; then
-        if [ "$lb" == 1 ]; then echo 'All IPs (Legacy)'; else echo 'Core Peer (Legacy)'; fi
-    elif [ "$spec" == all ]; then
-        if [ "$lb" == 1 ]; then echo 'All IPs (Core Peer + vIPs)'; else echo 'Core Peer (Direct)'; fi
-    else
-        local -a ips=(); IFS=',' read -ra ips <<< "$spec"; count=${#ips[@]}
-        if [ "$lb" != 1 ]; then echo "${ips[0]} (Direct)"
-        elif [ "$count" == 1 ]; then echo "${ips[0]}"
-        else echo "Selected Pool (${count} IPs)"; fi
-    fi
-}
-mt_stage_backup() {
-    local archive="$1" subdir="$2" stage conf found=0
-    stage=$(mktemp -d "$SECURE_TMP/restore.XXXXXX") || return 1
-    if ! mt_extract_archive "$archive" "$stage" || [ ! -d "$stage/$subdir" ]; then rm -rf "$stage"; return 1; fi
-    while IFS= read -r conf; do
-        case "$conf" in "$stage/$subdir/"*.conf) ;; *) rm -rf "$stage"; return 1;; esac
-        if [ "$(dirname "$conf")" != "$stage/$subdir" ] || ! mt_validate_conf "$conf"; then rm -rf "$stage"; return 1; fi
-        found=1
-    done < <(find "$stage" -type f)
-    [ "$found" == 1 ] || { rm -rf "$stage"; return 1; }
-    printf '%s\n' "$stage"
-}
-# Keep the running executable until the candidate has been downloaded and checked.
-mt_update_core() {
-    local name="$1" unit_prefix="$2" source="$3" kind="${4:-url}" expected="${5:-}" work candidate item unit failed=0 had_old=0
-    local target="${MTUNNEL_TEST_ROOT:-}/usr/local/bin/$name" alias="${MTUNNEL_TEST_ROOT:-}/usr/bin/$name"; local -a active=()
-    work=$(mktemp -d "$SECURE_TMP/core.XXXXXX") || return 1
-    if [ "$kind" == local ]; then
-        cp "$source" "$work/download" || { rm -rf "$work"; return 1; }
-    else
-        mt_download "$source" "$work/download" "$expected" || { rm -rf "$work"; return 1; }
-    fi
-    candidate="$work/download"
-    if ! mt_valid_elf "$candidate"; then
-        mkdir "$work/extracted"
-        mt_extract_archive "$candidate" "$work/extracted" || { rm -rf "$work"; return 1; }
-        candidate=''
-        while IFS= read -r item; do
-            if mt_valid_elf "$item"; then
-                [ -z "$candidate" ] || { echo 'Archive contains multiple candidate executables.' >&2; rm -rf "$work"; return 1; }
-                candidate="$item"
-            fi
-        done < <(find "$work/extracted" -type f -name "*$name*")
-        if [ "$name" == bh ] && [ -z "$candidate" ]; then
-            item="$work/extracted/backhaul"; mt_valid_elf "$item" && candidate="$item"
-        fi
-        [ -n "$candidate" ] || { rm -rf "$work"; return 1; }
-    fi
-    if [ ! -f "$target" ] && [ -f "$alias" ]; then
-        mkdir -p "$(dirname "$target")" && cp -pL "$alias" "$target" || { rm -rf "$work"; return 1; }
-    fi
-    if [ -f "$target" ]; then cp -pL "$target" "$work/previous" || { rm -rf "$work"; return 1; }; had_old=1; fi
-    mapfile -t active < <(systemctl list-units --type=service --state=active --no-legend --plain "${unit_prefix}@*.service" "${unit_prefix}.service" 2>/dev/null | awk '{print $1}')
-    if ! mt_install_files 755 "$candidate" "$target" "$candidate" "$alias"; then rm -rf "$work"; return 1; fi
-    for unit in "${active[@]}"; do
-        systemctl restart "$unit" && systemctl is-active --quiet "$unit" || failed=1
-    done
-    if [ "$failed" == 1 ]; then
-        if [ "$had_old" == 1 ]; then
-            mt_install_files 755 "$work/previous" "$target" "$work/previous" "$alias" || echo 'Failed to restore the previous core!' >&2
-            for unit in "${active[@]}"; do systemctl restart "$unit"; done
-        else rm -f "$target" "$alias"; fi
-        rm -rf "$work"; return 1
-    fi
-    rm -rf "$work"
-}
-# A backup must have a coherent network identity before any live teardown.
-mt_validate_tunnel_conf() {
-    local conf="$1" kind="$2"
-    local TYPE='' T_NAME='' VX_NAME='' BR_NAME='' TUN_ID='' VNI_ID='' CORE_SUBNET='' CORE_V6='' TUN_PROTO=ipv4 FAB_PROTO=ipv4 LOCAL_PUB='' REMOTE_PUB='' LOCAL_PUB6='' REMOTE_PUB6='' LOCAL_IP6='' REMOTE_IP6='' CUSTOM_MTU='' MAX_IPS=0 ENCRYPT=0 TUN_SECRET='' SYNC_KEY='' FWD_TCP='' FWD_UDP=''
-    mt_validate_conf "$conf" || return 1
-    source "$conf"
-    [[ "$TYPE" =~ ^[12]$ && "$MAX_IPS" =~ ^[0-9]{1,4}$ && "$ENCRYPT" =~ ^[01]$ ]] || return 1
-    [ -z "$CUSTOM_MTU" ] || { [[ "$CUSTOM_MTU" =~ ^[0-9]{3,5}$ ]] && ((10#$CUSTOM_MTU >= 512 && 10#$CUSTOM_MTU <= 65535)); } || return 1
-    if [ "$kind" == gre ]; then
-        [[ "$T_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$TUN_ID" =~ ^[0-9]{1,9}$ && "$TUN_PROTO" =~ ^(ipv4|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]] || return 1
-        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$TUN_ID" gre)" || return 1
-        case "$TUN_PROTO" in
-            gre6|ipip4to6|ipip6to6) mt_valid_ipv6 "${LOCAL_PUB6:-$LOCAL_IP6}" && mt_valid_ipv6 "${REMOTE_PUB6:-$REMOTE_IP6}" || return 1;;
-            *) mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1;;
-        esac
-        if [ "$TUN_PROTO" == ipip6to6 ]; then mt_valid_ipv6 "$CORE_V6::1" || return 1
-        else mt_valid_ipv4 "$CORE_SUBNET.1" || return 1; fi
-        if [ "$TUN_PROTO" == 6to4 ]; then mt_valid_ipv6 "$LOCAL_IP6" && mt_valid_ipv6 "$REMOTE_IP6" || return 1; fi
-    else
-        [[ "$VX_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$BR_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$VNI_ID" =~ ^[0-9]{1,8}$ && "$FAB_PROTO" =~ ^(ipv4|ipv6)$ ]] && ((10#$VNI_ID >= 1 && 10#$VNI_ID <= 16777215)) || return 1
-        local main_mx_mtu_max=1450
-        [ "$FAB_PROTO" != ipv6 ] || main_mx_mtu_max=1430
-        [ -z "$CUSTOM_MTU" ] || ((10#$CUSTOM_MTU >= 900 && 10#$CUSTOM_MTU <= main_mx_mtu_max)) || return 1
-        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$VNI_ID" vxlan)" || return 1
-        mt_valid_ipv4 "$CORE_SUBNET.1" || return 1
-        if [ "$FAB_PROTO" == ipv6 ]; then mt_valid_ipv6 "$LOCAL_PUB6" && mt_valid_ipv6 "$REMOTE_PUB6" || return 1
-        else mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1; fi
-    fi
-    mt_validate_port_list "$FWD_TCP" 0 tcp && mt_validate_port_list "$FWD_UDP" 0 udp || return 1
-    [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
-}
-mt_valid_scope() {
-    case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
-}
-mt_run_tool() {
-    local name="$1" path; shift
-    case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
-    for path in "${MTUNNEL_TEST_ROOT:-}/usr/bin/$name" "${LOCAL_DIR:-/root/mtunnel}/tools/$name.sh"; do
-        if [ -f "$path" ] && mt_validate_script "$path"; then
-            bash "$path" "$@"
-            return $?
-        fi
-    done
-    echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
-    return 1
-}
-mt_ask_bbr_on_create() {
-    local answer
-    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
-    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
-    read -r answer || answer=''
-    case "${answer,,}" in
-        y|yes)
-            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
-        *) ;;
-    esac
-    return 0
-}
-mt_render_tunnel_system_tools() {
-    local healer="$1" bbr="$2"
-    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
-}
-mt_monitor_wait() {
-    local key='' rc=0
-    read -r -t "$1" -n 1 -s key || rc=$?
-    case "$key" in q|Q|$'\e') return 1;; esac
-    [ "$rc" -ne 1 ]
-}
-mt_tunnels_info_menu() {
-    local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
-    local extra_label='Live Service Logs'
-    mt_valid_scope "$kind" && [ "$kind" != all ] || return 1
-    case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
-    while true; do
-        "$details" --no-pause
-        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}Interface Blueprint Matrix${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
-        echo -e "  ${DIM}│${NC}"
-        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
-        echo -ne "  ${C}Select ❯❯ ${NC}"
-        rc=0
-        read -r choice || rc=$?
-        [ "$rc" -le 128 ] || continue
-        [ "$rc" -eq 0 ] || return 0
-        case "${choice//$'\r'/}" in
-            1) mt_run_tool minterface --scope "$kind" --render;;
-            2) "$extra_view";;
-            0|q|Q) return 0;;
-        esac
-    done
-}
-mt_config_value() {
-    local key="$1" file="$2" value
-    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
-    value=$(sed -n "s/^${key}=//p" "$file" | head -n 1)
-    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
-    printf '%s' "$value"
-}
-# END MTUNNEL SHARED HELPERS
-if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+MODULE_VERSION="3.5.3"
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 INSTALL_PATH="/usr/bin/mrathole"
@@ -652,8 +14,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 [ -f "/usr/local/bin/mrathole" ] && rm -f "/usr/local/bin/mrathole" 2>/dev/null
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
-chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
-find "$CONF_DIR" -maxdepth 3 -type f -exec chmod 600 {} + 2>/dev/null || true
+chmod 700 "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
 ensure_dependencies() {
@@ -667,27 +28,43 @@ ensure_dependencies() {
         systemctl start cron >/dev/null 2>&1
     fi
 }
-if [[ "${1:-}" != --* ]]; then ensure_dependencies; fi
+ensure_dependencies
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
-    mt_install_files 755 "$0" "$INSTALL_PATH" || { echo "Cannot install module." >&2; exit 1; }
+    cp -f "$0" "$INSTALL_PATH" 2>/dev/null
+    chmod +x "$INSTALL_PATH" 2>/dev/null
 fi
 
 is_valid_host() {
-    mt_valid_host "$1"
+    local host=$1
+    if [[ "$host" =~ ^([a-zA-Z0-9.-]+)$ ]] || [[ "$host" =~ ^([a-fA-F0-9:]+)$ ]]; then return 0; fi
+    return 1
 }
 
 validate_forward_ports() {
-    if ! mt_validate_port_list "$1" "$2" "$3" "${4:-}"; then
-        echo 'Invalid, duplicate, or busy forwarded port.' >&2; return 1
-    fi
-    local item; local -a parts=(); IFS=, read -ra parts <<< "$1"
-    for item in "${parts[@]}"; do
-        [ -z "$item" ] && continue
-        if mt_valid_port "${LINK_PORT:-}" && ((10#$item == 10#$LINK_PORT)); then
-            echo 'Forwarded port conflicts with the tunnel link port.' >&2; return 1
+    local p_list="$1"
+    local check_listen="$2"
+    local proto="$3"
+    [ -z "$p_list" ] && return 0
+    
+    IFS=',' read -ra ARR <<< "$p_list"
+    for p in "${ARR[@]}"; do
+        p=$(echo "$p" | tr -dc '0-9')
+        [ -z "$p" ] && continue
+        if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+            echo -e "  ${R}Error: Port ${p} is out of valid range (1-65535)!${NC}"
+            return 1
+        fi
+        if [ "$check_listen" == "1" ]; then
+            local flag="-t"
+            [ "$proto" == "udp" ] && flag="-u"
+            if ss "$flag" -ln 2>/dev/null | grep -qE ":${p}\s"; then
+                echo -e "  ${R}Error: Port ${p} (${proto^^}) is already in use by another service!${NC}"
+                return 1
+            fi
         fi
     done
+    return 0
 }
 
 MAIN_PID=$$
@@ -702,31 +79,31 @@ read_with_refresh() {
     local redraw_func="$3"
     local buffer=""
     local char rc
+
     touch "$SECURE_TMP/.mrathole_in_menu"
     echo -ne "$prompt"
 
     while true; do
         if [ "$NEED_REFRESH" = true ]; then
             NEED_REFRESH=false
-            if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
+            if [ -n "$redraw_func" ]; then
                 "$redraw_func"
-                echo -ne "$prompt$buffer"
             fi
+            echo -ne "$prompt$buffer"
         fi
 
         IFS= read -rsn1 -t 0.3 char
         rc=$?
+
         if [ $rc -ne 0 ]; then
-            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
-                continue
-            fi
-    rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
-            return "$rc"
+            continue
         fi
-        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
+
+        if [[ -z "$char" ]]; then
             echo ""
             break
         fi
+
         if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
             if [ -n "$buffer" ]; then
                 buffer="${buffer%?}"
@@ -734,12 +111,13 @@ read_with_refresh() {
             fi
             continue
         fi
+
         buffer+="$char"
         echo -ne "$char"
     done
 
     rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
-    printf -v "$__resultvar" '%s' "$buffer"
+    eval "$__resultvar=\"\$buffer\""
 }
 
 check_update_bg() {
@@ -749,11 +127,11 @@ check_update_bg() {
     local remote_ver=""
     
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fkSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --no-check-certificate --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mrathole_remote_ver"
@@ -768,12 +146,11 @@ update_watcher_loop() {
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
-if [[ "${1:-}" != --* ]]; then update_watcher_loop & fi
+update_watcher_loop &
 WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null' EXIT
 
 self_update_module() {
-    local src_opt custom_url dl_url tmp_file confirm
     local rel_path="tunnels/mrathole.sh"
     local cb="?t=$(date +%s)"
     
@@ -781,13 +158,13 @@ self_update_module() {
     [ -f "$SECURE_TMP/.mrathole_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mrathole_remote_ver" | tr -d '\r\n ')
 
     local gh_text="${C}Official GitHub Server${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
         gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
     else
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MRathole) ]${NC}"
+    clear; echo -e "\n  ${DIM}┌─[ OTA UPDATE SOURCE (MRathole) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -798,42 +175,74 @@ self_update_module() {
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_opt
     
-    [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
-    tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
-    if [ "$src_opt" == 4 ]; then
+    local tmp_file="$SECURE_TMP/.mrathole_update.$$"
+    > "$tmp_file"
+
+    if [[ "$src_opt" == "4" ]]; then
         if command -v nano >/dev/null 2>&1; then
             echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
-            nano "$tmp_file"
-        elif command -v vi >/dev/null 2>&1; then vi "$tmp_file"
-        else rm -f "$tmp_file"; echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; return 1; fi
-    else
-        case "$src_opt" in
-            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path";;
-            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path";;
-            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read -r dl_url;;
+            sleep 2; nano "$tmp_file"
+        elif command -v vi >/dev/null 2>&1; then
+            vi "$tmp_file"
+        else
+            echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -f "$tmp_file"; sleep 2; return
+        fi
+    elif [[ "$src_opt" =~ ^[123]$ ]]; then
+        local dl_url=""
+        case $src_opt in
+            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path$cb" ;;
+            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path$cb" ;;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read custom_url; dl_url=$(echo "$custom_url" | tr -d '\r ') ;;
         esac
+        [ -z "$dl_url" ] && rm -f "$tmp_file" && return
+
         echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
-        if ! mt_download "$dl_url" "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Download failed. Installed module preserved.${NC}"; return 1; fi
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$tmp_file" "$dl_url" 2>/dev/null
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$tmp_file" "$dl_url" 2>/dev/null
+        fi
+    else
+        rm -f "$tmp_file"
+        return
     fi
-    sed -i 's/\r$//' "$tmp_file"
-    if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
-    local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+
+    if [ -s "$tmp_file" ] && grep -q "#!/bin/bash" "$tmp_file"; then
+        local new_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp_file" | cut -d'"' -f2)
+        [ -z "$new_ver" ] && new_ver="Unknown"
+        
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read confirm
         
-    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
-    if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
-        rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
+        if [[ "${confirm,,}" == "y" || "${confirm,,}" == "yes" ]]; then
+            sed -i 's/\r$//' "$tmp_file" 2>/dev/null
+            chmod +x "$tmp_file"
+            
+            cat "$tmp_file" > "$INSTALL_PATH" 2>/dev/null || true
+            [ -f "$0" ] && cat "$tmp_file" > "$0" 2>/dev/null || true
+            cp -f "$tmp_file" "$LOCAL_DIR/$rel_path" 2>/dev/null
+            
+            rm -f "$tmp_file"
+            echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+            sleep 1.5
+            
+            # رفع باگ ۱: متوقف‌کردن صریح پروسه پس‌زمینه قبل از exec برای جلوگیری از نشت پردازش
+            kill "$WATCHER_PID" 2>/dev/null
+            rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
+            exec "$INSTALL_PATH" "$@"
+        else
+            echo -e "  ${Y}● Update cancelled by user.${NC}"
+            rm -f "$tmp_file"; sleep 1.5
+        fi
+    else
+        echo -e "  ${R}✖ Update failed. Invalid format or network timeout.${NC}"
+        rm -f "$tmp_file"
+        sleep 2
     fi
-    rm -f "$tmp_file"
-    echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
-    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH" "$@"
 }
 
 get_local_ip() {
@@ -843,156 +252,130 @@ get_local_ip() {
 }
 
 is_rathole_core_valid() {
-    local candidate
-    for candidate in /usr/local/bin/rathole /usr/bin/rathole; do
-        [ -x "$candidate" ] && mt_valid_elf "$candidate" && return 0
-    done
+    local bin_path=""
+    if [ -x "/usr/local/bin/rathole" ]; then
+        bin_path="/usr/local/bin/rathole"
+    elif [ -x "/usr/bin/rathole" ]; then
+        bin_path="/usr/bin/rathole"
+    elif command -v rathole >/dev/null 2>&1; then
+        bin_path=$(command -v rathole)
+    else
+        return 1
+    fi
+
+    [ -f "$bin_path" ] && [ -s "$bin_path" ] || return 1
+
+    if command -v file >/dev/null 2>&1; then
+        file -L "$bin_path" 2>/dev/null | grep -qiE "ELF.*executable" && return 0
+        return 1
+    fi
+
+    local magic=$(head -c 4 "$bin_path" 2>/dev/null)
+    [ "$magic" = $'\x7fELF' ] && return 0
     return 1
 }
 
-# Rathole download helpers are embedded in this module; no external lib is needed.
-rh_release_triplet() {
-    case "${1:-$(uname -m)}" in
-        x86_64) printf 'x86_64-unknown-linux-gnu';;
-        aarch64|arm64) printf 'aarch64-unknown-linux-musl';;
-        *) echo 'Unsupported CPU architecture.' >&2; return 1;;
-    esac
-}
-
-rh_ensure_download_tools() {
-    local need_zip="${1:-0}" missing=() log
-    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then missing+=(curl); fi
-    if [ "$need_zip" = 1 ] && ! command -v unzip >/dev/null 2>&1; then missing+=(unzip); fi
-    [ -s /etc/ssl/certs/ca-certificates.crt ] || missing+=(ca-certificates)
-    [ "${#missing[@]}" -gt 0 ] || return 0
-    command -v apt-get >/dev/null 2>&1 || { echo "Install the missing packages: ${missing[*]}" >&2; return 1; }
-    echo -e "  ${DIM}● Installing download prerequisites: ${missing[*]}...${NC}"
-    log=$(mktemp "$SECURE_TMP/rh-deps.XXXXXX") || return 1
-    apt-get update -q > "$log" 2>&1 || true
-    if ! apt-get install -y -q "${missing[@]}" >> "$log" 2>&1; then
-        echo 'Download prerequisites could not be installed:' >&2
-        tail -n 6 "$log" >&2; rm -f "$log"; return 1
-    fi
-    rm -f "$log"
-    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || return 1
-    [ "$need_zip" != 1 ] || command -v unzip >/dev/null 2>&1 || return 1
-    [ -s /etc/ssl/certs/ca-certificates.crt ] || { echo 'System CA certificate bundle is missing.' >&2; return 1; }
-}
-
-rh_download() {
-    local url="$1" dest="$2" expected="${3:-}" tmp log tool family rc=1 code permanent=false
-    [[ "$url" == https://* ]] || { echo 'Download requires an HTTPS URL.' >&2; return 1; }
-    [[ -z "$expected" || "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Invalid expected SHA256.' >&2; return 1; }
-    tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
-    log=$(mktemp "$SECURE_TMP/rh-download.XXXXXX") || { rm -f "$tmp"; return 1; }
-    local -a args=()
-    for tool in curl wget; do
-        command -v "$tool" >/dev/null 2>&1 || continue
-        for family in auto ipv4; do
-            args=(); [ "$family" != ipv4 ] || args=(-4)
-            : > "$tmp"
-            echo -e "  ${DIM}● Downloading with $tool ($family)...${NC}"
-            if [ "$tool" = curl ]; then
-                code=$(curl "${args[@]}" -fsSL --proto '=https' --proto-redir '=https' \
-                    --connect-timeout 10 --max-time 120 --retry 1 -w '%{http_code}' -o "$tmp" "$url" 2> "$log"); rc=$?
-                if [ "$rc" = 22 ] && [[ "$code" =~ ^(400|401|403|404|410)$ ]]; then permanent=true; fi
-            else
-                wget "${args[@]}" --https-only --timeout=30 --tries=2 -O "$tmp" "$url" 2> "$log"; rc=$?
-                [ "$rc" != 8 ] || permanent=true
-            fi
-            if [ "$rc" = 0 ] && [ -s "$tmp" ]; then
-                if [ -n "$expected" ] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" != "${expected,,}" ]; then
-                    echo 'Downloaded package SHA256 does not match; installation refused.' >&2
-                    rm -f "$tmp" "$log"; return 1
-                fi
-                mv -f "$tmp" "$dest"; rc=$?
-                rm -f "$log"; return "$rc"
-            fi
-            [ "$permanent" != true ] || break
-        done
-        [ "$permanent" != true ] || break
-    done
-    echo 'Rathole download failed:' >&2
-    if [ -s "$log" ]; then tail -n 4 "$log" >&2; else echo 'The server returned an empty file or no downloader is available.' >&2; fi
-    rm -f "$tmp" "$log"; return 1
-}
-
-rh_validate_package() {
-    local source="$1" stage item count=0
-    mt_valid_elf "$source" && return 0
-    stage=$(mktemp -d "$SECURE_TMP/rh-validate.XXXXXX") || return 1
-    if ! mt_extract_archive "$source" "$stage"; then rm -rf "$stage"; return 1; fi
-    while IFS= read -r item; do
-        mt_valid_elf "$item" && count=$((count+1))
-    done < <(find "$stage" -type f -name '*rathole*')
-    rm -rf "$stage"
-    [ "$count" = 1 ]
-}
-
 install_core_from_source() {
-    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0
-    triplet=$(rh_release_triplet) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
-    asset="rathole-${triplet}.zip"
-    local -a urls=()
-    case "$src_choice" in
-        1) urls=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset"); need_zip=1;;
-        2)
-            urls=("https://c107328.parspack.net/c107328/MTunnel/packages/$asset")
-            # The unqualified mirror binary is the bundled x86_64 build only.
-            [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("https://c107328.parspack.net/c107328/MTunnel/packages/rathole")
-            urls+=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset")
-            need_zip=1;;
-        3)
-            echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r url || return 0
-            url="${url//$'\r'/}"; [ -n "$url" ] || return 0
-            [[ "$url" == https://* ]] || { echo 'Use an HTTPS direct link.' >&2; return 1; }
-            urls=("$url"); need_zip=1;;
-        4)
-            kind=local
-            for item in "$LOCAL_DIR/packages/rathole" "$LOCAL_DIR/packages/$asset" "$LOCAL_DIR/packages/rathole-${triplet}.tar.gz"; do
-                [ -f "$item" ] || continue
-                if [ "$item" = "$LOCAL_DIR/packages/rathole" ] && ! mt_valid_elf "$item"; then continue; fi
-                source="$item"; break
-            done
-            [ -n "$source" ] || { echo "No compatible Rathole binary or $asset found in $LOCAL_DIR/packages." >&2; return 1; }
-            [[ "$source" != *.zip ]] || need_zip=1;;
-        *) return 0;;
-    esac
-    # Do not require internet/download utilities for a local binary.
-    if [ "$kind" = url ]; then rh_ensure_download_tools "$need_zip" || return 1
-    elif [ "$need_zip" = 1 ] && ! command -v unzip >/dev/null 2>&1; then
-        echo 'Install unzip to use a local ZIP; an unpacked local binary needs no download tools.' >&2; return 1
+    local src_choice="$1"
+    systemctl stop mrathole@* 2>/dev/null
+    killall -9 rathole 2>/dev/null
+    
+    if [ -f "/usr/local/bin/rathole" ] || [ -f "/usr/bin/rathole" ]; then
+        echo -e "  ${Y}● Purging previous Rathole installation...${NC}"
     fi
-    echo -e "  ${DIM}● Preparing Rathole Core ($triplet)...${NC}"
-    if [ "$kind" = url ]; then
-        work=$(mktemp -d "$SECURE_TMP/rh-package.XXXXXX") || return 1
-        source=""
-        for url in "${urls[@]}"; do
-            local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
-            echo -e "  ${DIM}● Source: $source_host${NC}"
-            if rh_download "$url" "$work/package" "${EXPECTED_SHA256:-}"; then
-                if rh_validate_package "$work/package"; then source="$work/package"; break
-                else echo 'Downloaded file is not a compatible Rathole binary/archive.' >&2; fi
+    rm -f /usr/local/bin/rathole /usr/bin/rathole "$SECURE_TMP/rh_dl.zip" "$SECURE_TMP/rathole"
+
+    command -v unzip >/dev/null 2>&1 || {
+        apt-get update -y -q >/dev/null 2>&1
+        apt-get install -y -q unzip >/dev/null 2>&1 || true
+    }
+
+    if [[ "$src_choice" == "1" || "$src_choice" == "2" ]]; then
+        echo -e "  ${DIM}● Downloading latest binary...${NC}"
+        local arch=$(uname -m)
+        local target="x86_64-unknown-linux-gnu"
+        [ "$arch" == "aarch64" ] || [ "$arch" == "arm64" ] && target="aarch64-unknown-linux-gnu"
+        local archive="rathole-${target}.zip"
+        
+        local dl_url="https://github.com/rapiz1/rathole/releases/download/v0.5.0/${archive}"
+        [ "$src_choice" == "2" ] && dl_url="https://c107328.parspack.net/c107328/MTunnel/packages/${archive}"
+
+        local dl_ok=false
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --connect-timeout 10 --max-time 60 -o "$SECURE_TMP/rh_dl.zip" "$dl_url" 2>/dev/null && dl_ok=true
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q --timeout=15 -O "$SECURE_TMP/rh_dl.zip" "$dl_url" 2>/dev/null && dl_ok=true
+        fi
+
+        if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/rh_dl.zip" ]; then
+            unzip -q -o "$SECURE_TMP/rh_dl.zip" -d "$SECURE_TMP/" >/dev/null 2>&1
+            [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
+            chmod +x /usr/local/bin/rathole 2>/dev/null || true
+            if is_rathole_core_valid; then
+                echo -e "  ${G}✔ Rathole Core installed successfully.${NC}"
+            else
+                rm -f /usr/local/bin/rathole
+                echo -e "  ${R}✖ Download did not contain a valid binary! Installation aborted.${NC}"
             fi
-            [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
-        done
-        [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
-    fi
-    if [ -n "${EXPECTED_SHA256:-}" ]; then
-        if ! [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || [ "$(sha256sum "$source" | cut -d' ' -f1)" != "${EXPECTED_SHA256,,}" ]; then
-            [ -z "$work" ] || rm -rf "$work"
-            echo 'Package SHA256 does not match; previous installation preserved.' >&2; return 1
+        else
+            echo -e "  ${R}✖ Download failed! Check connection.${NC}"
+        fi
+
+    elif [[ "$src_choice" == "3" ]]; then
+        echo -ne "  ${C}● Enter Direct Link: ${NC}"; read custom_url
+        custom_url=$(echo "$custom_url" | tr -d '\r ')
+        if [ -n "$custom_url" ]; then
+            echo -e "  ${DIM}● Downloading from Custom Link...${NC}"
+            local dl_ok=false
+            if command -v curl >/dev/null 2>&1; then
+                curl -fsSL --connect-timeout 10 --max-time 60 -o "$SECURE_TMP/rh_dl.zip" "$custom_url" 2>/dev/null && dl_ok=true
+            elif command -v wget >/dev/null 2>&1; then
+                wget -q --timeout=15 -O "$SECURE_TMP/rh_dl.zip" "$custom_url" 2>/dev/null && dl_ok=true
+            fi
+
+            if [ "$dl_ok" = true ] && [ -s "$SECURE_TMP/rh_dl.zip" ]; then
+                if unzip -t "$SECURE_TMP/rh_dl.zip" >/dev/null 2>&1; then
+                    unzip -q -o "$SECURE_TMP/rh_dl.zip" -d "$SECURE_TMP/" >/dev/null 2>&1
+                    [ -f "$SECURE_TMP/rathole" ] && mv "$SECURE_TMP/rathole" /usr/local/bin/rathole 2>/dev/null
+                else
+                    mv "$SECURE_TMP/rh_dl.zip" /usr/local/bin/rathole
+                fi
+                chmod +x /usr/local/bin/rathole 2>/dev/null || true
+                if is_rathole_core_valid; then
+                    echo -e "  ${G}✔ Rathole Core installed from custom link.${NC}"
+                else
+                    rm -f /usr/local/bin/rathole
+                    echo -e "  ${R}✖ Downloaded file is not a valid binary! Installation aborted.${NC}"
+                fi
+            else
+                echo -e "  ${R}✖ Download failed! Check the link.${NC}"
+            fi
+        fi
+
+    elif [[ "$src_choice" == "4" ]]; then
+        if [ -s "$LOCAL_DIR/packages/rathole" ]; then
+            cp "$LOCAL_DIR/packages/rathole" /usr/local/bin/rathole
+            chmod +x /usr/local/bin/rathole
+            if is_rathole_core_valid; then
+                echo -e "  ${G}✔ Rathole Core restored from Local Directory.${NC}"
+            else
+                rm -f /usr/local/bin/rathole
+                echo -e "  ${R}✖ Local file is not a valid binary! Installation aborted.${NC}"
+            fi
+        else
+            echo -e "  ${R}✖ File not found in $LOCAL_DIR/packages/rathole!${NC}"
         fi
     fi
-    if mt_update_core rathole mrathole "$source" local "${EXPECTED_SHA256:-}"; then
-        [ -z "$work" ] || rm -rf "$work"
-        echo -e "  ${G}✔ Rathole Core installed successfully.${NC}"
-        echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
-    else
-        [ -z "$work" ] || rm -rf "$work"
-        echo -e "  ${R}✖ Package extraction, validation or service restart failed. Previous installation preserved.${NC}" >&2
-        return 1
-    fi
+
+    [ -f "/usr/local/bin/rathole" ] && ln -sf /usr/local/bin/rathole /usr/bin/rathole 2>/dev/null
+    rm -f "$SECURE_TMP/rh_dl.zip" "$SECURE_TMP/rathole" 2>/dev/null
+
+    for d in "$CONF_DIR"/*; do
+        [ -d "$d" ] || continue
+        local t_name=$(basename "$d")
+        systemctl is-enabled "mrathole@${t_name}" >/dev/null 2>&1 && systemctl restart "mrathole@${t_name}" 2>/dev/null
+    done
+    sleep 1.5
 }
 
 menu_install_core() {
@@ -1001,7 +384,7 @@ menu_install_core() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
@@ -1013,7 +396,8 @@ menu_install_core() {
 check_first_run_core() {
     if ! is_rathole_core_valid; then
         local first_prompt_flag="$CONF_DIR/.core_prompted"
-        if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
+        if [ ! -f "$first_prompt_flag" ]; then
+            touch "$first_prompt_flag"
             clear
             echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${B}│${NC}   ${R}● Rathole Core binary is NOT installed on this machine!${NC}                  ${B}│${NC}"
@@ -1022,17 +406,13 @@ check_first_run_core() {
             echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
             echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/rathole)${NC}"
             echo -e "  ${DIM}│${NC}"
             echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
-                if install_core_from_source "$init_opt"; then printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
-                else rm -f "$first_prompt_flag"; return 1; fi
-            elif [[ "$init_opt" = q || -z "$init_opt" ]]; then
-                printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
-            else return 1
+                install_core_from_source "$init_opt"
             fi
         fi
     fi
@@ -1049,7 +429,6 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-ExecStartPre=/usr/bin/mrathole --counters %i
 ExecStart=/usr/local/bin/rathole /etc/mrathole/tunnels/%i/config.toml
 Restart=always
 RestartSec=3
@@ -1066,49 +445,19 @@ EOF
     fi
 }
 
-clean_rat_counters() {
-    local bin chain direction
-    for bin in iptables ip6tables; do
-        command -v "$bin" >/dev/null 2>&1 || continue
-        for chain in INPUT OUTPUT; do
-            for direction in RX TX; do mt_delete_tagged_rules "$bin" mangle "$chain" "RAT_${direction}_$1"; done
-        done
-    done
-}
-
-zero_rat_counters() {
-    local bin chain direction num
-    for bin in iptables ip6tables; do
-        command -v "$bin" >/dev/null 2>&1 || continue
-        for chain in INPUT OUTPUT; do
-            for direction in RX TX; do
-                while read -r num; do [ -n "$num" ] && "$bin" -w 5 -t mangle -Z "$chain" "$num"; done < <(mt_tagged_rules "$bin" mangle "$chain" "RAT_${direction}_$1")
-            done
-        done
-    done
-}
-
 generate_toml() {
     local name="$1"
     local dir="$CONF_DIR/$name"
     local meta="$dir/meta.conf"
     local toml="$dir/config.toml"
     
-    local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
+    local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS=""
     source "$meta" 2>/dev/null
     
-    mt_valid_port "$LINK_PORT" && [[ "$TYPE" =~ ^[12]$ ]] || return 1
-    BIND_HOST=$(mt_normalize_host "$BIND_HOST")
-    mt_valid_ipv4 "$BIND_HOST" || mt_valid_ipv6 "$BIND_HOST" || return 1
-    [ "$TYPE" != 2 ] || mt_valid_host "$REMOTE_IP" || return 1
-    validate_forward_ports "$TCP_PORTS" 0 tcp && validate_forward_ports "$UDP_PORTS" 0 udp || return 1
-    [[ "$TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
-    local final_toml="$toml"
-    toml=$(mktemp "$dir/config.XXXXXX") || return 1
     > "$toml"
     if [ "$TYPE" == "1" ]; then
         echo "[server]" >> "$toml"
-        echo "bind_addr = \"$(mt_hostport "$BIND_HOST" "$LINK_PORT")\"" >> "$toml"
+        echo "bind_addr = \"0.0.0.0:${LINK_PORT}\"" >> "$toml"
         echo "default_token = \"${TOKEN}\"" >> "$toml"
         echo "heartbeat_interval = 30" >> "$toml"
         echo "" >> "$toml"
@@ -1124,7 +473,7 @@ generate_toml() {
                 echo "" >> "$toml"
                 echo "[server.services.tcp_${p}]" >> "$toml"
                 echo "type = \"tcp\"" >> "$toml"
-                echo "bind_addr = \"$(mt_hostport "$BIND_HOST" "$p")\"" >> "$toml"
+                echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
             done
         fi
 
@@ -1135,12 +484,12 @@ generate_toml() {
                 echo "" >> "$toml"
                 echo "[server.services.udp_${p}]" >> "$toml"
                 echo "type = \"udp\"" >> "$toml"
-                echo "bind_addr = \"$(mt_hostport "$BIND_HOST" "$p")\"" >> "$toml"
+                echo "bind_addr = \"0.0.0.0:${p}\"" >> "$toml"
             done
         fi
     else
         echo "[client]" >> "$toml"
-        echo "remote_addr = \"$(mt_hostport "$REMOTE_IP" "$LINK_PORT")\"" >> "$toml"
+        echo "remote_addr = \"${REMOTE_IP}:${LINK_PORT}\"" >> "$toml"
         echo "default_token = \"${TOKEN}\"" >> "$toml"
         echo "heartbeat_timeout = 40" >> "$toml"
         echo "retry_interval = 1" >> "$toml"
@@ -1172,11 +521,6 @@ generate_toml() {
             done
         fi
     fi
-    mt_install_files 600 "$toml" "$final_toml" || { rm -f "$toml"; return 1; }
-    rm -f "$toml"
-    clean_rat_counters "$name"
-    mt_setup_counter_pair RAT "$name" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
-    return 0
 }
 
 get_tunnel_status() {
@@ -1218,7 +562,7 @@ get_peer_ping() {
 
     if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
         local start_ts=$(date +%s%3N 2>/dev/null)
-        if mt_tcp_probe "$target_ip" "$port"; then
+        if timeout 1 bash -c "</dev/tcp/$target_ip/$port" 2>/dev/null; then
             local end_ts=$(date +%s%3N 2>/dev/null)
             if [[ "$start_ts" =~ ^[0-9]+$ ]] && [[ "$end_ts" =~ ^[0-9]+$ ]]; then
                 local t_rtt=$((end_ts - start_ts))
@@ -1356,12 +700,12 @@ draw_header() {
 
 show_tunnel_registry() {
     draw_header
-    echo -e "\n  ${Y}● Tunnel Info & Specs:${NC}"
+    echo -e "\n  ${Y}● Deployed Rathole Tunnels Registry:${NC}"
     local count=0
     for d in "$CONF_DIR"/*; do
         [ ! -d "$d" ] && continue
         local t_name=$(basename "$d")
-        local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
+        local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS=""
         source "$d/meta.conf" 2>/dev/null
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
@@ -1427,9 +771,7 @@ show_tunnel_registry() {
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
-    if [ "${1:-}" != --no-pause ]; then
-        echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
-    fi
+    echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
 show_live_radar() {
@@ -1445,7 +787,7 @@ show_live_radar() {
         for d in "$CONF_DIR"/*; do
             [ ! -d "$d" ] && continue
             local t_name=$(basename "$d")
-            local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
+            local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS=""
             source "$d/meta.conf" 2>/dev/null
             
             local st=$(get_tunnel_status "$t_name")
@@ -1466,7 +808,7 @@ show_live_radar() {
         fi
         echo -e "  ${B}╰──────────────────────┴────────────────┴──────────────────────────┴────────────────────────────╯${NC}"
         printf "\033[J"
-        mt_monitor_wait 1 || break
+        read -t 1 -n 1 -s key; if [[ "$key" == "q" || "$key" == "Q" || "$key" == $'\e' ]]; then break; fi
     done
     tput cnorm
 }
@@ -1486,7 +828,7 @@ manage_cron() {
     if [[ "$cr_opt" == "1" ]]; then
         echo -ne "  ${C}●${NC} ${W}Restart interval in hours (e.g. 2, 4, 6): ${NC}"; read interval
         interval=$(echo "$interval" | tr -d '\r')
-        [[ "$interval" =~ ^[0-9]+$ ]] && ((10#$interval >= 1 && 10#$interval <= 24)) || { echo -e "  ${R}Invalid interval! Use 1-24 hours.${NC}"; sleep 1.5; return; }
+        [[ ! "$interval" =~ ^[0-9]+$ ]] && echo -e "  ${R}Invalid interval!${NC}" && sleep 1.5 && return
         
         echo "#!/bin/bash" > "$cron_script"
         echo "systemctl kill -s SIGKILL mrathole@${t_name}" >> "$cron_script"
@@ -1496,11 +838,7 @@ manage_cron() {
         if command -v crontab >/dev/null 2>&1; then
             local cron_tmp="$SECURE_TMP/crontab.$$"
             crontab -l 2>/dev/null | grep -v "mrathole@${t_name}" > "$cron_tmp"
-            if [ "$interval" -eq 24 ]; then
-                echo "0 0 * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
-            else
-                echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
-            fi
+            echo "0 */${interval} * * * $cron_script #mrathole@${t_name}" >> "$cron_tmp"
             crontab "$cron_tmp"; rm -f "$cron_tmp"
             echo -e "  ${G}✔ Cronjob added: Tunnel will restart every ${interval} hours.${NC}"; sleep 2
         else
@@ -1552,7 +890,6 @@ uninstall_mrathole() {
     systemctl daemon-reload 2>/dev/null
 
     echo -e "  ${DIM}● [4/5] Deleting configurations & core binary...${NC}"
-    local dir; for dir in "$CONF_DIR"/*; do [ -d "$dir" ] && clean_rat_counters "$(basename "$dir")"; done
     rm -rf /etc/mrathole "$SECURE_TMP/.mrathole"* /usr/local/bin/rathole /usr/bin/rathole
 
     echo -e "  ${DIM}● [5/5] Removing mrathole wrapper script...${NC}"
@@ -1574,541 +911,63 @@ select_tunnel() {
     echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
-    mt_valid_index "$t_idx" "${#configs[@]}" || return 1
-    t_idx=$((10#$t_idx))
+    if [[ "$t_idx" == "q" || -z "$t_idx" || -z "${configs[$t_idx]}" ]]; then return 1; fi
     
     SELECTED_TUN="${configs[$t_idx]}"
     return 0
 }
 
-if [ "${1:-}" == --counters ]; then
-    [[ "${2:-}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "$CONF_DIR/$2/meta.conf" ] || exit 1
-    TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; source "$CONF_DIR/$2/meta.conf"
-    mt_setup_counter_pair RAT "$2" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
-    exit $?
-fi
-if [ "${1:-}" == --apply ]; then
-    for dir in "$CONF_DIR"/*; do [ -d "$dir" ] && generate_toml "$(basename "$dir")"; done
-    exit 0
-fi
-for dir in "$CONF_DIR"/*; do
-    [ -f "$dir/meta.conf" ] || continue
-    TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; source "$dir/meta.conf"
-    mt_setup_counter_pair RAT "$(basename "$dir")" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
-done
-
 check_first_run_core
 setup_systemd
 
-show_tunnels_info() {
-    mt_tunnels_info_menu rathole draw_header show_tunnel_registry show_tunnel_logs
-}
-
-show_tunnel_logs() {
-    select_tunnel || return 0
-    local t_name int_trap
-    t_name=$(basename "$SELECTED_TUN")
-    draw_header
-    echo -e "\n  ${DIM}● Live logs for ${W}${t_name}${NC} ${DIM}(Ctrl+C to return)${NC}\n"
-    int_trap=$(trap -p INT)
-    trap ':' INT
-    journalctl -u "mrathole@${t_name}" -n 50 -f
-    if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
-}
-
-# BEGIN MTUNNEL WORKSPACE V14.0.1
-# Embedded in each module: no external library or sourced setup-link code.
-mt_ask() { # styled prompt: mt_ask VAR "text"
-    local __var="$1"; shift
-    printf '  %b●%b %b%s%b ' "$C" "$NC" "$W" "$*" "$NC"
-    read -r "$__var"
-}
-mt_workspace_screen() { "$MT_HEADER"; }
-# Keep the stable palette, tree layout and aligned one/two-digit option numbers.
-mt_workspace_row() {
-    printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b%b\n' \
-        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$2" "$NC" "${4:-}"
-}
-mt_workspace_group() {
-    if [ "${2:-}" = first ]; then
-        printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$1" "$NC"
-    else
-        printf '  %b│%b\n  %b├─[ %s ]%b\n' "$DIM" "$NC" "$DIM" "$1" "$NC"
-    fi
-    printf '  %b│%b\n' "$DIM" "$NC"
-}
-mt_workspace_footer() {
-    printf '  %b│%b\n  %b└─%b %b0%b %b❯%b %b%s%b\n\n' \
-        "$DIM" "$NC" "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
-}
-mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
-    local title="$1" entry id label action color choice; shift
-    while true; do
-        mt_workspace_screen
-        mt_workspace_group "$title" first
-        for entry in "$@"; do
-            IFS='|' read -r id label action color <<< "$entry"
-            mt_workspace_row "$id" "$label" "$color"
-        done
-        mt_workspace_footer 'Return to Previous Menu'
-        printf '  %bSelect ❯❯ %b' "$C" "$NC"
-        read -r choice || return 1
-        case "$choice" in 0|q|Q) return 1;; esac
-        for entry in "$@"; do
-            IFS='|' read -r id label action color <<< "$entry"
-            if [ "$choice" = "$id" ]; then MT_ACTION="$action"; return 0; fi
-        done
-        echo -e "  ${R}✖ Invalid selection.${NC}"
-    done
-}
-mt_workspace_pause() {
-    printf '  %bPress Enter to continue...%b' "$DIM" "$NC"
-    read -r _ || true
-}
-mt_link_encode() {
-    mt_link_validate || return 1
-    local raw encoded checksum key
-    raw=$(for key in "${!MT_LINK_DATA[@]}"; do
-            [ "$key" = SYNC_KEY ] && [ "${MT_LINK_DATA[SYNC_KEY]}" = "${MT_LINK_DATA[TUN_SECRET]:-}" ] && continue
-            printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
-          done | LC_ALL=C sort)
-    encoded=$(printf '%s\n' "$raw" | gzip -9n | base64 -w0 | tr '+/' '-_' | tr -d '=')
-    checksum=$(printf '%s' "2/$MT_KIND/$encoded" | sha256sum); checksum="${checksum:0:16}"
-    printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
-}
-mt_link_decode() {
-    local link="$1" rest kind encoded checksum actual raw padded canonical key val ver
-    link="${link//$'\r'/}"
-    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
-    declare -gA MT_LINK_DATA=()
-    [ "${#link}" -le 32768 ] || return 1
-    case "$link" in
-        mtunnel://1/*) ver=1; rest="${link#mtunnel://1/}";;
-        mtunnel://2/*) ver=2; rest="${link#mtunnel://2/}";;
-        *) return 1;;
-    esac
-    kind="${rest%%/*}"; rest="${rest#*/}"
-    [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
-    [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
-    encoded="${rest%.*}"; checksum="${rest##*.}"
-    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
-    if [ "$ver" = 1 ]; then
-        [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
-        actual=$(printf '%s' "1/$kind/$encoded" | sha256sum); actual="${actual%% *}"
-    else
-        [[ "$checksum" =~ ^[a-f0-9]{16}$ ]] || return 1
-        actual=$(printf '%s' "2/$kind/$encoded" | sha256sum); actual="${actual:0:16}"
-    fi
-    [ "$actual" = "$checksum" ] || { echo 'Setup link checksum failed.' >&2; return 1; }
-    padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) return 1;; esac
-    if [ "$ver" = 1 ]; then
-        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || return 1
-        canonical=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
-        [ "$canonical" = "$encoded" ] || return 1 # rejects NULs/noncanonical/trailing newlines
-    else
-        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null | gunzip 2>/dev/null) || return 1
-    fi
-    while IFS='=' read -r key val; do
-        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
-        [[ ! -v MT_LINK_DATA[$key] ]] || return 1
-        mt_link_field_valid "$key" "$val" || return 1
-        MT_LINK_DATA[$key]="$val"
-    done <<< "$raw"
-    # v2 links omit SYNC_KEY when it equals the tunnel secret; restore it here.
-    if [ "$ver" = 2 ] && [[ ! -v MT_LINK_DATA[SYNC_KEY] ]] && [[ -v MT_LINK_DATA[TUN_SECRET] ]]; then MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[TUN_SECRET]}"; fi
-    mt_link_validate
-}
-mt_bbr_state() { [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo 1 || echo 0; }
-mt_ask_bbr_from_peer() { # peer had BBR on: offer the same here
-    local ans
-    echo -e "\n  ${DIM}● Peer server has BBR enabled.${NC}"
-    mt_ask ans 'Enable BBR on this server too? [y/N]: ' || return 0
-    case "${ans,,}" in y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the peer tunnel is retained.${NC}" >&2;; esac
-    return 0
-}
-mt_link_box() { # draws the peer code inside a plain box
-    local text="$1" line
-    line=$(printf '%*s' "$(( ${#text} + 4 ))" '' | tr ' ' '─')
-    echo -e "  ${DIM}╭${line}╮${NC}"
-    echo -e "  ${DIM}│${NC}  ${W}${text}${NC}  ${DIM}│${NC}"
-    echo -e "  ${DIM}╰${line}╯${NC}"
-}
-mt_main_logs() { show_tunnel_logs; }
-mt_link_read() { # read flat metadata as data, never source it
-    local value
-    value=$(awk -v k="$2" 'index($0,k"=")==1 {sub(/^[^=]*=/,"");print;exit}' "$1")
-    printf '%s' "$value"
-}
-mt_link_uint() { [[ "$1" =~ ^[0-9]{1,10}$ ]] && ((10#$1 >= $2 && 10#$1 <= $3)); }
-mt_link_ports() {
-    local spec="$1" p; local -a a=(); local -A seen=()
-    [ -z "$spec" ] && return 0
-    [[ "$spec" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
-    IFS=, read -ra a <<< "$spec"
-    [ "${#a[@]}" -le 128 ] || return 1
-    for p in "${a[@]}"; do mt_valid_port "$p" || return 1; p=$((10#$p)); [[ ! -v seen[$p] ]] || return 1; seen[$p]=1; done
-}
-mt_link_field_valid() {
-    local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,=-]*$'
-    # Reject whitespace, control bytes, shell syntax, quotes, paths and unknown keys.
-    [ "${#val}" -le 4096 ] && [[ "$val" =~ $safe ]] || return 1
-    case "$key" in
-        ROLE) [[ "$val" =~ ^[12]$ ]];;
-        BBR) [[ "$val" =~ ^[01]$ ]];;
-        NAME) [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]];;
-        BIND_HOST) [[ "$val" = 0.0.0.0 || "$val" = :: ]];;
-        EXPIRES) mt_link_uint "$val" 1 9999999999;;
-        CORE_V6) [ -z "$val" ] || mt_valid_ipv6 "$val::1";;
-        HOST|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|LOCAL_IP6|REMOTE_IP6|REMOTE_V4)
-            [ -z "$val" ] || mt_valid_host "$val";;
-        TOKEN|TUN_SECRET|SYNC_KEY) [[ "$val" =~ ^[A-Za-z0-9_=-]{1,256}$ ]];;
-        LINK_PORT) mt_valid_port "$val";;
-        TCP_PORTS|UDP_PORTS) mt_link_ports "$val";;
-        TRANSPORT) [[ "$val" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ ]];;
-        PORTS) return 0;;
-        ENABLE_UDP|ADV_AGGRESSIVE|ADV_NODELAY|ADV_PROXY|KCP_WDELAY|KCP_ACKNODELAY) [[ "$val" =~ ^(true|false)$ ]];;
-        PROTO) [[ "$val" =~ ^(ipv4|ipv6|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]];;
-        CORE_SUBNET) mt_valid_ipv4 "$val.1";;
-        TUN_ID) mt_link_uint "$val" 0 16777215;;
-        VNI_ID) mt_link_uint "$val" 1 16777215;;
-        MAX_IPS) mt_link_uint "$val" 0 64;;
-        CUSTOM_MTU) [ -z "$val" ] || mt_link_uint "$val" 512 9000;;
-        ENCRYPT) [[ "$val" =~ ^[01]$ ]];;
-        ADV_LOG) [[ "$val" =~ ^(trace|debug|info|warn|error)$ ]];;
-        ADV_KEEPALIVE|ADV_HEARTBEAT|ADV_CHANNEL|ADV_POOL|ADV_RETRY|ADV_DIAL|ADV_MUX_CON|ADV_MUX_VERSION|ADV_MUX_FRAME|ADV_MUX_RECEIVE|ADV_MUX_STREAM|ADV_MTU|ADV_MSS|ADV_RCVBUF|ADV_SNDBUF) mt_link_uint "$val" 0 1073741824;;
-        PROFILE) [[ "$val" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME|NORMAL|FAST|FAST2|FAST3|MANUAL|CUSTOM)$ ]];;
-        BLOCK) [[ "$val" =~ ^(aes-128-gcm|aes|aes-128|aes-192|aes-256|salsa20|blowfish|twofish|cast5|3des|tea|xtea|xor|sm4|none)$ ]];;
-        KCP_MODE) [[ "$val" =~ ^(normal|fast|fast2|fast3|manual)$ ]];;
-        KCP_CONN) mt_link_uint "$val" 1 32;;
-        KCP_MTU) mt_link_uint "$val" 576 1500;;
-        KCP_NODELAY|KCP_NOCONGESTION) [[ "$val" =~ ^[01]$ ]];;
-        KCP_RESEND) mt_link_uint "$val" 0 2;;
-        KCP_INTERVAL) mt_link_uint "$val" 10 5000;;
-        KCP_RCVWND|KCP_SNDWND) mt_link_uint "$val" 128 32768;;
-        KCP_STREAMBUF|KCP_SMUXBUF|KCP_PCAP_SOCKBUF) mt_link_uint "$val" 65536 268435456;;
-        KCP_TCPBUF|KCP_UDPBUF) mt_link_uint "$val" 1024 1048576;;
-        KCP_DSHARD|KCP_PSHARD|KCP_SMUXKALIVE) mt_link_uint "$val" 0 65535;;
-        *) return 1;;
-    esac
-}
-mt_link_validate() {
-    local key required
-    [[ "$MT_KIND" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
-    local allowed=' ROLE NAME HOST EXPIRES BBR '
-    case "$MT_KIND" in
-        gre) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET CORE_V6 TUN_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
-        vxlan) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET VNI_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
-        backhaul) allowed+=' TOKEN LINK_PORT TRANSPORT PORTS ENABLE_UDP BIND_HOST ADV_KEEPALIVE ADV_HEARTBEAT ADV_CHANNEL ADV_POOL ADV_RETRY ADV_DIAL ADV_AGGRESSIVE ADV_NODELAY ADV_LOG ADV_MUX_CON ADV_MUX_VERSION ADV_MUX_FRAME ADV_MUX_RECEIVE ADV_MUX_STREAM ADV_MTU ADV_MSS ADV_RCVBUF ADV_SNDBUF ADV_PROXY ';;
-        rathole) allowed+=' TOKEN LINK_PORT TCP_PORTS UDP_PORTS BIND_HOST ';;
-        paqet) allowed+=' TOKEN LINK_PORT TCP_PORTS PROFILE BLOCK KCP_MODE KCP_CONN KCP_MTU KCP_RCVWND KCP_SNDWND KCP_SMUXBUF KCP_STREAMBUF KCP_PCAP_SOCKBUF KCP_TCPBUF KCP_UDPBUF KCP_NODELAY KCP_WDELAY KCP_ACKNODELAY KCP_INTERVAL KCP_RESEND KCP_NOCONGESTION KCP_DSHARD KCP_PSHARD KCP_SMUXKALIVE ';;
-    esac
-    for key in "${!MT_LINK_DATA[@]}"; do
-        [[ "$allowed" == *" $key "* ]] || { echo "Unexpected $MT_KIND field: $key" >&2; return 1; }
-    done
-    for key in "${!MT_LINK_DATA[@]}"; do mt_link_field_valid "$key" "${MT_LINK_DATA[$key]}" || { echo "Invalid setup field: $key" >&2; return 1; }; done
-    required='ROLE NAME HOST EXPIRES'
-    case "$MT_KIND" in
-        gre) required+=' PROTO TUN_SECRET CORE_SUBNET TUN_ID MAX_IPS ENCRYPT';;
-        vxlan) required+=' PROTO TUN_SECRET CORE_SUBNET VNI_ID MAX_IPS ENCRYPT';;
-        backhaul) required+=' TOKEN LINK_PORT TRANSPORT PORTS ENABLE_UDP';;
-        rathole) required+=' TOKEN LINK_PORT TCP_PORTS UDP_PORTS';;
-        paqet) required+=' TOKEN LINK_PORT TCP_PORTS PROFILE BLOCK KCP_MODE KCP_CONN KCP_MTU KCP_RCVWND KCP_SNDWND KCP_SMUXBUF KCP_STREAMBUF KCP_PCAP_SOCKBUF KCP_TCPBUF KCP_UDPBUF';;
-    esac
-    for key in $required; do [[ -v MT_LINK_DATA[$key] ]] || { echo "Missing setup field: $key" >&2; return 1; }; done
-    [ -n "${MT_LINK_DATA[HOST]}" ] && mt_valid_host "${MT_LINK_DATA[HOST]}" || return 1
-    ((10#${MT_LINK_DATA[EXPIRES]} >= $(date +%s))) || { echo 'Setup link has expired; generate a new link.' >&2; return 1; }
-    return 0
-}
-mt_link_select() {
-    case "$MT_KIND" in
-        gre) select_tunnel_interactive || return 1; MT_LINK_CONF="$SELECTED_CONF";;
-        vxlan) select_fabric_interactive || return 1; MT_LINK_CONF="$SELECTED_CONF";;
-        backhaul) select_tunnel || return 1; MT_LINK_CONF="$SELECTED_TUN";;
-        rathole) select_tunnel || return 1; MT_LINK_CONF="$SELECTED_TUN/meta.conf";;
-        paqet) select_tunnel || return 1; MT_LINK_CONF="${SELECTED_TUN%.yaml}.meta";;
-    esac
-    [ -f "$MT_LINK_CONF" ]
-}
-mt_link_export() {
-    local conf="${1:-}" host name role key ttl link dest
-    [ -n "$conf" ] || { mt_link_select || return 1; conf="$MT_LINK_CONF"; }
-    [ -f "$conf" ] || return 1
-    declare -gA MT_LINK_DATA=()
-    case "$MT_KIND" in
-        rathole) name=$(basename "$(dirname "$conf")"); role=$(mt_link_read "$conf" TYPE);;
-        gre|vxlan) name=$(basename "$conf" .conf); role=$(mt_link_read "$conf" TYPE);;
-        *) name=$(basename "$conf" .meta); role=$(mt_link_read "$conf" ROLE);;
-    esac
-    [[ "$role" =~ ^[12]$ ]] || return 1
-    MT_LINK_DATA[ROLE]=$((3-role)); MT_LINK_DATA[NAME]="$name"
-    MT_LINK_DATA[BBR]=$(mt_bbr_state)
-    MT_LINK_DATA[EXPIRES]=$(($(date +%s)+604800))
-    case "$MT_KIND" in
-        gre|vxlan)
-            for key in TUN_SECRET SYNC_KEY CORE_SUBNET CORE_V6 TUN_ID VNI_ID MAX_IPS CUSTOM_MTU ENCRYPT; do
-                case "$MT_KIND:$key" in gre:VNI_ID|vxlan:TUN_ID|vxlan:CORE_V6) continue;; esac
-                MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key")
-            done
-            MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[SYNC_KEY]:-${MT_LINK_DATA[TUN_SECRET]}}"
-            if [ "$MT_KIND" = gre ]; then MT_LINK_DATA[PROTO]=$(mt_link_read "$conf" TUN_PROTO); else MT_LINK_DATA[PROTO]=$(mt_link_read "$conf" FAB_PROTO); fi
-            MT_LINK_DATA[PROTO]="${MT_LINK_DATA[PROTO]:-ipv4}"
-            MT_LINK_DATA[ENCRYPT]="${MT_LINK_DATA[ENCRYPT]:-0}"
-            for key in LOCAL_PUB LOCAL_PUB6 LOCAL_IP6; do
-                dest="REMOTE${key#LOCAL}"; MT_LINK_DATA[$dest]=$(mt_link_read "$conf" "$key"); MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$dest")
-            done
-            MT_LINK_DATA[HOST]="${MT_LINK_DATA[REMOTE_PUB6]:-${MT_LINK_DATA[REMOTE_PUB]}}"
-            ;;
-        backhaul)
-            for key in TOKEN TRANSPORT PORTS ENABLE_UDP; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done
-            MT_LINK_DATA[LINK_PORT]=$(mt_link_read "$conf" TUN_PORT)
-            # Machine-local TLS paths and client CDN overrides are deliberately not exported.
-            while IFS='=' read -r key host; do
-                case "$key" in ADV_TLS_CERT|ADV_TLS_KEY|ADV_EDGE) continue;; ADV_*) MT_LINK_DATA[$key]="$host";; esac
-            done < "$conf"
-            ;;
-        rathole)
-            for key in TOKEN LINK_PORT TCP_PORTS UDP_PORTS; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done;;
-        paqet)
-            MT_LINK_DATA[LINK_PORT]=$(mt_link_read "$conf" TUN_PORT)
-            MT_LINK_DATA[TCP_PORTS]=$(mt_link_read "$conf" TCP_PORTS)
-            MT_LINK_DATA[PROFILE]=$(get_tunnel_profile "$name")
-            MT_LINK_DATA[TOKEN]=$(get_yaml_value key "$CONF_DIR/$name.yaml")
-            MT_LINK_DATA[BLOCK]=$(get_yaml_value block "$CONF_DIR/$name.yaml")
-            mt_link_paqet_values "$CONF_DIR/$name.yaml" || return 1;;
-    esac
-    if [[ "$MT_KIND" == backhaul || "$MT_KIND" == rathole ]]; then
-        host=$(mt_link_read "$conf" REMOTE_IP)
-        MT_LINK_DATA[BIND_HOST]=0.0.0.0
-        [[ "$host" != *:* ]] || MT_LINK_DATA[BIND_HOST]=::
-    fi
-    if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
-        host=$(get_local_ip)
-        mt_ask dest "This server's reachable public IP/hostname [$host]: " || return 1
-        host="${dest:-$host}"
-        mt_valid_host "$host" && [[ "$host" != 0.0.0.0 && "$host" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
-        MT_LINK_DATA[HOST]="$host"
-        if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
-            mt_ask dest 'Peer server port mappings (e.g. 443=127.0.0.1:443): ' || return 1
-            validate_bh_ports "$dest" 0 || return 1; MT_LINK_DATA[PORTS]="$dest"
-        elif [ "$MT_KIND" = paqet ] && [ "$role" = 1 ]; then
-            mt_ask dest 'Peer client forwarded TCP ports (e.g. 443,8080): ' || return 1
-            mt_link_ports "$dest" && [ -n "$dest" ] || return 1; MT_LINK_DATA[TCP_PORTS]="$dest"
-        fi
-    fi
-    link=$(mt_link_encode) || { echo 'Cannot export these settings safely.' >&2; return 1; }
-    mt_workspace_screen
-    echo -e "\n  ${DIM}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${DIM}│${NC}"
-    mt_link_box "$link"
-    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${Y}Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
-    mt_workspace_pause
-}
-mt_link_offer() {
-    local ans
-    mt_ask ans 'Generate a setup link for the peer now? [Y/n]: ' || return 0
-    case "${ans,,}" in n|no) return 0;; esac
-    mt_link_export "$1"
-}
-mt_link_import() {
-    local link ans name
-    mt_workspace_screen
-    if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1; fi
-    [ "$link" != q ] || return 0
-    mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
-    echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
-    mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
-    name="${name:-${MT_LINK_DATA[NAME]}}"
-    mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
-    MT_LINK_DATA[NAME]="$name"
-    mt_ask ans 'Is this correct? Create this peer tunnel? [y/N]: ' || return 1
-    [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
-    if mt_link_deploy; then
-        echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
-        if [ "${MT_LINK_DATA[BBR]:-0}" = 1 ]; then mt_ask_bbr_from_peer; else mt_ask_bbr_on_create; fi
-    else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
-    mt_workspace_pause
-}
-mt_workspace_vip() {
-    local ans count
-    MT_NEW_VIP_COUNT=0
-    mt_ask ans 'Create internal Virtual IPs for this tunnel? [y/N/q]: ' || return 1
-    case "${ans,,}" in q) return 1;; n|no|'') return 0;; y|yes) ;; *) echo 'Type y, n or q.' >&2; mt_workspace_vip; return $?;; esac
-    while true; do
-        mt_ask count 'Virtual IP pair count [1] (1-64, q: back): ' || return 1
-        [ "$count" != q ] || return 1; count="${count:-1}"
-        if mt_link_uint "$count" 1 64; then MT_NEW_VIP_COUNT=$((10#$count)); return 0; fi
-        echo 'Enter a number between 1 and 64.'
-    done
-}
-mt_workspace_backup() {
-    local dest
-    mt_workspace_screen
-    mt_ask dest "Backup file [$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz]: " || return 1
-    dest="${dest:-$LOCAL_DIR/backups/$MT_KIND-$(date +%Y%m%d-%H%M%S).tar.gz}"
-    mkdir -p "$(dirname "$dest")" || return 1
-    [ ! -e "$dest" ] || { echo 'File already exists; choose another path.' >&2; return 1; }
-    (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
-    mt_workspace_pause
-}
-# END MTUNNEL WORKSPACE V14.0.1
-
-mt_link_deploy_locked() {
-    mt_link_validate || return 1
-    local name="${MT_LINK_DATA[NAME]}" role="${MT_LINK_DATA[ROLE]}" host="${MT_LINK_DATA[HOST]}" port="${MT_LINK_DATA[LINK_PORT]}" token="${MT_LINK_DATA[TOKEN]}" bind=0.0.0.0 key settings conf tmp unit
-    [[ "$token" =~ ^[A-Za-z0-9_-]{1,256}$ ]] || return 1
-    [[ "$host" != *:* ]] || bind=::
-    bind="${MT_LINK_DATA[BIND_HOST]:-$bind}"
-    if [ "$MT_KIND" = backhaul ]; then name="bh_${name#bh_}"; conf="$CONF_DIR/$name.meta"
-    else conf="$CONF_DIR/$name/meta.conf"; fi
-    [ ! -e "$conf" ] && { [ "$MT_KIND" != rathole ] || [ ! -e "$CONF_DIR/$name" ]; } || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
-    if [ "$role" = 1 ] && mt_port_busy "$port"; then echo 'Link port is already in use.' >&2; return 1; fi
-    if [ "$MT_KIND" = backhaul ]; then
-        validate_bh_ports "${MT_LINK_DATA[PORTS]}" "$role" || return 1
-        settings=$(mktemp "$SECURE_TMP/peer-backhaul.XXXXXX") || return 1
-        for key in "${!MT_LINK_DATA[@]}"; do [[ "$key" != ADV_* ]] || printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"; done > "$settings"
-        bh_load_options '' "$settings" || { rm -f "$settings"; return 1; }
-        # Forwarder is a choice local to the access server; peer configuration uses the native default.
-        bh_activate_config "$name" "$role" "${MT_LINK_DATA[TRANSPORT]}" "$port" "$host" "$token" "${MT_LINK_DATA[PORTS]}" "${MT_LINK_DATA[ENABLE_UDP]}" "$bind" backhaul "$settings"
-        local rc=$?; rm -f "$settings"
-        if [ "$rc" != 0 ]; then systemctl stop "mbackhaul@$name"; bh_clear_forwarder "$name"; clean_bh_counters "$name"; rm -f "$conf" "$CONF_DIR/$name.toml"; return 1; fi
-        unit="mbackhaul@$name"
-    else
-        validate_forward_ports "${MT_LINK_DATA[TCP_PORTS]}" "$role" tcp && validate_forward_ports "${MT_LINK_DATA[UDP_PORTS]}" "$role" udp || return 1
-        mkdir "$CONF_DIR/$name" || return 1
-        chmod 700 "$CONF_DIR/$name"
-        {
-            printf 'TYPE=%s\nBIND_HOST=%s\nLINK_PORT=%s\nREMOTE_IP=%s\nTOKEN=%s\nTCP_PORTS=%s\nUDP_PORTS=%s\n' "$role" "$bind" "$port" "$host" "$token" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[UDP_PORTS]}"
-        } > "$conf"; chmod 600 "$conf"
-        unit="mrathole@$name"
-        if ! generate_toml "$name" || ! systemctl restart "$unit" || ! mt_workspace_service_ready "$unit"; then
-            journalctl -u "$unit" -n 8 --no-pager >&2; systemctl stop "$unit"; clean_rat_counters "$name"; rm -rf "$CONF_DIR/$name"; return 1
-        fi
-    fi
-    systemctl enable "$unit" >/dev/null 2>&1
-}
-mt_workspace_service_ready() {
-    local attempt
-    for attempt in 1 2 3 4; do sleep .4; systemctl is-active --quiet "$1" || return 1; done
-}
-mt_workspace_health() {
-    mt_link_select || return 1
-    local name conf="$MT_LINK_CONF" host port role unit
-    if [ "$MT_KIND" = rathole ]; then name=$(basename "$(dirname "$conf")"); role=$(mt_link_read "$conf" TYPE); port=$(mt_link_read "$conf" LINK_PORT); unit="mrathole@$name"
-    else name=$(basename "$conf" .meta); role=$(mt_link_read "$conf" ROLE); port=$(mt_link_read "$conf" TUN_PORT); unit="mbackhaul@$name"; fi
-    host=$(mt_link_read "$conf" REMOTE_IP)
-    mt_workspace_screen
-    systemctl status "$unit" --no-pager -l
-    if [ "$role" = 2 ]; then
-        if [ "$MT_KIND" = backhaul ] && [ "$(mt_link_read "$conf" TRANSPORT)" = udp ]; then
-            echo '  UDP link: a TCP probe does not verify this transport; inspect packet counters and peer logs.'
-        elif mt_tcp_probe "$host" "$port"; then echo '  TCP link endpoint is reachable (application forwarding must be checked separately).'
-        else echo '  TCP link endpoint could not be reached.'; fi
-    else echo '  Listener-side sessions:'; ss -tn "sport = :$port"; fi
-    journalctl -u "$unit" -n 12 --no-pager
-    mt_workspace_pause
-}
-
-mt_link_deploy() {
-    local fd rc
-    exec {fd}>"$SECURE_TMP/$MT_KIND-peer-setup.lock" || return 1
-    flock -x "$fd" || { exec {fd}>&-; return 1; }
-    mt_link_deploy_locked; rc=$?
-    exec {fd}>&-
-    return "$rc"
-}
-
-mt_workspace_auto_backup() {
-    local dest module="m$MT_KIND"
-    [ "$MT_KIND" != vxlan ] || module=mxlan
-    [ "$MT_KIND" != paqet ] || module=mpaqet
-    mkdir -p "$LOCAL_DIR/backups" || return 1
-    chmod 700 "$LOCAL_DIR/backups"
-    dest=$(mktemp "$LOCAL_DIR/backups/$module-before-edit-$(date +%Y%m%d-%H%M%S)-XXXXXX.tgz") || return 1
-    if ! tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")"; then rm -f "$dest"; return 1; fi
-    chmod 600 "$dest"
-    printf '  Config restore point: %s\n' "$dest"
-}
-mt_workspace_update_badge() {
-    local rv file="$SECURE_TMP/.mrathole_remote_ver"
-    [ -f "$file" ] || return 0
-    rv=$(tr -d '\r\n ' < "$file")
-    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
-        printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
-    fi
-    return 0
-}
-MT_KIND=rathole; MT_HEADER=draw_header; MT_SECTION=""
-mt_workspace_route() {
-    local section="$1"
-    case "$section" in
-        1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Rathole Setup|1|${G}" "2|Create From Peer Link|97|${G}" "3|Generate Peer Setup Link|98|${M}" || { MT_SECTION=""; return 1; };;
-        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Auth Token|6|${G}" "3|Link Port|7|${C}" "4|Tunnel Name|8|${W}" "5|Listen Address|9|${C}" "6|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
-        3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|TCP Port Mappings|4|${Y}" "2|UDP Port Mappings|5|${M}" || { MT_SECTION=""; return 1; };;
-        4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|12|${G}" "2|BBR Settings|13|${G}" "3|Scheduled Restart|14|${Y}" "4|Restart Service|15|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
-        5) MT_ACTION=10;;
-        6) MT_ACTION=11;;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE & LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" "2|Install / Update Engine (Online / Local)|16|${M}" || { MT_SECTION=""; return 1; };;
-        8) MT_ACTION=96;;
-        9) MT_ACTION=201;;
-        10) MT_SECTION=2; MT_ACTION=2; MT_SHORTCUT=1;;
-        11) MT_ACTION=18;;
-        0) MT_ACTION=0;;
-        *) return 1;;
-    esac
-}
-
 render_mrathole_menu() {
-    mt_workspace_screen
-    mt_workspace_group 'PROVISION & MANAGE' first
-    mt_workspace_row 1 'Create Tunnel' "$C"
-    mt_workspace_row 2 'Edit & Manage' "$Y"
-    mt_workspace_row 3 'Forwarding' "$G"
-    mt_workspace_row 4 'System & Security' "$M"
-    mt_workspace_row 5 'Tunnel Info & Specs' "$M"
-    mt_workspace_row 6 'Live Monitor' "$C"
-    mt_workspace_row 7 'Update & Local Install' "$G" "$(mt_workspace_update_badge)"
-    mt_workspace_row 8 'Backup & Restore' "$W"
-    mt_workspace_row 9 'Logs' "$Y"
-    mt_workspace_row 10 'Delete Tunnels' "$R"
-    mt_workspace_row 11 'Uninstall MRATHOLE' "$R"
-    mt_workspace_footer 'Return to Main Core'
+    badge=""
+    if [ -f "$SECURE_TMP/.mrathole_remote_ver" ]; then
+        rv=$(cat "$SECURE_TMP/.mrathole_remote_ver" | tr -d '\r\n ')
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+            badge=" ${Y}(Update Available: v${rv})${NC}"
+        fi
+    fi
+
+    draw_header
+    echo -e "\n  ${DIM}┌─[ DEPLOYMENT & DESTRUCTION ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Deploy New Reverse Tunnel${NC} ${DIM}(Rathole)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC} ${DIM}(Specific / ALL)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ CONFIGURATION & EDITING ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Edit Remote Host / IP Address${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Edit TCP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Edit UDP Port Mappings${NC} ${DIM}(Overwrite/Add)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Auth Token (Secret)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${C}Edit Tunnel Link Port${NC} ${DIM}(Connection Port)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Rename Tunnel Interface${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MONITORING & DETAILS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${C}Live Traffic & Port Radar${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${W}View Tunnels Registry & Settings${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${DIM}View Live Service Logs${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${Y}Anti-Freeze Cronjob Manager${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${G}Restart Service${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}14${NC}${DIM}❯${NC} ${M}Install / Update Core Binary${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}15${NC}${DIM}❯${NC} ${G}Instant OTA Update (Sync Module)${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}16${NC}${DIM}❯${NC} ${R}Uninstall MRathole${NC} ${DIM}(Purge All)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 }
 
-if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
 while true; do
-    if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
-    else
-        render_mrathole_menu
-        read_with_refresh "  ${C}MRATHOLE ❯❯ ${NC}" opt render_mrathole_menu || break
-        opt="${opt//$'\r'/}"
-    fi
-    mt_workspace_route "$opt" || continue
-    case "$MT_ACTION" in
-        97) mt_link_import; continue;;
-        98) mt_link_export; continue;;
-        99) mt_workspace_health; continue;;
-        201) mt_main_logs; continue;;
-        96) mt_workspace_menu "BACKUP & RESTORE" "1|Save Config Backup|save|${W}" || continue; mt_workspace_backup; continue;;
-    esac
-    # Every edit/forwarding action gets a private config restore point first.
-    if [[ "$MT_SECTION" == 2 || "$MT_SECTION" == 3 ]]; then
-        mt_workspace_auto_backup || { echo 'Could not save the config restore point; operation cancelled.' >&2; mt_workspace_pause; continue; }
-    fi
-    [ "${MT_SHORTCUT:-}" = 1 ] && { MT_SECTION=""; MT_SHORTCUT=""; }
-    opt="$MT_ACTION"
+    render_mrathole_menu
+    read_with_refresh "  ${C}MRATHOLE ❯❯ ${NC}" opt render_mrathole_menu
+    opt=$(echo "$opt" | tr -d '\r')
+    
     case $opt in
         1) 
-           mt_workspace_screen
            echo -e "\n  ${DIM}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
                echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read s_type
@@ -2124,13 +983,11 @@ while true; do
                [[ -n "$t_name" ]] && break
            done
            
-           bind_host="0.0.0.0"
-           if [ "$s_type" == 1 ]; then mt_ask_bind_host || continue; bind_host="$MT_BIND_HOST"; fi
            r_ip="0.0.0.0"
            if [ "$s_type" == "2" ]; then
                while true; do
                    echo -ne "  ${C}●${NC} ${W}Target IRAN Host/IP: ${NC}"; read r_ip
-                   r_ip=$(mt_normalize_host "${r_ip//$'\r'/}")
+                   r_ip=$(echo "$r_ip" | tr -d '\r')
                    is_valid_host "$r_ip" && break
                    echo -e "  ${R}Error: Invalid Host or IP format!${NC}"
                done
@@ -2138,8 +995,8 @@ while true; do
            
            while true; do
                echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5050): ${NC}"; read t_port
-               t_port=${t_port//$'\r'/}
-               if ! mt_valid_port "$t_port"; then
+               t_port=$(echo "$t_port" | tr -dc '0-9')
+               if [ -z "$t_port" ] || [ "$t_port" -lt 1 ] || [ "$t_port" -gt 65535 ]; then
                    echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"
                    continue
                fi
@@ -2153,25 +1010,24 @@ while true; do
            
            echo -ne "  ${C}●${NC} ${W}Custom Token (Leave blank to generate auto): ${NC}"; read t_token
            t_token=$(echo "$t_token" | tr -dc 'a-zA-Z0-9_-')
-           [ -z "$t_token" ] && t_token=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
+           [ -z "$t_token" ] && t_token=$(head -c 8 /dev/urandom | xxd -p)
            
            # رفع باگ ۲: بررسی و اعتبارسنجی دقیق پورت‌های فوروارد
            while true; do
                echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Blank if none]: ${NC}"; read tcp_p
-               tcp_p=$(echo "$tcp_p" | tr -d '\r ')
+               tcp_p=$(echo "$tcp_p" | tr -dc '0-9,')
                validate_forward_ports "$tcp_p" "$s_type" "tcp" && break
            done
 
            while true; do
                echo -ne "  ${C}●${NC} ${W}UDP Ports to Forward (e.g. 53) [Blank if none]: ${NC}"; read udp_p
-               udp_p=$(echo "$udp_p" | tr -d '\r ')
+               udp_p=$(echo "$udp_p" | tr -dc '0-9,')
                validate_forward_ports "$udp_p" "$s_type" "udp" && break
            done
            
            mkdir -p "$CONF_DIR/$t_name"
            cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
 TYPE=$s_type
-BIND_HOST=$bind_host
 LINK_PORT=$t_port
 REMOTE_IP=$r_ip
 TOKEN=$t_token
@@ -2179,19 +1035,10 @@ TCP_PORTS=$tcp_p
 UDP_PORTS=$udp_p
 EOF
            
-           chmod 600 "$CONF_DIR/$t_name/meta.conf"
-           generate_toml "$t_name" || continue
+           generate_toml "$t_name"
            systemctl enable mrathole@$t_name >/dev/null 2>&1
-           if systemctl restart "mrathole@$t_name" && mt_workspace_service_ready "mrathole@$t_name"; then
-               mt_ask_bbr_on_create
-               echo -e "  ${G}● Rathole service started successfully.${NC}"
-               mt_link_offer "$CONF_DIR/$t_name/meta.conf"
-           else
-               echo -e "  ${R}✖ Rathole failed to start. Configuration retained for inspection.${NC}"
-               journalctl -u "mrathole@$t_name" -n 8 --no-pager
-               mt_workspace_pause
-           fi
-           sleep 1.5 ;;
+           systemctl restart mrathole@$t_name
+           echo -e "  ${G}● Tunnel Deployed with Anti-Flap Optimizations!${NC}"; sleep 1.5 ;;
            
         2)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
@@ -2204,7 +1051,6 @@ EOF
            if [[ "$del_idx" == "all" ]]; then
                for d in "${tunnels[@]}"; do
                    t_name=$(basename "$d")
-                   clean_rat_counters "$t_name"
                    systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
                    if command -v crontab >/dev/null 2>&1; then
                        cron_tmp="$SECURE_TMP/crontab.$$"
@@ -2214,10 +1060,8 @@ EOF
                    rm -rf "$d"
                done
                echo -e "  ${G}All Tunnels Purged!${NC}"; sleep 1.5
-           elif mt_valid_index "$del_idx" "${#tunnels[@]}"; then
-               del_idx=$((10#$del_idx))
+           elif [[ -n "${tunnels[$del_idx]}" ]]; then
                t_name=$(basename "${tunnels[$del_idx]}")
-               clean_rat_counters "$t_name"
                systemctl stop mrathole@$t_name 2>/dev/null; systemctl disable mrathole@$t_name 2>/dev/null
                if command -v crontab >/dev/null 2>&1; then
                    cron_tmp="$SECURE_TMP/crontab.$$"
@@ -2228,15 +1072,15 @@ EOF
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
 
-        3|4|5|6|7|8|14|15|9)
+        3|4|5|6|7|8|12|13)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
-           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; BIND_HOST="0.0.0.0"
+           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""
            source "$SELECTED_TUN/meta.conf" 2>/dev/null
            
            if [[ "$opt" == "3" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip
-               n_ip=$(mt_normalize_host "${n_ip//$'\r'/}")
+               n_ip=$(echo "$n_ip" | tr -d '\r')
                if [ -z "$n_ip" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
                fi
@@ -2247,25 +1091,23 @@ EOF
                
            elif [[ "$opt" == "4" ]]; then
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Enter TCP Ports (none to clear; e.g. 80,443) [Current: ${Y}${TCP_PORTS:-None}${W}]: ${NC}"; read n_tcp
-                   n_tcp=${n_tcp//$'\r'/}
-                   if [ "${n_tcp,,}" == none ] || [ "$n_tcp" == - ]; then TCP_PORTS=""; break; fi
+                   echo -ne "  ${C}●${NC} ${W}Enter TCP Ports (e.g. 80,443) [Current: ${Y}${TCP_PORTS:-None}${W}]: ${NC}"; read n_tcp
+                   n_tcp=$(echo "$n_tcp" | tr -dc '0-9,')
                    if [ -z "$n_tcp" ]; then
                        echo -e "  ${Y}● No changes made.${NC}"; break
                    fi
-                   validate_forward_ports "$n_tcp" "$TYPE" "tcp" "$TCP_PORTS" && { TCP_PORTS="$n_tcp"; break; }
+                   validate_forward_ports "$n_tcp" "$TYPE" "tcp" && { TCP_PORTS="$n_tcp"; break; }
                done
                [ -z "$n_tcp" ] && continue
                
            elif [[ "$opt" == "5" ]]; then
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Enter UDP Ports (none to clear; e.g. 53) [Current: ${C}${UDP_PORTS:-None}${W}]: ${NC}"; read n_udp
-                   n_udp=${n_udp//$'\r'/}
-                   if [ "${n_udp,,}" == none ] || [ "$n_udp" == - ]; then UDP_PORTS=""; break; fi
+                   echo -ne "  ${C}●${NC} ${W}Enter UDP Ports (e.g. 53) [Current: ${C}${UDP_PORTS:-None}${W}]: ${NC}"; read n_udp
+                   n_udp=$(echo "$n_udp" | tr -dc '0-9,')
                    if [ -z "$n_udp" ]; then
                        echo -e "  ${Y}● No changes made.${NC}"; break
                    fi
-                   validate_forward_ports "$n_udp" "$TYPE" "udp" "$UDP_PORTS" && { UDP_PORTS="$n_udp"; break; }
+                   validate_forward_ports "$n_udp" "$TYPE" "udp" && { UDP_PORTS="$n_udp"; break; }
                done
                [ -z "$n_udp" ] && continue
 
@@ -2281,11 +1123,11 @@ EOF
            elif [[ "$opt" == "7" ]]; then
                while true; do
                    echo -ne "  ${C}●${NC} ${W}Enter New Link Port [Current: ${Y}${LINK_PORT}${W}]: ${NC}"; read n_port
-                   n_port=${n_port//$'\r'/}
+                   n_port=$(echo "$n_port" | tr -dc '0-9')
                    if [ -z "$n_port" ]; then
                        echo -e "  ${Y}● No changes made.${NC}"; break
                    fi
-                   if ! mt_valid_port "$n_port"; then
+                   if [ "$n_port" -lt 1 ] || [ "$n_port" -gt 65535 ]; then
                        echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"; continue
                    fi
                    if [ "$n_port" != "$LINK_PORT" ] && ss -tuln 2>/dev/null | grep -qE ":${n_port}\s"; then
@@ -2314,7 +1156,6 @@ EOF
                        rm -f "$CONF_DIR/$t_name/restart.sh"
                    fi
 
-                   clean_rat_counters "$t_name"
                    mv "$CONF_DIR/$t_name" "$CONF_DIR/$new_name" 2>/dev/null
                    t_name="$new_name"
                    SELECTED_TUN="$CONF_DIR/$new_name"
@@ -2324,20 +1165,15 @@ EOF
                    echo -e "  ${Y}● Rename cancelled.${NC}"; sleep 1; continue
                fi
                
-           elif [[ "$opt" == "14" ]]; then
+           elif [[ "$opt" == "12" ]]; then
                manage_cron "$t_name"; continue
                
-           elif [[ "$opt" == "9" ]]; then
-               [ "$TYPE" == 1 ] || continue
-               mt_ask_bind_host || continue; BIND_HOST="$MT_BIND_HOST"
-
-           elif [[ "$opt" == "15" ]]; then
-               zero_rat_counters "$t_name"
+           elif [[ "$opt" == "13" ]]; then
+               true
            fi
            
            cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
 TYPE=$TYPE
-BIND_HOST=$BIND_HOST
 LINK_PORT=$LINK_PORT
 REMOTE_IP=$REMOTE_IP
 TOKEN=$TOKEN
@@ -2345,8 +1181,7 @@ TCP_PORTS=$TCP_PORTS
 UDP_PORTS=$UDP_PORTS
 EOF
 
-           chmod 600 "$CONF_DIR/$t_name/meta.conf"
-           generate_toml "$t_name" || continue
+           generate_toml "$t_name"
            systemctl restart mrathole@$t_name
            if systemctl is-active --quiet mrathole@$t_name; then
                echo -e "  ${G}✔ Tunnel updated and service restarted successfully.${NC}"; sleep 1.5
@@ -2355,13 +1190,17 @@ EOF
            fi
            ;;
 
-        10) show_tunnels_info ;;
-        16) menu_install_core ;;
-        17) self_update_module ;;
-        18) uninstall_mrathole ;;
-        12) mt_run_tool mhealer --scope rathole ;;
-        13) mt_run_tool mbbr --from-tunnel ;;
-        11) show_live_radar ;;
+        9) show_live_radar ;;
+        10) show_tunnel_registry ;;
+        11) 
+           select_tunnel || continue
+           t_name=$(basename "$SELECTED_TUN")
+           journalctl -u mrathole@$t_name -n 50 -f; continue
+           ;;
+           
+        14) menu_install_core ;;
+        15) self_update_module ;;
+        16) uninstall_mrathole ;;
         0) break ;;
     esac
 done

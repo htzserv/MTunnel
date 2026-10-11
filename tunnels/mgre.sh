@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.0.1 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v15.0.1 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="15.0.1"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -2414,7 +2414,7 @@ show_live_monitor() {
     done
 }
 
-# BEGIN MTUNNEL WORKSPACE V14.0.1
+# BEGIN MTUNNEL WORKSPACE V15.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -2779,7 +2779,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V14.0.1
+# END MTUNNEL WORKSPACE V15.0.1
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1

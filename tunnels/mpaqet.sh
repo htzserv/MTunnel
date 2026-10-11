@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.1 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v15.0.1 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="15.0.1"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -2120,7 +2120,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V14.0.1
+# BEGIN MTUNNEL WORKSPACE V15.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 mt_ask() { # styled prompt: mt_ask VAR "text"
     local __var="$1"; shift
@@ -2476,7 +2476,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V14.0.1
+# END MTUNNEL WORKSPACE V15.0.1
 
 mt_link_paqet_values() {
     local yaml="$1" key val source

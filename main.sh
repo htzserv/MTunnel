@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.0.1 ---
+# --- MTunnel Master Core | Central Dashboard v15.0.1 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="15.0.1"
 umask 077
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -1160,12 +1160,17 @@ draw_header_lines_only() {
             while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
                 [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
                 compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${t_loss:-}%"
-                printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+                printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
+" "$((content_w-2))" "$((content_w-2))" "$compact_line"
             done < "$SECURE_TMP/.main_tun_stats"
         fi
-        if [ "$cshown" -eq 0 ]; then compact_line='No active tunnels configured.'; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"; cshown=1; fi
-        while [ "$cshown" -lt 3 ]; do printf "  ${B}│${NC} %-*s ${B}│${NC}\033[K\n" "$((content_w-2))" ''; ((cshown++)); done
-        printf "  ${B}╰${border}╯${NC}\033[K\n"
+        if [ "$cshown" -eq 0 ]; then
+            compact_line='No active tunnels configured.'
+            printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
+" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        fi
+        printf "  ${B}╰${border}╯${NC}[K
+"
         return 0
     fi
 
@@ -1242,14 +1247,11 @@ draw_header_lines_only() {
     fi
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\033[K\n" "No active tunnels or fabrics deployed across the ecosystem."
-        shown=1
+        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}[K
+" "No active tunnels or fabrics deployed across the ecosystem."
     fi
-    while [ "$shown" -lt 3 ]; do
-        printf "  ${B}│${NC}  %-113s  ${B}│${NC}\033[K\n" ""
-        ((shown++))
-    done
-    printf "  ${B}╰${border}╯${NC}\033[K\n"
+    printf "  ${B}╰${border}╯${NC}[K
+"
 }
 
 draw_main_header() {

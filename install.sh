@@ -1,8 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.0.1"
-umask 077
-DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"
+MODULE_VERSION="13.6.1"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -511,7 +509,7 @@ mt_update_core() {
     mapfile -t active < <(systemctl list-units --type=service --state=active --no-legend --plain "${unit_prefix}@*.service" "${unit_prefix}.service" 2>/dev/null | awk '{print $1}')
     if ! mt_install_files 755 "$candidate" "$target" "$candidate" "$alias"; then rm -rf "$work"; return 1; fi
     for unit in "${active[@]}"; do
-        systemctl restart "$unit" && systemctl is-active --quiet "$unit" || failed=1
+        systemctl restart "$unit" && sleep 2 && systemctl is-active --quiet "$unit" || failed=1
     done
     if [ "$failed" == 1 ]; then
         if [ "$had_old" == 1 ]; then
@@ -626,22 +624,6 @@ mt_config_value() {
 # END MTUNNEL SHARED HELPERS
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 
 draw_progress() {
@@ -696,45 +678,29 @@ installer_main() {
     local script_file="${BASH_SOURCE[0]}" script_dir
     script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mweb:tools/mweb.sh mstats:tools/mstats.sh mhealer:tools/mhealer.sh minterface:tools/minterface.sh mbbr:tools/mbbr.sh mdiag:tools/mdiag.sh mshield:tools/mshield.sh linktest:tools/linktest.sh)
-    local -a active_modules=()
     local -a files=()
     local current=0 mod_ver
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; remote=''; shift 2;;
+            --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; shift 2;;
             --root) [ "$#" -ge 2 ] || return 1; root="${2%/}"; launch=0; shift 2;;
             --with-cores) with_cores=1; shift;;
             --no-launch) launch=0; shift;;
-            --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; source_dir=''; shift 2;;
-            --online) remote="$DEFAULT_REMOTE"; source_dir=''; shift;;
-            --allow-downgrade) export MT_ALLOW_DOWNGRADE=1; shift;;
+            --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; shift 2;;
             --help|-h)
-                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--allow-downgrade] [--no-launch]'
-                echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
-                echo '  --online             Force online install from the official GitHub source.'
-                echo '  --allow-downgrade    Permit installing an older module over a newer installed one.'
-                echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
-                echo '  --with-cores         Also install bundled binary cores when available.'
-                echo '  --root DIR           Test-install under DIR without touching the live root.'
-                echo ''
-                echo 'Local downgrade example:'
-                echo '  sudo MT_ALLOW_DOWNGRADE=1 bash install.sh'
-                echo 'Online one-line example:'
-                echo '  curl -fsSL https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh | sudo bash -s -- --online --allow-downgrade'
+                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE] [--no-launch]'
+                echo 'Without options: use adjacent scripts, or download from GitHub.'
+                echo 'Optional local binaries: --with-cores. Test installation: --root DIR.'
                 return 0;;
             *) echo "Unknown option: $1" >&2; return 1;;
         esac
     done
-    if [ -n "$root" ]; then
-        [[ "$root" == /* && "$root" != / ]] || return 1
-        [[ ! "$root" =~ (^|/)\.\.(/|$) && ! "$root" =~ (^|/)\.(/|$) ]] || { echo 'Unsafe --root path.' >&2; return 1; }
-        root=$(readlink -m -- "$root") || return 1
-        [ "$root" != / ] || return 1
+    if [ -n "$root" ]; then [[ "$root" == /* && "$root" != / && "$root" != *'/../'* ]] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
         elif [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
-        else remote="$DEFAULT_REMOTE"; fi
+        else remote="${MTUNNEL_REPO_URL:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"; fi
     fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"
@@ -758,30 +724,21 @@ installer_main() {
         done
         source_dir="$work/scripts"
     fi
-        [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
-    if [ -n "$remote" ]; then
-        active_modules=("${modules[@]}")
-    else
-        for item in "${modules[@]}"; do
-            path="${item#*:}"
-            mt_validate_script "$source_dir/$path" && active_modules+=("$item")
-        done
-        [ "${#active_modules[@]}" -gt 0 ] || { echo 'No valid MTunnel scripts were found in the local source.' >&2; return 1; }
-    fi
-    for item in "${active_modules[@]}"; do
+    [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
+    for item in "${modules[@]}"; do
         name="${item%%:*}"; path="${item#*:}"; target="$root/usr/bin/$name"
         [ "$name" != main ] || target="$root/usr/bin/mtunnel"
         mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
         if mt_validate_script "$target" 2>/dev/null; then
             cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
             next=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            mt_downgrade_blocked "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
+            mt_is_newer_version "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
         fi
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
         if [ -z "$remote" ]; then
             current=$((current+1))
             mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
+            draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
             echo ''
         fi
     done
@@ -805,6 +762,10 @@ installer_main() {
             [ -z "$target" ] || systemctl restart "$target" || return 1
         done < <(systemctl list-units --type=service --state=active --no-legend --plain 'mrathole@*.service' 'mbackhaul@*.service' 'mpaqet@*.service' 'gost.service' 'haproxy.service' 2>/dev/null | awk '{print $1}')
     fi
-    if [ "$launch" == 1 ]; then sleep 1.5; exec "$root/usr/bin/mtunnel"; fi
+    if [ "$launch" == 1 ]; then
+        # exec skips the EXIT trap, so remove the staging directory first.
+        rm -rf -- "$INSTALLER_WORK"
+        sleep 1.5; exec "$root/usr/bin/mtunnel"
+    fi
 }
 installer_main "$@"

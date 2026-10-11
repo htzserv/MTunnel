@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.1 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.0.1"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -512,7 +512,7 @@ mt_update_core() {
     mapfile -t active < <(systemctl list-units --type=service --state=active --no-legend --plain "${unit_prefix}@*.service" "${unit_prefix}.service" 2>/dev/null | awk '{print $1}')
     if ! mt_install_files 755 "$candidate" "$target" "$candidate" "$alias"; then rm -rf "$work"; return 1; fi
     for unit in "${active[@]}"; do
-        systemctl restart "$unit" && systemctl is-active --quiet "$unit" || failed=1
+        systemctl restart "$unit" && sleep 2 && systemctl is-active --quiet "$unit" || failed=1
     done
     if [ "$failed" == 1 ]; then
         if [ "$had_old" == 1 ]; then
@@ -678,6 +678,8 @@ NEED_HDR=false
 trap 'NEED_HDR=true' SIGUSR2
 
 UPDATE_CHECK_INTERVAL=60
+MOD_NAME="mpaqet"; MOD_TITLE="MPaqet"; OTA_REL="tunnels/mpaqet.sh"
+ENGINE_LABEL="Paqet"; ENGINE_BIN="paqet"; ENGINE_UNIT="mpaqet"; ENGINE_VERSION="1.0.0-alpha.21"; ENGINE_VALID_FN="is_paqet_core_valid"
 
 read_with_refresh() {
     local prompt="$1"
@@ -729,21 +731,40 @@ read_with_refresh() {
     printf -v "$__resultvar" '%s' "$buffer"
 }
 
-check_update_bg() {
-    local cb="?t=$(date +%s)"
-    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mpaqet.sh${cb}"
-    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mpaqet.sh${cb}"
-    local remote_ver=""
-    
+ota_fetch_version() {
+    local url="$1" payload="" version="" rc
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        payload=$(curl -fsSL -H "Cache-Control: no-cache" -r 0-4095 --connect-timeout 3 --max-time 6 "$url" 2>/dev/null); rc=$?
+        if [ "$rc" -ne 0 ]; then
+            # 22/33: server rejected the Range header; any other error means the host is unreachable.
+            [ "$rc" -eq 22 ] || [ "$rc" -eq 33 ] || return 1
+            payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=6 --tries=1 "$url" 2>/dev/null) || return 1
+    else
+        return 1
     fi
-    
-    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mpaqet_remote_ver"
+    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([^" ]*\)".*/\1/p' | head -n 1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
+# Both sources are queried in parallel, so a dead mirror never delays the other one.
+check_update_bg() {
+    local cb="?t=$(date +%s)" tmp_gh tmp_mi p1 p2 gh_ver mirror_ver latest
+    tmp_gh=$(mktemp "$SECURE_TMP/.ota_gh.XXXXXX") || return 1
+    tmp_mi=$(mktemp "$SECURE_TMP/.ota_mi.XXXXXX") || { rm -f "$tmp_gh"; return 1; }
+    ota_fetch_version "https://raw.githubusercontent.com/htzserv/MTunnel/main/${OTA_REL}${cb}" > "$tmp_gh" 2>/dev/null & p1=$!
+    ota_fetch_version "https://c107328.parspack.net/c107328/MTunnel/${OTA_REL}${cb}" > "$tmp_mi" 2>/dev/null & p2=$!
+    wait "$p1" "$p2" 2>/dev/null
+    gh_ver=$(tr -d '\r\n ' < "$tmp_gh"); mirror_ver=$(tr -d '\r\n ' < "$tmp_mi")
+    rm -f "$tmp_gh" "$tmp_mi"
+    [ -z "$gh_ver" ] || printf '%s\n' "$gh_ver" > "$SECURE_TMP/.${MOD_NAME}_remote_ver_github"
+    [ -z "$mirror_ver" ] || printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.${MOD_NAME}_remote_ver_mirror"
+    latest=$(printf '%s\n' "$gh_ver" "$mirror_ver" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    [ -z "$latest" ] || printf '%s\n' "$latest" > "$SECURE_TMP/.${MOD_NAME}_remote_ver"
+    : > "$SECURE_TMP/.${MOD_NAME}_ota_checked"
 }
 
 update_watcher_loop() {
@@ -759,68 +780,202 @@ if [[ "${1:-}" != --* ]]; then update_watcher_loop & fi
 WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" ${HDR_PID:-} 2>/dev/null; rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null' EXIT
 
-self_update_module() {
-    local src_opt custom_url dl_url tmp_file confirm
-    local rel_path="tunnels/mpaqet.sh"
-    local cb="?t=$(date +%s)"
-    
-    local remote_v="Unknown"
-    [ -f "$SECURE_TMP/.mpaqet_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mpaqet_remote_ver" | tr -d '\r\n ')
+# ---- Unified OTA hub: script + core engine in one menu -------------------------------------
+ota_cached_ver() {
+    local f="$SECURE_TMP/.${MOD_NAME}_remote_ver_$1"
+    if [ -f "$f" ]; then tr -d '\r\n ' < "$f"; fi
+}
 
-    local gh_text="${C}Official GitHub Server${NC}"
-    if [ "$remote_v" != "Unknown" ] && is_newer_version "$remote_v" "$MODULE_VERSION"; then
-        gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+# The background watcher normally keeps the cache fresh; this only covers the first seconds after launch.
+ota_refresh_now() {
+    local f="$SECURE_TMP/.${MOD_NAME}_ota_checked" age=999999 mt
+    if [ -f "$f" ]; then mt=$(stat -c %Y "$f" 2>/dev/null || echo 0); age=$(( $(date +%s) - mt )); fi
+    [ "$age" -le $((UPDATE_CHECK_INTERVAL * 2)) ] && return 0
+    echo -e "\n  ${C}⟳${NC} ${DIM}Checking GitHub and mirror...${NC}"
+    check_update_bg
+}
+
+ota_ver_tag() {
+    local v="$1"
+    if [ -z "$v" ]; then printf '    %b(version unavailable)%b' "$DIM" "$NC"
+    elif mt_is_newer_version "$v" "$MODULE_VERSION"; then printf '    %b(v%s ➔ v%s)%b' "$Y" "$MODULE_VERSION" "$v" "$NC"
+    else printf '    %b(v%s)%b' "$DIM" "$v" "$NC"; fi
+}
+
+# Loose comparison: also understands pre-release tags such as 1.0.0-alpha.21.
+ota_ver_newer() {
+    [ -n "$1" ] && [ -n "$2" ] && [ "$1" != "$2" ] || return 1
+    [[ "$1" =~ ^[0-9][0-9A-Za-z.+-]*$ && "$2" =~ ^[0-9][0-9A-Za-z.+-]*$ ]] || return 1
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+ota_core_installed_ver() {
+    local f="$CONF_DIR/.core_version"
+    if [ -f "$f" ]; then tr -d '\r\n ' < "$f"; fi
+}
+
+# Written by install_core_from_source; the binary itself is never executed to guess a version.
+ota_stamp_core() {
+    local v
+    case "$1" in 1|2) v="$ENGINE_VERSION";; 3) v=custom;; 4) v=local;; *) return 0;; esac
+    printf '%s\n' "$v" > "$CONF_DIR/.core_version" 2>/dev/null && chmod 600 "$CONF_DIR/.core_version" 2>/dev/null
+    return 0
+}
+
+# missing | unknown | outdated | current
+ota_core_state() {
+    local inst
+    "$ENGINE_VALID_FN" || { echo missing; return 0; }
+    inst=$(ota_core_installed_ver)
+    [[ "$inst" =~ ^[0-9] ]] || { echo unknown; return 0; }
+    if ota_ver_newer "$ENGINE_VERSION" "$inst"; then echo outdated; else echo current; fi
+}
+
+ota_core_text() {
+    local inst; inst=$(ota_core_installed_ver)
+    case "$(ota_core_state)" in
+        missing)  printf '%bNot installed%b  %b(target v%s)%b' "$R" "$NC" "$DIM" "$ENGINE_VERSION" "$NC";;
+        outdated) printf '%b(v%s ➔ v%s)%b' "$Y" "$inst" "$ENGINE_VERSION" "$NC";;
+        current)  printf '%b(v%s)%b' "$DIM" "$inst" "$NC";;
+        *)        printf '%bInstalled, version unknown%b  %b(target v%s)%b' "$DIM" "$NC" "$DIM" "$ENGINE_VERSION" "$NC";;
+    esac
+}
+
+ota_yes() { local a; read -r a || return 1; [[ "${a,,}" == y || "${a,,}" == yes ]]; }
+
+ota_is_script_file() { head -c 2 "$1" 2>/dev/null | grep -q '^#!'; }
+
+ota_core_step() {
+    local src="$1" state
+    state=$(ota_core_state)
+    case "$state" in
+        current)
+            if [ "$src" != 4 ]; then
+                echo -e "  ${G}✔${NC} ${W}${ENGINE_LABEL} core${NC} ${DIM}is up to date (v$(ota_core_installed_ver)).${NC}"
+                return 0
+            fi
+            echo -ne "  ${C}●${NC} ${W}Reinstall ${ENGINE_LABEL} core from the local directory? (y/n): ${NC}"; ota_yes || return 0;;
+        unknown)
+            echo -ne "  ${C}●${NC} ${W}${ENGINE_LABEL} core version is unknown. Install v${ENGINE_VERSION} now? (y/n): ${NC}"; ota_yes || return 0;;
+    esac
+    install_core_from_source "$src"
+}
+
+ota_core_from_file() {
+    echo -e "  ${DIM}● Preparing ${ENGINE_LABEL} Core from the downloaded file...${NC}"
+    if mt_update_core "$ENGINE_BIN" "$ENGINE_UNIT" "$1" local ""; then
+        ota_stamp_core 3
+        echo -e "  ${G}✔ ${ENGINE_LABEL} Core installed successfully.${NC}"
+        echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else
-        gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
+        echo -e "  ${R}✖ Core update failed. Previous installation preserved.${NC}" >&2
+        return 1
+    fi
+}
+
+# src: gh | mirror | custom | paste | local
+ota_apply() {
+    local src="$1" url="" tmp="" new_ver core_src=""
+    case "$src" in
+        gh)     url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$OTA_REL"; core_src=1;;
+        mirror) url="https://c107328.parspack.net/c107328/MTunnel/$OTA_REL"; core_src=2;;
+        local)  core_src=4;;
+        custom)
+            echo -ne "  ${C}●${NC} ${W}Enter Direct Link (script .sh / core binary / archive): ${NC}"; read -r url || return 0
+            url="${url//$'\r'/}"; [ -n "$url" ] || return 0;;
+    esac
+
+    if [ "$src" = local ]; then
+        if [ -f "$LOCAL_DIR/$OTA_REL" ]; then
+            tmp=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
+            cp "$LOCAL_DIR/$OTA_REL" "$tmp" || { rm -f "$tmp"; return 1; }
+        else
+            echo -e "  ${DIM}● No local script at $LOCAL_DIR/$OTA_REL; checking the local core only.${NC}"
+        fi
+    else
+        tmp=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
+        if [ "$src" = paste ]; then
+            if command -v nano >/dev/null 2>&1; then
+                echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
+                nano "$tmp"
+            elif command -v vi >/dev/null 2>&1; then vi "$tmp"
+            else rm -f "$tmp"; echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; return 1; fi
+        else
+            echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+            if ! mt_download "$url" "$tmp"; then rm -f "$tmp"; echo -e "  ${R}✖ Download failed. Installed module preserved.${NC}"; return 1; fi
+        fi
     fi
 
-    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MPaqet Engine) ]${NC}"
+    # A custom link may point to a core binary/archive instead of a script: detect it, never ask.
+    if [ "$src" = custom ] && ! ota_is_script_file "$tmp"; then
+        ota_core_from_file "$tmp"; local rc=$?; rm -f "$tmp"; return "$rc"
+    fi
+
+    if [ -n "$tmp" ]; then
+        sed -i 's/\r$//' "$tmp"
+        if ! mt_validate_script "$tmp"; then rm -f "$tmp"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
+        new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp")
+        if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+        if [ "$new_ver" = "$MODULE_VERSION" ] && { [ "$src" = gh ] || [ "$src" = mirror ]; }; then
+            rm -f "$tmp"
+            echo -e "  ${G}✔${NC} ${W}Script${NC} ${DIM}is up to date (v${MODULE_VERSION}).${NC}"
+            ota_core_step "$core_src"; return $?
+        fi
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Script Current :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Script Target  :${NC} ${G}v${new_ver}${NC}"
+        if [ -n "$core_src" ]; then echo -e "  ${DIM}├─${NC} ${W}Core Engine    :${NC} $(ota_core_text) ${DIM}(checked after the script update)${NC}"; fi
+        echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"
+        if ! ota_yes; then echo -e "  ${Y}● Update cancelled.${NC}"; rm -f "$tmp"; return 0; fi
+        if ! mt_install_script "$tmp" "$OTA_REL" "$INSTALL_PATH" "$0"; then
+            rm -f "$tmp"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
+        fi
+        rm -f "$tmp"
+        echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+        kill "${WATCHER_PID:-}" ${HDR_PID:-} 2>/dev/null || true
+        rm -f "$SECURE_TMP/.${MOD_NAME}_in_menu" 2>/dev/null
+        # The new version finishes the job: it checks the core against ITS OWN target version.
+        if [ -n "$core_src" ]; then export MT_OTA_CORE_SRC="$core_src"; fi
+        exec "$INSTALL_PATH"
+    fi
+    [ -z "$core_src" ] || ota_core_step "$core_src"
+}
+
+self_update_module() {
+    local src_opt gh_text mirror_text
+    ota_refresh_now
+    gh_text="${C}Official GitHub Server${NC}$(ota_ver_tag "$(ota_cached_ver github)")"
+    mirror_text="${G}ParsPack Iranian Mirror${NC}$(ota_ver_tag "$(ota_cached_ver mirror)")"
+
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ OTA Update (${MOD_TITLE} Engine) ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC} ${DIM}Script + Core Engine${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${mirror_text} ${DIM}(c107328.parspack.net)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Script .sh / Core binary / Archive)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Local Directory${NC} ${DIM}(${LOCAL_DIR})${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ CORE ENGINE ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${DIM}●${NC} ${W}${ENGINE_LABEL} Core${NC}    $(ota_core_text)"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
-    
-    [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
-    tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
-    if [ "$src_opt" == 4 ]; then
-        if command -v nano >/dev/null 2>&1; then
-            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
-            nano "$tmp_file"
-        elif command -v vi >/dev/null 2>&1; then vi "$tmp_file"
-        else rm -f "$tmp_file"; echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; return 1; fi
-    else
-        case "$src_opt" in
-            1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path";;
-            2) dl_url="https://c107328.parspack.net/c107328/MTunnel/$rel_path";;
-            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read -r dl_url;;
-        esac
-        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
-        if ! mt_download "$dl_url" "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Download failed. Installed module preserved.${NC}"; return 1; fi
-    fi
-    sed -i 's/\r$//' "$tmp_file"
-    if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
-    local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
-        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
-        
-    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
-    if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
-        rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
-    fi
-    rm -f "$tmp_file"
-    echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
-    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH" "$@"
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt || return 0
+    src_opt="${src_opt//$'\r'/}"
+    case "$src_opt" in
+        1) ota_apply gh;;
+        2) ota_apply mirror;;
+        3) ota_apply custom;;
+        4) ota_apply paste;;
+        5) ota_apply local;;
+        *) return 0;;
+    esac
+    local rc=$?
+    echo -ne "\n  ${DIM}Press Enter to continue...${NC}"; read -r _ || true
+    return "$rc"
 }
 
 get_local_ip() {
@@ -862,8 +1017,8 @@ install_core_from_source() {
     case "$arch" in x86_64) target=amd64;; aarch64|arm64) target=arm64;; *) echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1;; esac
     case "$src_choice" in
         1|2)
-            local asset="paqet-linux-${target}-v1.0.0-alpha.21.tar.gz"
-            dl_url="https://github.com/hanselime/paqet/releases/download/v1.0.0-alpha.21/$asset"
+            local asset="paqet-linux-${target}-v${ENGINE_VERSION}.tar.gz"
+            dl_url="https://github.com/hanselime/paqet/releases/download/v${ENGINE_VERSION}/$asset"
             [ "$src_choice" != 2 ] || dl_url="https://c107328.parspack.net/c107328/MTunnel/packages/$asset"
             ;;
         3) echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r dl_url; [ -n "$dl_url" ] || return 0;;
@@ -872,6 +1027,7 @@ install_core_from_source() {
     esac
     echo -e "  ${DIM}● Preparing MPaqet Core...${NC}"
     if mt_update_core "paqet" "mpaqet" "$dl_url" "$kind" "${EXPECTED_SHA256:-}"; then
+        ota_stamp_core "$src_choice"
         echo -e "  ${G}✔ MPaqet Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else
@@ -2001,6 +2157,12 @@ uninstall_mpaqet() {
 }
 
 check_first_run_core
+if [ -n "${MT_OTA_CORE_SRC:-}" ]; then
+    ota_src="$MT_OTA_CORE_SRC"; unset MT_OTA_CORE_SRC
+    echo -e "\n  ${DIM}● Script updated. Checking ${ENGINE_LABEL} core...${NC}"
+    ota_core_step "$ota_src" || true
+    echo -ne "\n  ${DIM}Press Enter to continue...${NC}"; read -r _ || true
+fi
 setup_systemd_service
 
 show_tunnels_info() {
@@ -2469,12 +2631,17 @@ mt_workspace_auto_backup() {
     printf '  Config restore point: %s\n' "$dest"
 }
 mt_workspace_update_badge() {
-    local rv file="$SECURE_TMP/.mpaqet_remote_ver"
-    [ -f "$file" ] || return 0
-    rv=$(tr -d '\r\n ' < "$file")
-    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
-        printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
+    local rv file="$SECURE_TMP/.${MOD_NAME}_remote_ver" parts="" state
+    if [ -f "$file" ]; then
+        rv=$(tr -d '\r\n ' < "$file")
+        if mt_is_newer_version "$rv" "$MODULE_VERSION"; then parts="Script v${rv}"; fi
     fi
+    state=$(ota_core_state)
+    case "$state" in
+        outdated) parts+="${parts:+ · }Core v${ENGINE_VERSION}";;
+        missing)  printf ' %b(Core Not Installed)%b' "$R" "$NC"; [ -z "$parts" ] || printf ' %b(Update Available: %s)%b' "$Y" "$parts" "$NC"; return 0;;
+    esac
+    [ -z "$parts" ] || printf ' %b(Update Available: %s)%b' "$Y" "$parts" "$NC"
     return 0
 }
 if [[ "${1:-}" != --* ]]; then hdr_stats_loop & HDR_PID=$!; fi
@@ -2488,7 +2655,7 @@ mt_workspace_route() {
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Restart & Zero Counters|15|${G}" "4|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
         6) MT_ACTION=12;;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE & LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" "2|Install / Update Engine (Online / Local)|16|${M}" || { MT_SECTION=""; return 1; };;
+        7) MT_ACTION=18;;
         8) MT_ACTION=96;;
         9) MT_ACTION=201;;
         10) MT_SECTION=2; MT_ACTION=3; MT_SHORTCUT=1;;

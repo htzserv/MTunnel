@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.0.1"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -577,13 +577,10 @@ mt_run_tool() {
 }
 mt_ask_bbr_on_create() {
     local answer
-    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
-    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR? [y/N]: ${NC}"
     read -r answer || answer=''
     case "${answer,,}" in
-        y|yes)
-            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
-        *) ;;
+        y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; tunnel configuration is retained.${NC}" >&2;;
     esac
     return 0
 }
@@ -750,7 +747,22 @@ ipt_delete_tagged() {
 
 # Cross-tool subnet collision check (MGRE + MXLAN + live routes)
 subnet_in_use() {
-    local sub="$1" exclude="$2" f existing tid vid
+    local sub="$1" exclude="$2" f existing tid vid route
+    local candidate="${sub}.0/30"
+    mt_ipv4_cidr_overlap() {
+        local a="$1" b="$2" ip1 p1 ip2 p2 n1 n2 m1 m2 lo1 hi1 lo2 hi2
+        ip1="${a%/*}"; p1="${a#*/}"; [ "$ip1" != "$p1" ] || p1=32
+        ip2="${b%/*}"; p2="${b#*/}"; [ "$ip2" != "$p2" ] || p2=32
+        [[ "$p1" =~ ^[0-9]+$ && "$p2" =~ ^[0-9]+$ ]] || return 1
+        ((p1>=0 && p1<=32 && p2>=0 && p2<=32)) || return 1
+        mt_ipv4_u32() { local IFS=. o1 o2 o3 o4; read -r o1 o2 o3 o4 <<< "$1"; mt_valid_ipv4 "$1" || return 1; printf '%u' "$(( (10#$o1<<24) | (10#$o2<<16) | (10#$o3<<8) | 10#$o4 ))"; }
+        n1=$(mt_ipv4_u32 "$ip1") || return 1; n2=$(mt_ipv4_u32 "$ip2") || return 1
+        if ((p1==0)); then m1=0; else m1=$(( (0xFFFFFFFF << (32-p1)) & 0xFFFFFFFF )); fi
+        if ((p2==0)); then m2=0; else m2=$(( (0xFFFFFFFF << (32-p2)) & 0xFFFFFFFF )); fi
+        lo1=$((n1 & m1)); hi1=$((lo1 | (0xFFFFFFFF ^ m1)))
+        lo2=$((n2 & m2)); hi2=$((lo2 | (0xFFFFFFFF ^ m2)))
+        ((lo1 <= hi2 && lo2 <= hi1))
+    }
     for f in "$MT_ROOT_CONF"/tunnels/*.conf "$MT_ROOT_CONF"/vxlan/*.conf; do
         [ -f "$f" ] || continue
         [ -n "$exclude" ] && [ "$(readlink -f "$f")" == "$(readlink -f "$exclude")" ] && continue
@@ -762,9 +774,12 @@ subnet_in_use() {
                 tid=$(mt_config_value TUN_ID "$f"); [ -n "$tid" ] && existing=$(mt_legacy_core_subnet "$tid" gre 2>/dev/null || true)
             fi
         fi
-        [ "$existing" != "$sub" ] || return 0
+        [ -z "$existing" ] || ! mt_ipv4_cidr_overlap "$candidate" "${existing}.0/30" || return 0
     done
-    ip -4 route show 2>/dev/null | grep -qE "^${sub//./\\.}\\.[0-9]+(/| )" && return 0
+    while read -r route; do
+        [[ "$route" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(/[0-9]+)?$ ]] || continue
+        mt_ipv4_cidr_overlap "$candidate" "$route" && return 0
+    done < <(ip -4 route show table all 2>/dev/null | awk '$1 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ {print $1}')
     return 1
 }
 
@@ -1182,6 +1197,32 @@ get_local_ip() {
     ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+mt_choose_peer_host() {
+    local v4 v6 choice custom default
+    v4=$(get_local_ip); mt_valid_ipv4 "$v4" || v4=''
+    v6=$(get_local_ipv6); mt_valid_ipv6 "$v6" || v6=''
+    if [ -n "$v4" ] && [ -n "$v6" ]; then
+        echo -e "
+  ${DIM}┌─[ PEER LINK ADDRESS ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(${v4})${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(${v6})${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Custom IP / Hostname${NC}"
+        mt_ask choice 'Select address [1]: ' || return 1
+        case "${choice:-1}" in
+            1) custom="$v4";;
+            2) custom="$v6";;
+            3) mt_ask custom 'Reachable public IP / hostname: ' || return 1;;
+            *) return 1;;
+        esac
+    else
+        default="${v4:-$v6}"
+        mt_ask custom "This server's reachable public IP/hostname [${default:-none}]: " || return 1
+        custom="${custom:-$default}"
+    fi
+    mt_valid_host "$custom" && [[ "$custom" != 0.0.0.0 && "$custom" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
+    MT_PEER_HOST="$custom"
 }
 
 get_pure_vx_name() {
@@ -2334,18 +2375,32 @@ mt_link_decode() {
     mt_link_validate
 }
 mt_bbr_state() { [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo 1 || echo 0; }
-mt_ask_bbr_from_peer() { # peer had BBR on: offer the same here
-    local ans
-    echo -e "\n  ${DIM}● Peer server has BBR enabled.${NC}"
-    mt_ask ans 'Enable BBR on this server too? [y/N]: ' || return 0
-    case "${ans,,}" in y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the peer tunnel is retained.${NC}" >&2;; esac
+mt_sync_bbr_from_peer() {
+    local desired="${1:-0}" current
+    [[ "$desired" =~ ^[01]$ ]] || desired=0
+    current=$(mt_bbr_state)
+    [ "$current" = "$desired" ] && return 0
+    if [ "$desired" = 1 ]; then
+        mt_run_tool mbbr --enable || echo -e "  ${Y}● Could not enable BBR to match the peer; tunnel was kept.${NC}" >&2
+    else
+        mt_run_tool mbbr --disable || echo -e "  ${Y}● Could not disable BBR to match the peer; tunnel was kept.${NC}" >&2
+    fi
     return 0
 }
-mt_link_box() { # draws the peer code inside a plain box
-    local text="$1" line
-    line=$(printf '%*s' "$(( ${#text} + 4 ))" '' | tr ' ' '─')
+mt_ask_bbr_from_peer() { mt_sync_bbr_from_peer 1; }
+mt_link_box() {
+    local text="$1" box_width=80 pad=5 inner_width text_width line chunk
+    inner_width=$((box_width - 2))
+    text_width=$((inner_width - (pad * 2)))
+    printf -v line '%*s' "$inner_width" ''
+    line="${line// /─}"
     echo -e "  ${DIM}╭${line}╮${NC}"
-    echo -e "  ${DIM}│${NC}  ${W}${text}${NC}  ${DIM}│${NC}"
+    while [ -n "$text" ]; do
+        chunk="${text:0:text_width}"
+        text="${text:text_width}"
+        printf "  ${DIM}│${NC}%*s${W}%-*s${NC}%*s${DIM}│${NC}
+" "$pad" '' "$text_width" "$chunk" "$pad" ''
+    done
     echo -e "  ${DIM}╰${line}╯${NC}"
 }
 mt_main_logs() {
@@ -2502,10 +2557,8 @@ mt_link_export() {
         [[ "$host" != *:* ]] || MT_LINK_DATA[BIND_HOST]=::
     fi
     if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
-        host=$(get_local_ip)
-        mt_ask dest "This server's reachable public IP/hostname [$host]: " || return 1
-        host="${dest:-$host}"
-        mt_valid_host "$host" && [[ "$host" != 0.0.0.0 && "$host" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
+        mt_choose_peer_host || return 1
+        host="$MT_PEER_HOST"
         MT_LINK_DATA[HOST]="$host"
         if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
             mt_ask dest 'Peer server port mappings (e.g. 443=127.0.0.1:443): ' || return 1
@@ -2554,7 +2607,7 @@ mt_link_import() {
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
-        if [ "${MT_LINK_DATA[BBR]:-0}" = 1 ]; then mt_ask_bbr_from_peer; else mt_ask_bbr_on_create; fi
+        mt_sync_bbr_from_peer "${MT_LINK_DATA[BBR]:-0}"
     else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
     mt_workspace_pause
 }

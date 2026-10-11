@@ -1,7 +1,7 @@
 #!/bin/bash
 # --- MTunnel Master Core | Central Dashboard v1.0.1 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="1.0.1"
+MODULE_VERSION="1.0.2"
 umask 077
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -569,12 +569,10 @@ mt_run_tool() {
 }
 mt_ask_bbr_on_create() {
     local answer
-    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
-    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR? [y/N]: ${NC}"
     read -r answer || answer=''
     case "${answer,,}" in
-        y|yes)
-            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2 ;;
         *) ;;
     esac
     return 0
@@ -819,6 +817,21 @@ collect_system_vitals() {
     echo "${cpu_pct}|${cpu_cores}|${r_used}|${r_total}|${r_pct}|${rx_speed}|${tx_speed}|${v6_status}" > "$sys_target"
     mv -f "$sys_target" "$SECURE_TMP/.main_sys_stats" 2>/dev/null
 }
+
+mt_ping_stats() {
+    local target="$1" ping_res loss avg='---'; local -a cmd=(ping)
+    mt_valid_host "$target" || { printf '%s|%s' '---' '---'; return 1; }
+    [[ "$target" == *:* ]] && cmd=(ping -6)
+    ping_res=$(timeout 3 "${cmd[@]}" -c 2 -i 0.2 -W 1 "$target" 2>/dev/null || true)
+    loss=$(printf '%s\n' "$ping_res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1)
+    [ -n "$loss" ] || loss=100
+    if printf '%s\n' "$ping_res" | grep -q 'min/avg/max'; then
+        avg=$(printf '%s\n' "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
+        [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')"
+    fi
+    printf '%s|%s' "$avg" "$loss"
+}
+
 collect_active_tunnels_stats() {
     local tmp_target="$SECURE_TMP/.main_tun_stats.tmp"
     > "$tmp_target"
@@ -920,18 +933,9 @@ collect_active_tunnels_stats() {
                     [ -z "$peer_ip" ] && peer_ip="Listening"
                 fi
             fi
-            local avg="---" loss="0"
-            if [[ "$peer_ip" =~ ^[0-9.]+$ ]]; then
-                local ping_res=$(timeout 2 ping -c 2 -i 0.2 -W 1 "$peer_ip" 2>/dev/null)
-                loss=$(echo "$ping_res" | grep -oP '[0-9]+(?=% packet loss)')
-                [ -z "$loss" ] && loss="100"
-                if echo "$ping_res" | grep -q "min/avg/max"; then
-                    avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    if [ -n "$avg" ]; then
-                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                        avg="${avg}ms"
-                    fi
-                fi
+            local avg="---" loss="---"
+            if mt_valid_host "$peer_ip" 2>/dev/null; then
+                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip")"
             fi
             local fwd_str="OFF"
             [ -n "$PORTS" ] && fwd_str="ACT"
@@ -959,18 +963,9 @@ collect_active_tunnels_stats() {
                 peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
                 [ -z "$peer_ip" ] && peer_ip="Listening"
             fi
-            local avg="---" loss="0"
-            if [[ "$peer_ip" =~ ^[0-9.]+$ ]]; then
-                local ping_res=$(timeout 2 ping -c 2 -i 0.2 -W 1 "$peer_ip" 2>/dev/null)
-                loss=$(echo "$ping_res" | grep -oP '[0-9]+(?=% packet loss)')
-                [ -z "$loss" ] && loss="100"
-                if echo "$ping_res" | grep -q "min/avg/max"; then
-                    avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    if [ -n "$avg" ]; then
-                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                        avg="${avg}ms"
-                    fi
-                fi
+            local avg="---" loss="---"
+            if mt_valid_host "$peer_ip" 2>/dev/null; then
+                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip")"
             fi
             local fwd_str="OFF"
             [ -n "$TCP_PORTS" ] || [ -n "$UDP_PORTS" ] && fwd_str="ACT"
@@ -1000,18 +995,9 @@ collect_active_tunnels_stats() {
                 [ -n "$peer_ip" ] || peer_ip=$(cat "$cache" 2>/dev/null)
                 [ -n "$peer_ip" ] || peer_ip="Listening"
             fi
-            local avg="---" loss="0"
-            if [[ "$peer_ip" =~ ^[0-9.]+$ ]]; then
-                local ping_res=$(timeout 2 ping -c 2 -i 0.2 -W 1 "$peer_ip" 2>/dev/null)
-                loss=$(echo "$ping_res" | grep -oP '[0-9]+(?=% packet loss)')
-                [ -z "$loss" ] && loss="100"
-                if echo "$ping_res" | grep -q "min/avg/max"; then
-                    avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                    if [ -n "$avg" ]; then
-                        avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                        avg="${avg}ms"
-                    fi
-                fi
+            local avg="---" loss="---"
+            if mt_valid_host "$peer_ip" 2>/dev/null; then
+                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip")"
             fi
             echo "PAQET|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|pq_${t_name}|RAW" >> "$tmp_target"
             ((count++))
@@ -1158,6 +1144,31 @@ draw_header_lines_only() {
         v6_col="${G}"; v6_icon="●"; v6_text="ON"
     fi
 
+    local term_cols boxw content_w compact_line border
+    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-120}")
+    if [ "$term_cols" -lt 124 ]; then
+        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
+        content_w=$((boxw - 2))
+        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
+        printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
+        compact_line="MDesign v${MODULE_VERSION} | Local: ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="Web ${web_text} | Porter ${porter_text} | RX ${rx_speed} | TX ${tx_speed}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        printf "  ${B}├${border}┤${NC}\033[K\n"
+        local cshown=0
+        if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
+            while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
+                [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
+                compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${t_loss:-}%"
+                printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+            done < "$SECURE_TMP/.main_tun_stats"
+        fi
+        if [ "$cshown" -eq 0 ]; then compact_line='No active tunnels configured.'; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"; cshown=1; fi
+        while [ "$cshown" -lt 3 ]; do printf "  ${B}│${NC} %-*s ${B}│${NC}\033[K\n" "$((content_w-2))" ''; ((cshown++)); done
+        printf "  ${B}╰${border}╯${NC}\033[K\n"
+        return 0
+    fi
+
     local border
     printf -v border '%*s' 117 ''
     border="${border// /─}"
@@ -1232,7 +1243,12 @@ draw_header_lines_only() {
 
     if [ "$shown" -eq 0 ]; then
         printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\033[K\n" "No active tunnels or fabrics deployed across the ecosystem."
+        shown=1
     fi
+    while [ "$shown" -lt 3 ]; do
+        printf "  ${B}│${NC}  %-113s  ${B}│${NC}\033[K\n" ""
+        ((shown++))
+    done
     printf "  ${B}╰${border}╯${NC}\033[K\n"
 }
 
@@ -1899,7 +1915,7 @@ while true; do
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"
             echo -e "  ${R}╰────────────────────────────────────────────────────────────╯${NC}\n"
             echo -e "  ${Y}⚠ Warning: This will stop and remove all tunnels, services,${NC}"
-            echo -e "  ${Y}  binary cores (rathole, backhaul, paqet, gost), and configs!${NC}\n"
+            echo -e "  ${Y}  MTunnel tunnel cores, MTunnel services, and MTunnel-owned configs!${NC}\n"
             echo -ne "  ${R}Type WIPE-MTUNNEL to continue: ${NC}"; read del_confirm
             del_confirm="${del_confirm//[$' \r\n']/}"
             if [[ "$del_confirm" == "WIPE-MTUNNEL" ]]; then
@@ -1924,15 +1940,17 @@ while true; do
                     crontab -l 2>/dev/null | awk '!/mbackhaul@|mrathole@|mpaqet@|\/usr\/bin\/mgre|\/usr\/bin\/mxlan|\/usr\/local\/bin\/mporter-watchdog/' > "$cron_tmp"
                     crontab "$cron_tmp"; rm -f "$cron_tmp"
                 fi
-                systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service gost.service realm.service 2>/dev/null || true
-                systemctl disable mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service gost.service realm.service 2>/dev/null || true
+                systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+                systemctl disable mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
                 rm -f /etc/systemd/system/mgre-watchdog.{service,timer} /etc/systemd/system/mxlan-watchdog.{service,timer} /etc/systemd/system/{mbackhaul,mrathole,mpaqet}-apply.service /etc/systemd/system/mporter-{iptables,obfs}.service
                 rm -f /usr/local/bin/mhealer_daemon.sh /usr/local/bin/mporter-{watchdog,iptables,obfs}.sh /etc/mhealer.conf
-                rm -f /etc/systemd/system/{gost,realm}.service /var/lock/mporter-state.lock /run/mporter-backends.tsv
-                rm -rf /etc/gost /etc/realm
+                rm -f /var/lock/mporter-state.lock /run/mporter-backends.tsv
+                # Generic Gost/Realm installations may belong to another project. Remove only when MPorter explicitly marked ownership.
+                if [ -f /etc/mporter/.owns_gost ]; then systemctl disable --now gost.service 2>/dev/null || true; rm -f /etc/systemd/system/gost.service /usr/local/bin/gost; rm -rf /etc/gost; fi
+                if [ -f /etc/mporter/.owns_realm ]; then systemctl disable --now realm.service 2>/dev/null || true; rm -f /etc/systemd/system/realm.service /usr/local/bin/realm; rm -rf /etc/realm; fi
                 rm -rf /run/mtunnel-healer
-                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* gost@* 2>/dev/null || true
-                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* gost@* 2>/dev/null || true
+                systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* 2>/dev/null || true
+                systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service mweb.service mhealer.service mshield.service mbackhaul@* mrathole@* mpaqet@* 2>/dev/null || true
                 
                 rm -f /etc/systemd/system/mgre.service \
                       /etc/systemd/system/mxlan.service \
@@ -1943,12 +1961,11 @@ while true; do
                       /etc/systemd/system/mshield.service \
                       /etc/systemd/system/mbackhaul@.service \
                       /etc/systemd/system/mrathole@.service \
-                      /etc/systemd/system/mpaqet@.service \
-                      /etc/systemd/system/gost@.service 2>/dev/null || true
+                      /etc/systemd/system/mpaqet@.service 2>/dev/null || true
                 systemctl daemon-reload 2>/dev/null || true
                 rm -rf /etc/mgre /etc/mporter /etc/mweb /etc/mshield /etc/mstats /etc/mrathole /etc/mbackhaul /etc/paqet /etc/mhealer /etc/minterface /etc/mdiag /etc/linktest /etc/mbbr /root/mtunnel /tmp/custom-unzip.* /tmp/mtunnel-local-deploy.* 2>/dev/null || true
                 rm -f /usr/bin/mtunnel /usr/bin/main /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/minterface /usr/bin/mdiag /usr/bin/mshield /usr/bin/mstats /usr/bin/mhealer /usr/bin/mweb /usr/bin/mrathole /usr/bin/mbbr /usr/bin/linktest
-                rm -f /usr/local/bin/rathole /usr/local/bin/bh /usr/local/bin/backhaul /usr/local/bin/paqet /usr/local/bin/gost /usr/local/bin/frpc /usr/local/bin/frps /usr/local/bin/haproxy /usr/local/bin/realm /usr/bin/bh /usr/bin/rathole /usr/bin/paqet /usr/local/bin/mtunnel
+                rm -f /usr/local/bin/rathole /usr/local/bin/bh /usr/local/bin/backhaul /usr/local/bin/paqet /usr/bin/bh /usr/bin/rathole /usr/bin/paqet /usr/local/bin/mtunnel
                 kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
                 echo -e "\n  ${G}✓ MTunnel ecosystem completely wiped from this system.${NC}\n"; exit 0
             else

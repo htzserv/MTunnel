@@ -2,7 +2,7 @@
 # --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.1 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.0.1"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -571,13 +571,10 @@ mt_run_tool() {
 }
 mt_ask_bbr_on_create() {
     local answer
-    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
-    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR? [y/N]: ${NC}"
     read -r answer || answer=''
     case "${answer,,}" in
-        y|yes)
-            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
-        *) ;;
+        y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; tunnel configuration is retained.${NC}" >&2;;
     esac
     return 0
 }
@@ -690,8 +687,8 @@ read_with_refresh() {
 
     while true; do
         if [ "$NEED_REFRESH" = true ]; then
-            NEED_REFRESH=false
             if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
+                NEED_REFRESH=false
                 "$redraw_func"
                 echo -ne "$prompt$buffer"
             fi
@@ -729,21 +726,27 @@ read_with_refresh() {
     printf -v "$__resultvar" '%s' "$buffer"
 }
 
-check_update_bg() {
-    local cb="?t=$(date +%s)"
-    local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mpaqet.sh${cb}"
-    local mirror_url="https://c107328.parspack.net/c107328/MTunnel/tunnels/mpaqet.sh${cb}"
-    local remote_ver=""
-    
+fetch_remote_version() {
+    local url="$1" payload=''
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        payload=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$url" 2>/dev/null) || return 1
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-    fi
-    
-    [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.mpaqet_remote_ver"
+        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$url" 2>/dev/null) || return 1
+    else return 1; fi
+    printf '%s
+' "$payload" | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2
+}
+check_update_bg() {
+    local cb="?t=$(date +%s)" gh mirror combined
+    gh=$(fetch_remote_version "https://raw.githubusercontent.com/htzserv/MTunnel/main/tunnels/mpaqet.sh${cb}" 2>/dev/null || true)
+    mirror=$(fetch_remote_version "https://c107328.parspack.net/c107328/MTunnel/tunnels/mpaqet.sh${cb}" 2>/dev/null || true)
+    printf '%s
+' "${gh:-Unknown}" > "$SECURE_TMP/.mpaqet_remote_ver_github"
+    printf '%s
+' "${mirror:-Unknown}" > "$SECURE_TMP/.mpaqet_remote_ver_mirror"
+    combined="$gh"; [ -n "$combined" ] || combined="$mirror"
+    printf '%s
+' "${combined:-Unknown}" > "$SECURE_TMP/.mpaqet_remote_ver"
 }
 
 update_watcher_loop() {
@@ -760,7 +763,7 @@ WATCHER_PID=$!
 trap 'kill "$WATCHER_PID" ${HDR_PID:-} 2>/dev/null; rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null' EXIT
 
 self_update_module() {
-    local src_opt custom_url dl_url tmp_file confirm
+    local src_opt="${1:-}" custom_url dl_url tmp_file confirm
     local rel_path="tunnels/mpaqet.sh"
     local cb="?t=$(date +%s)"
     
@@ -774,6 +777,7 @@ self_update_module() {
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
+    if [ -z "$src_opt" ]; then
     clear; echo -e "\n  ${DIM}┌─[ OTA Update (MPaqet Engine) ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
@@ -786,6 +790,7 @@ self_update_module() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
+    fi
     
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
     tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
@@ -827,6 +832,38 @@ get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
+}
+
+get_local_ipv6() {
+    local ip
+    ip=$(ip -6 -o addr show scope global 2>/dev/null | awk '$3=="inet6" && $0 !~ / tentative | dadfailed | deprecated / {print $4; exit}')
+    ip="${ip%%/*}"
+    printf '%s' "$ip"
+}
+mt_choose_peer_host() {
+    local v4 v6 choice custom default
+    v4=$(get_local_ip); mt_valid_ipv4 "$v4" || v4=''
+    v6=$(get_local_ipv6); mt_valid_ipv6 "$v6" || v6=''
+    if [ -n "$v4" ] && [ -n "$v6" ]; then
+        echo -e "
+  ${DIM}┌─[ PEER LINK ADDRESS ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(${v4})${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(${v6})${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Custom IP / Hostname${NC}"
+        mt_ask choice 'Select address [1]: ' || return 1
+        case "${choice:-1}" in
+            1) custom="$v4";;
+            2) custom="$v6";;
+            3) mt_ask custom 'Reachable public IP / hostname: ' || return 1;;
+            *) return 1;;
+        esac
+    else
+        default="${v4:-$v6}"
+        mt_ask custom "This server's reachable public IP/hostname [${default:-none}]: " || return 1
+        custom="${custom:-$default}"
+    fi
+    mt_valid_host "$custom" && [[ "$custom" != 0.0.0.0 && "$custom" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
+    MT_PEER_HOST="$custom"
 }
 
 is_paqet_core_valid() {
@@ -878,6 +915,70 @@ install_core_from_source() {
         echo -e "  ${R}✖ Core update failed. Previous installation preserved.${NC}" >&2
         return 1
     fi
+}
+
+mt_core_version() {
+    local out
+    out=$(paqet --version 2>/dev/null | head -n1)
+    [ -n "$out" ] || out=$(paqet -V 2>/dev/null | head -n1)
+    out=$(printf '%s' "$out" | grep -oE '[0-9]+(\.[0-9A-Za-z-]+)+' | head -n1)
+    printf '%s' "${out:-not-installed}"
+}
+mt_install_local_bundle() {
+    local installer="$LOCAL_DIR/install.sh" rc=0
+    if [ -f "$installer" ]; then
+        bash "$installer" --local "$LOCAL_DIR" --no-launch || rc=1
+    else
+        echo -e "  ${R}✖ $LOCAL_DIR/install.sh was not found.${NC}"; rc=1
+    fi
+    if ! install_core_from_source 4; then
+        echo -e "  ${Y}● Local Paqet core was not found; scripts/tools were still processed.${NC}"
+        rc=1
+    fi
+    return "$rc"
+}
+mt_update_label() {
+    local file="$1" rv='Unknown'
+    [ -f "$file" ] && rv=$(tr -d '\r\n ' < "$file")
+    if [ -n "$rv" ] && [ "$rv" != Unknown ]; then
+        if mt_is_newer_version "$rv" "$MODULE_VERSION" 2>/dev/null; then printf 'v%s → v%s' "$MODULE_VERSION" "$rv"
+        else printf 'v%s' "$rv"; fi
+    else printf 'version unavailable'; fi
+}
+render_unified_update_menu() {
+    local gh_label mirror_label core_v
+    gh_label=$(mt_update_label "$SECURE_TMP/.mpaqet_remote_ver_github")
+    mirror_label=$(mt_update_label "$SECURE_TMP/.mpaqet_remote_ver_mirror")
+    core_v=$(mt_core_version)
+    mt_workspace_screen
+    echo -e "\n  ${DIM}┌─[ UPDATE & LOCAL INSTALL — MPAQET ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Core from Foreign / GitHub${NC} ${DIM}(installed: ${core_v} | target: 1.0.0-alpha.21)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Core from Iran Mirror${NC} ${DIM}(installed: ${core_v} | target: 1.0.0-alpha.21)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Script from Foreign / GitHub${NC} ${DIM}(${gh_label})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Script from Iran Mirror${NC} ${DIM}(${mirror_label})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+}
+unified_update_menu() {
+    local opt
+    while true; do
+        render_unified_update_menu
+        read_with_refresh "  ${C}MPAQET UPDATE ❯❯ ${NC}" opt render_unified_update_menu || return 0
+        opt="${opt//$'\r'/}"
+        case "$opt" in
+            1) install_core_from_source 1; mt_workspace_pause;;
+            2) install_core_from_source 2; mt_workspace_pause;;
+            3) self_update_module 1; mt_workspace_pause;;
+            4) self_update_module 2; mt_workspace_pause;;
+            5) mt_install_local_bundle; mt_workspace_pause;;
+            6) self_update_module 4; mt_workspace_pause;;
+            0|q|Q) return 0;;
+            *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
+        esac
+    done
 }
 
 menu_install_core() {
@@ -2122,18 +2223,32 @@ mt_link_decode() {
     mt_link_validate
 }
 mt_bbr_state() { [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo 1 || echo 0; }
-mt_ask_bbr_from_peer() { # peer had BBR on: offer the same here
-    local ans
-    echo -e "\n  ${DIM}● Peer server has BBR enabled.${NC}"
-    mt_ask ans 'Enable BBR on this server too? [y/N]: ' || return 0
-    case "${ans,,}" in y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the peer tunnel is retained.${NC}" >&2;; esac
+mt_sync_bbr_from_peer() {
+    local desired="${1:-0}" current
+    [[ "$desired" =~ ^[01]$ ]] || desired=0
+    current=$(mt_bbr_state)
+    [ "$current" = "$desired" ] && return 0
+    if [ "$desired" = 1 ]; then
+        mt_run_tool mbbr --enable || echo -e "  ${Y}● Could not enable BBR to match the peer; tunnel was kept.${NC}" >&2
+    else
+        mt_run_tool mbbr --disable || echo -e "  ${Y}● Could not disable BBR to match the peer; tunnel was kept.${NC}" >&2
+    fi
     return 0
 }
-mt_link_box() { # draws the peer code inside a plain box
-    local text="$1" line
-    line=$(printf '%*s' "$(( ${#text} + 4 ))" '' | tr ' ' '─')
+mt_ask_bbr_from_peer() { mt_sync_bbr_from_peer 1; }
+mt_link_box() {
+    local text="$1" box_width=80 pad=5 inner_width text_width line chunk
+    inner_width=$((box_width - 2))
+    text_width=$((inner_width - (pad * 2)))
+    printf -v line '%*s' "$inner_width" ''
+    line="${line// /─}"
     echo -e "  ${DIM}╭${line}╮${NC}"
-    echo -e "  ${DIM}│${NC}  ${W}${text}${NC}  ${DIM}│${NC}"
+    while [ -n "$text" ]; do
+        chunk="${text:0:text_width}"
+        text="${text:text_width}"
+        printf "  ${DIM}│${NC}%*s${W}%-*s${NC}%*s${DIM}│${NC}
+" "$pad" '' "$text_width" "$chunk" "$pad" ''
+    done
     echo -e "  ${DIM}╰${line}╯${NC}"
 }
 mt_main_logs() { show_tunnel_logs; }
@@ -2285,10 +2400,8 @@ mt_link_export() {
         [[ "$host" != *:* ]] || MT_LINK_DATA[BIND_HOST]=::
     fi
     if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
-        host=$(get_local_ip)
-        mt_ask dest "This server's reachable public IP/hostname [$host]: " || return 1
-        host="${dest:-$host}"
-        mt_valid_host "$host" && [[ "$host" != 0.0.0.0 && "$host" != :: ]] || { echo 'Enter a reachable endpoint.' >&2; return 1; }
+        mt_choose_peer_host || return 1
+        host="$MT_PEER_HOST"
         MT_LINK_DATA[HOST]="$host"
         if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
             mt_ask dest 'Peer server port mappings (e.g. 443=127.0.0.1:443): ' || return 1
@@ -2337,7 +2450,7 @@ mt_link_import() {
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
-        if [ "${MT_LINK_DATA[BBR]:-0}" = 1 ]; then mt_ask_bbr_from_peer; else mt_ask_bbr_on_create; fi
+        mt_sync_bbr_from_peer "${MT_LINK_DATA[BBR]:-0}"
     else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
     mt_workspace_pause
 }
@@ -2488,7 +2601,7 @@ mt_workspace_route() {
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Restart & Zero Counters|15|${G}" "4|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
         6) MT_ACTION=12;;
-        7) MT_SECTION=7; mt_workspace_menu "UPDATE & LOCAL INSTALL" "1|OTA Update / Local Script|17|${G}" "2|Install / Update Engine (Online / Local)|16|${M}" || { MT_SECTION=""; return 1; };;
+        7) MT_ACTION=20;;
         8) MT_ACTION=96;;
         9) MT_ACTION=201;;
         10) MT_SECTION=2; MT_ACTION=3; MT_SHORTCUT=1;;
@@ -2997,6 +3110,7 @@ EOF
         15) zero_paqet_counters; systemctl restart mpaqet@* 2>/dev/null; echo -e "  ${G}● Services restarted and traffic counters zeroed.${NC}"; sleep 1.5 ;;
         16) menu_install_core ;;
         17) self_update_module ;;
+        20) unified_update_menu ;;
         18) uninstall_mpaqet ;;
         13) mt_run_tool mhealer --scope paqet ;;
         14) mt_run_tool mbbr --from-tunnel ;;

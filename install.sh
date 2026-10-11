@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.0.1"
+MODULE_VERSION="1.0.2"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"
 
@@ -570,12 +570,10 @@ mt_run_tool() {
 }
 mt_ask_bbr_on_create() {
     local answer
-    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
-    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR? [y/N]: ${NC}"
     read -r answer || answer=''
     case "${answer,,}" in
-        y|yes)
-            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2 ;;
         *) ;;
     esac
     return 0

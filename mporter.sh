@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="1.0.1"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -594,12 +594,10 @@ mt_run_tool() {
 }
 mt_ask_bbr_on_create() {
     local answer
-    echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
-    echo -ne "  ${C}●${NC} ${W}Enable BBR now? [y/N]: ${NC}"
+    echo -ne "  ${C}●${NC} ${W}Enable BBR? [y/N]: ${NC}"
     read -r answer || answer=''
     case "${answer,,}" in
-        y|yes)
-            mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2;;
+        y|yes) mt_run_tool mbbr --enable || echo -e "  ${Y}● BBR could not be enabled; the tunnel configuration is retained.${NC}" >&2 ;;
         *) ;;
     esac
     return 0
@@ -1887,8 +1885,9 @@ install_core_engines() {
 
     if [[ "$eng_opt" == "5" || "$eng_opt" == "1" ]]; then
         (
-            mkdir -p /etc/haproxy /var/lib/haproxy 2>/dev/null
+            mkdir -p /etc/haproxy /var/lib/haproxy /etc/mporter 2>/dev/null
             DEBIAN_FRONTEND=noninteractive apt-get install "${APT_OPTS[@]}" -o Dpkg::Options::=--force-confold haproxy >/dev/null 2>&1 || exit 1
+            : > /etc/mporter/.owns_haproxy
             # The Debian package ships an HTTP-mode config: replace it unless it already holds MPorter mappings.
             if [ ! -s "$H_CONF" ] || ! grep -qE '^(frontend|backend)[[:space:]]+(ft|bk)_[0-9]+' "$H_CONF"; then
                 [ -s "$H_CONF" ] && cp -f "$H_CONF" "$H_CONF.orig.$(date +%s)"
@@ -1905,7 +1904,8 @@ install_core_engines() {
     if [[ "$eng_opt" == "5" || "$eng_opt" == "2" ]]; then
         (
             download_gost_binary true || exit 1
-            mkdir -p /etc/gost 2>/dev/null
+            mkdir -p /etc/gost /etc/mporter 2>/dev/null
+            : > /etc/mporter/.owns_gost
             if [ ! -f "$G_CONF" ] || ! jq -e 'type=="object"' "$G_CONF" >/dev/null 2>&1; then echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"; fi
             cat <<EOF_GST > /etc/systemd/system/gost.service
 [Unit]
@@ -1931,7 +1931,8 @@ EOF_GST
     if [[ "$eng_opt" == "5" || "$eng_opt" == "3" ]]; then
         (
             download_realm_binary true || exit 1
-            mkdir -p /etc/realm 2>/dev/null
+            mkdir -p /etc/realm /etc/mporter 2>/dev/null
+            : > /etc/mporter/.owns_realm
             if [ ! -f "$R_CONF" ] || ! jq -e 'type=="object"' "$R_CONF" >/dev/null 2>&1; then echo '{"network": {"no_tcp_delay": true}, "endpoints": []}' > "$R_CONF"; fi
             cat <<EOF_RLM > /etc/systemd/system/realm.service
 [Unit]
@@ -3018,14 +3019,32 @@ manual_restart() {
 
 nuclear_wipe() {
     local u
-    for u in haproxy gost realm mporter-obfs mporter-iptables mporter-watchdog mporter; do systemctl stop "$u" 2>/dev/null; systemctl disable "$u" 2>/dev/null; done
-    DEBIAN_FRONTEND=noninteractive apt-get purge "${APT_OPTS[@]}" haproxy >/dev/null 2>&1
+    # MPorter-owned units are always safe to remove. Shared engines are removed only
+    # when this installation created them and recorded an ownership marker.
+    for u in mporter-obfs mporter-iptables mporter-watchdog mporter; do
+        systemctl stop "$u" 2>/dev/null; systemctl disable "$u" 2>/dev/null
+    done
+
+    if [ -f /etc/mporter/.owns_haproxy ]; then
+        systemctl stop haproxy 2>/dev/null; systemctl disable haproxy 2>/dev/null
+        DEBIAN_FRONTEND=noninteractive apt-get purge "${APT_OPTS[@]}" haproxy >/dev/null 2>&1 || true
+        rm -rf /etc/haproxy /var/lib/haproxy
+    fi
+    if [ -f /etc/mporter/.owns_gost ]; then
+        systemctl stop gost 2>/dev/null; systemctl disable gost 2>/dev/null
+        rm -rf /usr/local/bin/gost /etc/gost /etc/systemd/system/gost.service
+    fi
+    if [ -f /etc/mporter/.owns_realm ]; then
+        systemctl stop realm 2>/dev/null; systemctl disable realm 2>/dev/null
+        rm -rf /usr/local/bin/realm /etc/realm /etc/systemd/system/realm.service
+    fi
+
     obfs_flush_rules
     ipt_flush_tag nat PREROUTING MPORTER_NAT_; ipt_flush_tag nat OUTPUT MPORTER_NAT_; ipt_flush_tag nat POSTROUTING MPORTER_NAT_; ipt_flush_tag filter FORWARD MPORTER_NAT_
     ipt_flush_tag mangle OUTPUT MPORTER_MSS_; ipt_flush_tag mangle FORWARD MPORTER_MSS_
     rm -f /etc/sysctl.d/99-mporter-ipv6.conf
-    rm -rf /etc/haproxy /var/lib/haproxy /usr/local/bin/gost /etc/gost /usr/local/bin/realm /etc/realm "$OBFS_DIR" "$IPT_DIR" "$STATE_DIR" "$SECURE_TMP" "$HEALTH_FILE" \
-           /etc/systemd/system/gost.service /etc/systemd/system/realm.service /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service \
+    rm -rf "$OBFS_DIR" "$IPT_DIR" "$STATE_DIR" "$SECURE_TMP" "$HEALTH_FILE" \
+           /etc/systemd/system/mporter-obfs.service /etc/systemd/system/mporter-iptables.service \
            "/etc/systemd/system/$WATCHDOG_SERVICE" "$SERVICE_FILE" /usr/local/bin/mporter-obfs.sh /usr/local/bin/mporter-iptables.sh "$WATCHDOG_SCRIPT" "$INSTALL_PATH"
     systemctl daemon-reload
     # sysctl (ip_forward/BBR) is intentionally left in place: MDesign tunnels depend on it.

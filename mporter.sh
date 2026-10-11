@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v14.0.1 ---
+# --- MTunnel MPorter | Port Forwarding Manager v14.0.2 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
 # v12.0.3 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
@@ -25,23 +25,39 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="14.0.1"
+MODULE_VERSION="14.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
 # Sourcing this file performs no network, filesystem, or service operations.
-
 mt_normalize_host() {
     local host="$1"
     if [[ "$host" == \[*\] ]]; then host="${host:1:${#host}-2}"; fi
     printf '%s' "$host"
 }
-
 mt_valid_port() {
     [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535))
 }
 
+mt_legacy_core_subnet() {
+    local id="$1" kind="${2:-gre}" n idx a b
+    [[ "$id" =~ ^[0-9]{1,9}$ ]] || return 1
+    n=$((10#$id))
+    if [ "$kind" == vxlan ]; then
+        if ((n <= 255)); then printf '10.88.%d' "$n"; return 0; fi
+        idx=$(((n - 256) % 32768))
+        a=$((128 + idx / 256)); b=$((idx % 256))
+    else
+        if ((n <= 255)); then printf '10.76.%d' "$n"; return 0; fi
+        # Extended GRE space uses 10.0.0.0/9 while reserving legacy 10.76/16 and 10.88/16.
+        idx=$(((n - 256) % 32256))
+        a=$((idx / 256)); b=$((idx % 256))
+        ((a >= 76)) && a=$((a + 1))
+        ((a >= 88)) && a=$((a + 1))
+    fi
+    printf '10.%d.%d' "$a" "$b"
+}
 mt_valid_ipv4() {
     local part; local -a octets=()
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
@@ -50,7 +66,6 @@ mt_valid_ipv4() {
         [[ "$part" =~ ^[0-9]{1,3}$ ]] && ((10#$part <= 255)) || return 1
     done
 }
-
 mt_valid_ipv6() {
     local ip tail group rest count=0 extra=0
     ip=$(mt_normalize_host "$1")
@@ -80,7 +95,6 @@ mt_valid_ipv6() {
     done
     if [[ "$ip" == *::* ]]; then ((count < 8)); else ((count == 8)); fi
 }
-
 mt_valid_host() {
     local host label
     host=$(mt_normalize_host "$1")
@@ -96,21 +110,17 @@ mt_valid_host() {
         [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] && [ "${#label}" -le 63 ] || return 1
     done
 }
-
 mt_hostport() {
     local host; host=$(mt_normalize_host "$1")
     if [[ "$host" == *:* ]]; then printf '[%s]:%s' "$host" "$2"; else printf '%s:%s' "$host" "$2"; fi
 }
-
 mt_valid_index() {
     [[ "$1" =~ ^[0-9]{1,8}$ ]] && ((10#$1 < $2))
 }
-
 mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
-
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -129,24 +139,27 @@ mt_ask_bind_host() {
         *) return 1;;
     esac
 }
-
 mt_tcp_probe() {
     local host; host=$(mt_normalize_host "$1")
     mt_valid_host "$host" && mt_valid_port "$2" || return 1
     timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$host" "$2" 2>/dev/null
 }
-
 mt_list_has_port() {
-    local item; local -a parts=()
+    local item a b target="$2"; local -a parts=()
+    mt_valid_port "$target" || return 1
+    target=$((10#$target))
     IFS=, read -ra parts <<< "$1"
     for item in "${parts[@]}"; do
         [[ "$item" == *"="* ]] && item="${item%%=*}"
-        [[ "$item" == *:* ]] && item="${item##*:}"
-        mt_valid_port "$item" && ((10#$item == 10#$2)) && return 0
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((target >= a && target <= b)) && return 0
+        elif mt_valid_port "$item" && ((10#$item == target)); then
+            return 0
+        fi
     done
     return 1
 }
-
 mt_port_busy() {
     local port="$1" proto="${2:-both}" opts='-Hln'
     mt_valid_port "$port" || return 1
@@ -155,20 +168,25 @@ mt_port_busy() {
         { for (i=1;i<=NF;i++) if ($i ~ /:[0-9]+$/) {n=$i;sub(/^.*:/,"",n);if(n+0==p) found=1;break} }
         END {exit !found}'
 }
-
 mt_validate_port_list() {
-    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item
+    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item a b p
     local -A seen=(); local -a parts=()
     [ -z "$list" ] && return 0
-    [[ "$list" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+    [[ "$list" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || return 1
     IFS=, read -ra parts <<< "$list"
     for item in "${parts[@]}"; do
-        mt_valid_port "$item" || return 1
-        item=$((10#$item)); [ -z "${seen[$item]:-}" ] || return 1; seen[$item]=1
-        if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$item" && mt_port_busy "$item" "$proto"; then return 1; fi
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((a >= 1 && b <= 65535 && a < b)) || return 1
+        else
+            mt_valid_port "$item" || return 1; a=$((10#$item)); b=$a
+        fi
+        for ((p=a; p<=b; p++)); do
+            [ -z "${seen[$p]:-}" ] || return 1; seen[$p]=1
+            if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$p" && mt_port_busy "$p" "$proto"; then return 1; fi
+        done
     done
 }
-
 mt_validate_script() {
     local file="$1" version
     [ -s "$file" ] && head -n 1 "$file" | grep -qE '^#!(/bin/bash|/usr/bin/env bash)$' || return 1
@@ -176,7 +194,6 @@ mt_validate_script() {
     version=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$file")
     [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
 }
-
 mt_download() {
     local url="$1" dest="$2" expected="${3:-}" tmp rc=1
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
@@ -192,7 +209,6 @@ mt_download() {
     fi
     mv -f "$tmp" "$dest"
 }
-
 # Stage all destinations first. Roll back every committed file if a rename fails.
 mt_install_files() {
     local mode="$1"; shift
@@ -227,7 +243,6 @@ mt_install_files() {
     for stage in "${stages[@]}" "${backups[@]}"; do [ -n "$stage" ] && rm -f "$stage"; done
     return "$rc"
 }
-
 mt_install_script() {
     local candidate="$1" rel="$2" target="$3" current="${4:-}"; local -a files=()
     mt_validate_script "$candidate" || return 1
@@ -242,7 +257,6 @@ mt_install_script() {
     if [ -f "$current" ] && [ "$(readlink -f "$current")" != "$(readlink -f "$target")" ] && [ "$current" != "$LOCAL_DIR/$rel" ]; then files+=("$candidate" "$current"); fi
     mt_install_files 755 "${files[@]}"
 }
-
 mt_valid_elf() {
     local file="$1" machine arch
     [ -f "$file" ] && [ "$(wc -c < "$file")" -gt 4096 ] || return 1
@@ -251,7 +265,6 @@ mt_valid_elf() {
     case "$arch:$machine" in x86_64:62|aarch64:183|arm64:183|armv7l:40|i686:3) return 0;; esac
     return 1
 }
-
 mt_extract_archive() {
     local archive="$1" dest="$2" list entry
     list=$(mktemp "$dest/.entries.XXXXXX") || return 1
@@ -271,15 +284,14 @@ mt_extract_archive() {
         rm -f "$list"; unzip -q "$archive" -d "$dest"
     else rm -f "$list"; return 1; fi
 }
-
 mt_counter_sum() {
     awk -v tag="$2" '{for(i=1;i<=NF;i++) if($i==tag){sum+=$2;break}} END {printf "%.0f\n",sum}' <<< "$1"
 }
-
 mt_setup_counter_pair() {
-    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" bin addr family
+    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" proto="${7:-tcp}" bin addr
     local -a addresses=() input=() output=()
     mt_valid_port "$port" || return 1
+    [[ "$proto" =~ ^(tcp|udp)$ ]] || return 1
     if [ "$role" == 1 ]; then
         input=(--dport "$port"); output=(--sport "$port")
         if [[ "$bind" == *:* ]]; then addresses=('::'); else addresses=('0.0.0.0'); fi
@@ -289,19 +301,17 @@ mt_setup_counter_pair() {
         if mt_valid_ipv4 "$remote" || mt_valid_ipv6 "$remote"; then addresses=("$remote")
         else mapfile -t addresses < <({ getent ahostsv4 "$remote"; getent ahostsv6 "$remote"; } 2>/dev/null | awk '{print $1}' | sort -u); fi
     fi
-    # IPv6 wildcard sockets may also accept IPv4 on Linux; count both families.
     if [ "$role" == 1 ] && [ "$bind" == '::' ]; then addresses+=('0.0.0.0'); fi
     for addr in "${addresses[@]}"; do
         bin=iptables; [[ "$addr" == *:* ]] && bin=ip6tables
         command -v "$bin" >/dev/null 2>&1 || continue
         if [ "$role" != 1 ]; then input=(-s "$addr" --sport "$port"); output=(-d "$addr" --dport "$port"); fi
-        "$bin" -w 5 -t mangle -C INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
-        "$bin" -w 5 -t mangle -C OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
     done
 }
-
 mt_tagged_rules() {
     local bin="$1" table="$2" chain="$3" tag="$4" match="${5:-exact}"
     "$bin" -t "$table" -L "$chain" -n --line-numbers 2>/dev/null |
@@ -310,16 +320,13 @@ mt_tagged_rules() {
             for(i=1;i<=NF;i++) if($i==tag || (m=="prefix" && index($i,tag)==1)){print $1;break}
         }' | sort -rn
 }
-
 mt_delete_tagged_rules() {
     local bin="$1" table="$2" chain="$3" tag="$4" match="${5:-exact}" num
     while read -r num; do [ -n "$num" ] && "$bin" -w 5 -t "$table" -D "$chain" "$num" || return 1; done < <(mt_tagged_rules "$bin" "$table" "$chain" "$tag" "$match")
     return 0
 }
-
 mt_milliseconds() { awk '{printf "%.0f\n", $1*1000}' /proc/uptime; }
 mt_rate() { local delta=$(($1-$2)); [ "$delta" -lt 0 ] && delta=0; local ms="$3"; [ "$ms" -gt 0 ] || ms=1; echo "$((delta*1000/ms))"; }
-
 mt_tunnel_addresses() {
     local subnet
     MT_LOCAL_PUBLIC="${LOCAL_PUB:-}"; MT_REMOTE_PUBLIC="${REMOTE_PUB:-}"
@@ -330,14 +337,16 @@ mt_tunnel_addresses() {
         if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${CORE_V6}::1"; MT_CORE_PEER="${CORE_V6}::2"
         else MT_CORE_LOCAL="${CORE_V6}::2"; MT_CORE_PEER="${CORE_V6}::1"; fi
     else
-        subnet="${CORE_SUBNET:-10.76.${TUN_ID:-}}"
-        [ -z "${VNI_ID:-}" ] || subnet="${CORE_SUBNET:-10.88.$VNI_ID}"
+        subnet="${CORE_SUBNET:-}"
+        if [ -z "$subnet" ]; then
+            if [ -n "${VNI_ID:-}" ]; then subnet=$(mt_legacy_core_subnet "$VNI_ID" vxlan) || return 1
+            else subnet=$(mt_legacy_core_subnet "${TUN_ID:-}" gre) || return 1; fi
+        fi
         if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${subnet}.1"; MT_CORE_PEER="${subnet}.2"
         else MT_CORE_LOCAL="${subnet}.2"; MT_CORE_PEER="${subnet}.1"; fi
     fi
     mt_valid_ipv4 "$MT_CORE_PEER" || mt_valid_ipv6 "$MT_CORE_PEER"
 }
-
 mt_validate_conf() {
     local file="$1" line key value
     [ -s "$file" ] && bash -n "$file" || return 1
@@ -351,7 +360,15 @@ mt_validate_conf() {
         [ "$key" != FWD_TARGETS ] || mt_valid_fwd_targets "$value" || return 1
     done < "$file"
 }
-
+mt_read_kv() {
+    local file="$1" key="$2" value
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+    value=$(awk -v k="$key" 'index($0,k"=")==1 {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null) || return 1
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || return 1
+    [[ "$value" =~ ^[A-Za-z0-9_.:/,=+%\[\]-]*$ ]] || return 1
+    printf '%s' "$value"
+}
 mt_valid_fwd_targets() {
     local spec="$1" ip
     [[ -z "$spec" || "$spec" == all ]] && return 0
@@ -360,7 +377,6 @@ mt_valid_fwd_targets() {
     IFS=',' read -ra ips <<< "$spec"
     for ip in "${ips[@]}"; do mt_valid_ipv4 "$ip" || return 1; done
 }
-
 mt_fwd_candidates() {
     local core="$1" key="$2" max="${3:-0}" type="$4" pair ip seen="|$1|"
     mt_valid_ipv4 "$core" && [[ "$max" =~ ^[0-9]{1,3}$ && "$type" == 1 ]] && ((10#$max <= 64)) || return 1
@@ -373,7 +389,6 @@ mt_fwd_candidates() {
         seen+="$ip|"; printf '%s\n' "$ip"
     done < <(vip_targets "$key" "$max" "$type")
 }
-
 mt_fwd_selected() {
     local spec="$1" lb="$2"; shift 2
     local available ip seen='|' found=0
@@ -394,7 +409,6 @@ mt_fwd_selected() {
     # Never substitute an unselected core/vIP when selected addresses disappear.
     [ "$found" == 1 ]
 }
-
 mt_parse_fwd_choice() {
     local choice="${1//$'\r'/}" item idx ip seen='|' result=''; shift
     local -a available=("$@") parts=()
@@ -418,7 +432,6 @@ mt_parse_fwd_choice() {
     [ -n "$result" ] || return 1
     MT_FWD_CHOICE="$result"
 }
-
 mt_save_fwd_selection() {
     local file="$1" spec="$2" lb="$3" tmp rc=1
     mt_validate_conf "$file" && mt_valid_fwd_targets "$spec" && [[ "$lb" =~ ^[01]$ ]] || return 1
@@ -429,7 +442,6 @@ mt_save_fwd_selection() {
     rm -f "$tmp"
     return "$rc"
 }
-
 mt_choose_fwd_targets() {
     local file="$1"; shift
     local candidates selected choice rc spec lb count ip i label mark
@@ -463,7 +475,6 @@ mt_choose_fwd_targets() {
         return 0
     done
 }
-
 mt_fwd_target_summary() {
     local spec="$1" lb="$2" item count=0
     if [ -z "$spec" ]; then
@@ -477,7 +488,6 @@ mt_fwd_target_summary() {
         else echo "Selected Pool (${count} IPs)"; fi
     fi
 }
-
 mt_stage_backup() {
     local archive="$1" subdir="$2" stage conf found=0
     stage=$(mktemp -d "$SECURE_TMP/restore.XXXXXX") || return 1
@@ -490,7 +500,6 @@ mt_stage_backup() {
     [ "$found" == 1 ] || { rm -rf "$stage"; return 1; }
     printf '%s\n' "$stage"
 }
-
 # Keep the running executable until the candidate has been downloaded and checked.
 mt_update_core() {
     local name="$1" unit_prefix="$2" source="$3" kind="${4:-url}" expected="${5:-}" work candidate item unit failed=0 had_old=0
@@ -535,7 +544,6 @@ mt_update_core() {
     fi
     rm -rf "$work"
 }
-
 # A backup must have a coherent network identity before any live teardown.
 mt_validate_tunnel_conf() {
     local conf="$1" kind="$2"
@@ -546,6 +554,7 @@ mt_validate_tunnel_conf() {
     [ -z "$CUSTOM_MTU" ] || { [[ "$CUSTOM_MTU" =~ ^[0-9]{3,5}$ ]] && ((10#$CUSTOM_MTU >= 512 && 10#$CUSTOM_MTU <= 65535)); } || return 1
     if [ "$kind" == gre ]; then
         [[ "$T_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$TUN_ID" =~ ^[0-9]{1,9}$ && "$TUN_PROTO" =~ ^(ipv4|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]] || return 1
+        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$TUN_ID" gre)" || return 1
         case "$TUN_PROTO" in
             gre6|ipip4to6|ipip6to6) mt_valid_ipv6 "${LOCAL_PUB6:-$LOCAL_IP6}" && mt_valid_ipv6 "${REMOTE_PUB6:-$REMOTE_IP6}" || return 1;;
             *) mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1;;
@@ -555,6 +564,10 @@ mt_validate_tunnel_conf() {
         if [ "$TUN_PROTO" == 6to4 ]; then mt_valid_ipv6 "$LOCAL_IP6" && mt_valid_ipv6 "$REMOTE_IP6" || return 1; fi
     else
         [[ "$VX_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$BR_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$VNI_ID" =~ ^[0-9]{1,8}$ && "$FAB_PROTO" =~ ^(ipv4|ipv6)$ ]] && ((10#$VNI_ID >= 1 && 10#$VNI_ID <= 16777215)) || return 1
+        local main_mx_mtu_max=1450
+        [ "$FAB_PROTO" != ipv6 ] || main_mx_mtu_max=1430
+        [ -z "$CUSTOM_MTU" ] || ((10#$CUSTOM_MTU >= 900 && 10#$CUSTOM_MTU <= main_mx_mtu_max)) || return 1
+        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$VNI_ID" vxlan)" || return 1
         mt_valid_ipv4 "$CORE_SUBNET.1" || return 1
         if [ "$FAB_PROTO" == ipv6 ]; then mt_valid_ipv6 "$LOCAL_PUB6" && mt_valid_ipv6 "$REMOTE_PUB6" || return 1
         else mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1; fi
@@ -562,11 +575,9 @@ mt_validate_tunnel_conf() {
     mt_validate_port_list "$FWD_TCP" 0 tcp && mt_validate_port_list "$FWD_UDP" 0 udp || return 1
     [ "$ENCRYPT" != 1 ] || [[ "${TUN_SECRET:-$SYNC_KEY}" =~ ^[A-Za-z0-9_=-]+$ ]]
 }
-
 mt_valid_scope() {
     case "$1" in all|gre|vxlan|rathole|backhaul|paqet) return 0;; *) return 1;; esac
 }
-
 mt_run_tool() {
     local name="$1" path; shift
     case "$name" in mbbr|minterface|mhealer) ;; *) return 1;; esac
@@ -579,7 +590,6 @@ mt_run_tool() {
     echo -e "  ${R}✖ ${name} is missing. Use Update & Local Install to install all scripts.${NC}" >&2
     return 1
 }
-
 mt_ask_bbr_on_create() {
     local answer
     echo -e "\n  ${DIM}● BBR changes TCP congestion control for the entire server.${NC}"
@@ -592,20 +602,17 @@ mt_ask_bbr_on_create() {
     esac
     return 0
 }
-
 mt_render_tunnel_system_tools() {
     local healer="$1" bbr="$2"
     echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
     echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
 }
-
 mt_monitor_wait() {
     local key='' rc=0
     read -r -t "$1" -n 1 -s key || rc=$?
     case "$key" in q|Q|$'\e') return 1;; esac
     [ "$rc" -ne 1 ]
 }
-
 mt_tunnels_info_menu() {
     local kind="$1" header="$2" details="$3" extra_view="$4" choice rc
     local extra_label='Live Service Logs'
@@ -631,7 +638,6 @@ mt_tunnels_info_menu() {
         esac
     done
 }
-
 mt_config_value() {
     local key="$1" file="$2" value
     [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
@@ -639,7 +645,6 @@ mt_config_value() {
     if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
     printf '%s' "$value"
 }
-
 # END MTUNNEL SHARED HELPERS
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
@@ -758,7 +763,26 @@ valid_host() {
 valid_iface() { [[ "$1" =~ ^[A-Za-z0-9_.@:-]{1,32}$ ]]; }
 
 parse_ports() {
-    printf '%s\n' "$1" | tr -c '0-9\n' ' ' | tr ' ' '\n' | grep -E '^[0-9]{1,5}$' | awk '{n=$1+0} n>=1 && n<=65535 {print n}' | sort -un | xargs
+    local raw item a b p count=0
+    local -a parts=() out=()
+    raw=$(printf '%s' "$1" | tr -d '[:space:]')
+    [ -z "$raw" ] && return 0
+    [[ "$raw" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || return 1
+    IFS=, read -ra parts <<< "$raw"
+    for item in "${parts[@]}"; do
+        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+            ((a >= 1 && b <= 65535 && a < b)) || return 1
+        else
+            valid_port "$item" || return 1
+            a=$((10#$item)); b=$a
+        fi
+        for ((p=a; p<=b; p++)); do
+            out+=("$p"); count=$((count+1))
+            [ "$count" -le 4096 ] || return 1
+        done
+    done
+    printf '%s\n' "${out[@]}" | sort -nu | xargs
 }
 
 ip_to_int() { local a b c d; IFS=. read -r a b c d <<< "$1"; echo $(( (10#$a<<24) | (10#$b<<16) | (10#$c<<8) | 10#$d )); }
@@ -810,17 +834,21 @@ tunnel_ifaces() {
 
 # Core-NAT forwards defined by MDesign GRE/VXLAN tunnel files: "port|ip|TUN"
 tunnel_ext_entries() {
-    local conf t fwd sub tid vid tip p
+    local conf t tcp udp sub tid vid tip p ports
     for conf in /etc/mgre/tunnels/*.conf /etc/mgre/vxlan/*.conf; do
         [ -f "$conf" ] || continue
         t=$(read_conf_value "$conf" TYPE); [ "$t" = "1" ] || continue
-        fwd="$(read_conf_value "$conf" FWD_TCP),$(read_conf_value "$conf" FWD_UDP)"
+        tcp=$(read_conf_value "$conf" FWD_TCP); udp=$(read_conf_value "$conf" FWD_UDP)
         sub=$(read_conf_value "$conf" CORE_SUBNET); tid=$(read_conf_value "$conf" TUN_ID); vid=$(read_conf_value "$conf" VNI_ID)
         tip=""
-        if [[ "$tid" =~ ^[0-9]+$ ]]; then tip="${sub:-10.76.${tid}}.2"
-        elif [[ "$vid" =~ ^[0-9]+$ ]]; then tip="${sub:-10.88.${vid}}.2"; fi
+        if [[ "$tid" =~ ^[0-9]+$ ]]; then [ -n "$sub" ] || sub=$(mt_legacy_core_subnet "$tid" gre); tip="${sub}.2"
+        elif [[ "$vid" =~ ^[0-9]+$ ]]; then [ -n "$sub" ] || sub=$(mt_legacy_core_subnet "$vid" vxlan); tip="${sub}.2"; fi
         valid_ipv4 "$tip" || continue
-        for p in $(parse_ports "$fwd"); do echo "$p|$tip|TUN"; done
+        ports=""
+        [ -z "$tcp" ] || ports+="$(parse_ports "$tcp" 2>/dev/null || true) "
+        [ -z "$udp" ] || ports+="$(parse_ports "$udp" 2>/dev/null || true)"
+        for p in $(printf '%s
+' $ports 2>/dev/null | sort -nu); do echo "$p|$tip|TUN"; done
     done
 }
 
@@ -865,7 +893,7 @@ download_file() {
 
 check_update_bg() {
     local cache="$SECURE_TMP/.mporter_remote_ver"
-    if [ -f "$cache" ] && [ $(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 3600 ]; then return 0; fi
+    if [ -f "$cache" ] && [ $(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 25 ]; then return 0; fi
     local cb="?t=$(date +%s)" remote_ver="" url tmp
     tmp=$(mp_tmp ver) || return 0
     for url in "https://raw.githubusercontent.com/htzserv/MTunnel/main/mporter.sh${cb}" "https://c107328.parspack.net/c107328/MTunnel/mporter.sh${cb}"; do
@@ -953,11 +981,13 @@ enable_v6_forwarding() {
     [ "$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)" = "1" ] && return 0
     local dif cf="/etc/sysctl.d/99-mporter-ipv6.conf" lines=""
     for dif in $(ip -6 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | sort -u); do
-        sysctl -w "net.ipv6.conf.${dif}.accept_ra=2" >/dev/null 2>&1
+        sysctl -w "net.ipv6.conf.${dif}.accept_ra=2" >/dev/null 2>&1 || return 1
         lines+="net.ipv6.conf.${dif}.accept_ra=2"$'\n'
     done
-    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
-    { printf '%s' "$lines"; echo "net.ipv6.conf.all.forwarding=1"; } > "$cf" 2>/dev/null
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1 || return 1
+    [ "$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)" = "1" ] || return 1
+    ( umask 077; { printf '%s' "$lines"; echo "net.ipv6.conf.all.forwarding=1"; } > "$cf" ) || return 1
+    return 0
 }
 
 # Never kills the worker (killing apt/dpkg mid-install breaks the system). It only waits.
@@ -2099,11 +2129,6 @@ draw_header() {
 
     echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
     echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${STATS_SERVER_IP}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${STATS_HAP_STAT} ${DIM}RLM:${NC} ${STATS_RLM_STAT} ${DIM}GST:${NC} ${STATS_GST_STAT} ${DIM}IPT:${NC} ${STATS_IPT_STAT} ${B}│${NC} ${DIM}IPs:${NC} ${STATS_IP_STATUS} ${B}│${NC} ${DIM}Pts:${NC} ${G}${STATS_TOTAL_PORTS}${NC}${padding}${B}│${NC}"
-    if [ -n "${STATS_SERVER_IP6:-}" ]; then
-        local raw6=" IPv6: ${STATS_SERVER_IP6} │ IPv6 targets: HAP/GST/RLM/IPT " pad6
-        pad6=$(( 106 - ${#raw6} )); (( pad6 < 0 )) && pad6=0
-        echo -e "  ${B}│${NC} ${DIM}IPv6:${NC} ${W}${STATS_SERVER_IP6}${NC} ${B}│${NC} ${DIM}IPv6 targets:${NC} ${G}HAP/GST/RLM/IPT${NC}$(printf '%*s' "$pad6" "")${B}│${NC}"
-    fi
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"
@@ -2253,7 +2278,7 @@ smart_map() {
     fi
     echo -ne "\n  ${C}●${NC} ${W}Enter Exact Local Ports (e.g. 80,443)${MP_BH_PUBLIC_PORTS:+ [Enter: $MP_BH_PUBLIC_PORTS]}: ${NC}"; read -r raw_ports
     raw_ports="${raw_ports:-$MP_BH_PUBLIC_PORTS}"
-    clean_ports=$(parse_ports "$raw_ports")
+    if ! clean_ports=$(parse_ports "$raw_ports"); then echo -e "  ${R}● Invalid port list. Use commas/ranges only (e.g. 80,443 or 10000:10100).${NC}"; sleep 1.5; return; fi
     if [ -n "$bh_meta" ]; then
         for p in $clean_ports; do
             mp_bh_target_port "$bh_meta" "$p" >/dev/null || { echo -e "  ${R}● Port $p is not configured in Backhaul.${NC}"; sleep 2; return; }
@@ -2306,7 +2331,10 @@ smart_map() {
                ipt_add+="$ipb -w 5 -t nat -A POSTROUTING -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j MASQUERADE"$'\n'
                ipt_add+="$ipb -w 5 -I FORWARD -d $t -p tcp --dport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
                ipt_add+="$ipb -w 5 -I FORWARD -s $t -p tcp --sport $p -m comment --comment \"MPORTER_NAT_$t\" -j ACCEPT"$'\n'
-               if is_v6 "$t"; then enable_v6_forwarding; command -v ip6tables >/dev/null 2>&1 || echo -e "  ${Y}⚠ ip6tables not found: IPv6 Kernel NAT rule for $t will not apply.${NC}"; fi
+               if is_v6 "$t"; then
+                   enable_v6_forwarding || { echo -e "  ${R}● Could not enable persistent IPv6 forwarding; mapping aborted.${NC}"; return 1; }
+                   command -v ip6tables >/dev/null 2>&1 || { echo -e "  ${R}● ip6tables not found; IPv6 Kernel NAT mapping aborted.${NC}"; return 1; }
+               fi
                fi ;;
         esac
         map_target[$p]="$t"; mapped_ports+=("$p")
@@ -2414,7 +2442,7 @@ smart_loadbalance() {
 
     local raw_ports clean_ports
     echo -ne "  ${C}●${NC} ${W}Ports (e.g. 443,8443): ${NC}"; read -r raw_ports
-    clean_ports=$(parse_ports "$raw_ports")
+    if ! clean_ports=$(parse_ports "$raw_ports"); then echo -e "  ${R}● Invalid port list. Use commas/ranges only.${NC}"; sleep 1.5; return; fi
     [ -n "$clean_ports" ] || { echo -e "  ${R}● Invalid port list.${NC}"; sleep 1.5; return; }
 
     local active_ifs=(); mapfile -t active_ifs < <(tunnel_ifaces)
@@ -3065,9 +3093,66 @@ show_mporter_info() {
 }
 
 setup_mporter_service
+MAIN_PID=$$
+NEED_REFRESH=false
+trap 'NEED_REFRESH=true' SIGUSR1
+MPORTER_UPDATE_CHECK_INTERVAL=30
 check_update_bg >/dev/null 2>&1 &
+mporter_update_watcher() {
+    while true; do
+        sleep "$MPORTER_UPDATE_CHECK_INTERVAL"
+        check_update_bg >/dev/null 2>&1
+        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+    done
+}
+mporter_update_watcher &
+MPORTER_WATCHER_PID=$!
+trap 'kill "$MPORTER_WATCHER_PID" 2>/dev/null' EXIT
 state_init >/dev/null 2>&1 || true
 ensure_haproxy_base >/dev/null 2>&1 || true
+
+read_with_refresh() {
+    local prompt="$1"
+    local __resultvar="$2"
+    local redraw_func="$3"
+    local buffer=""
+    local char rc
+    echo -ne "$prompt"
+
+    while true; do
+        if [ "$NEED_REFRESH" = true ]; then
+            NEED_REFRESH=false
+            if [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
+                "$redraw_func"
+                echo -ne "$prompt$buffer"
+            fi
+        fi
+
+        IFS= read -rsn1 -t 0.3 char
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                continue
+            fi
+            return "$rc"
+        fi
+        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
+            echo ""
+            break
+        fi
+        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
+            if [ -n "$buffer" ]; then
+                buffer="${buffer%?}"
+                echo -ne "\b \b"
+            fi
+            continue
+        fi
+        buffer+="$char"
+        echo -ne "$char"
+    done
+
+    printf -v "$__resultvar" '%s' "$buffer"
+}
 
 # BEGIN MTUNNEL WORKSPACE V14.0.1
 # Embedded in each module: no external library or sourced setup-link code.
@@ -3167,7 +3252,7 @@ render_mporter_menu() {
 
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
-    else render_mporter_menu; printf '  %bMPorter ❯❯ %b' "$C" "$NC"; read -r opt || break; fi
+    else render_mporter_menu; read_with_refresh "  ${C}MPorter ❯❯ ${NC}" opt render_mporter_menu || break; fi
     mt_workspace_route "$opt" || continue
     if [ "$MT_ACTION" = bbr ]; then mt_run_tool mbbr --from-tunnel; continue; fi
     if [ "$MT_ACTION" = backup ]; then mp_backup_configs; continue; fi

@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v14.0.1 ---
+# --- MTunnel Master Core | Central Dashboard v14.0.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="14.0.1"
+MODULE_VERSION="14.0.2"
 umask 077
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -13,6 +13,25 @@ mt_normalize_host() {
 }
 mt_valid_port() {
     [[ "$1" =~ ^[0-9]{1,5}$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535))
+}
+
+mt_legacy_core_subnet() {
+    local id="$1" kind="${2:-gre}" n idx a b
+    [[ "$id" =~ ^[0-9]{1,9}$ ]] || return 1
+    n=$((10#$id))
+    if [ "$kind" == vxlan ]; then
+        if ((n <= 255)); then printf '10.88.%d' "$n"; return 0; fi
+        idx=$(((n - 256) % 32768))
+        a=$((128 + idx / 256)); b=$((idx % 256))
+    else
+        if ((n <= 255)); then printf '10.76.%d' "$n"; return 0; fi
+        # Extended GRE space uses 10.0.0.0/9 while reserving legacy 10.76/16 and 10.88/16.
+        idx=$(((n - 256) % 32256))
+        a=$((idx / 256)); b=$((idx % 256))
+        ((a >= 76)) && a=$((a + 1))
+        ((a >= 88)) && a=$((a + 1))
+    fi
+    printf '10.%d.%d' "$a" "$b"
 }
 mt_valid_ipv4() {
     local part; local -a octets=()
@@ -244,9 +263,10 @@ mt_counter_sum() {
     awk -v tag="$2" '{for(i=1;i<=NF;i++) if($i==tag){sum+=$2;break}} END {printf "%.0f\n",sum}' <<< "$1"
 }
 mt_setup_counter_pair() {
-    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" bin addr family
+    local prefix="$1" name="$2" port="$3" remote="$4" role="$5" bind="${6:-0.0.0.0}" proto="${7:-tcp}" bin addr
     local -a addresses=() input=() output=()
     mt_valid_port "$port" || return 1
+    [[ "$proto" =~ ^(tcp|udp)$ ]] || return 1
     if [ "$role" == 1 ]; then
         input=(--dport "$port"); output=(--sport "$port")
         if [[ "$bind" == *:* ]]; then addresses=('::'); else addresses=('0.0.0.0'); fi
@@ -256,16 +276,15 @@ mt_setup_counter_pair() {
         if mt_valid_ipv4 "$remote" || mt_valid_ipv6 "$remote"; then addresses=("$remote")
         else mapfile -t addresses < <({ getent ahostsv4 "$remote"; getent ahostsv6 "$remote"; } 2>/dev/null | awk '{print $1}' | sort -u); fi
     fi
-    # IPv6 wildcard sockets may also accept IPv4 on Linux; count both families.
     if [ "$role" == 1 ] && [ "$bind" == '::' ]; then addresses+=('0.0.0.0'); fi
     for addr in "${addresses[@]}"; do
         bin=iptables; [[ "$addr" == *:* ]] && bin=ip6tables
         command -v "$bin" >/dev/null 2>&1 || continue
         if [ "$role" != 1 ]; then input=(-s "$addr" --sport "$port"); output=(-d "$addr" --dport "$port"); fi
-        "$bin" -w 5 -t mangle -C INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A INPUT -p tcp "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
-        "$bin" -w 5 -t mangle -C OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
-            "$bin" -w 5 -t mangle -A OUTPUT -p tcp "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
+        "$bin" -w 5 -t mangle -C OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" 2>/dev/null ||
+            "$bin" -w 5 -t mangle -A OUTPUT -p "$proto" "${output[@]}" -m comment --comment "${prefix}_TX_${name}" || return 1
     done
 }
 mt_tagged_rules() {
@@ -293,8 +312,11 @@ mt_tunnel_addresses() {
         if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${CORE_V6}::1"; MT_CORE_PEER="${CORE_V6}::2"
         else MT_CORE_LOCAL="${CORE_V6}::2"; MT_CORE_PEER="${CORE_V6}::1"; fi
     else
-        subnet="${CORE_SUBNET:-10.76.${TUN_ID:-}}"
-        [ -z "${VNI_ID:-}" ] || subnet="${CORE_SUBNET:-10.88.$VNI_ID}"
+        subnet="${CORE_SUBNET:-}"
+        if [ -z "$subnet" ]; then
+            if [ -n "${VNI_ID:-}" ]; then subnet=$(mt_legacy_core_subnet "$VNI_ID" vxlan) || return 1
+            else subnet=$(mt_legacy_core_subnet "${TUN_ID:-}" gre) || return 1; fi
+        fi
         if [ "${TYPE:-}" == 1 ]; then MT_CORE_LOCAL="${subnet}.1"; MT_CORE_PEER="${subnet}.2"
         else MT_CORE_LOCAL="${subnet}.2"; MT_CORE_PEER="${subnet}.1"; fi
     fi
@@ -507,7 +529,7 @@ mt_validate_tunnel_conf() {
     [ -z "$CUSTOM_MTU" ] || { [[ "$CUSTOM_MTU" =~ ^[0-9]{3,5}$ ]] && ((10#$CUSTOM_MTU >= 512 && 10#$CUSTOM_MTU <= 65535)); } || return 1
     if [ "$kind" == gre ]; then
         [[ "$T_NAME" =~ ^[A-Za-z0-9_.-]{1,15}$ && "$TUN_ID" =~ ^[0-9]{1,9}$ && "$TUN_PROTO" =~ ^(ipv4|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]] || return 1
-        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="10.76.$((10#$TUN_ID))"
+        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$TUN_ID" gre)" || return 1
         case "$TUN_PROTO" in
             gre6|ipip4to6|ipip6to6) mt_valid_ipv6 "${LOCAL_PUB6:-$LOCAL_IP6}" && mt_valid_ipv6 "${REMOTE_PUB6:-$REMOTE_IP6}" || return 1;;
             *) mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1;;
@@ -520,6 +542,7 @@ mt_validate_tunnel_conf() {
         local main_mx_mtu_max=1450
         [ "$FAB_PROTO" != ipv6 ] || main_mx_mtu_max=1430
         [ -z "$CUSTOM_MTU" ] || ((10#$CUSTOM_MTU >= 900 && 10#$CUSTOM_MTU <= main_mx_mtu_max)) || return 1
+        [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$VNI_ID" vxlan)" || return 1
         mt_valid_ipv4 "$CORE_SUBNET.1" || return 1
         if [ "$FAB_PROTO" == ipv6 ]; then mt_valid_ipv6 "$LOCAL_PUB6" && mt_valid_ipv6 "$REMOTE_PUB6" || return 1
         else mt_valid_ipv4 "$LOCAL_PUB" && mt_valid_ipv4 "$REMOTE_PUB" || return 1; fi
@@ -846,7 +869,7 @@ collect_active_tunnels_stats() {
             ip link show "$VX_NAME" >/dev/null 2>&1 || continue
             [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" == "down" ] && continue
             local pure="${VX_NAME#vx_}"
-            local c_sub="${CORE_SUBNET:-10.88.${VNI_ID}}"
+            local c_sub="${CORE_SUBNET:-$(mt_legacy_core_subnet "$VNI_ID" vxlan)}"
             mt_tunnel_addresses || continue
             local peer_vip="$MT_CORE_PEER"; REMOTE_PUB="$MT_REMOTE_PUBLIC"
             local vip_stat="OFF"
@@ -1085,13 +1108,16 @@ is_package_or_bin_installed() {
 draw_header_lines_only() {
     local s_ip=$(get_local_ip)
     s_ip="${s_ip:0:16}"
+
     local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+
     local web_col="${DIM}" web_icon="○" web_text="OFFLINE"
     if systemctl is-active --quiet mweb.service 2>/dev/null; then
         local w_port="1000"
         [ -f "/etc/mweb/web.conf" ] && w_port=$(grep "WEB_PORT" /etc/mweb/web.conf | cut -d= -f2 | tr -d ' ' | tr -d '\r')
         web_col="${G}"; web_icon="●"; web_text="PORT ${w_port}"
     fi
+
     local porter_col="${DIM}" porter_icon="○" porter_text="OFF"
     if systemctl is-active --quiet mporter.service 2>/dev/null || \
        systemctl is-active --quiet haproxy 2>/dev/null || \
@@ -1099,33 +1125,43 @@ draw_header_lines_only() {
        systemctl is-active --quiet mporter-iptables 2>/dev/null; then
         porter_col="${G}"; porter_icon="●"; porter_text="ON"
     fi
+
     local bbr_col="${DIM}" bbr_icon="○" bbr_text="OFF"
     [ "$bbr_cc" == "bbr" ] && { bbr_col="${G}"; bbr_icon="●"; bbr_text="ON"; }
+
     local cpu_pct=0 cpu_cores=1 r_used="0G" r_total="0G" r_pct=0 rx_speed="0 B/s" tx_speed="0 B/s" v6_status="OFF"
     if [ -f "$SECURE_TMP/.main_sys_stats" ]; then
         IFS='|' read -r cpu_pct cpu_cores r_used r_total r_pct rx_speed tx_speed v6_status < "$SECURE_TMP/.main_sys_stats"
     fi
+
     local cpu_col="${G}"
     [ "$cpu_pct" -gt 60 ] 2>/dev/null && cpu_col="${Y}"
     [ "$cpu_pct" -gt 85 ] 2>/dev/null && cpu_col="${R}"
     local cpu_str="${cpu_pct}%"
+
     local core_label="${cpu_cores} Cores"
     [ "$cpu_cores" -eq 1 ] 2>/dev/null && core_label="1 Core"
+
     local ram_col="${G}"
     [ "$r_pct" -gt 70 ] 2>/dev/null && ram_col="${Y}"
     [ "$r_pct" -gt 88 ] 2>/dev/null && ram_col="${R}"
     local ram_str="${r_used}/${r_total} [${r_pct}%]"
+
     local rx_col="${DIM}"
     [[ "$rx_speed" != "0 B/s" && -n "$rx_speed" ]] && rx_col="${G}"
+
     local tx_col="${DIM}"
     [[ "$tx_speed" != "0 B/s" && -n "$tx_speed" ]] && tx_col="${Y}"
+
     local v6_col="${DIM}" v6_icon="○" v6_text="OFF"
     if [ "$v6_status" == "ON" ]; then
         v6_col="${G}"; v6_icon="●"; v6_text="ON"
     fi
+
     local border
     printf -v border '%*s' 117 ''
     border="${border// /─}"
+
     printf "\033[K\n"
     printf "  ${B}╭${border}╮${NC}\033[K\n"
     # Row 1: 31 | 25 | 21 | 18 | 18 = 117 columns
@@ -1143,25 +1179,32 @@ draw_header_lines_only() {
         "$tx_col" "$tx_speed" "$NC" \
         "$v6_col" "$v6_icon" "$NC" "$v6_text"
     printf "  ${B}├${border}┤${NC}\033[K\n"
+
     local shown=0
     if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
         while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
             [ -z "$t_proto" ] && continue
             ((shown++))
             [ "$shown" -gt 3 ] && break
+
             local pure_name=$(echo "$t_name" | tr -d ' ')
             [ ${#pure_name} -gt 8 ] && pure_name="${pure_name:0:8}"
             local name_tag="${pure_name} [${t_proto}]"
             [ ${#name_tag} -gt 17 ] && name_tag="${name_tag:0:17}"
+
             [ ${#t_remote} -gt 16 ] && t_remote="${t_remote:0:16}"
+
             local if_uptime=$(get_iface_uptime_pure "$t_dev")
             local stat_icon="●"; local stat_col="${G}"
             if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
             [ ${#if_uptime} -gt 10 ] && if_uptime="${if_uptime:0:10}"
+
             local fwd_col="${DIM}"; [ "$t_fwd" != "OFF" ] && fwd_col="${C}"
             local fwd_str="${t_fwd:0:9}"
+
             local vip_col="${DIM}"; [ "$t_vip" != "OFF" ] && vip_col="${G}"
             local vip_stat="${t_vip:0:5}"
+
             local live_ping="---"
             if [ -n "$t_ping" ] && [ "$t_ping" != "---" ]; then
                 local num_p="${t_ping%ms}"
@@ -1172,6 +1215,7 @@ draw_header_lines_only() {
                 fi
             fi
             [ ${#live_ping} -gt 5 ] && live_ping="${live_ping:0:5}"
+
             local loss_col="${DIM}"; local loss_disp="---"
             if [ "$t_loss" != "---" ] && [ -n "$t_loss" ]; then
                 loss_disp="${t_loss}%"
@@ -1180,19 +1224,23 @@ draw_header_lines_only() {
                 else loss_col="${R}"; fi
             fi
             [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
+
             printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-16.16s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${B}│${NC}\033[K\n" \
                 "$stat_col" "$stat_icon" "$NC" "$name_tag" "$t_remote" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
+
     if [ "$shown" -eq 0 ]; then
         printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}\033[K\n" "No active tunnels or fabrics deployed across the ecosystem."
     fi
     printf "  ${B}╰${border}╯${NC}\033[K\n"
 }
+
 draw_main_header() {
     clear
     draw_header_lines_only
 }
+
 refresh_header_live() {
     tput civis 2>/dev/null || true
     printf "\033[s"      # Save cursor position (ANSI)
@@ -1225,7 +1273,7 @@ read_with_refresh() {
         IFS= read -rsn1 -t 0.3 char
         rc=$?
         if [ $rc -ne 0 ]; then
-            [ "$rc" -eq 142 ] && continue
+            { [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; } && continue
             return "$rc"
         fi
         if [[ -z "$char" ]]; then

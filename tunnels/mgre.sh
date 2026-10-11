@@ -3093,7 +3093,6 @@ while true; do
 
            if [ "$tun_proto" = ipip6to6 ]; then
                MT_NEW_VIP_COUNT=0
-               echo '  IPv4 Virtual IP pairs are unavailable for IPv6-only IPIP6->6.'
            else mt_workspace_vip || continue; fi
            conf_path="$CONF_DIR/${t_name}.conf"
            {
@@ -3105,15 +3104,7 @@ while true; do
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
                mt_ask_bbr_on_create
-               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully (Protocol: ${tun_proto} | MTU: ${cust_mtu:-Default})${NC}"
-               pt=$(TYPE="$s_type" TUN_PROTO="$tun_proto" CORE_SUBNET="$core_sub" CORE_V6="$core_v6"; mgre_core_ips; echo "$CORE_PING|$CORE_TIP")
-               ping_cmd="${pt%%|*}"; remote_tip="${pt#*|}"
-               mgre_proto_is_v6 "$tun_proto" && echo -e "  ${DIM}● IPv6 underlay (${tun_proto}): allow the tunnel protocol over IPv6 in the firewall on BOTH servers (GRE=47, IPIP4>6=4, IPIP6>6=41).${NC}"
-               echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read -r run_initial_ping; run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
-                   $ping_cmd -c 4 -W 1 "$remote_tip" 2>&1
-               fi
-
+               echo -e "  ${G}● Tunnel [${t_name}] deployed successfully.${NC}"
                # Port forwarding is meaningful only on the IRAN/access side when the tunnel payload is IPv4.
                if [[ "$s_type" == "1" && "$tun_proto" != "ipip6to6" ]]; then
                    echo -ne "  ${C}●${NC} ${W}Do you want to configure Port Forwarding / Load Balancer now? (y/n): ${NC}"
@@ -3122,8 +3113,6 @@ while true; do
                    if [[ "$setup_fwd_now" == "y" || "$setup_fwd_now" == "yes" ]]; then
                        manage_port_forwarding "$conf_path"
                    fi
-               elif [[ "$s_type" == "1" && "$tun_proto" == "ipip6to6" ]]; then
-                   echo -e "  ${DIM}● Port Forwarding is skipped: IPIP6→6 carries IPv6 payload and the current forwarder is IPv4/NAT based.${NC}"
                fi
                mt_link_offer "$conf_path"
            else

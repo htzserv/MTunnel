@@ -2955,25 +2955,7 @@ while true; do
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
                mt_ask_bbr_on_create
-               echo -e "  ${G}● Fabric [${vx_name}] deployed (Underlay: ${fab_proto} | VNI: ${vni_id} | Subnet: ${core_sub}.x | MTU: ${cust_mtu:-Default})${NC}"
-               [ "$fab_proto" == "ipv6" ] && echo -e "  ${DIM}● IPv6 underlay: allow UDP 4789 over IPv6 in the firewall on BOTH servers.${NC}"
-               remote_tip=$([ "$s_type" == "1" ] && echo "${core_sub}.2" || echo "${core_sub}.1")
-
-               echo -ne "\n  ${C}●${NC} ${W}Run initial ping test to peer now? (y/n): ${NC}"; read -r run_initial_ping
-               run_initial_ping=$(echo "$run_initial_ping" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-               if [[ "$run_initial_ping" == "y" || "$run_initial_ping" == "yes" ]]; then
-                   echo -e "  ${DIM}┌─[ INITIAL PING TEST TO PEER ]${NC}"
-                   echo -e "  ${DIM}│${NC} Pinging ${remote_tip} (4 Packets)..."
-                   ping_res=$(ping -c 4 -W 1 "$remote_tip" 2>&1)
-                   if echo "$ping_res" | grep -q "time="; then
-                       lat=$(echo "$ping_res" | grep -oP 'min/avg/max/mdev = \K[^/]+/[^/]+' | cut -d/ -f2)
-                       lat_int=$(awk -v v="$lat" 'BEGIN {printf "%.0f", v}')
-                       echo -e "  ${DIM}└─${NC} ${G}SUCCESS!${NC} Average Latency: ${Y}${lat_int}ms${NC}"
-                   else
-                       echo -e "  ${DIM}└─${NC} ${R}FAILED!${NC} Destination Host Unreachable."
-                   fi
-               fi
-
+               echo -e "  ${G}● Fabric [${vx_name}] deployed successfully.${NC}"
                if [ "$s_type" == "1" ]; then
                    echo -ne "\n  ${C}●${NC} ${W}Do you want to setup Port Forwarding? (y/n): ${NC}"; read -r setup_pf
                    setup_pf=$(echo "$setup_pf" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')

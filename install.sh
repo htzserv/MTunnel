@@ -2,6 +2,7 @@
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
 MODULE_VERSION="1.0.1"
 umask 077
+DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"
 
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -97,7 +98,7 @@ mt_is_newer_version() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
 # True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
-mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:1}" != 1 ] && mt_is_newer_version "$1" "$2"; }
+mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -700,15 +701,26 @@ installer_main() {
     local current=0 mod_ver
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; shift 2;;
+            --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; remote=''; shift 2;;
             --root) [ "$#" -ge 2 ] || return 1; root="${2%/}"; launch=0; shift 2;;
             --with-cores) with_cores=1; shift;;
             --no-launch) launch=0; shift;;
-            --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; shift 2;;
+            --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; source_dir=''; shift 2;;
+            --online) remote="$DEFAULT_REMOTE"; source_dir=''; shift;;
+            --allow-downgrade) export MT_ALLOW_DOWNGRADE=1; shift;;
             --help|-h)
-                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE] [--no-launch]'
-                echo 'Without options: use adjacent scripts, or download from GitHub.'
-                echo 'Optional local binaries: --with-cores. Test installation: --root DIR. Set MT_ALLOW_DOWNGRADE=1 to install an older version over a newer one.'
+                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--allow-downgrade] [--no-launch]'
+                echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
+                echo '  --online             Force online install from the official GitHub source.'
+                echo '  --allow-downgrade    Permit installing an older module over a newer installed one.'
+                echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
+                echo '  --with-cores         Also install bundled binary cores when available.'
+                echo '  --root DIR           Test-install under DIR without touching the live root.'
+                echo ''
+                echo 'Local downgrade example:'
+                echo '  sudo MT_ALLOW_DOWNGRADE=1 bash install.sh'
+                echo 'Online one-line example:'
+                echo '  curl -fsSL https://raw.githubusercontent.com/htzserv/MTunnel/main/install.sh | sudo bash -s -- --online --allow-downgrade'
                 return 0;;
             *) echo "Unknown option: $1" >&2; return 1;;
         esac
@@ -722,7 +734,7 @@ installer_main() {
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
         elif [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
-        else remote="${MTUNNEL_REPO_URL:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"; fi
+        else remote="$DEFAULT_REMOTE"; fi
     fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"

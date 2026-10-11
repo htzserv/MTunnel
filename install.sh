@@ -97,7 +97,7 @@ mt_is_newer_version() {
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
 # True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
-mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
+mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:1}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"

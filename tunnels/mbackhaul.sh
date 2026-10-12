@@ -2567,8 +2567,7 @@ mt_term_cols() {
     [ "$c" -ge 32 ] || c=32
     printf '%s' "$c"
 }
-# Desktop keeps the spacious menu. Narrow/mobile terminals switch to a compact
-# row layout and trim only the visual label, never the option/action itself.
+# Responsive menu row: compact on all terminal widths; visual labels may trim on narrow screens.
 mt_workspace_row() {
     local cols max_label label="$2"
     cols=$(mt_term_cols)
@@ -2576,7 +2575,6 @@ mt_workspace_row() {
     [ ${#label} -le "$max_label" ] || label="${label:0:$((max_label-1))}…"
     printf '  %b├─%b %b%-2s%b%b❯%b %b\033[1m%s%b%b\n' \
         "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
-    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
 }
 mt_workspace_group() {
     local cols; cols=$(mt_term_cols)

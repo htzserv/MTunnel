@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v15.0.1 ---
+# --- MTunnel Master Core | Central Dashboard v15.0.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="15.0.1"
+MODULE_VERSION="15.0.2"
 umask 077
 # BEGIN MTUNNEL SHARED HELPERS
 # Internal helpers; each distributed script contains its own copy.
@@ -1146,6 +1146,19 @@ draw_header_lines_only() {
 
     local term_cols boxw content_w compact_line border
     term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-120}")
+    if [ "$term_cols" -lt 72 ]; then
+        local tun_count=0
+        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 66 ] && boxw=66
+        content_w=$((boxw - 2))
+        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
+        [ -f "$SECURE_TMP/.main_tun_stats" ] && tun_count=$(awk -F'|' 'NF>2{n++} END{print n+0}' "$SECURE_TMP/.main_tun_stats" 2>/dev/null)
+        printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
+        compact_line="MDesign v${MODULE_VERSION} | ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="Tunnels ${tun_count} | Web ${web_text} | Porter ${porter_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        printf "  ${B}╰${border}╯${NC}\033[K\n"
+        return 0
+    fi
     if [ "$term_cols" -lt 124 ]; then
         boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
         content_w=$((boxw - 2))

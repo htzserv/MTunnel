@@ -1,5 +1,5 @@
 #!/bin/bash
-MODULE_VERSION="15.0.1"
+MODULE_VERSION="15.0.2"
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; W='\033[1;37m'; C='\033[0;36m'; DIM='\033[2;37m'; NC='\033[0m'
 scope=all
 while [ "$#" -gt 0 ]; do case "$1" in --scope) scope="${2:-all}"; shift 2;; --render) shift;; *) shift;; esac; done

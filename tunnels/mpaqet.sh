@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v15.0.1 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v15.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="15.0.1"
+MODULE_VERSION="15.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -1707,7 +1707,7 @@ hdr_stats_loop() {
 }
 
 draw_header() {
-    local s_ip=$(get_local_ip); local total_tunnels=0; local online_tunnels=0; local active_t=0; local mtu_err_t=0; local err_t=0
+    local s_ip=$(get_local_ip); local total_tunnels=0; local online_tunnels=0; local active_t=0; local mtu_err_t=0; local err_t=0; local waiting_t=0; local connecting_t=0
     local t_names=() units=()
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
@@ -1723,9 +1723,13 @@ draw_header() {
             if [ "${states[$i]}" == "active" ]; then
                 ((active_t++))
                 local st=$(check_paqet_connection "$t_name" "1")
-                [ "$st" == "ONLINE" ] && ((online_tunnels++))
-                [ "$st" == "MTU-ERR" ] && ((mtu_err_t++))
-                [ "$st" == "ERRORS" ] && ((err_t++))
+                case "$st" in
+                    ONLINE) ((online_tunnels++));;
+                    WAITING) ((waiting_t++));;
+                    CONNECTING) ((connecting_t++));;
+                    MTU-ERR) ((mtu_err_t++));;
+                    ERRORS) ((err_t++));;
+                esac
             fi
             ((i++))
         done
@@ -1754,8 +1758,12 @@ draw_header() {
             stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"
         elif [ "$online_tunnels" -gt 0 ]; then 
             stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL"
-        else 
+        elif [ "$connecting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="CONNECTING"
+        elif [ "$waiting_t" -gt 0 ]; then
             stat_color="${Y}"; stat_icon="◎"; stat_text="WAITING"
+        else
+            stat_color="${Y}"; stat_icon="◎"; stat_text="STARTING"
         fi
     fi
 
@@ -1823,6 +1831,19 @@ draw_header() {
         [ "$online_tunnels" -gt 0 ] && g_text="N/A"
     fi
 
+    local term_cols boxw cw border compact_line
+    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-132}")
+    if [ "$term_cols" -lt 132 ]; then
+        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 80 ] && boxw=80
+        cw=$((boxw - 2)); printf -v border '%*s' "$cw" ''; border="${border// /─}"
+        [ -z "${HEADER_LIVE:-}" ] && clear
+        echo -e "\n  ${B}╭${border}╮${NC}"
+        compact_line="MPaqet v${MODULE_VERSION} | ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$compact_line"
+        compact_line="Core ${core_raw} | Active ${act_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$compact_line"
+        compact_line="Status ${stat_text} | Peer ${g_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$compact_line"
+        echo -e "  ${B}╰${border}╯${NC}"
+        return 0
+    fi
     local title=" MPaqet Engine v${MODULE_VERSION} "
     local full_str=" │${title}│ IP: ${s_ip} │ Core: ${core_raw} │ Peer Ping: ${g_text} │ ACTIVE: ${act_text} │ STATUS: ${stat_icon} ${stat_text} "
     local pad_len=$(( 126 - ${#full_str} ))
@@ -2102,7 +2123,7 @@ uninstall_mpaqet() {
     exit 0
 }
 
-check_first_run_core
+[ -n "${MT_PEER_LINK:-}" ] || check_first_run_core
 setup_systemd_service
 
 show_tunnels_info() {
@@ -2121,30 +2142,87 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V15.0.1
+# BEGIN MTUNNEL WORKSPACE V15.0.2
 # Embedded in each module: no external library or sourced setup-link code.
-mt_ask() { # styled prompt: mt_ask VAR "text"
+mt_header_refresh_now() {
+    [ -t 1 ] || return 0
+    [ -n "${MT_HEADER:-}" ] || return 0
+    local frame
+    frame=$(HEADER_LIVE=1 "$MT_HEADER" 2>/dev/null) || return 0
+    [ -n "$frame" ] || return 0
+    printf '\0337\033[1;1H%s\0338' "$frame"
+}
+mt_live_readline() {
+    local __var="$1" prompt="$2" buffer="" char rc now last_refresh=0
+    printf '%b' "$prompt"
+    while true; do
+        IFS= read -rsn1 -t 0.25 char
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                now=$(date +%s)
+                if [ "$now" != "$last_refresh" ]; then
+                    last_refresh="$now"
+                    mt_header_refresh_now
+                fi
+                continue
+            fi
+            return "$rc"
+        fi
+        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
+            echo
+            break
+        fi
+        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
+            if [ -n "$buffer" ]; then
+                buffer="${buffer%?}"
+                printf '\b \b'
+            fi
+            continue
+        fi
+        buffer+="$char"
+        printf '%s' "$char"
+    done
+    printf -v "$__var" '%s' "$buffer"
+}
+mt_ask() { # styled prompt + live header refresh while waiting for peer input
     local __var="$1"; shift
-    printf '  %b●%b %b%s%b ' "$C" "$NC" "$W" "$*" "$NC"
-    read -r "$__var"
+    mt_live_readline "$__var" "  ${C}●${NC} ${W}$*${NC} "
 }
 mt_workspace_screen() { "$MT_HEADER"; }
-# Keep the stable palette, tree layout and aligned one/two-digit option numbers.
+mt_term_cols() {
+    local c
+    c=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-80}")
+    [[ "$c" =~ ^[0-9]+$ ]] || c=80
+    [ "$c" -ge 32 ] || c=32
+    printf '%s' "$c"
+}
+# Desktop keeps the spacious menu. Narrow/mobile terminals switch to a compact
+# row layout and trim only the visual label, never the option/action itself.
 mt_workspace_row() {
-    printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b%b\n' \
-        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$2" "$NC" "${4:-}"
+    local cols max_label label="$2"
+    cols=$(mt_term_cols)
+    max_label=$((cols - 12)); [ "$max_label" -lt 12 ] && max_label=12
+    [ ${#label} -le "$max_label" ] || label="${label:0:$((max_label-1))}…"
+    printf '  %b├─%b %b%-2s%b%b❯%b %b\033[1m%s%b%b\n' \
+        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
+    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
 }
 mt_workspace_group() {
+    local cols; cols=$(mt_term_cols)
     if [ "${2:-}" = first ]; then
         printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$1" "$NC"
     else
-        printf '  %b│%b\n  %b├─[ %s ]%b\n' "$DIM" "$NC" "$DIM" "$1" "$NC"
+        [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
+        printf '  %b├─[ %s ]%b\n' "$DIM" "$1" "$NC"
     fi
-    printf '  %b│%b\n' "$DIM" "$NC"
+    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
 }
 mt_workspace_footer() {
-    printf '  %b│%b\n  %b└─%b %b0%b %b❯%b %b%s%b\n\n' \
-        "$DIM" "$NC" "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
+    local cols; cols=$(mt_term_cols)
+    printf '  %b└─%b %b0%b %b❯%b %b\033[1m%s%b\n' \
+        "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
+    [ "$cols" -lt 72 ] || printf '\n'
 }
 mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
     local title="$1" entry id label action color choice; shift
@@ -2167,8 +2245,8 @@ mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
     done
 }
 mt_workspace_pause() {
-    printf '  %bPress Enter to continue...%b' "$DIM" "$NC"
-    read -r _ || true
+    local _pause_input
+    mt_live_readline _pause_input "  ${DIM}Press Enter to continue...${NC}" || true
 }
 mt_link_encode() {
     mt_link_validate || return 1
@@ -2253,12 +2331,23 @@ mt_clipboard_copy() {
     if [ -w /dev/tty ]; then printf '%s' "$seq" > /dev/tty 2>/dev/null; else printf '%s' "$seq"; fi
 }
 mt_peer_copy_prompt() {
-    local link="$1" key
+    local link="$1" key rc now last_refresh=0
     mt_clipboard_copy "$link" >/dev/null 2>&1 || true
     echo -e "  ${G}●${NC} ${W}Peer Code sent to clipboard.${NC} ${DIM}(terminal support required)${NC}"
     while true; do
         printf '  %bC%b = Copy again   %bEnter%b = Continue ❯❯ ' "$C" "$NC" "$C" "$NC"
-        IFS= read -rsn1 key || return 0
+        while true; do
+            key=''
+            IFS= read -rsn1 -t 0.25 key
+            rc=$?
+            if [ $rc -eq 0 ]; then break; fi
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                now=$(date +%s)
+                if [ "$now" != "$last_refresh" ]; then last_refresh="$now"; mt_header_refresh_now; fi
+                continue
+            fi
+            return 0
+        done
         case "$key" in
             c|C)
                 mt_clipboard_copy "$link" >/dev/null 2>&1 || true
@@ -2459,6 +2548,31 @@ mt_link_offer() {
     case "${ans,,}" in n|no) return 0;; esac
     mt_link_export "$1"
 }
+mt_peer_ensure_core() {
+    is_paqet_core_valid && return 0
+    local choice
+    echo -e "\n  ${Y}● Paqet Core is required before applying this Peer Code.${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    while true; do
+        mt_live_readline choice "  ${C}Select Source ❯❯ ${NC}" || return 1
+        choice="${choice//$'\r'/}"
+        case "$choice" in
+            1|2)
+                if install_core_from_source "$choice"; then
+                    is_paqet_core_valid && return 0
+                    echo -e "  ${R}✖ Core installer returned but the binary is still unavailable.${NC}" >&2
+                    return 1
+                fi
+                echo -e "  ${R}✖ Core installation failed. Peer setup was not changed.${NC}" >&2
+                return 1
+                ;;
+            0|q|Q|'') return 1 ;;
+            *) echo -e "  ${R}✖ Invalid selection.${NC}" ;;
+        esac
+    done
+}
 mt_link_import() {
     local link ans name
     mt_workspace_screen
@@ -2483,6 +2597,7 @@ mt_link_import() {
     MT_LINK_DATA[NAME]="$name"
     mt_ask ans 'Is this correct? Create this peer tunnel? [y/N]: ' || return 1
     [[ "${ans,,}" == y || "${ans,,}" == yes ]] || return 0
+    mt_peer_ensure_core || { echo -e "  ${Y}● Peer setup cancelled before deployment.${NC}"; mt_workspace_pause; return 1; }
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
         mt_sync_bbr_from_peer "${MT_LINK_DATA[BBR]:-0}"
@@ -2511,7 +2626,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V15.0.1
+# END MTUNNEL WORKSPACE V15.0.2
 
 mt_link_paqet_values() {
     local yaml="$1" key val source

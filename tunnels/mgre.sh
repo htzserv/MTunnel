@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v15.0.1 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v15.0.2 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="15.0.1"
+MODULE_VERSION="15.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -1337,6 +1337,16 @@ draw_mgre_header() {
     echo ""
     local border term_cols
     term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-132}")
+    if [ "$term_cols" -lt 82 ]; then
+        local boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 76 ] && boxw=76
+        local cw=$((boxw - 2)) line
+        printf -v border '%*s' "$cw" ''; border="${border// /─}"
+        echo -e "  ${B}╭${border}╮${NC}"
+        line="MGRE v${MODULE_VERSION}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"
+        line="Local ${s_ip} | Active ${active_tunnels}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"
+        echo -e "  ${B}╰${border}╯${NC}"
+        return 0
+    fi
     if [ "$term_cols" -lt 130 ]; then
         local boxw=$((term_cols - 4)); [ "$boxw" -lt 34 ] && boxw=34; [ "$boxw" -gt 80 ] && boxw=80
         local cw=$((boxw - 2)) line cshown=0 peer p loss up
@@ -2408,30 +2418,87 @@ show_live_monitor() {
     done
 }
 
-# BEGIN MTUNNEL WORKSPACE V15.0.1
+# BEGIN MTUNNEL WORKSPACE V15.0.2
 # Embedded in each module: no external library or sourced setup-link code.
-mt_ask() { # styled prompt: mt_ask VAR "text"
+mt_header_refresh_now() {
+    [ -t 1 ] || return 0
+    [ -n "${MT_HEADER:-}" ] || return 0
+    local frame
+    frame=$(HEADER_LIVE=1 "$MT_HEADER" 2>/dev/null) || return 0
+    [ -n "$frame" ] || return 0
+    printf '\0337\033[1;1H%s\0338' "$frame"
+}
+mt_live_readline() {
+    local __var="$1" prompt="$2" buffer="" char rc now last_refresh=0
+    printf '%b' "$prompt"
+    while true; do
+        IFS= read -rsn1 -t 0.25 char
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                now=$(date +%s)
+                if [ "$now" != "$last_refresh" ]; then
+                    last_refresh="$now"
+                    mt_header_refresh_now
+                fi
+                continue
+            fi
+            return "$rc"
+        fi
+        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
+            echo
+            break
+        fi
+        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
+            if [ -n "$buffer" ]; then
+                buffer="${buffer%?}"
+                printf '\b \b'
+            fi
+            continue
+        fi
+        buffer+="$char"
+        printf '%s' "$char"
+    done
+    printf -v "$__var" '%s' "$buffer"
+}
+mt_ask() { # styled prompt + live header refresh while waiting for peer input
     local __var="$1"; shift
-    printf '  %b●%b %b%s%b ' "$C" "$NC" "$W" "$*" "$NC"
-    read -r "$__var"
+    mt_live_readline "$__var" "  ${C}●${NC} ${W}$*${NC} "
 }
 mt_workspace_screen() { "$MT_HEADER"; }
-# Keep the stable palette, tree layout and aligned one/two-digit option numbers.
+mt_term_cols() {
+    local c
+    c=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-80}")
+    [[ "$c" =~ ^[0-9]+$ ]] || c=80
+    [ "$c" -ge 32 ] || c=32
+    printf '%s' "$c"
+}
+# Desktop keeps the spacious menu. Narrow/mobile terminals switch to a compact
+# row layout and trim only the visual label, never the option/action itself.
 mt_workspace_row() {
-    printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b%b\n' \
-        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$2" "$NC" "${4:-}"
+    local cols max_label label="$2"
+    cols=$(mt_term_cols)
+    max_label=$((cols - 12)); [ "$max_label" -lt 12 ] && max_label=12
+    [ ${#label} -le "$max_label" ] || label="${label:0:$((max_label-1))}…"
+    printf '  %b├─%b %b%-2s%b%b❯%b %b\033[1m%s%b%b\n' \
+        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
+    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
 }
 mt_workspace_group() {
+    local cols; cols=$(mt_term_cols)
     if [ "${2:-}" = first ]; then
         printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$1" "$NC"
     else
-        printf '  %b│%b\n  %b├─[ %s ]%b\n' "$DIM" "$NC" "$DIM" "$1" "$NC"
+        [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
+        printf '  %b├─[ %s ]%b\n' "$DIM" "$1" "$NC"
     fi
-    printf '  %b│%b\n' "$DIM" "$NC"
+    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
 }
 mt_workspace_footer() {
-    printf '  %b│%b\n  %b└─%b %b0%b %b❯%b %b%s%b\n\n' \
-        "$DIM" "$NC" "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
+    local cols; cols=$(mt_term_cols)
+    printf '  %b└─%b %b0%b %b❯%b %b\033[1m%s%b\n' \
+        "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
+    [ "$cols" -lt 72 ] || printf '\n'
 }
 mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
     local title="$1" entry id label action color choice; shift
@@ -2454,8 +2521,8 @@ mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
     done
 }
 mt_workspace_pause() {
-    printf '  %bPress Enter to continue...%b' "$DIM" "$NC"
-    read -r _ || true
+    local _pause_input
+    mt_live_readline _pause_input "  ${DIM}Press Enter to continue...${NC}" || true
 }
 mt_link_encode() {
     mt_link_validate || return 1
@@ -2540,12 +2607,23 @@ mt_clipboard_copy() {
     if [ -w /dev/tty ]; then printf '%s' "$seq" > /dev/tty 2>/dev/null; else printf '%s' "$seq"; fi
 }
 mt_peer_copy_prompt() {
-    local link="$1" key
+    local link="$1" key rc now last_refresh=0
     mt_clipboard_copy "$link" >/dev/null 2>&1 || true
     echo -e "  ${G}●${NC} ${W}Peer Code sent to clipboard.${NC} ${DIM}(terminal support required)${NC}"
     while true; do
         printf '  %bC%b = Copy again   %bEnter%b = Continue ❯❯ ' "$C" "$NC" "$C" "$NC"
-        IFS= read -rsn1 key || return 0
+        while true; do
+            key=''
+            IFS= read -rsn1 -t 0.25 key
+            rc=$?
+            if [ $rc -eq 0 ]; then break; fi
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                now=$(date +%s)
+                if [ "$now" != "$last_refresh" ]; then last_refresh="$now"; mt_header_refresh_now; fi
+                continue
+            fi
+            return 0
+        done
         case "$key" in
             c|C)
                 mt_clipboard_copy "$link" >/dev/null 2>&1 || true
@@ -2807,7 +2885,7 @@ mt_workspace_backup() {
     (umask 077; tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")") && echo "  Backup saved: $dest"
     mt_workspace_pause
 }
-# END MTUNNEL WORKSPACE V15.0.1
+# END MTUNNEL WORKSPACE V15.0.2
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1

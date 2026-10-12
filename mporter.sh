@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v15.0.1 ---
+# --- MTunnel MPorter | Port Forwarding Manager v15.0.2 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
-# v15.0.1 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
+# v15.0.2 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
 #  - IPv6 targets everywhere: HAProxy / Gost / Realm / Kernel NAT (ip6tables) / OBFS / health probes
 #  - New tunnel interface families recognised: GRE6 / 6to4 (g6*), IPIP4>4 (i4*), IPIP4>6 (i46*), IPIP6>6 (i66*), VXLAN over IPv6
 #  - Peer discovery understands IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer, ip -6 neighbours)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="15.0.1"
+MODULE_VERSION="15.0.2"
 umask 077
 
 # BEGIN MTUNNEL SHARED HELPERS
@@ -3179,7 +3179,7 @@ read_with_refresh() {
     printf -v "$__resultvar" '%s' "$buffer"
 }
 
-# BEGIN MTUNNEL WORKSPACE V15.0.1
+# BEGIN MTUNNEL WORKSPACE V15.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 mt_workspace_screen() { "$MT_HEADER"; }
 # Keep the stable palette, tree layout and aligned one/two-digit option numbers.

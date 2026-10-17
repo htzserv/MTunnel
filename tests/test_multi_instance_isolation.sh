@@ -34,9 +34,9 @@ grep -F 'mktemp "$SECURE_TMP/.mrathole_hdr_rows.XXXXXX"' "$repo/tunnels/mrathole
 grep -F 'mktemp "$SECURE_TMP/.mpaqet_hdr_rows.XXXXXX"' "$repo/tunnels/mpaqet.sh" >/dev/null
 
 # Peer color follows the established stable yellow convention in every per-tunnel row.
-grep -F '${DIM}Peer:${NC} ${Y}${t_remote}${NC}' "$repo/main.sh" >/dev/null
-grep -F '${DIM}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/mbackhaul.sh" >/dev/null
-grep -F '${DIM}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/mrathole.sh" >/dev/null
-grep -F '${DIM}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/mpaqet.sh" >/dev/null
+grep -F '${Y}Peer:${NC} ${Y}${peer_remote}${NC}' "$repo/main.sh" >/dev/null
+grep -F '${Y}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/mbackhaul.sh" >/dev/null
+grep -F '${Y}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/mrathole.sh" >/dev/null
+grep -F '${Y}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/mpaqet.sh" >/dev/null
 grep -F '${DIM}➔${NC} ${Y}%s${NC}' "$repo/tunnels/mgre.sh" >/dev/null
 grep -F '${DIM}➔${NC} ${Y}%s${NC}' "$repo/tunnels/mxlan.sh" >/dev/null

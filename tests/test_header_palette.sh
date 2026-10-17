@@ -4,13 +4,13 @@ repo="$(cd "$(dirname "$0")/.." && pwd)"
 
 # Main dashboard: stable palette semantics.
 grep -F '${DIM}Local:${NC} ${W}${s_ip}${NC}' "$repo/main.sh" >/dev/null
-grep -F '${DIM}Peer:${NC} ${Y}${t_remote}${NC}' "$repo/main.sh" >/dev/null
+grep -F '${Y}Peer:${NC} ${Y}${peer_remote}${NC}' "$repo/main.sh" >/dev/null
 grep -F '${DIM}Ping:${NC} ${Y}${t_ping:----}${NC}' "$repo/main.sh" >/dev/null
 grep -F '${DIM}Up:${NC} ${W}${uptime}${NC}' "$repo/main.sh" >/dev/null
 
 # Socket-based tunnel headers: peer is yellow, matching the stable theme.
 for f in mbackhaul mrathole mpaqet; do
-  grep -F '${DIM}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/$f.sh" >/dev/null
+  grep -F '${Y}Peer:${NC} ${Y}%-24.24s${NC}' "$repo/tunnels/$f.sh" >/dev/null
 done
 
 # GRE/VXLAN route rows: local and remote endpoints are both yellow.

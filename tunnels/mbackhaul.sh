@@ -2,7 +2,7 @@
 # --- MTunnel MBackhaul | Multiplexer Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.0.6"
+MODULE_VERSION="1.0.10"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1487,7 +1487,7 @@ hdr_print_rows() {
             loss="${loss}%"
         fi
         fcol="${DIM}"; [ "$fwd" != "OFF" ] && [ "$fwd" != "---" ] && fcol="${C}"
-        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
+        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${Y}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
             "$icol" "$icon" "$NC" "$nt" "${peer:----}" "${ping:----}" "$lcol" "${loss:----}" "$NC" "${up:----}" "$fcol" "${fwd:----}" "$NC"
     done < "$HDR_ROWS_FILE"
     HDR_DRAWN_ROWS=$(( n > 3 ? 3 : n ))

@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.0.6 ---
-# [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="1.0.6"
+# --- MTunnel Master Core | Central Dashboard v1.0.10 ---
+# [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
+MODULE_VERSION="1.0.10"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -600,16 +600,22 @@ mt_main_header_cell() {
     printf ' %s%*s ' "$rendered" "$padding" ''
 }
 mt_main_header_row4() {
-    # Four columns of 30,23,29,26 chars plus 3 x ' │ ' = 117
-    local join
+    # Dynamic wide header. Base width 120, extra terminal width is given to title/local area.
+    local total="${MT_MAIN_HEADER_WIDTH:-120}" extra join
+    (( total < 120 )) && total=120
+    extra=$((total-120))
     join=$(printf '%b' " ${B}│${NC} ")
-    mt_main_frame_row "$(mt_main_header_cell 30 "$1")${join}$(mt_main_header_cell 23 "$2")${join}$(mt_main_header_cell 29 "$3")${join}$(mt_main_header_cell 26 "$4")" 117
+    mt_main_frame_row "$(mt_main_header_cell $((33+extra)) "$1")${join}$(mt_main_header_cell 23 "$2")${join}$(mt_main_header_cell 29 "$3")${join}$(mt_main_header_cell 26 "$4")" "$total"
 }
 mt_main_header_row7() {
-    # 17+24+11+12+12+12+11 plus 6 x ' │ ' = 117
-    local join
+    # Keep the tunnel identity readable while still reserving a wide Peer cell.
+    # Base: 22+31+9+10+9+11+10 + 6 x ' │ ' = 120.
+    # Extra terminal width is donated to Peer so long/compressed IPv6 peers fit.
+    local total="${MT_MAIN_HEADER_WIDTH:-120}" extra join
+    (( total < 120 )) && total=120
+    extra=$((total-120))
     join=$(printf '%b' " ${B}│${NC} ")
-    mt_main_frame_row "$(mt_main_header_cell 17 "$1")${join}$(mt_main_header_cell 24 "$2")${join}$(mt_main_header_cell 11 "$3")${join}$(mt_main_header_cell 12 "$4")${join}$(mt_main_header_cell 12 "$5")${join}$(mt_main_header_cell 12 "$6")${join}$(mt_main_header_cell 11 "$7")" 117
+    mt_main_frame_row "$(mt_main_header_cell 22 "$1")${join}$(mt_main_header_cell $((31+extra)) "$2")${join}$(mt_main_header_cell 9 "$3")${join}$(mt_main_header_cell 10 "$4")${join}$(mt_main_header_cell 9 "$5")${join}$(mt_main_header_cell 11 "$6")${join}$(mt_main_header_cell 10 "$7")" "$total"
 }
 mt_main_menu_separator() {
     local w="$1" title="${2:-}" border=''
@@ -721,8 +727,14 @@ draw_header_lines_only() {
         return 0
     fi
 
+    # Use all safe terminal width for the wide dashboard (up to 150 columns).
+    # At 124 columns this is already 120, giving Peer substantially more room;
+    # wider terminals donate all additional width to the Peer cell.
+    local MT_MAIN_HEADER_WIDTH=$((term_cols - 4))
+    (( MT_MAIN_HEADER_WIDTH < 120 )) && MT_MAIN_HEADER_WIDTH=120
+    (( MT_MAIN_HEADER_WIDTH > 150 )) && MT_MAIN_HEADER_WIDTH=150
     local border
-    printf -v border '%*s' 117 ''
+    printf -v border '%*s' "$MT_MAIN_HEADER_WIDTH" ''
     border="${border// /─}"
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
     mt_main_header_row4 \
@@ -755,9 +767,13 @@ draw_header_lines_only() {
             local vip_color="$G" fwd_color="$C"
             case "${t_vip^^}" in OFF|NONE|0|-) vip_color="$DIM";; esac
             case "${t_fwd^^}" in OFF|NONE|0|-) fwd_color="$DIM";; esac
+            local peer_remote="$t_remote" display_name="$t_name" display_proto="$t_proto"
+            peer_remote=$(printf '%s' "$peer_remote" | sed -E $'s/\033\[[0-9;]*[A-Za-z]//g')
+            display_name=$(printf '%s' "$display_name" | sed -E $'s/\033\[[0-9;]*[A-Za-z]//g')
+            display_proto=$(printf '%s' "$display_proto" | sed -E $'s/\033\[[0-9;]*[A-Za-z]//g')
             mt_main_header_row7 \
-                "${status_color}${status_icon}${NC} ${W}${t_name} [${t_proto}]${NC}" \
-                "${DIM}Peer:${NC} ${Y}${t_remote}${NC}" \
+                "${status_color}${status_icon}${NC} ${W}${display_name} [${display_proto}]${NC}" \
+                "${Y}Peer:${NC} ${Y}${peer_remote}${NC}" \
                 "${DIM}vIP:${NC} ${vip_color}${t_vip}${NC}" \
                 "${DIM}Ping:${NC} ${Y}${t_ping:----}${NC}" \
                 "${DIM}Loss:${NC} ${loss_color}${loss_text}${NC}" \
@@ -1580,20 +1596,20 @@ use_peer_code() {
 render_main_menu() {
     draw_main_header
     printf '\n'
-    printf '  %b┌─[ TUNNEL INFRASTRUCTURE ]%b\n' "$DIM" "$NC"
-    printf '  %b│%b\n' "$DIM" "$NC"
+    printf '  %b┌─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
     printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
     printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
     printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
     printf '  %b├─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
+    printf '  %b├─[ TOOLS & BENCHMARK UTILITIES ]%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
     printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
     printf '  %b├─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
-    printf '  %b│%b\n' "$DIM" "$NC"
-    printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"
+    printf '  %b├─[ SESSION CONTROL ]%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 show_local_install() {

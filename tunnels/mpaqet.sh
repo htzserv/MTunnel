@@ -2,7 +2,7 @@
 # --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.0.6"
+MODULE_VERSION="1.0.10"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -511,7 +511,7 @@ setup_paqet_probe() {
     port=$(grep -m1 '^TUN_PORT=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     remote=$(grep -m1 '^REMOTE_IP=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     [[ "$port" =~ ^[0-9]+$ ]] || return 0
-    # Replace any pre-1.0.6 broad detector rule. Keeping an old broad rule
+    # Replace any pre-1.0.10 broad detector rule. Keeping an old broad rule
     # would make same-port instances count each other's traffic after upgrade.
     mt_delete_tagged_rules iptables mangle INPUT "MPAQET_PEER_${name}" >/dev/null 2>&1 || true
     mt_delete_tagged_rules iptables mangle INPUT "MPAQET_LINK_${name}" >/dev/null 2>&1 || true
@@ -1100,7 +1100,7 @@ hdr_print_rows() {
             loss="${loss}%"
         fi
         fcol="${DIM}"; [ "$fwd" != "OFF" ] && [ "$fwd" != "---" ] && fcol="${C}"
-        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
+        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${Y}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
             "$icol" "$icon" "$NC" "$nt" "${peer:----}" "${ping:----}" "$lcol" "${loss:----}" "$NC" "${up:----}" "$fcol" "${fwd:----}" "$NC"
     done < "$HDR_ROWS_FILE"
     HDR_DRAWN_ROWS=$(( n > 3 ? 3 : n ))

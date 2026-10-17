@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v16.0.2 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="16.0.2"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -68,7 +68,7 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
 fi
 
 is_newer_version() {   # is_newer_version REMOTE LOCAL -> true only if REMOTE > LOCAL
-    [ -n "$1" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]
+    [ -n "$1" ] && mt_update_available "$1" "$2"
 }
 
 is_valid_host() {
@@ -219,7 +219,7 @@ self_update_module() {
     sed -i 's/\r$//' "$tmp_file"
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+    if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
@@ -329,7 +329,7 @@ mt_update_label() {
     local file="$1" rv='Unknown'
     [ -f "$file" ] && rv=$(tr -d '\r\n ' < "$file")
     if [ -n "$rv" ] && [ "$rv" != Unknown ]; then
-        if mt_is_newer_version "$rv" "$MODULE_VERSION" 2>/dev/null; then printf 'v%s → v%s' "$MODULE_VERSION" "$rv"
+        if mt_update_available "$rv" "$MODULE_VERSION" 2>/dev/null; then printf 'v%s → v%s' "$MODULE_VERSION" "$rv"
         else printf 'v%s' "$rv"; fi
     else printf 'version unavailable'; fi
 }
@@ -1532,7 +1532,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.2
+# BEGIN MTUNNEL WORKSPACE V1.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 # mt_header_refresh_now supplied by core/common.sh
 # mt_live_readline supplied by core/common.sh
@@ -1667,7 +1667,7 @@ mt_link_import() {
 }
 # mt_workspace_vip supplied by core/common.sh
 # mt_workspace_backup supplied by core/common.sh
-# END MTUNNEL WORKSPACE V16.0.2
+# END MTUNNEL WORKSPACE V1.0.2
 
 mt_link_paqet_values() {
     local yaml="$1" key val source
@@ -1759,7 +1759,7 @@ mt_workspace_update_badge() {
     local rv file="$SECURE_TMP/.mpaqet_remote_ver"
     [ -f "$file" ] || return 0
     rv=$(tr -d '\r\n ' < "$file")
-    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
+    if mt_update_available "$rv" "$MODULE_VERSION"; then
         printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
     fi
     return 0

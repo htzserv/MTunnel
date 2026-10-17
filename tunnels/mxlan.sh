@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MXLAN | VXLAN Fabric Engine v16.0.2 ---
+# --- MTunnel MXLAN | VXLAN Fabric Engine v1.0.2 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="16.0.2"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -497,7 +497,13 @@ check_update_bg() {
     [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mxlan_remote_ver_github"
     [ -n "$mirror_ver" ] && printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.mxlan_remote_ver_mirror"
     local latest_ver=""
-    latest_ver=$(printf '%s\n' "$gh_ver" "$mirror_ver" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    # A retired 15.x/16.x release (stale mirror/cache) must never count as "latest".
+    local cand
+    for cand in "$gh_ver" "$mirror_ver"; do
+        [[ "$cand" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || continue
+        if [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && mt_is_retired_version "$cand" && ! mt_is_retired_version "$MODULE_VERSION"; then continue; fi
+        latest_ver=$(printf '%s\n%s\n' "$latest_ver" "$cand" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    done
     if [ -n "$latest_ver" ]; then
         printf '%s\n' "$latest_ver" > "$SECURE_TMP/.mxlan_remote_ver"
     fi
@@ -755,11 +761,11 @@ self_update_module() {
     local gh_text="${C}Official GitHub Server${NC}"
     local mirror_text="${G}Iranian Mirror${NC}"
     if [ "$gh_ver" != "Unknown" ]; then
-        if mt_is_newer_version "$gh_ver" "$MODULE_VERSION"; then gh_text+="    ${Y}(v${MODULE_VERSION} ➔ v${gh_ver})${NC}"
+        if mt_update_available "$gh_ver" "$MODULE_VERSION"; then gh_text+="    ${Y}(v${MODULE_VERSION} ➔ v${gh_ver})${NC}"
         else gh_text+="    ${DIM}(v${gh_ver})${NC}"; fi
     else gh_text+="    ${DIM}(version unavailable)${NC}"; fi
     if [ "$mirror_ver" != "Unknown" ]; then
-        if mt_is_newer_version "$mirror_ver" "$MODULE_VERSION"; then mirror_text+="    ${Y}(v${MODULE_VERSION} ➔ v${mirror_ver})${NC}"
+        if mt_update_available "$mirror_ver" "$MODULE_VERSION"; then mirror_text+="    ${Y}(v${MODULE_VERSION} ➔ v${mirror_ver})${NC}"
         else mirror_text+="    ${DIM}(v${mirror_ver})${NC}"; fi
     else mirror_text+="    ${DIM}(version unavailable)${NC}"; fi
 
@@ -797,7 +803,7 @@ self_update_module() {
     sed -i 's/\r$//' "$tmp_file"
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+    if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
@@ -1626,7 +1632,7 @@ esac
 update_available_badge() {
     local remote_v=""
     [ -f "$SECURE_TMP/.mxlan_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mxlan_remote_ver")
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_update_available "$remote_v" "$MODULE_VERSION"; then
         printf '  %b' "${Y}(Update Available: v${remote_v})${NC}"
     fi
 }
@@ -1643,7 +1649,7 @@ show_live_monitor() {
     done
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.2
+# BEGIN MTUNNEL WORKSPACE V1.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 # mt_header_refresh_now supplied by core/common.sh
 # mt_live_readline supplied by core/common.sh
@@ -1757,7 +1763,7 @@ mt_link_import() {
 }
 # mt_workspace_vip supplied by core/common.sh
 # mt_workspace_backup supplied by core/common.sh
-# END MTUNNEL WORKSPACE V16.0.2
+# END MTUNNEL WORKSPACE V1.0.2
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1
@@ -1841,7 +1847,7 @@ mt_workspace_update_badge() {
     local rv file="$SECURE_TMP/.mxlan_remote_ver"
     [ -f "$file" ] || return 0
     rv=$(tr -d '\r\n ' < "$file")
-    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
+    if mt_update_available "$rv" "$MODULE_VERSION"; then
         printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
     fi
     return 0

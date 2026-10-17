@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v16.0.2; modular layout revision 2).
+# MTunnel shared core API 1 (v1.0.2; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="16.0.2"
+MTUNNEL_RELEASE_VERSION="1.0.2"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -140,8 +140,70 @@ mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
+# Numeric versions are compared with sort -V; v16.0.2 -> v1.0.2 is a downgrade.
+# MT_ALLOW_DOWNGRADE=1 is explicit CLI opt-in; interactive Sync asks once.
 # True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
 mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
+
+# The 15.x/16.x line was retired and renumbered to 1.x. Because 16 > 1 numerically,
+# a stale mirror/cache still serving 16.x would otherwise look like an "upgrade" to
+# every 1.x server. Such candidates are never offered or installed silently.
+# MT_ALLOW_RETIRED=1 is an explicit operator override.
+MTUNNEL_RETIRED_MAJOR_MIN=15
+MTUNNEL_RETIRED_MAJOR_MAX=16
+mt_is_retired_version() {
+    [[ "${1:-}" =~ ^([0-9]+)\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+    local major=$((10#${BASH_REMATCH[1]}))
+    ((major >= MTUNNEL_RETIRED_MAJOR_MIN && major <= MTUNNEL_RETIRED_MAJOR_MAX))
+}
+# True only when REMOTE ($1) is a real update for LOCAL ($2): newer, and not a
+# retired-line release being offered to a server that is already on the 1.x line.
+mt_update_available() {
+    mt_is_newer_version "$1" "$2" || return 1
+    if [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"; then return 1; fi
+    return 0
+}
+# Refuse a retired-line bundle over an installed 1.x installation.
+# $1 = candidate bundle version, $2 = highest installed version (may be empty).
+mt_retired_bundle_blocked() {
+    [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && [ -n "${2:-}" ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"
+}
+
+# Require explicit operator approval for installing an older version. The caller
+# must have validated the entire staged bundle before this prompt is shown.
+# --allow-downgrade is an explicit non-interactive opt-in for CLI deployment.
+# Installed version "unknown" (file present, version line unreadable) always asks.
+# Return codes: 0 = proceed, 2 = operator cancelled, 1 = input error / EOF.
+mt_confirm_downgrade() {
+    local installed="${1:-}" downloaded="${2:-}" subject="${3:-MTunnel}" answer='' shown
+    [ -n "$installed" ] || return 0
+    if [ "$installed" != unknown ] && ! mt_is_newer_version "$installed" "$downloaded"; then return 0; fi
+    if [ "${MT_ALLOW_DOWNGRADE:-0}" = 1 ]; then return 0; fi
+    shown="v$installed"; [ "$installed" != unknown ] || shown='unknown (version line unreadable)'
+    printf '\n  ┌─[ DOWNGRADE CONFIRMATION: %s ]\n' "$subject" >&2
+    printf '  ├─ Installed Version : %s\n' "$shown" >&2
+    printf '  ├─ Downloaded Version: v%s\n' "$downloaded" >&2
+    printf '  ├─ All installed modules must match their shared core.\n' >&2
+    printf '  └─ Downgrade to v%s? (y/N): ' "$downloaded" >&2
+    IFS= read -r answer || return 1
+    case "$answer" in y|Y|yes|YES|Yes) return 0;; *) printf '  Downgrade cancelled. Existing version preserved.\n' >&2; return 2;; esac
+}
+# Script-only updates cannot install an older module with a newer shared core.
+# For that case, use Sync All Scripts or install.sh with a complete bundle.
+mt_module_downgrade_allowed() {
+    local installed="${1:-}" downloaded="${2:-}"
+    if mt_is_newer_version "$installed" "$downloaded"; then
+        if [ "$downloaded" != "${MTUNNEL_RELEASE_VERSION:-}" ]; then
+            printf '  Downloaded v%s is older than installed v%s.\n' "$downloaded" "$installed" >&2
+            printf '  This requires a FULL BUNDLE downgrade (modules + shared core).\n' >&2
+            printf '  Use the Main Dashboard > Update & Local Install > Sync All Scripts,\n' >&2
+            printf '  or install the complete v%s package locally.\n' "$downloaded" >&2
+            return 1
+        fi
+        mt_confirm_downgrade "$installed" "$downloaded" 'Single Module'
+    fi
+}
+
 mt_ask_bind_host() {
     local choice host
     echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
@@ -382,7 +444,7 @@ mt_install_script() {
         local current_version new_version
         current_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
         new_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_downgrade_blocked "$current_version" "$new_version"; then echo 'Refusing to replace a newer installed module.' >&2; return 1; fi
+        if ! mt_module_downgrade_allowed "$current_version" "$new_version"; then return 1; fi
     fi
     files+=("$candidate" "$target")
     [ "$LOCAL_DIR/$rel" == "$target" ] || files+=("$candidate" "$LOCAL_DIR/$rel")
@@ -775,7 +837,7 @@ mt_bbr_menu() {
     while true; do
         clear 2>/dev/null || true
         echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-16.0.2}" "$(mt_bbr_status)" 21 ''
+        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-1.0.2}" "$(mt_bbr_status)" 21 ''
         echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Enable BBR${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Disable BBR${NC}"

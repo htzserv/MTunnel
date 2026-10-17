@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="16.0.2"
+MODULE_VERSION="1.0.2"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -25,6 +25,15 @@ mt_installer_load_common() {
     if [[ "$mode" == local ]]; then
         candidate="${source_dir%/}/core/common.sh"
         [[ -f "$candidate" && -r "$candidate" ]] || { echo "Missing local shared core: $candidate" >&2; return 1; }
+        # A newer installer must run its own matching helper API while staging
+        # an older target bundle. The target core is separately validated.
+        if [[ -f "$script_dir/core/common.sh" ]] &&
+           grep -Fqx "MTUNNEL_RELEASE_VERSION=\"${MODULE_VERSION}\"" "$script_dir/core/common.sh"; then
+            candidate="$script_dir/core/common.sh"
+        fi
+    elif [[ "$mode" == remote && -f "$script_dir/core/common.sh" ]] &&
+         grep -Fqx "MTUNNEL_RELEASE_VERSION=\"${MODULE_VERSION}\"" "$script_dir/core/common.sh"; then
+        candidate="$script_dir/core/common.sh"
     elif [[ "$mode" != remote && -f "$script_dir/core/common.sh" ]]; then
         candidate="$script_dir/core/common.sh"
     elif [[ "$mode" != remote && -f "$PWD/core/common.sh" ]]; then
@@ -226,6 +235,40 @@ installer_main() {
         done
         active_modules=("${modules[@]}")
     fi
+    # A full-bundle downgrade is authorized once after the whole staged bundle
+    # and its shared core version have passed validation.
+    local highest_installed='' old_v old_target unknown_installed=0 conf_installed
+    for item in "${active_modules[@]}"; do
+        name="${item%%:*}"; old_target="$root/usr/bin/$name"
+        [ "$name" != main ] || old_target="$root/usr/bin/mtunnel"
+        old_v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$old_target" 2>/dev/null)
+        if [ -z "$old_v" ]; then
+            [ ! -f "$old_target" ] || unknown_installed=1
+        elif [ -z "$highest_installed" ] || mt_is_newer_version "$old_v" "$highest_installed"; then
+            highest_installed="$old_v"
+        fi
+    done
+    # The installed shared core and installer copy count as well.
+    for old_target in "$root/usr/lib/mtunnel/common.sh" "$root/root/mtunnel/install.sh"; do
+        case "$old_target" in
+            */install.sh) old_v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$old_target" 2>/dev/null);;
+            *) old_v=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$old_target" 2>/dev/null);;
+        esac
+        if [ -n "$old_v" ] && { [ -z "$highest_installed" ] || mt_is_newer_version "$old_v" "$highest_installed"; }; then
+            highest_installed="$old_v"
+        fi
+    done
+    # A retired 15.x/16.x bundle (e.g. stale mirror) must not silently replace 1.x.
+    if mt_retired_bundle_blocked "$bundle_version" "$highest_installed"; then
+        echo "Bundle v$bundle_version belongs to the retired 15.x/16.x line (stale mirror or cache?)." >&2
+        echo "Installed is v$highest_installed. Refusing; refresh the source or set MT_ALLOW_RETIRED=1." >&2
+        return 1
+    fi
+    conf_installed="$highest_installed"
+    # An unreadable installed version is treated as unknown unless the bundle is
+    # strictly newer than every readable installed version.
+    if [ "$unknown_installed" == 1 ] && { [ -z "$conf_installed" ] || ! mt_is_newer_version "$bundle_version" "$conf_installed"; }; then conf_installed=unknown; fi
+    mt_confirm_downgrade "$conf_installed" "$bundle_version" 'Full MTunnel Bundle' || return $?
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
     files+=("$source_dir/core/common.sh" "$root/usr/lib/mtunnel/common.sh"
@@ -237,7 +280,7 @@ installer_main() {
         if mt_validate_script "$target" 2>/dev/null; then
             cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
             next=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            mt_downgrade_blocked "$cur" "$next" && { echo "Refusing downgrade of $name." >&2; return 1; }
+            # Downgrade was explicitly approved above for the complete bundle.
         fi
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
         if [ -z "$remote" ]; then

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v16.0.2 ---
+# --- MTunnel MPorter | Port Forwarding Manager v1.0.2 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
-# v16.0.2 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
+# v1.0.x changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
 #  - IPv6 targets everywhere: HAProxy / Gost / Realm / Kernel NAT (ip6tables) / OBFS / health probes
 #  - New tunnel interface families recognised: GRE6 / 6to4 (g6*), IPIP4>4 (i4*), IPIP4>6 (i46*), IPIP6>6 (i66*), VXLAN over IPv6
 #  - Peer discovery understands IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer, ip -6 neighbours)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="16.0.2"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -318,7 +318,7 @@ self_update_module() {
     [ -f "$SECURE_TMP/.mporter_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mporter_remote_ver")
 
     clear; echo -e "\n  ${DIM}┌─[ OTA Update (Script Only) ]${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_update_available "$remote_v" "$MODULE_VERSION"; then
         echo -e "  ${DIM}├─${NC} ${Y}Update Available: v${MODULE_VERSION} ➔ v${remote_v}${NC}"
     else
         echo -e "  ${DIM}├─${NC} ${DIM}Current Version: v${MODULE_VERSION}${NC}"
@@ -350,7 +350,7 @@ self_update_module() {
     sed -i 's/\r$//' "$tmp_file"
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+    if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
     local sum; sum=$(sha256sum "$tmp_file" | awk '{print $1}')
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
@@ -2590,7 +2590,7 @@ read_with_refresh() {
     printf -v "$__resultvar" '%s' "$buffer"
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.2
+# BEGIN MTUNNEL WORKSPACE V1.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 mt_workspace_screen() { "$MT_HEADER"; }
 # Keep the stable palette, tree layout and aligned one/two-digit option numbers.
@@ -2635,7 +2635,7 @@ mt_workspace_update_badge() {
     local rv file="$SECURE_TMP/.mporter_remote_ver"
     [ -f "$file" ] || return 0
     rv=$(tr -d '\r\n ' < "$file")
-    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
+    if mt_update_available "$rv" "$MODULE_VERSION"; then
         printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
     fi
     return 0

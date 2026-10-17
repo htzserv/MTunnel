@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v16.0.2 ---
+# --- MTunnel MRathole | Reverse Tunnel Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="16.0.2"
+MODULE_VERSION="1.0.2"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -199,7 +199,7 @@ self_update_module() {
     [ -f "$SECURE_TMP/.mrathole_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.mrathole_remote_ver" | tr -d '\r\n ')
 
     local gh_text="${C}Official GitHub Server${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_is_newer_version "$remote_v" "$MODULE_VERSION"; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_update_available "$remote_v" "$MODULE_VERSION"; then
         gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
     else
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
@@ -240,7 +240,7 @@ self_update_module() {
     sed -i 's/\r$//' "$tmp_file"
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-    if mt_is_newer_version "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; echo -e "  ${Y}● Downloaded module is older; update refused.${NC}"; return 1; fi
+    if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
@@ -452,7 +452,7 @@ mt_update_label() {
     local file="$1" rv='Unknown'
     [ -f "$file" ] && rv=$(tr -d '\r\n ' < "$file")
     if [ -n "$rv" ] && [ "$rv" != Unknown ]; then
-        if mt_is_newer_version "$rv" "$MODULE_VERSION" 2>/dev/null; then printf 'v%s → v%s' "$MODULE_VERSION" "$rv"
+        if mt_update_available "$rv" "$MODULE_VERSION" 2>/dev/null; then printf 'v%s → v%s' "$MODULE_VERSION" "$rv"
         else printf 'v%s' "$rv"; fi
     else printf 'version unavailable'; fi
 }
@@ -1249,7 +1249,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.2
+# BEGIN MTUNNEL WORKSPACE V1.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 # mt_header_refresh_now supplied by core/common.sh
 # mt_live_readline supplied by core/common.sh
@@ -1384,7 +1384,7 @@ mt_link_import() {
 }
 # mt_workspace_vip supplied by core/common.sh
 # mt_workspace_backup supplied by core/common.sh
-# END MTUNNEL WORKSPACE V16.0.2
+# END MTUNNEL WORKSPACE V1.0.2
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1
@@ -1449,7 +1449,7 @@ mt_workspace_update_badge() {
     local rv file="$SECURE_TMP/.mrathole_remote_ver"
     [ -f "$file" ] || return 0
     rv=$(tr -d '\r\n ' < "$file")
-    if mt_is_newer_version "$rv" "$MODULE_VERSION"; then
+    if mt_update_available "$rv" "$MODULE_VERSION"; then
         printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
     fi
     return 0

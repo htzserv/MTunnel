@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v16.0.2 ---
+# --- MTunnel Master Core | Central Dashboard v1.0.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="16.0.2"
+MODULE_VERSION="1.0.2"
 umask 077
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
 # Source next to a checkout first, or from the system-wide installed location.
@@ -84,6 +84,17 @@ trap 'NEED_REFRESH=true' SIGUSR1
 trap 'NEED_LIVE_HEADER_REFRESH=true' SIGUSR2
 UPDATE_CHECK_INTERVAL=30
 STATS_CHECK_INTERVAL=5
+fetch_bundle_version() {
+    # One tiny request for the whole bundle. Empty output means: use per-module fallback.
+    local v='' cb="?t=$(date +%s%N)"
+    if command -v curl >/dev/null 2>&1; then
+        v=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/VERSION$cb" 2>/dev/null | head -c 32 | tr -d '\r\n ')
+    elif command -v wget >/dev/null 2>&1; then
+        v=$(wget -qO- --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/VERSION$cb" 2>/dev/null | head -c 32 | tr -d '\r\n ')
+    fi
+    [[ "$v" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$v"
+    return 0
+}
 check_single_module_silent() {
     local mod="$1"
     local rel_path="$2"
@@ -94,19 +105,22 @@ check_single_module_silent() {
     local cur_v=""
     [ -f "$local_file" ] && cur_v=$(grep -m1 '^MODULE_VERSION=' "$local_file" | cut -d'"' -f2)
     [ -z "$cur_v" ] && cur_v="0.0.0"
-    local cb="?t=$(date +%s%N)"
-    local rem_v=""
-    if command -v curl >/dev/null 2>&1; then
-        rem_v=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-    elif command -v wget >/dev/null 2>&1; then
-        rem_v=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+    local rem_v="${BUNDLE_REMOTE_VER:-}"
+    if [ -z "$rem_v" ]; then
+        local cb="?t=$(date +%s%N)"
+        if command -v curl >/dev/null 2>&1; then
+            rem_v=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        elif command -v wget >/dev/null 2>&1; then
+            rem_v=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        fi
     fi
-    if [ -n "$rem_v" ] && mt_is_newer_version "$rem_v" "$cur_v"; then
+    if [ -n "$rem_v" ] && mt_update_available "$rem_v" "$cur_v"; then
         echo "${mod}:${cur_v}:${rem_v}" > "$out_file"
     fi
 }
 check_all_updates_round() {
     local pids=()
+    BUNDLE_REMOTE_VER=$(fetch_bundle_version)
     for mod in "${!MOD_MAP[@]}"; do
         check_single_module_silent "$mod" "${MOD_MAP[$mod]}" &
         pids+=("$!")
@@ -647,7 +661,7 @@ draw_header_lines_only() {
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
     mt_main_header_row4 \
         "${W}MDesign Master Core v${MODULE_VERSION}${NC}" \
-        "${DIM}Local:${NC} ${W}${s_ip}${NC}" \
+        "${DIM}Local:${NC} ${M}${s_ip}${NC}" \
         "${DIM}Porter:${NC} ${porter_col}${porter_icon} ${porter_text}${NC}" \
         "${DIM}BBR:${NC} ${bbr_col}${bbr_icon} ${bbr_text}${NC}  ${DIM}IPv6:${NC} ${v6_col}${v6_icon} ${v6_text}${NC}"
     printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
@@ -771,7 +785,11 @@ download_file_to_cache() {
     if ! mt_download "$base_url/$rel_path" "$tmp" || ! mt_validate_script "$tmp"; then rm -f "$tmp"; return 1; fi
     local installed="/usr/bin/$mod"; [ "$mod" != main ] || installed="$MTUNNEL_PATH"
     local cur new; cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$installed" 2>/dev/null); new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp")
-    if mt_downgrade_blocked "$cur" "$new"; then rm -f "$tmp"; return 1; fi
+    if [ "$new" != "$MTUNNEL_RELEASE_VERSION" ]; then
+        echo 'Remote module does not match installed shared core. Sync full bundle instead.' >&2
+        rm -f "$tmp"; return 1
+    fi
+    mt_module_downgrade_allowed "$cur" "$new" || { rm -f "$tmp"; return 1; }
     mt_install_files 755 "$tmp" "$LOCAL_DIR/$rel_path"
     local rc=$?; rm -f "$tmp"; return "$rc"
 }
@@ -824,7 +842,7 @@ ensure_module() {
 }
 run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
 install_bundle_scripts() {
-    local source="$1" mod rel candidate target cur new
+    local source="$1" mod rel candidate target cur new bundle_version=''
     local -a files=() mods=()
     [ -d "$source" ] || return 1
     # Entire bundles must include the shared core. Never deploy loader scripts
@@ -848,12 +866,49 @@ install_bundle_scripts() {
     local core_version
     core_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$source/core/common.sh")
     [ "$core_version" = "$bundle_version" ] || { echo 'Module/Core version mismatch. Refusing mixed bundle.' >&2; return 1; }
+    # Installer must be included too: otherwise the installed release is mixed
+    # after a successful "Sync All Scripts" downgrade.
+    mt_validate_script "$source/install.sh" || { echo 'Missing installer in complete bundle.' >&2; return 1; }
+    local installer_version
+    installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/install.sh")
+    [ "$installer_version" = "$bundle_version" ] || { echo 'Installer/bundle versions differ.' >&2; return 1; }
+    # Compare ALL installed scripts to the candidate and authorize one coherent
+    # downgrade of the entire bundle (not seven separate prompts).
+    local installed_highest='' installed_version unknown_installed=0 conf_installed
+    for mod in "${mods[@]}"; do
+        target="/usr/bin/$mod"; [ "$mod" != main ] || target="$MTUNNEL_PATH"
+        installed_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
+        if [ -z "$installed_version" ]; then
+            [ ! -f "$target" ] || unknown_installed=1
+        elif [ -z "$installed_highest" ] || mt_is_newer_version "$installed_version" "$installed_highest"; then
+            installed_highest="$installed_version"
+        fi
+    done
+    # Also compare the installed copy of install.sh and the installed shared core.
+    for target in "$LOCAL_DIR/install.sh" /usr/lib/mtunnel/common.sh; do
+        case "$target" in
+            */install.sh) installed_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null);;
+            *) installed_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null);;
+        esac
+        if [ -n "$installed_version" ] && { [ -z "$installed_highest" ] || mt_is_newer_version "$installed_version" "$installed_highest"; }; then
+            installed_highest="$installed_version"
+        fi
+    done
+    # A retired 15.x/16.x bundle (e.g. a stale mirror) must never silently replace 1.x.
+    if mt_retired_bundle_blocked "$bundle_version" "$installed_highest"; then
+        echo "Bundle v$bundle_version belongs to the retired 15.x/16.x line (stale mirror or cache?)." >&2
+        echo "Installed is v$installed_highest. Refusing; refresh the source or set MT_ALLOW_RETIRED=1." >&2
+        return 1
+    fi
+    conf_installed="$installed_highest"
+    # An unreadable installed version is treated as unknown unless the bundle is
+    # strictly newer than every readable installed version.
+    if [ "$unknown_installed" == 1 ] && { [ -z "$conf_installed" ] || ! mt_is_newer_version "$bundle_version" "$conf_installed"; }; then conf_installed=unknown; fi
+    mt_confirm_downgrade "$conf_installed" "$bundle_version" 'Full MTunnel Bundle' || return $?
+    files+=("$source/install.sh" "$LOCAL_DIR/install.sh")
     for mod in "${mods[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"; target="/usr/bin/$mod"
         [ "$mod" != main ] || target="$MTUNNEL_PATH"
-        cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
-        new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-        if mt_downgrade_blocked "$cur" "$new"; then echo "Refusing downgrade: $mod" >&2; return 1; fi
         files+=("$candidate" "$LOCAL_DIR/$rel" "$candidate" "$target")
     done
     mt_install_files 755 "${files[@]}" || return 1
@@ -878,12 +933,24 @@ sync_script_bundle() {
        ! grep -q '^MTUNNEL_LAYOUT_REV=2$' "$stage/core/common.sh"; then
         rm -rf "$stage"; return 1
     fi
+    # Optional release marker: if the source publishes VERSION it must match the
+    # core, otherwise the mirror/cache is only partly refreshed.
+    local marker core_ver
+    core_ver=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$stage/core/common.sh")
+    if mt_download "$base/VERSION" "$stage/VERSION" 2>/dev/null; then
+        marker=$(head -c 32 "$stage/VERSION" | tr -d '\r\n ')
+        if [ "$marker" != "$core_ver" ]; then
+            echo "Source is inconsistent: VERSION says v$marker but shared core is v$core_ver. Refresh the mirror/cache." >&2
+            rm -rf "$stage"; return 1
+        fi
+    fi
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
         if ! mt_download "$base/$rel" "$stage/$rel" || ! mt_validate_script "$stage/$rel"; then rc=1; break; fi
     done
-    [ "$rc" != 0 ] || install_bundle_scripts "$stage" "${2:-0}" || rc=1
+    if [ "$rc" == 0 ] && { ! mt_download "$base/install.sh" "$stage/install.sh" || ! mt_validate_script "$stage/install.sh"; }; then rc=1; fi
+    [ "$rc" != 0 ] || install_bundle_scripts "$stage" "${2:-0}" || rc=$?
     rm -rf "$stage"
     return "$rc"
 }
@@ -898,7 +965,7 @@ offline_local_deploy() {
     [ -d "$source" ] || return 1
     bundle=$(find "$source" -maxdepth 3 -type f -name main.sh -printf '%h\n' | head -n 1)
     if [ -n "$bundle" ]; then
-        install_bundle_scripts "$bundle" "${2:-0}" || { [ -z "$stage" ] || rm -rf "$stage"; return 1; }
+        install_bundle_scripts "$bundle" "${2:-0}" || { rc=$?; [ -z "$stage" ] || rm -rf "$stage"; return "$rc"; }
         [ ! -d "$bundle/packages" ] || deploy_binaries_from_dir "$bundle/packages" || rc=1
     else deploy_binaries_from_dir "$source" || rc=1; fi
     [ -z "$stage" ] || rm -rf "$stage"
@@ -937,8 +1004,8 @@ render_ota_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SCRIPT CORE ENGINE UPDATES ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Sync All Scripts from Official GitHub${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Sync All Scripts from Iranian Mirror${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Sync All Scripts from Official GitHub (Up/Down)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Sync All Scripts from Iranian Mirror (Up/Down)${NC}"
     local main_sub_badge=""
     if [ -f "$UPDATE_FILE" ]; then
         local m_line=$(grep "^main:" "$UPDATE_FILE")
@@ -1013,7 +1080,7 @@ reload_dashboard() {
     exec "$MTUNNEL_PATH"
 }
 show_ota_update_hub() {
-    local option base work url file module rel target confirm new_ver current_v kind source_name
+    local option base work url file module rel target confirm new_ver current_v kind source_name sync_rc
     while true; do
         render_ota_menu
         read_with_refresh "  ${C}OTA-HUB ❯❯ ${NC}" option render_ota_menu || return 0
@@ -1025,11 +1092,14 @@ show_ota_update_hub() {
                 base="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
                 if [ "$option" == 2 ]; then base="$MIRROR_SCRIPTS"; source_name='IRANIAN MIRROR'; fi
                 echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
-                if sync_script_bundle "$base" 1; then
+                sync_script_bundle "$base" 1 && sync_rc=0 || sync_rc=$?
+                if [ "$sync_rc" == 0 ]; then
                     : > "$UPDATE_FILE"
                     echo -e "\n\n  ${G}● Script sync finished. Press Enter to reload core...${NC}\n"
                     read -r confirm
                     reload_dashboard
+                elif [ "$sync_rc" == 2 ]; then
+                    echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing scripts preserved.${NC}\n"
                 else
                     echo -e "\n  ${R}✖ Script update failed. Previous scripts preserved.${NC}\n" >&2
                 fi;;
@@ -1037,11 +1107,14 @@ show_ota_update_hub() {
                 draw_main_header
                 echo -e "\n  ${DIM}┌─[ REPAIRING FULL MODULAR BUNDLE ]${NC}\n"
                 # Modular dashboard and core must be updated as one compatible pair.
-                if sync_script_bundle "$REPO_SCRIPTS" 0; then
+                sync_script_bundle "$REPO_SCRIPTS" 0 && sync_rc=0 || sync_rc=$?
+                if [ "$sync_rc" == 0 ]; then
                     new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$LOCAL_DIR/main.sh")
                     draw_item_progress 1 1 main "$new_ver"
                     echo -e "\n\n  ${G}● Modular bundle successfully updated! Reloading...${NC}\n"
                     reload_dashboard
+                elif [ "$sync_rc" == 2 ]; then
+                    echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing installation preserved.${NC}\n"
                 else
                     draw_item_progress 1 1 main '' failed
                     echo -e "\n  ${R}✖ Bundle repair failed. Previous installation preserved.${NC}\n" >&2
@@ -1079,9 +1152,12 @@ show_ota_update_hub() {
                     fi
                     mkdir "$work/extracted"
                     if mt_extract_archive "$file" "$work/extracted" 2>/dev/null; then
-                        if offline_local_deploy "$work/extracted" 1; then
+                        offline_local_deploy "$work/extracted" 1 && sync_rc=0 || sync_rc=$?
+                        if [ "$sync_rc" == 0 ]; then
                             echo -e "\n  ${G}✔ Archive extracted and modules deployed successfully!${NC}\n"
                             rm -rf "$work"; reload_dashboard
+                        elif [ "$sync_rc" == 2 ]; then
+                            echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing installation preserved.${NC}\n"
                         else
                             echo -e "\n  ${R}✖ Bundle deployment failed.${NC}\n" >&2
                         fi
@@ -1319,53 +1395,23 @@ use_peer_code() {
 }
 render_main_menu() {
     draw_main_header
-    printf '
-'
-    printf '  %b┌─[ TUNNEL INFRASTRUCTURE ]%b
-' "$DIM" "$NC"
-    printf '  %b│%b
-' "$DIM" "$NC"
-    printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
-    printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
-    printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b└─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
-    printf '  %b│%b
-' "$DIM" "$NC"
-    printf '  %b├─[ ROUTING, MONITORING & BENCHMARK ]%b
-' "$DIM" "$NC"
-    printf '  %b│%b
-' "$DIM" "$NC"
-    printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b└─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b│%b
-' "$DIM" "$NC"
-    printf '  %b├─[ SYSTEM OPERATIONS ]%b
-' "$DIM" "$NC"
-    printf '  %b│%b
-' "$DIM" "$NC"
-    printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b└─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
-    printf '  %b│%b
-' "$DIM" "$NC"
-    printf '  %b├────────────────────────────%b
-' "$DIM" "$NC"
-    printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b
-
-' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+    printf '\n'
+    printf '  %b┌─[ TUNNEL INFRASTRUCTURE ]%b\n' "$DIM" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
+    printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+    printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+    printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
+    printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"
+    printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
-
 show_local_install() {
     local local_input
     draw_main_header
@@ -1373,8 +1419,12 @@ show_local_install() {
     echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read -r local_input
     draw_main_header
     echo -e "\n  ${DIM}┌─[ INSTALLING FROM LOCAL SOURCE ]${NC}\n"
-    if offline_local_deploy "$local_input" 1; then
+    local deploy_rc=0
+    offline_local_deploy "$local_input" 1 || deploy_rc=$?
+    if [ "$deploy_rc" == 0 ]; then
         echo -e "\n\n  ${G}● Local scripts and available binary packages installed successfully.${NC}\n"
+    elif [ "$deploy_rc" == 2 ]; then
+        echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing installation preserved.${NC}\n"
     else echo -e "\n  ${R}✖ Local install failed. Check the reported error.${NC}\n" >&2; fi
     ota_pause
 }

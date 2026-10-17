@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v16.0.1 ---
+# --- MTunnel MPorter | Port Forwarding Manager v16.0.2 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
-# v16.0.1 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
+# v16.0.2 changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
 #  - IPv6 targets everywhere: HAProxy / Gost / Realm / Kernel NAT (ip6tables) / OBFS / health probes
 #  - New tunnel interface families recognised: GRE6 / 6to4 (g6*), IPIP4>4 (i4*), IPIP4>6 (i46*), IPIP6>6 (i66*), VXLAN over IPv6
 #  - Peer discovery understands IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer, ip -6 neighbours)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="16.0.1"
+MODULE_VERSION="16.0.2"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -326,7 +326,7 @@ self_update_module() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Server${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Terminal / Editor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X Auto Apply)${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
 
@@ -356,7 +356,12 @@ self_update_module() {
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}SHA256          :${NC} ${DIM}${sum}${NC}"
-        echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+        if [ "$src_opt" == 4 ]; then
+            confirm=y  # Ctrl+X saved and validated this Nano candidate.
+            echo -e "  ${G}✔ Nano file validated — applying automatically.${NC}"
+        else
+            echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+        fi
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
         rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
@@ -364,7 +369,7 @@ self_update_module() {
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
     [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH" "$@"
+    exec "$INSTALL_PATH"
 }
 
 get_local_ip() {
@@ -2585,7 +2590,7 @@ read_with_refresh() {
     printf -v "$__resultvar" '%s' "$buffer"
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.1
+# BEGIN MTUNNEL WORKSPACE V16.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 mt_workspace_screen() { "$MT_HEADER"; }
 # Keep the stable palette, tree layout and aligned one/two-digit option numbers.

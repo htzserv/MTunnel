@@ -1,0 +1,6 @@
+# MTunnel release sources (HTTPS; no quotes; no trailing comments)
+# Copy to /etc/mtunnel/sources.conf, chmod 600.
+# Directory structure must match the repository root: main.sh, core/common.sh,
+# tunnels/*.sh and packages/* (when using mirror-hosted binary downloads).
+MTUNNEL_GITHUB_BASE=https://raw.githubusercontent.com/htzserv/MTunnel/main
+MTUNNEL_MIRROR_BASE=https://c107328.parspack.net/c107328/MTunnel

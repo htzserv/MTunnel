@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v16.0.1 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v16.0.2 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="16.0.1"
+MODULE_VERSION="16.0.2"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -851,7 +851,7 @@ self_update_module() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Terminal / Editor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X Auto Apply)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
@@ -880,7 +880,12 @@ self_update_module() {
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        if [ "$src_opt" == 4 ]; then
+            confirm=y  # Ctrl+X saved and validated this Nano candidate.
+            echo -e "  ${G}✔ Nano file validated — applying automatically.${NC}"
+        else
+            echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        fi
         
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -889,7 +894,7 @@ self_update_module() {
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
     [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH" "$@"
+    exec "$INSTALL_PATH"
 }
 
 merge_ports() {
@@ -1761,7 +1766,7 @@ show_live_monitor() {
     done
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.1
+# BEGIN MTUNNEL WORKSPACE V16.0.2
 # Embedded in each module: no external library or sourced setup-link code.
 # mt_header_refresh_now supplied by core/common.sh
 # mt_live_readline supplied by core/common.sh
@@ -1879,7 +1884,7 @@ mt_link_import() {
 }
 # mt_workspace_vip supplied by core/common.sh
 # mt_workspace_backup supplied by core/common.sh
-# END MTUNNEL WORKSPACE V16.0.1
+# END MTUNNEL WORKSPACE V16.0.2
 
 mt_link_deploy_locked() {
     mt_link_validate || return 1

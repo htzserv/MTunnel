@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v16.0.1 ---
+# --- MTunnel Master Core | Central Dashboard v16.0.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="16.0.1"
+MODULE_VERSION="16.0.2"
 umask 077
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
 # Source next to a checkout first, or from the system-wide installed location.
@@ -963,7 +963,7 @@ render_ota_menu() {
     echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Terminal / Editor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Nano / Ctrl+X Auto Apply)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ LOCAL INSTALL ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -991,7 +991,7 @@ choose_module() {
     local i selection branch mode="${1:-OVERWRITE}"
     draw_main_header
     if [ "$mode" == EDITOR ]; then
-        echo -e "\n  ${DIM}┌─[ MANUAL RAW CODE PASTE (EDITOR) ]${NC}\n  ${DIM}│${NC}"
+        echo -e "\n  ${DIM}┌─[ MANUAL CODE PASTE (NANO) ]${NC}\n  ${DIM}│${NC}"
     else
         echo -e "\n  ${DIM}┌─[ SELECT MODULE TARGET TO OVERWRITE ]${NC}\n  ${DIM}│${NC}"
     fi
@@ -1109,7 +1109,12 @@ show_ota_update_hub() {
                 echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
                 echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
                 echo -e "  ${DIM}│${NC}"
-                echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+                if [ "$option" == 9 ]; then
+                    confirm=y  # Ctrl+X saved a validated full module.
+                    echo -e "  ${G}✔ Nano file validated — applying automatically.${NC}"
+                else
+                    echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+                fi
                 if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
                     if mt_install_script "$file" "$rel" "$target"; then
                         echo -e "\n  ${G}✔ Module ${module} (v${new_ver}) successfully applied! Rebooting core...${NC}\n"
@@ -1314,37 +1319,51 @@ use_peer_code() {
 }
 render_main_menu() {
     draw_main_header
-    local term_cols menu_width border
-    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-120}")
-    [[ "$term_cols" =~ ^[0-9]+$ ]] || term_cols=120
-    menu_width=$((term_cols - 4))
-    ((menu_width > 64)) && menu_width=64
-    ((menu_width < 32)) && menu_width=32
-    printf -v border '%*s' "$menu_width" ''
-    border="${border// /─}"
-    printf '\n  %b╭%s╮%b\033[K\n' "$DIM" "$border" "$NC"
-    mt_main_frame_row " ${DIM}[ TUNNEL INFRASTRUCTURE ]${NC}" "$menu_width" "$DIM"
-    mt_main_frame_row '' "$menu_width" "$DIM"
-    mt_main_menu_option "$menu_width" 1 "$G" 'Use Peer Code'
-    mt_main_menu_option "$menu_width" 2 "$C" 'GRE / GRE6 / IPIP Tunnel' mgre
-    mt_main_menu_option "$menu_width" 3 "$M" 'VXLAN Virtual Mesh Fabric' mxlan
-    mt_main_menu_option "$menu_width" 4 "$R" 'Rathole Reverse Tunnel' mrathole
-    mt_main_menu_option "$menu_width" 5 "$G" 'Backhaul Multiplexer' mbackhaul
-    mt_main_menu_option "$menu_width" 6 "$M" 'Paqet Raw Packet KCP Tunnel' mpaqet
-    mt_main_menu_separator "$menu_width" 'ROUTING, MONITORING & BENCHMARK'
-    mt_main_frame_row '' "$menu_width" "$DIM"
-    mt_main_menu_option "$menu_width" 7 "$G" 'Port Forwarding Matrix (Mporter)' mporter
-    mt_main_menu_option "$menu_width" 8 "$C" 'iPerf3 Bandwidth Benchmark'
-    mt_main_menu_separator "$menu_width" 'SYSTEM OPERATIONS'
-    mt_main_frame_row '' "$menu_width" "$DIM"
-    mt_main_menu_option "$menu_width" 9 "$G" 'Update & Local Install' main
-    mt_main_menu_option "$menu_width" 10 "$R" 'Nuclear Wipe (Uninstall)'
-    mt_main_frame_row '' "$menu_width" "$DIM"
-    mt_main_menu_separator "$menu_width"
-    mt_main_frame_row '' "$menu_width" "$DIM"
-    mt_main_menu_option "$menu_width" 0 "$DIM" 'Exit Terminal'
-    mt_main_frame_row '' "$menu_width" "$DIM"
-    printf '  %b╰%s╯%b\033[K\n\n' "$DIM" "$border" "$NC"
+    printf '
+'
+    printf '  %b┌─[ TUNNEL INFRASTRUCTURE ]%b
+' "$DIM" "$NC"
+    printf '  %b│%b
+' "$DIM" "$NC"
+    printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+    printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b└─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+    printf '  %b│%b
+' "$DIM" "$NC"
+    printf '  %b├─[ ROUTING, MONITORING & BENCHMARK ]%b
+' "$DIM" "$NC"
+    printf '  %b│%b
+' "$DIM" "$NC"
+    printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b└─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b│%b
+' "$DIM" "$NC"
+    printf '  %b├─[ SYSTEM OPERATIONS ]%b
+' "$DIM" "$NC"
+    printf '  %b│%b
+' "$DIM" "$NC"
+    printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b└─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b│%b
+' "$DIM" "$NC"
+    printf '  %b├────────────────────────────%b
+' "$DIM" "$NC"
+    printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b
+
+' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 
 show_local_install() {

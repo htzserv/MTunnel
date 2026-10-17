@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v16.0.1; modular layout revision 2).
+# MTunnel shared core API 1 (v16.0.2; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="16.0.1"
+MTUNNEL_RELEASE_VERSION="16.0.2"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -215,73 +215,69 @@ mt_validate_script() {
     version=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$file")
     [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
 }
-# Read a complete Bash module directly from an SSH terminal without relying on
-# nano/vi. Pasted text is written to a private file and NEVER evaluated here.
-# A unique terminator prevents accidental execution of following commands.
+# Open GNU nano on a disposable candidate, then syntax/version-check it.
+# nano -t (--saveonexit) means Ctrl+X saves without asking Y/N + filename.
+# The caller, not this helper, commits a validated candidate transactionally.
+mt_ensure_nano() {
+    command -v nano >/dev/null 2>&1 && return 0
+    [ "$EUID" -eq 0 ] || {
+        echo 'GNU nano is required. Install it first (sudo apt-get install nano).' >&2
+        return 1
+    }
+    echo 'Installing required GNU nano editor...' >&2
+    if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y nano >/dev/null 2>&1 || {
+            DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 update -qq >&2 &&
+            DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y nano >/dev/null 2>&1
+        } || return 1
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf -y install nano >/dev/null 2>&1 || return 1
+    elif command -v yum >/dev/null 2>&1; then
+        yum -y install nano >/dev/null 2>&1 || return 1
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache nano >/dev/null 2>&1 || return 1
+    else
+        echo 'Cannot install nano: no supported package manager. Install nano manually.' >&2
+        return 1
+    fi
+    command -v nano >/dev/null 2>&1 || { echo 'nano installation failed.' >&2; return 1; }
+}
 mt_capture_manual_script() {
-    local output="${1:-}" line first=1 fenced=0 ended=0 lines=0 bytes=0 editor
-    [[ -n "$output" && -f "$output" && ! -L "$output" ]] || { echo 'Manual paste: invalid destination.' >&2; return 1; }
+    local output="${1:-}" pasted_version
+    [[ -n "$output" && -f "$output" && ! -L "$output" ]] || {
+        echo 'Manual nano: invalid candidate path.' >&2; return 1;
+    }
+    [[ -t 0 && -t 1 ]] || {
+        echo 'Manual nano requires an interactive SSH terminal (TTY).' >&2; return 1;
+    }
+    mt_ensure_nano || { echo 'GNU nano unavailable. Existing script preserved.' >&2; return 1; }
     : > "$output" || return 1
-    printf '\n  ┌─[ MANUAL CODE PASTE ]\n' >&2
-    printf '  │ Paste the COMPLETE Bash module (shebang and MODULE_VERSION included).\n' >&2
-    printf '  │ Finish by entering MTUNNEL_END on its OWN line, then press Enter.\n' >&2
-    printf '  │ On the first line: :editor = nano/vi, :cancel = abort.\n' >&2
-    printf '  └─ Waiting for code...\n\n' >&2
-    while IFS= read -r line; do
-        line="${line%$'\r'}"
-        if (( first )); then
-            line="${line#$'\xef\xbb\xbf'}"
-            [[ -n "$line" ]] || continue
-            case "$line" in
-                :cancel) echo 'Manual paste cancelled.' >&2; return 1 ;;
-                :editor)
-                    if command -v nano >/dev/null 2>&1; then editor=nano
-                    elif command -v vi >/dev/null 2>&1; then editor=vi
-                    else echo 'No text editor found (nano/vi).' >&2; return 1; fi
-                    "$editor" "$output" || { echo 'Editor failed.' >&2; return 1; }
-                    ended=1
-                    break ;;
-                '```'|'```bash'|'```sh') fenced=1; first=0; continue ;;
-            esac
-            first=0
-        fi
-        # An optional UTF-8 BOM can be on the first script line, after a fence.
-        if (( lines == 0 )); then line="${line#$'\xef\xbb\xbf'}"; fi
-        if [[ "$line" == MTUNNEL_END ]]; then ended=1; break; fi
-        # Paste from a Markdown code block: drop only the surrounding fences.
-        if (( fenced )) && [[ "$line" == '```' ]]; then fenced=0; continue; fi
-        lines=$((lines+1)); bytes=$((bytes+${#line}+1))
-        if (( lines > 50000 || bytes > 2097152 )); then
-            echo 'Manual paste exceeded the 2 MiB / 50,000-line limit.' >&2
-            return 1
-        fi
-        printf '%s\n' "$line" >> "$output" || return 1
-    done
-    if (( ! ended )); then
-        echo 'Manual paste incomplete: MTUNNEL_END was not received. Nothing installed.' >&2
+    # Reset screen before opening fullscreen nano. Keep stdout connected to TTY.
+    printf '\033[2J\033[H'
+    if ! nano -t -- "$output"; then
+        echo 'Nano closed with an error; previous module was not changed.' >&2
         return 1
     fi
-    if [[ ! -s "$output" ]]; then echo 'Manual paste was empty. Nothing installed.' >&2; return 1; fi
-    # The output is data until validated. Do not source or run pasted code.
-    if ! head -n 1 "$output" | grep -qE '^#!(/bin/bash|/usr/bin/env bash)$'; then
-        echo 'Invalid script: first line must be #!/bin/bash or #!/usr/bin/env bash.' >&2
+    if [[ ! -s "$output" ]]; then
+        echo 'Nothing saved in Nano; previous module preserved.' >&2; return 1
+    fi
+    # Normalize text copied from Windows and optionally enclosed by Markdown.
+    sed -i 's/\r$//' "$output" || return 1
+    if [[ "$(head -n1 "$output")" == \`\`\`bash || "$(head -n1 "$output")" == \`\`\`sh ]]; then
+        sed -i '1d; ${/^```$/d;}' "$output" || return 1
+    fi
+    # Drop an optional BOM on the first line only.
+    sed -i '1s/^\xEF\xBB\xBF//' "$output" || return 1
+    if ! mt_validate_script "$output"; then
+        echo 'Invalid full Bash module (shebang, syntax or MODULE_VERSION). Previous module preserved.' >&2
         return 1
     fi
-    if ! bash -n "$output"; then
-        echo 'Invalid Bash syntax; old module has not been changed.' >&2
-        return 1
-    fi
-    if ! grep -qE '^MODULE_VERSION="[0-9]+\.[0-9]+(\.[0-9]+)?"$' "$output"; then
-        echo 'Missing MODULE_VERSION="x.y.z"; paste the whole module, not a code fragment.' >&2
-        return 1
-    fi
-    local pasted_version
     pasted_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$output" | head -n1)
     if [[ -n "${MTUNNEL_RELEASE_VERSION:-}" && "$pasted_version" != "$MTUNNEL_RELEASE_VERSION" ]]; then
-        printf 'Pasted module v%s is not compatible with shared core v%s. Update the FULL bundle instead.\n' "$pasted_version" "$MTUNNEL_RELEASE_VERSION" >&2
+        printf 'Pasted module v%s does not match shared core v%s. Install the entire compatible bundle instead.\n' "$pasted_version" "$MTUNNEL_RELEASE_VERSION" >&2
         return 1
     fi
-    echo 'Manual paste received and validated. Review the target/version before confirming.' >&2
+    echo 'Nano save successful. Syntax and version verified; applying module automatically...' >&2
     return 0
 }
 
@@ -347,9 +343,29 @@ mt_install_files() {
     for stage in "${stages[@]}" "${backups[@]}"; do [ -n "$stage" ] && rm -f "$stage"; done
     return "$rc"
 }
+# Avoid accidentally replacing a different engine when paste auto-applies.
+mt_validate_module_role() {
+    local candidate="$1" rel="$2" role
+    case "$rel" in
+        main.sh) role='Master Core';;
+        mporter.sh) role='MPorter';;
+        tunnels/mgre.sh) role='MGRE';;
+        tunnels/mxlan.sh) role='MXLAN';;
+        tunnels/mrathole.sh) role='MRathole';;
+        tunnels/mbackhaul.sh) role='MBackhaul';;
+        tunnels/mpaqet.sh) role='MPaqet';;
+        *) echo "Unrecognized MTunnel module path: $rel" >&2; return 1;;
+    esac
+    # Header check guards against accidental cross-module paste, not malicious code.
+    head -n 5 "$candidate" | grep -Fq "# --- MTunnel $role |" || {
+        echo "Incorrect module pasted for $rel. Current script preserved." >&2
+        return 1
+    }
+}
 mt_install_script() {
     local candidate="$1" rel="$2" target="$3" current="${4:-}"; local -a files=()
     mt_validate_script "$candidate" || return 1
+    mt_validate_module_role "$candidate" "$rel" || return 1
     # Single-module OTA cannot upgrade the shared core. Require a compatible
     # release; the full bundle updater is used for changing major versions.
     local candidate_version
@@ -759,7 +775,7 @@ mt_bbr_menu() {
     while true; do
         clear 2>/dev/null || true
         echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-16.0.1}" "$(mt_bbr_status)" 21 ''
+        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-16.0.2}" "$(mt_bbr_status)" 21 ''
         echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Enable BBR${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Disable BBR${NC}"

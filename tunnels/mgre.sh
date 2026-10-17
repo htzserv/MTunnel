@@ -8,7 +8,9 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="1.0.3"
+MTUNNEL_REQUIRED_CORE_API=1
+MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -25,7 +27,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == 1 && "${MTUNNEL_LAYOUT_REV:-}" == 2 && "${MTUNNEL_RELEASE_VERSION:-}" == "${MODULE_VERSION}" ]]; then return 0; fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -900,7 +902,7 @@ self_update_module() {
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
     [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH"
+    exec "$INSTALL_PATH" "$@"
 }
 
 merge_ports() {

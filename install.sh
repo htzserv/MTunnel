@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="1.0.3"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -38,9 +38,10 @@ mt_installer_load_common() {
         candidate="$script_dir/core/common.sh"
     elif [[ "$mode" != remote && -f "$PWD/core/common.sh" ]]; then
         candidate="$PWD/core/common.sh"
-    elif [[ "$mode" != remote && -f /usr/lib/mtunnel/common.sh ]]; then
-        candidate=/usr/lib/mtunnel/common.sh
     else
+        # A curl/process-substitution bootstrap must not borrow an older installed
+        # common.sh: installer helper functions may have changed within the same API.
+        # Fetch the core from the same source as this installer instead.
         if [[ "$mode" != remote ]]; then remote="$DEFAULT_REMOTE"; fi
         [[ "$remote" == https://* ]] || { echo 'Shared core download requires HTTPS.' >&2; return 1; }
         tmp=$(mktemp "${TMPDIR:-/tmp}/mtunnel-core.XXXXXXXX") || return 1
@@ -64,6 +65,40 @@ mt_installer_load_common() {
 mt_installer_load_common "$@" || exit 1
 unset -f mt_installer_load_common
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-$MTUNNEL_GITHUB_BASE}"
+
+
+# Backward-compatible installer fallbacks. These make install.sh independently
+# updatable: if it is pasted/replaced before common.sh, it still cannot fail with
+# "command not found" for release-line/downgrade helpers.
+if ! declare -F mt_is_retired_version >/dev/null; then
+    mt_is_retired_version() { [[ "${1:-}" =~ ^(15|16)\.[0-9]+(\.[0-9]+)?$ ]]; }
+fi
+if ! declare -F mt_is_current_release_line >/dev/null; then
+    mt_is_current_release_line() { [[ "${1:-}" =~ ^1\.[0-9]+(\.[0-9]+)?$ ]]; }
+fi
+if ! declare -F mt_release_migration >/dev/null; then
+    mt_release_migration() { mt_is_retired_version "$1" && mt_is_current_release_line "$2"; }
+fi
+if ! declare -F mt_retired_bundle_blocked >/dev/null; then
+    mt_retired_bundle_blocked() {
+        [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && [ -n "${2:-}" ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"
+    }
+fi
+if ! declare -F mt_confirm_downgrade >/dev/null; then
+    mt_confirm_downgrade() {
+        local installed="${1:-}" downloaded="${2:-}" subject="${3:-MTunnel}" answer=''
+        [ -n "$installed" ] || return 0
+        [ "$installed" = unknown ] || ! mt_release_migration "$installed" "$downloaded" || return 0
+        if [ "$installed" != unknown ] && ! mt_is_newer_version "$installed" "$downloaded"; then return 0; fi
+        [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] || return 0
+        printf '\n  ┌─[ DOWNGRADE CONFIRMATION: %s ]\n' "$subject" >&2
+        printf '  ├─ Installed Version : %s\n' "$installed" >&2
+        printf '  ├─ Downloaded Version: v%s\n' "$downloaded" >&2
+        printf '  └─ Downgrade to v%s? (y/N): ' "$downloaded" >&2
+        IFS= read -r answer || return 1
+        case "$answer" in y|Y|yes|YES|Yes) return 0;; *) return 2;; esac
+    }
+fi
 
 
 
@@ -203,6 +238,16 @@ installer_main() {
             draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
             echo ''
         done
+        if ! mt_download "$remote/install.sh" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
+            echo 'Cannot prepare installer: install.sh. Installed scripts preserved.' >&2; return 1
+        fi
+        # VERSION is optional for legacy mirrors, but if present it must agree with the staged core.
+        if mt_download "$remote/VERSION" "$work/scripts/VERSION" 2>/dev/null; then
+            local marker staged_core
+            marker=$(head -c 32 "$work/scripts/VERSION" | tr -d '\r\n ')
+            staged_core=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$work/scripts/core/common.sh")
+            [ "$marker" = "$staged_core" ] || { echo "Source VERSION is v$marker but core is v$staged_core; refusing partial mirror/cache." >&2; return 1; }
+        fi
         source_dir="$work/scripts"
     fi
         [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
@@ -224,6 +269,12 @@ installer_main() {
     core_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/core/common.sh")
     [ "$bundle_version" = "$core_version" ] || {
         echo "Mismatched shared core version: $core_version; modules: $bundle_version" >&2; return 1;
+    }
+    mt_validate_script "$source_dir/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; return 1; }
+    local installer_version
+    installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/install.sh")
+    [ "$installer_version" = "$bundle_version" ] || {
+        echo "Mismatched installer version: $installer_version; bundle: $bundle_version" >&2; return 1;
     }
     if [ -n "$remote" ]; then
         active_modules=("${modules[@]}")
@@ -290,10 +341,7 @@ installer_main() {
             echo ''
         fi
     done
-    if [ -f "$source_dir/install.sh" ]; then
-        mt_validate_script "$source_dir/install.sh" || return 1
-        files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
-    fi
+    files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
     if [ "$with_cores" == 1 ]; then
         for name in bh rathole paqet gost haproxy; do
             path="packages/$name"

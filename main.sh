@@ -1,7 +1,9 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.0.2 ---
+# --- MTunnel Master Core | Central Dashboard v1.0.3 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="1.0.2"
+MODULE_VERSION="1.0.3"
+MTUNNEL_REQUIRED_CORE_API=1
+MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
 # Source next to a checkout first, or from the system-wide installed location.
@@ -17,7 +19,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == 1 && "${MTUNNEL_LAYOUT_REV:-}" == 2 && "${MTUNNEL_RELEASE_VERSION:-}" == "${MODULE_VERSION}" ]]; then return 0; fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -46,6 +48,21 @@ declare -A MOD_MAP=(
     ["mpaqet"]="tunnels/mpaqet.sh"
 )
 ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet")
+# Every shell component can also be updated independently from GitHub/mirror,
+# a direct link, or Manual Code Paste. Bundle sync remains available separately.
+declare -A COMPONENT_MAP=(
+    ["main"]="main.sh"
+    ["mporter"]="mporter.sh"
+    ["mgre"]="tunnels/mgre.sh"
+    ["mxlan"]="tunnels/mxlan.sh"
+    ["mrathole"]="tunnels/mrathole.sh"
+    ["mbackhaul"]="tunnels/mbackhaul.sh"
+    ["mpaqet"]="tunnels/mpaqet.sh"
+    ["common"]="core/common.sh"
+    ["install"]="install.sh"
+)
+EDITABLE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "common" "install")
+UPDATE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "common" "install")
 ALL_PACKAGES=(
     "bh"
     "rathole"
@@ -95,42 +112,53 @@ fetch_bundle_version() {
     [[ "$v" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$v"
     return 0
 }
+component_local_version_for_watch() {
+    local mod="$1" file=''
+    case "$mod" in
+        main) file="$MTUNNEL_PATH";;
+        common) file=/usr/lib/mtunnel/common.sh;;
+        install) file="$LOCAL_DIR/install.sh";;
+        *) file="/usr/bin/$mod";;
+    esac
+    [ -f "$file" ] || file="$LOCAL_DIR/${COMPONENT_MAP[$mod]}"
+    if [ "$mod" == common ]; then
+        sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$file" 2>/dev/null | head -n1
+    else
+        sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$file" 2>/dev/null | head -n1
+    fi
+}
 check_single_module_silent() {
-    local mod="$1"
-    local rel_path="$2"
-    local out_file="$SECURE_TMP/.chk_${mod}"
+    local mod="$1" rel_path="${COMPONENT_MAP[$1]:-}" out_file="$SECURE_TMP/.chk_${1}"
+    local cur_v='' rem_v='' cb="?t=$(date +%s%N)" payload=''
     rm -f "$out_file"
-    local local_file="$LOCAL_DIR/$rel_path"
-    [ ! -f "$local_file" ] && [ -f "/usr/bin/$mod" ] && local_file="/usr/bin/$mod"
-    local cur_v=""
-    [ -f "$local_file" ] && cur_v=$(grep -m1 '^MODULE_VERSION=' "$local_file" | cut -d'"' -f2)
-    [ -z "$cur_v" ] && cur_v="0.0.0"
-    local rem_v="${BUNDLE_REMOTE_VER:-}"
-    if [ -z "$rem_v" ]; then
-        local cb="?t=$(date +%s%N)"
-        if command -v curl >/dev/null 2>&1; then
-            rem_v=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        elif command -v wget >/dev/null 2>&1; then
-            rem_v=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        fi
+    [ -n "$rel_path" ] || return 0
+    cur_v=$(component_local_version_for_watch "$mod"); [ -n "$cur_v" ] || cur_v='0.0.0'
+    # Per-file checks are intentional: independent component versions are supported,
+    # so the bundle VERSION marker must never be reused as a module's remote version.
+    if command -v curl >/dev/null 2>&1; then
+        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 5 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null) || payload=''
+    elif command -v wget >/dev/null 2>&1; then
+        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null) || payload=''
+    fi
+    if [ "$mod" == common ]; then
+        rem_v=$(printf '%s\n' "$payload" | sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' | head -n1)
+    else
+        rem_v=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' | head -n1)
     fi
     if [ -n "$rem_v" ] && mt_update_available "$rem_v" "$cur_v"; then
         echo "${mod}:${cur_v}:${rem_v}" > "$out_file"
     fi
 }
 check_all_updates_round() {
-    local pids=()
-    BUNDLE_REMOTE_VER=$(fetch_bundle_version)
-    for mod in "${!MOD_MAP[@]}"; do
-        check_single_module_silent "$mod" "${MOD_MAP[$mod]}" &
+    local pids=() mod p f
+    for mod in "${UPDATE_COMPONENTS[@]}"; do
+        check_single_module_silent "$mod" &
         pids+=("$!")
     done
-    for p in "${pids[@]}"; do
-        wait "$p" 2>/dev/null
-    done
+    for p in "${pids[@]}"; do wait "$p" 2>/dev/null; done
     : > "$UPDATE_FILE.new"
-    for mod in "${!MOD_MAP[@]}"; do
-        local f="$SECURE_TMP/.chk_${mod}"
+    for mod in "${UPDATE_COMPONENTS[@]}"; do
+        f="$SECURE_TMP/.chk_${mod}"
         [ -s "$f" ] && cat "$f" >> "$UPDATE_FILE.new"
         rm -f "$f"
     done
@@ -685,14 +713,17 @@ draw_header_lines_only() {
                 elif (( t_loss < 30 )); then loss_color="$Y"
                 else loss_color="$R"; fi
             fi
+            local vip_color="$G" fwd_color="$C"
+            case "${t_vip^^}" in OFF|NONE|0|-) vip_color="$DIM";; esac
+            case "${t_fwd^^}" in OFF|NONE|0|-) fwd_color="$DIM";; esac
             mt_main_header_row7 \
                 "${status_color}${status_icon}${NC} ${W}${t_name} [${t_proto}]${NC}" \
                 "${DIM}Peer:${NC} ${Y}${t_remote}${NC}" \
-                "${DIM}vIP:${NC} ${G}${t_vip}${NC}" \
+                "${DIM}vIP:${NC} ${vip_color}${t_vip}${NC}" \
                 "${DIM}Ping:${NC} ${Y}${t_ping:----}${NC}" \
                 "${DIM}Loss:${NC} ${loss_color}${t_loss:----}%${NC}" \
                 "${DIM}Up:${NC} ${W}${uptime}${NC}" \
-                "${DIM}F:${NC}${C}${t_fwd}${NC}"
+                "${DIM}F:${NC}${fwd_color}${t_fwd}${NC}"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
     if (( shown == 0 )); then
@@ -785,11 +816,7 @@ download_file_to_cache() {
     if ! mt_download "$base_url/$rel_path" "$tmp" || ! mt_validate_script "$tmp"; then rm -f "$tmp"; return 1; fi
     local installed="/usr/bin/$mod"; [ "$mod" != main ] || installed="$MTUNNEL_PATH"
     local cur new; cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$installed" 2>/dev/null); new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp")
-    if [ "$new" != "$MTUNNEL_RELEASE_VERSION" ]; then
-        echo 'Remote module does not match installed shared core. Sync full bundle instead.' >&2
-        rm -f "$tmp"; return 1
-    fi
-    mt_module_downgrade_allowed "$cur" "$new" || { rm -f "$tmp"; return 1; }
+    mt_validate_module_core_contract "$tmp" || { rm -f "$tmp"; return 1; }
     mt_install_files 755 "$tmp" "$LOCAL_DIR/$rel_path"
     local rc=$?; rm -f "$tmp"; return "$rc"
 }
@@ -1006,15 +1033,7 @@ render_ota_menu() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Sync All Scripts from Official GitHub (Up/Down)${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Sync All Scripts from Iranian Mirror (Up/Down)${NC}"
-    local main_sub_badge=""
-    if [ -f "$UPDATE_FILE" ]; then
-        local m_line=$(grep "^main:" "$UPDATE_FILE")
-        if [ -n "$m_line" ]; then
-            local o_v=$(echo "$m_line" | cut -d: -f2)
-            local n_v=$(echo "$m_line" | cut -d: -f3)
-            main_sub_badge="  ${Y}(v${o_v} ➔ v${n_v})${NC}"
-        fi
-    fi
+    local main_sub_badge="$(updates_summary_badge)"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Repair Dashboard & All Shared Modules (Official)${NC}${main_sub_badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ BINARY CORES ONLY (BH, RAT, PAQET, GOST, HAPROXY) ]${NC}"
@@ -1035,6 +1054,11 @@ render_ota_menu() {
     echo -e "  ${DIM}├─[ LOCAL INSTALL ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}Offline Local Install (Directory / ZIP / Archive)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ INDIVIDUAL COMPONENT UPDATE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Update One File from Official GitHub${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Update One File from Iranian Mirror${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├────────────────────────────${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
@@ -1060,16 +1084,84 @@ choose_module() {
     if [ "$mode" == EDITOR ]; then
         echo -e "\n  ${DIM}┌─[ MANUAL CODE PASTE (NANO) ]${NC}\n  ${DIM}│${NC}"
     else
-        echo -e "\n  ${DIM}┌─[ SELECT MODULE TARGET TO OVERWRITE ]${NC}\n  ${DIM}│${NC}"
+        echo -e "\n  ${DIM}┌─[ SELECT COMPONENT TARGET ]${NC}\n  ${DIM}│${NC}"
     fi
-    for i in "${!ALL_MODULES[@]}"; do
-        branch='├─'; [ "$i" -ne "$((${#ALL_MODULES[@]}-1))" ] || branch='└─'
-        echo -e "  ${DIM}${branch}${NC} ${W}$((i+1))${NC} ${DIM}❯${NC} ${C}${ALL_MODULES[$i]}${NC}"
+    for i in "${!EDITABLE_COMPONENTS[@]}"; do
+        branch='├─'; [ "$i" -ne "$((${#EDITABLE_COMPONENTS[@]}-1))" ] || branch='└─'
+        echo -e "  ${DIM}${branch}${NC} ${W}$((i+1))${NC} ${DIM}❯${NC} ${C}${EDITABLE_COMPONENTS[$i]}${NC} ${DIM}(${COMPONENT_MAP[${EDITABLE_COMPONENTS[$i]}]})${NC}$(module_update_badge "${EDITABLE_COMPONENTS[$i]}")"
     done
     echo -ne "\n  ${C}${mode} ❯❯ ${NC}"; read -r selection
-    [[ "$selection" =~ ^[0-9]{1,2}$ ]] && ((10#$selection>=1 && 10#$selection<=${#ALL_MODULES[@]})) || return 1
-    CHOSEN_MODULE="${ALL_MODULES[$((10#$selection-1))]}"
+    [[ "$selection" =~ ^[0-9]{1,2}$ ]] && ((10#$selection>=1 && 10#$selection<=${#EDITABLE_COMPONENTS[@]})) || return 1
+    CHOSEN_MODULE="${EDITABLE_COMPONENTS[$((10#$selection-1))]}"
 }
+
+component_primary_target() {
+    case "$1" in
+        main) printf '%s\n' "$MTUNNEL_PATH";;
+        common) printf '%s\n' '/usr/lib/mtunnel/common.sh';;
+        install) printf '%s\n' "$LOCAL_DIR/install.sh";;
+        *) printf '/usr/bin/%s\n' "$1";;
+    esac
+}
+component_version_from_file() {
+    local component="$1" file="$2"
+    if [ "$component" == common ]; then
+        sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$file" | head -n1
+    else
+        sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$file" | head -n1
+    fi
+}
+validate_component_candidate() {
+    local component="$1" file="$2" rel="${COMPONENT_MAP[$1]:-}" api layout
+    [ -n "$rel" ] || return 1
+    if [ "$component" == common ]; then
+        [ -s "$file" ] && bash -n "$file" || return 1
+        grep -q '^MTUNNEL_CORE_API=[0-9][0-9]*$' "$file" || return 1
+        grep -q '^MTUNNEL_LAYOUT_REV=[0-9][0-9]*$' "$file" || return 1
+        grep -q '^MTUNNEL_RELEASE_VERSION="[0-9][0-9.]*"$' "$file" || return 1
+        api=$(sed -n 's/^MTUNNEL_CORE_API=\([0-9][0-9]*\)$/\1/p' "$file" | head -n1)
+        layout=$(sed -n 's/^MTUNNEL_LAYOUT_REV=\([0-9][0-9]*\)$/\1/p' "$file" | head -n1)
+        if [ "$api" != "${MTUNNEL_CORE_API:-}" ] || [ "$layout" != "${MTUNNEL_LAYOUT_REV:-}" ]; then
+            echo "Shared-core API/layout change ($api/$layout) requires Full Bundle Sync; independent core updates may only keep the current API/layout contract." >&2
+            return 1
+        fi
+        return 0
+    fi
+    mt_validate_script "$file" || return 1
+    if [ "$component" == install ]; then
+        head -n 5 "$file" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect installer script pasted. Existing file preserved.' >&2; return 1; }
+        return 0
+    fi
+    mt_validate_module_role "$file" "$rel" || return 1
+    mt_validate_module_core_contract "$file" || return 1
+}
+install_component_candidate() {
+    local component="$1" file="$2" rel="${COMPONENT_MAP[$1]:-}" target current_v new_v
+    validate_component_candidate "$component" "$file" || return 1
+    target=$(component_primary_target "$component")
+    current_v=$(component_version_from_file "$component" "$target" 2>/dev/null)
+    new_v=$(component_version_from_file "$component" "$file")
+    if [ -n "$current_v" ]; then mt_module_downgrade_allowed "$current_v" "$new_v" || return $?; fi
+    case "$component" in
+        common) mt_install_files 644 "$file" /usr/lib/mtunnel/common.sh "$file" "$LOCAL_DIR/core/common.sh";;
+        install) mt_install_files 755 "$file" "$LOCAL_DIR/install.sh";;
+        *) mt_install_script "$file" "$rel" "$target";;
+    esac
+}
+capture_manual_component() {
+    local output="$1" component="$2"
+    [[ -t 0 && -t 1 ]] || { echo 'Manual Code Paste requires an interactive SSH terminal (TTY).' >&2; return 1; }
+    mt_ensure_nano || return 1
+    : > "$output" || return 1
+    printf '\033[2J\033[H'
+    nano -t -- "$output" || return 1
+    [ -s "$output" ] || { echo 'Nothing saved; existing component preserved.' >&2; return 1; }
+    sed -i 's/\r$//' "$output" || return 1
+    if [[ "$(head -n1 "$output")" == \`\`\`bash || "$(head -n1 "$output")" == \`\`\`sh ]]; then sed -i '1d; ${/^```$/d;}' "$output" || return 1; fi
+    sed -i '1s/^\xEF\xBB\xBF//' "$output" || return 1
+    validate_component_candidate "$component" "$output"
+}
+
 ota_pause() {
     local dummy
     echo -ne "  ${DIM}Press Enter to return...${NC}\n"; read -r dummy
@@ -1163,46 +1255,85 @@ show_ota_update_hub() {
                         fi
                         rm -rf "$work"; ota_pause; continue
                     fi
-                    if ! mt_validate_script "$file" || ! choose_module; then
-                        echo -e "\n  ${R}✖ Invalid script or cancelled selection.${NC}\n"
+                    if ! choose_module; then
+                        echo -e "\n  ${R}✖ Component selection cancelled.${NC}\n"
+                        rm -rf "$work"; ota_pause; continue
+                    fi
+                    module="$CHOSEN_MODULE"
+                    if ! validate_component_candidate "$module" "$file"; then
+                        echo -e "\n  ${R}✖ Invalid or incompatible component file.${NC}\n"
                         rm -rf "$work"; ota_pause; continue
                     fi
                 else
                     if ! choose_module EDITOR; then rm -rf "$work"; continue; fi
+                    module="$CHOSEN_MODULE"
                     : > "$file"
-                    if ! mt_capture_manual_script "$file"; then
-                        echo -e "\n  ${R}✖ Manual paste failed or cancelled. Previous module preserved.${NC}\n"
+                    if ! capture_manual_component "$file" "$module"; then
+                        echo -e "\n  ${R}✖ Manual paste failed or cancelled. Previous component preserved.${NC}\n"
                         rm -rf "$work"; ota_pause; continue
                     fi
                 fi
-                module="$CHOSEN_MODULE"; rel="${MOD_MAP[$module]}"; target="/usr/bin/$module"
-                [ "$module" != main ] || target="$MTUNNEL_PATH"
-                new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$file")
-                current_v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target" 2>/dev/null)
+                rel="${COMPONENT_MAP[$module]}"; target=$(component_primary_target "$module")
+                new_ver=$(component_version_from_file "$module" "$file")
+                current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
                 draw_main_header
                 echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${DIM}│${NC}"
-                echo -e "  ${DIM}├─${NC} ${W}Target Module   :${NC} ${C}${module}${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Target Component:${NC} ${C}${module}${NC} ${DIM}(${rel})${NC}"
                 echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
-                echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
                 echo -e "  ${DIM}│${NC}"
                 if [ "$option" == 9 ]; then
-                    confirm=y  # Ctrl+X saved a validated full module.
-                    echo -e "  ${G}✔ Nano file validated — applying automatically.${NC}"
+                    confirm=y
+                    echo -e "  ${G}✔ Nano file validated — applying selected component automatically.${NC}"
                 else
                     echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
                 fi
                 if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
-                    if mt_install_script "$file" "$rel" "$target"; then
-                        echo -e "\n  ${G}✔ Module ${module} (v${new_ver}) successfully applied! Rebooting core...${NC}\n"
-                        rm -rf "$work"; reload_dashboard
+                    if install_component_candidate "$module" "$file"; then
+                        echo -e "\n  ${G}✔ Component ${module} (v${new_ver:-Unknown}) successfully applied!${NC}\n"
+                        rm -rf "$work"
+                        [ "$module" == install ] || reload_dashboard
                     else
-                        echo -e "\n  ${R}✖ Module install failed. Previous module preserved.${NC}\n" >&2
+                        echo -e "\n  ${R}✖ Component install failed. Previous file preserved.${NC}\n" >&2
                     fi
                 else
                     echo -e "\n  ${Y}● Manual update cancelled by user.${NC}\n"
                 fi
                 rm -rf "$work";;
             10) show_local_install; continue;;
+            11|12)
+                base="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
+                [ "$option" == 12 ] && { base="$MIRROR_SCRIPTS"; source_name='IRANIAN MIRROR'; }
+                if ! choose_module UPDATE; then continue; fi
+                module="$CHOSEN_MODULE"; rel="${COMPONENT_MAP[$module]}"
+                work=$(mktemp -d "$SECURE_TMP/onefile.XXXXXX") || return 1
+                file="$work/input"
+                draw_main_header
+                echo -e "\n  ${DIM}┌─[ INDIVIDUAL UPDATE: ${module} FROM ${source_name} ]${NC}\n"
+                if ! mt_download "$base/$rel?t=$(date +%s)" "$file"; then
+                    echo -e "  ${R}✖ Download failed. Existing component preserved.${NC}"
+                    rm -rf "$work"; ota_pause; continue
+                fi
+                if ! validate_component_candidate "$module" "$file"; then
+                    echo -e "  ${R}✖ Downloaded file is invalid or incompatible. Existing component preserved.${NC}"
+                    rm -rf "$work"; ota_pause; continue
+                fi
+                target=$(component_primary_target "$module")
+                current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
+                new_ver=$(component_version_from_file "$module" "$file")
+                echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Remote Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
+                echo -ne "  ${DIM}└─${NC} ${C}Apply only this file? (y/n): ${NC}"; read -r confirm
+                if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
+                    if install_component_candidate "$module" "$file"; then
+                        echo -e "\n  ${G}✔ Only ${rel} was updated successfully.${NC}\n"
+                        rm -rf "$work"
+                        [ "$module" == install ] || reload_dashboard
+                    else
+                        echo -e "\n  ${R}✖ Individual update failed. Previous file preserved.${NC}\n"
+                    fi
+                fi
+                rm -rf "$work";;
             *) continue;;
         esac
         ota_pause
@@ -1377,6 +1508,20 @@ module_update_badge() {
     [ -z "$version" ] || printf ' %b' "${Y}(Update Available: v${version})${NC}"
     return 0
 }
+updates_summary_badge() {
+    [ -s "$UPDATE_FILE" ] || return 0
+    local versions count version
+    versions=$(awk -F: 'NF>=3 && $3!="" {print $3}' "$UPDATE_FILE" 2>/dev/null | sort -Vu)
+    count=$(printf '%s
+' "$versions" | sed '/^$/d' | wc -l)
+    if [ "$count" -eq 1 ] 2>/dev/null; then
+        version=$(printf '%s
+' "$versions" | head -n1)
+        printf ' %b' "${Y}(Update Available: v${version})${NC}"
+    else
+        printf ' %b' "${Y}(Updates Available)${NC}"
+    fi
+}
 use_peer_code() {
     local link kind mod
     draw_main_header
@@ -1399,14 +1544,14 @@ render_main_menu() {
     printf '  %b┌─[ TUNNEL INFRASTRUCTURE ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
-    printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
-    printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
-    printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
+    printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
+    printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
+    printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
+    printf '  %b├─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
+    printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
     printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
     printf '  %b├─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"

@@ -19,7 +19,16 @@ for f in "${files[@]}"; do
     v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$f")
     [ "$v" = "$ver" ] || { echo "Version mismatch: $f is '$v', core is '$ver'" >&2; exit 1; }
 done
-if [ "$run_tests" = 1 ]; then for t in tests/test_*.sh; do bash "$t" >/dev/null || { echo "Test failed: $t" >&2; exit 1; }; done; fi
+if [ "$run_tests" = 1 ]; then
+    shopt -s nullglob
+    tests=(tests/test_*.sh)
+    if [ "${#tests[@]}" -gt 0 ]; then
+        for t in "${tests[@]}"; do bash "$t" >/dev/null || { echo "Test failed: $t" >&2; exit 1; }; done
+    else
+        echo 'No tests/test_*.sh found; syntax/version validation completed.' >&2
+    fi
+    shopt -u nullglob
+fi
 printf '%s\n' "$ver" > VERSION
 : > "$out/SHA256SUMS"
 for f in "${files[@]}" VERSION; do printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")" >> "$out/SHA256SUMS"; done

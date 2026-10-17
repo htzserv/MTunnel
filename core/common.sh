@@ -4,7 +4,7 @@
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.0.2"
+MTUNNEL_RELEASE_VERSION="1.0.3"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -140,25 +140,37 @@ mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
-# Numeric versions are compared with sort -V; v16.0.2 -> v1.0.2 is a downgrade.
-# MT_ALLOW_DOWNGRADE=1 is explicit CLI opt-in; interactive Sync asks once.
-# True when installing $2 over installed $1 would be a downgrade. MT_ALLOW_DOWNGRADE=1 permits it (one-time migrations).
-mt_downgrade_blocked() { [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && mt_is_newer_version "$1" "$2"; }
 
-# The 15.x/16.x line was retired and renumbered to 1.x. Because 16 > 1 numerically,
-# a stale mirror/cache still serving 16.x would otherwise look like an "upgrade" to
-# every 1.x server. Such candidates are never offered or installed silently.
-# MT_ALLOW_RETIRED=1 is an explicit operator override.
+# Release-line migration support. MTunnel 15.x/16.x was renumbered to the 1.x line.
+# Numeric sort alone sees 16.0.2 -> 1.0.3 as a downgrade, but for MTunnel this is
+# an intentional forward migration. The inverse (1.x -> 15.x/16.x) remains blocked.
 MTUNNEL_RETIRED_MAJOR_MIN=15
 MTUNNEL_RETIRED_MAJOR_MAX=16
-mt_is_retired_version() {
+mt_version_major() {
     [[ "${1:-}" =~ ^([0-9]+)\.[0-9]+(\.[0-9]+)?$ ]] || return 1
-    local major=$((10#${BASH_REMATCH[1]}))
+    printf '%d' "$((10#${BASH_REMATCH[1]}))"
+}
+mt_is_retired_version() {
+    local major; major=$(mt_version_major "$1") || return 1
     ((major >= MTUNNEL_RETIRED_MAJOR_MIN && major <= MTUNNEL_RETIRED_MAJOR_MAX))
 }
-# True only when REMOTE ($1) is a real update for LOCAL ($2): newer, and not a
-# retired-line release being offered to a server that is already on the 1.x line.
+mt_is_current_release_line() {
+    local major; major=$(mt_version_major "$1") || return 1
+    ((major == 1))
+}
+# $1 installed/local, $2 candidate/remote
+mt_release_migration() {
+    mt_is_retired_version "$1" && mt_is_current_release_line "$2"
+}
+# True when installing $2 over installed $1 would be a real downgrade. A recognized
+# retired-line -> 1.x migration is not treated as a downgrade.
+mt_downgrade_blocked() {
+    [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && ! mt_release_migration "$1" "$2" && mt_is_newer_version "$1" "$2"
+}
+# True only when REMOTE ($1) is a real update for LOCAL ($2). A 1.x release is
+# considered an update over retired 15.x/16.x even though its numeric major is lower.
 mt_update_available() {
+    if mt_release_migration "$2" "$1"; then return 0; fi
     mt_is_newer_version "$1" "$2" || return 1
     if [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"; then return 1; fi
     return 0
@@ -177,31 +189,49 @@ mt_retired_bundle_blocked() {
 mt_confirm_downgrade() {
     local installed="${1:-}" downloaded="${2:-}" subject="${3:-MTunnel}" answer='' shown
     [ -n "$installed" ] || return 0
+    # 15.x/16.x -> 1.x is the supported release-line migration, not a rollback.
+    if [ "$installed" != unknown ] && mt_release_migration "$installed" "$downloaded"; then return 0; fi
     if [ "$installed" != unknown ] && ! mt_is_newer_version "$installed" "$downloaded"; then return 0; fi
     if [ "${MT_ALLOW_DOWNGRADE:-0}" = 1 ]; then return 0; fi
     shown="v$installed"; [ "$installed" != unknown ] || shown='unknown (version line unreadable)'
     printf '\n  ┌─[ DOWNGRADE CONFIRMATION: %s ]\n' "$subject" >&2
     printf '  ├─ Installed Version : %s\n' "$shown" >&2
     printf '  ├─ Downloaded Version: v%s\n' "$downloaded" >&2
-    printf '  ├─ All installed modules must match their shared core.\n' >&2
+    printf '  ├─ Only the selected component will be changed.\n' >&2
     printf '  └─ Downgrade to v%s? (y/N): ' "$downloaded" >&2
     IFS= read -r answer || return 1
     case "$answer" in y|Y|yes|YES|Yes) return 0;; *) printf '  Downgrade cancelled. Existing version preserved.\n' >&2; return 2;; esac
 }
-# Script-only updates cannot install an older module with a newer shared core.
-# For that case, use Sync All Scripts or install.sh with a complete bundle.
+# Independent component updates/downgrades are supported. Compatibility is
+# governed by the shared-core API/layout contract, not by matching release numbers.
 mt_module_downgrade_allowed() {
-    local installed="${1:-}" downloaded="${2:-}"
+    local installed="${1:-}" downloaded="${2:-}" approval="${installed}>${downloaded}"
+    mt_release_migration "$installed" "$downloaded" && return 0
     if mt_is_newer_version "$installed" "$downloaded"; then
-        if [ "$downloaded" != "${MTUNNEL_RELEASE_VERSION:-}" ]; then
-            printf '  Downloaded v%s is older than installed v%s.\n' "$downloaded" "$installed" >&2
-            printf '  This requires a FULL BUNDLE downgrade (modules + shared core).\n' >&2
-            printf '  Use the Main Dashboard > Update & Local Install > Sync All Scripts,\n' >&2
-            printf '  or install the complete v%s package locally.\n' "$downloaded" >&2
-            return 1
-        fi
-        mt_confirm_downgrade "$installed" "$downloaded" 'Single Module'
+        # Some update paths validate once and mt_install_script validates again.
+        # Cache only this exact pair so the operator never receives duplicate prompts.
+        [ "${MTUNNEL_APPROVED_DOWNGRADE:-}" = "$approval" ] && return 0
+        mt_confirm_downgrade "$installed" "$downloaded" 'Single Component' || return $?
+        MTUNNEL_APPROVED_DOWNGRADE="$approval"
     fi
+    return 0
+}
+
+# Validate that a module can run against the currently loaded shared core.
+# Future modules can bump these constants when a breaking shared-core change occurs.
+# Older API-1/layout-2 modules without explicit constants remain compatible.
+mt_validate_module_core_contract() {
+    local candidate="$1" req_api req_layout
+    grep -Fq '# MTUNNEL_COMMON_LOADER' "$candidate" || return 0
+    req_api=$(sed -n 's/^MTUNNEL_REQUIRED_CORE_API=\([0-9][0-9]*\)$/\1/p' "$candidate" | head -n1)
+    req_layout=$(sed -n 's/^MTUNNEL_REQUIRED_LAYOUT_REV=\([0-9][0-9]*\)$/\1/p' "$candidate" | head -n1)
+    req_api="${req_api:-1}"; req_layout="${req_layout:-2}"
+    if [ "${MTUNNEL_CORE_API:-}" != "$req_api" ] || [ "${MTUNNEL_LAYOUT_REV:-}" != "$req_layout" ]; then
+        printf 'Module requires shared core API %s / layout %s; installed core is API %s / layout %s.\n' \
+            "$req_api" "$req_layout" "${MTUNNEL_CORE_API:-unknown}" "${MTUNNEL_LAYOUT_REV:-unknown}" >&2
+        return 1
+    fi
+    return 0
 }
 
 mt_ask_bind_host() {
@@ -335,11 +365,11 @@ mt_capture_manual_script() {
         return 1
     fi
     pasted_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$output" | head -n1)
-    if [[ -n "${MTUNNEL_RELEASE_VERSION:-}" && "$pasted_version" != "$MTUNNEL_RELEASE_VERSION" ]]; then
-        printf 'Pasted module v%s does not match shared core v%s. Install the entire compatible bundle instead.\n' "$pasted_version" "$MTUNNEL_RELEASE_VERSION" >&2
+    mt_validate_module_core_contract "$output" || {
+        echo 'Pasted module is not compatible with the installed shared-core API/layout. Previous module preserved.' >&2
         return 1
-    fi
-    echo 'Nano save successful. Syntax and version verified; applying module automatically...' >&2
+    }
+    echo 'Nano save successful. Syntax, version and shared-core compatibility verified; applying module automatically...' >&2
     return 0
 }
 
@@ -428,16 +458,11 @@ mt_install_script() {
     local candidate="$1" rel="$2" target="$3" current="${4:-}"; local -a files=()
     mt_validate_script "$candidate" || return 1
     mt_validate_module_role "$candidate" "$rel" || return 1
-    # Single-module OTA cannot upgrade the shared core. Require a compatible
-    # release; the full bundle updater is used for changing major versions.
-    local candidate_version
-    candidate_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
-    if [ "$candidate_version" != "$MTUNNEL_RELEASE_VERSION" ]; then
-        echo "Module is version $candidate_version; shared core requires $MTUNNEL_RELEASE_VERSION. Update the entire bundle." >&2
-        return 1
-    fi
-    if grep -Fq '# MTUNNEL_COMMON_LOADER' "$candidate" && [ ! -s /usr/lib/mtunnel/common.sh ]; then
-        echo 'Shared core not installed. Install the complete MTunnel bundle before this module.' >&2
+    # Module version numbers are independent from the shared-core release.
+    # Only the declared core API/layout contract must remain compatible.
+    mt_validate_module_core_contract "$candidate" || return 1
+    if grep -Fq '# MTUNNEL_COMMON_LOADER' "$candidate" && [ -z "${MTUNNEL_CORE_API:-}" ]; then
+        echo 'Shared core is not loaded. Install or load a compatible MTunnel shared core before this module.' >&2
         return 1
     fi
     if mt_validate_script "$target" 2>/dev/null; then

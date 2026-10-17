@@ -2,7 +2,7 @@
 # --- MTunnel MRathole | Reverse Tunnel Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.0.3"
+MODULE_VERSION="1.0.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -679,58 +679,87 @@ generate_toml() {
     return 0
 }
 
+rat_endpoint_host() {
+    local ep="$1" host
+    [ -n "$ep" ] || return 1
+    if [[ "$ep" == \[*\]:* ]]; then host="${ep#\[}"; host="${host%\]:*}"; else host="${ep%:*}"; fi
+    host="${host#::ffff:}"; printf '%s' "$host"
+}
+
+rat_unit_peer_ip() {
+    local name="$1" port="${2:-}" expected="${3:-}" unit="mrathole@${name}" pid line lep pep p host
+    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    while IFS= read -r line; do
+        [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]] || continue
+        lep=$(awk '{print $3}' <<< "$line"); pep=$(awk '{print $4}' <<< "$line")
+        [ -n "$pep" ] || continue
+        if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then p="${lep##*:}"; [ "$p" = "$port" ] || continue; fi
+        host=$(rat_endpoint_host "$pep")
+        if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
+            [ "$host" = "$expected" ] || continue
+        fi
+        printf '%s' "$host"; return 0
+    done < <(ss -Htnp state established 2>/dev/null)
+    return 1
+}
+
+rat_unit_tcp_rtt() {
+    local name="$1" target="$2" unit="mrathole@${name}" pid line rtt hit=0
+    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    while IFS= read -r line; do
+        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
+            if [[ "$line" == *"$target"* ]]; then
+                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
+                hit=1; continue
+            fi
+            hit=0
+        elif [ "$hit" = 1 ]; then
+            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
+            [[ "$line" =~ ^[[:space:]] ]] || hit=0
+        fi
+    done < <(ss -Htinp 2>/dev/null)
+    [ -n "$rtt" ] || return 1
+    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
+}
+
 get_tunnel_status() {
-    local t_name="$1"
-    local known_active="$2"
-    local meta="$CONF_DIR/$t_name/meta.conf"
-    local TYPE="" LINK_PORT=""
+    local t_name="$1" known_active="${2:-0}" meta="$CONF_DIR/$t_name/meta.conf"
+    local TYPE="" LINK_PORT="" REMOTE_IP="" peer
     source "$meta" 2>/dev/null
-    
-    if [ "$known_active" != "1" ] && ! systemctl is-active --quiet mrathole@$t_name; then echo "OFFLINE"; return; fi
-    
-    if [ "$TYPE" == "1" ]; then
-        if ss -tn src ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "WAITING"; fi
-    else
-        if ss -tn dst ":$LINK_PORT" 2>/dev/null | grep -qE "^ESTAB"; then echo "CONNECTED"; else echo "RECONNECTING"; fi
-    fi
+    if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mrathole@$t_name"; then echo "OFFLINE"; return; fi
+    if [ "$TYPE" = "1" ]; then peer=$(rat_unit_peer_ip "$t_name" "$LINK_PORT" 2>/dev/null || true)
+    else peer=$(rat_unit_peer_ip "$t_name" "" "$REMOTE_IP" 2>/dev/null || true); fi
+    if [ -n "$peer" ]; then echo "CONNECTED"
+    elif [ "$TYPE" = "1" ]; then echo "WAITING"
+    else echo "RECONNECTING"; fi
 }
 
 get_peer_ping() {
-    local target_ip=$(echo "$1" | tr -d ' \n\r')
-    local port=$(echo "$2" | tr -d ' \n\r')
-    if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
-    
-    local ping_cmd="ping"
-    [[ "$target_ip" == *:* ]] && ping_cmd="ping -6"
-    local ping_res=$(timeout 2 $ping_cmd -c 1 -W 1 "$target_ip" 2>/dev/null)
-    if echo "$ping_res" | grep -q "time="; then
-        local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
-        echo "${ping_val}ms"
-        return
+    local target_ip port t_name ping_res ping_val tcp_rtt start_ts end_ts t_rtt
+    target_ip=$(echo "$1" | tr -d ' \n\r'); port=$(echo "$2" | tr -d ' \n\r'); t_name="${3:-}"
+    if [ -z "$target_ip" ] || [ "$target_ip" = "0.0.0.0" ]; then echo "N/A"; return; fi
+    local -a pcmd=(ping); [[ "$target_ip" == *:* ]] && pcmd=(ping -6)
+    ping_res=$(timeout 2 "${pcmd[@]}" -c 1 -W 1 "$target_ip" 2>/dev/null || true)
+    if echo "$ping_res" | grep -q 'time='; then
+        ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | head -n1 | awk '{print int($1+0.5)}')
+        echo "${ping_val}ms"; return
     fi
-    
-    if command -v ss >/dev/null 2>&1; then
-        local tcp_rtt=$(ss -nti 2>/dev/null | grep -F -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
-        if [ -n "$tcp_rtt" ]; then
-            local rounded_rtt=$(echo "$tcp_rtt" | awk '{print int($1+0.5)}')
-            echo "${rounded_rtt}ms*"
-            return
-        fi
+    if [ -n "$t_name" ]; then
+        tcp_rtt=$(rat_unit_tcp_rtt "$t_name" "$target_ip" 2>/dev/null || true)
+        [ -n "$tcp_rtt" ] && { echo "$tcp_rtt"; return; }
     fi
-
     if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
-        local start_ts=$(date +%s%3N 2>/dev/null)
+        start_ts=$(date +%s%3N 2>/dev/null)
         if mt_tcp_probe "$target_ip" "$port"; then
-            local end_ts=$(date +%s%3N 2>/dev/null)
-            if [[ "$start_ts" =~ ^[0-9]+$ ]] && [[ "$end_ts" =~ ^[0-9]+$ ]]; then
-                local t_rtt=$((end_ts - start_ts))
-                [ "$t_rtt" -le 0 ] && t_rtt=1
-                echo "${t_rtt}ms*"
-                return
+            end_ts=$(date +%s%3N 2>/dev/null)
+            if [[ "$start_ts" =~ ^[0-9]+$ && "$end_ts" =~ ^[0-9]+$ ]]; then
+                t_rtt=$((end_ts-start_ts)); [ "$t_rtt" -le 0 ] && t_rtt=1
+                echo "${t_rtt}ms*"; return
             fi
         fi
     fi
-
     echo "Timeout"
 }
 
@@ -738,13 +767,17 @@ get_peer_ping() {
 HDR_ROWS_FILE="$SECURE_TMP/.mrathole_hdr_rows"
 HDR_DRAWN_ROWS=0
 hdr_ping_probe() {
-    local ip="$1" res loss avg="---" bin="ping"
-    [[ "$ip" == *:* ]] && bin="ping -6"
-    res=$(timeout 3 $bin -c 2 -i 0.2 -W 1 "$ip" 2>/dev/null)
-    loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)'); [ -z "$loss" ] && loss=100
-    if echo "$res" | grep -q "min/avg/max"; then
-        avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-        [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')ms" || avg="---"
+    local ip="$1" name="${2:-}" res loss avg="---" tcp_rtt
+    local -a pcmd=(ping); [[ "$ip" == *:* ]] && pcmd=(ping -6)
+    res=$(timeout 3 "${pcmd[@]}" -c 2 -i 0.2 -W 1 "$ip" 2>/dev/null || true)
+    loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1); [ -n "$loss" ] || loss=100
+    if echo "$res" | grep -q 'min/avg/max'; then
+        avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
+        [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')" || avg="---"
+    elif [ -n "$name" ]; then
+        tcp_rtt=$(rat_unit_tcp_rtt "$name" "$ip" 2>/dev/null || true)
+        if [ -n "$tcp_rtt" ]; then avg="$tcp_rtt"; loss="---"
+        elif [ -n "$(rat_unit_peer_ip "$name" 2>/dev/null || true)" ]; then loss="---"; fi
     fi
     echo "${avg}|${loss}"
 }
@@ -763,18 +796,14 @@ hdr_unit_uptime() {
     echo "ACTIVE"
 }
 hdr_is_ip() { [[ "$1" =~ ^[0-9]+(\.[0-9]+){3}$ || ( "$1" == *:* && "$1" =~ ^[0-9A-Fa-f:]+$ ) ]]; }
-hdr_ss_peer() {
-    local conn peer
-    conn=$(ss -tn src ":$1" 2>/dev/null | awk '/^ESTAB/ {print $5; exit}')
-    peer=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-    echo "$peer"
-}
+hdr_ss_peer() { rat_unit_peer_ip "$1" "$2" 2>/dev/null || true; }
 hdr_conf_has() {
     local v; v=$(sed -n "s/^$2=//p" "$1" 2>/dev/null | head -n 1 | tr -d "\"' \r")
     [ -n "$v" ]
 }
 collect_header_rows() {
-    local mode="${1:-}" tmp="$HDR_ROWS_FILE.tmp" d meta name role port remote peer fwd up avg loss st act="" ina="" line
+    local mode="${1:-}" tmp d meta name role port remote peer fwd up avg loss st act="" ina="" line
+    tmp=$(mktemp "$SECURE_TMP/.mrathole_hdr_rows.XXXXXX") || return 1
     for d in "$CONF_DIR"/*; do
         [ -d "$d" ] && [ -f "$d/meta.conf" ] || continue
         meta="$d/meta.conf"; name=$(basename "$d")
@@ -784,12 +813,12 @@ collect_header_rows() {
         st=0; systemctl is-active --quiet "mrathole@${name}" 2>/dev/null && st=1
         peer="$remote"
         if [ "$st" = 1 ] && [ "$role" = 1 ]; then
-            peer=$(hdr_ss_peer "$port"); [ -n "$peer" ] || peer="Listening"
+            peer=$(hdr_ss_peer "$name" "$port"); [ -n "$peer" ] || peer="Listening"
         fi
         [ -n "$peer" ] && [ "$peer" != "0.0.0.0" ] || peer="---"
         avg="---"; loss="---"
         if [ "$st" = 1 ] && hdr_is_ip "$peer"; then
-            if [ "$mode" = fast ]; then avg="..."; else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer")"; fi
+            if [ "$mode" = fast ]; then avg="..."; else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer" "$name")"; fi
         fi
         fwd="OFF"
         { hdr_conf_has "$meta" TCP_PORTS || hdr_conf_has "$meta" UDP_PORTS; } && fwd="ACT"
@@ -898,7 +927,7 @@ draw_header() {
         fi
     fi
 
-    local peer_ip=""
+    local peer_ip="" peer_name=""
     local tmp_port=""
     for d in "$CONF_DIR"/*; do
         if [ -d "$d" ] && [ -f "$d/meta.conf" ]; then
@@ -908,21 +937,21 @@ draw_header() {
             
             if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
                 peer_ip="$tmp_remote"
+                peer_name=$(basename "$d")
                 break
             elif [ "$tmp_type" == "1" ]; then
-                local conn=$(ss -tn src ":$tmp_port" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-                if [ -n "$conn" ]; then
-                    peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                    break
-                fi
+                local tmp_name=$(basename "$d")
+                peer_ip=$(rat_unit_peer_ip "$tmp_name" "$tmp_port" 2>/dev/null || true)
+                if [ -n "$peer_ip" ]; then peer_name="$tmp_name"; break; fi
             fi
         fi
     done
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local ping_cache="$SECURE_TMP/.mrathole_ping_cache"
-        local ping_lock="$SECURE_TMP/.mrathole_ping_lock"
+        local cache_key="${peer_name:-peer}"; cache_key="${cache_key//[^A-Za-z0-9_.-]/_}"
+        local ping_cache="$SECURE_TMP/.mrathole_ping_${cache_key}"
+        local ping_lock="$SECURE_TMP/.mrathole_ping_${cache_key}.lock"
         local now=$(date +%s)
         local cache_ts=0; [ -f "$ping_cache" ] && cache_ts=$(stat -c %Y "$ping_cache" 2>/dev/null || echo 0)
         local cache_age=$(( now - cache_ts ))
@@ -949,7 +978,7 @@ draw_header() {
         if { [ ! -f "$ping_cache" ] || [ "$cache_age" -ge 15 ]; } && { [ ! -f "$ping_lock" ] || [ "$lock_age" -gt 5 ]; }; then
             touch "$ping_lock"
             (
-                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port")
+                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port" "$peer_name")
                 echo "$bg_val" > "$ping_cache"
                 rm -f "$ping_lock"
                 if [ -f "$SECURE_TMP/.mrathole_in_menu" ]; then
@@ -1002,13 +1031,12 @@ show_tunnel_registry() {
         local connected_peer=""
 
         if [ "$TYPE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
-            ping_val=$(get_peer_ping "$REMOTE_IP" "$LINK_PORT")
+            ping_val=$(get_peer_ping "$REMOTE_IP" "$LINK_PORT" "$t_name")
             connected_peer="$REMOTE_IP"
         elif [ "$TYPE" == "1" ]; then
-            local conn=$(ss -tn src ":$LINK_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-            if [ -n "$conn" ]; then
-                local p_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
-                ping_val=$(get_peer_ping "$p_ip" "$LINK_PORT")
+            local p_ip=$(rat_unit_peer_ip "$t_name" "$LINK_PORT" 2>/dev/null || true)
+            if [ -n "$p_ip" ]; then
+                ping_val=$(get_peer_ping "$p_ip" "$LINK_PORT" "$t_name")
                 connected_peer="$p_ip"
             else
                 ping_val="Waiting"

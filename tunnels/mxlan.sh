@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.0.3"
+MODULE_VERSION="1.0.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -524,34 +524,32 @@ if [[ "${1:-}" != --* ]]; then
 fi
 
 check_ping_bg() {
-    local count=0
-    local conf TYPE VX_NAME CORE_SUBNET VNI_ID c_sub tip res loss avg
-    > "$SECURE_TMP/.mxlan_stats_cache.tmp"
+    local count=0 conf TYPE VX_NAME BR_NAME CORE_SUBNET VNI_ID c_sub tip res loss avg tmp
+    tmp=$(mktemp "$SECURE_TMP/.mxlan_stats_cache.XXXXXX") || return 1
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; VX_NAME=""; CORE_SUBNET=""; VNI_ID=""; source "$conf" 2>/dev/null
-        [ -z "$VX_NAME" ] && continue
-        
-        ((count++))
-        [ "$count" -gt 3 ] && break
+        TYPE=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""
+        source "$conf" 2>/dev/null
+        [ -n "$VX_NAME" ] || continue
+        ((count++)); [ "$count" -gt 3 ] && break
 
-        c_sub="$(mx_core_sub)"
-        tip=$([ "$TYPE" == "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
-        res=$(timeout 2 ping -c 3 -i 0.2 -W 1 "$tip" 2>/dev/null)
-        loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)')
-        [ -z "$loss" ] && loss="100"
-        
+        c_sub="$(mx_core_sub)"; [ -n "$c_sub" ] || { echo "${VX_NAME}|---|100" >> "$tmp"; continue; }
+        tip=$([ "$TYPE" = "1" ] && echo "${c_sub}.2" || echo "${c_sub}.1")
+        local -a pcmd=(ping)
+        # The inner address lives on the bridge, so bind the probe to that
+        # exact bridge. This is essential when several VXLAN fabrics coexist.
+        [ -n "$BR_NAME" ] && ip link show "$BR_NAME" >/dev/null 2>&1 && pcmd+=(-I "$BR_NAME")
+        res=$(timeout 3 "${pcmd[@]}" -c 3 -i 0.2 -W 1 "$tip" 2>/dev/null || true)
+        loss=$(printf '%s\n' "$res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1)
+        [ -n "$loss" ] || loss=100
         avg="---"
-        if echo "$res" | grep -q "min/avg/max"; then
-            avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            if [ -n "$avg" ]; then
-                avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                avg="${avg}ms"
-            fi
+        if printf '%s\n' "$res" | grep -q 'min/avg/max'; then
+            avg=$(printf '%s\n' "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
+            [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')"
         fi
-        echo "${VX_NAME}|${avg}|${loss}" >> "$SECURE_TMP/.mxlan_stats_cache.tmp"
+        echo "${VX_NAME}|${avg}|${loss}" >> "$tmp"
     done
-    mv -f "$SECURE_TMP/.mxlan_stats_cache.tmp" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null
+    mv -f "$tmp" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null || rm -f "$tmp"
 }
 
 ping_watcher_loop() {
@@ -702,7 +700,7 @@ draw_mxlan_header() {
 
         live_ping="---"; live_loss=""
         if [ -f "$SECURE_TMP/.mxlan_stats_cache" ]; then
-            cached_entry=$(grep "^${VX_NAME}|" "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null | head -n1)
+            cached_entry=$(awk -F'|' -v n="$VX_NAME" '$1==n {print; exit}' "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null)
             if [ -n "$cached_entry" ]; then
                 live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
                 live_loss=$(echo "$cached_entry" | cut -d'|' -f3)

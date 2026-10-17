@@ -2,7 +2,7 @@
 # --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.0.3"
+MODULE_VERSION="1.0.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -505,17 +505,26 @@ zero_paqet_counters() {
 #   server: xt_recent list of sources hitting the tunnel port  -> client IP
 #   client: counter of packets coming from the server port      -> link liveness
 setup_paqet_probe() {
-    local name="$1" meta="$CONF_DIR/${name}.meta" role port
+    local name="$1" meta="$CONF_DIR/${name}.meta" role port remote src_args=()
     [ -f "$meta" ] || return 0
     role=$(grep -m1 '^ROLE=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     port=$(grep -m1 '^TUN_PORT=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
+    remote=$(grep -m1 '^REMOTE_IP=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    # Replace any pre-1.0.6 broad detector rule. Keeping an old broad rule
+    # would make same-port instances count each other's traffic after upgrade.
+    mt_delete_tagged_rules iptables mangle INPUT "MPAQET_PEER_${name}" >/dev/null 2>&1 || true
+    mt_delete_tagged_rules iptables mangle INPUT "MPAQET_LINK_${name}" >/dev/null 2>&1 || true
     if [ "$role" = "1" ]; then
         iptables -w 5 -t mangle -C INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1 || \
         iptables -w 5 -t mangle -A INPUT -p tcp --dport "$port" -m recent --set --name "mpq_${name}" --rsource -m comment --comment "MPAQET_PEER_${name}" >/dev/null 2>&1
     else
-        iptables -w 5 -t mangle -C INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
-        iptables -w 5 -t mangle -A INPUT -p tcp --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
+        # Client-side liveness must be scoped to this instance's remote host as
+        # well as the port. Several Paqet tunnels can legitimately use the
+        # same server port on different remote servers.
+        mt_valid_ipv4 "$remote" 2>/dev/null && src_args=(-s "$remote")
+        iptables -w 5 -t mangle -C INPUT -p tcp "${src_args[@]}" --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
+        iptables -w 5 -t mangle -A INPUT -p tcp "${src_args[@]}" --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
     fi
     return 0
 }
@@ -952,40 +961,50 @@ check_paqet_connection() {
     echo "$cur $now $verdict" > "$sf"; echo "$verdict"
 }
 
-get_peer_ping() {
-    local target_ip=$(echo "$1" | tr -d ' \n\r')
-    local port=$(echo "$2" | tr -d ' \n\r')
-    if [ -z "$target_ip" ] || [ "$target_ip" == "0.0.0.0" ]; then echo "N/A"; return; fi
-    
-    local ping_res=$(timeout 2 ping -c 1 -W 1 "$target_ip" 2>/dev/null)
-    if echo "$ping_res" | grep -q "time="; then
-        local ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | awk '{print int($1+0.5)}')
-        echo "${ping_val}ms"
-        return
-    fi
-    
-    if command -v ss >/dev/null 2>&1; then
-        local tcp_rtt=$(ss -nti | grep -A 1 "$target_ip" | grep -oP 'rtt:\K[0-9.]+' | head -n 1)
-        if [ -n "$tcp_rtt" ]; then
-            local rounded_rtt=$(echo "$tcp_rtt" | awk '{print int($1+0.5)}')
-            echo "${rounded_rtt}ms*"
-            return
+pq_unit_tcp_rtt() {
+    local name="$1" target="$2" unit="mpaqet@${name}" pid line rtt hit=0
+    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    while IFS= read -r line; do
+        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
+            if [[ "$line" == *"$target"* ]]; then
+                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
+                hit=1; continue
+            fi
+            hit=0
+        elif [ "$hit" = 1 ]; then
+            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
+            [[ "$line" =~ ^[[:space:]] ]] || hit=0
         fi
-    fi
+    done < <(ss -Htinp 2>/dev/null)
+    [ -n "$rtt" ] || return 1
+    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
+}
 
-    if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
-        local start_ts=$(date +%s%3N 2>/dev/null)
+get_peer_ping() {
+    local target_ip port t_name ping_res ping_val tcp_rtt start_ts end_ts t_rtt
+    target_ip=$(echo "$1" | tr -d ' \n\r'); port=$(echo "$2" | tr -d ' \n\r'); t_name="${3:-}"
+    if [ -z "$target_ip" ] || [ "$target_ip" = "0.0.0.0" ]; then echo "N/A"; return; fi
+    local -a pcmd=(ping); [[ "$target_ip" == *:* ]] && pcmd=(ping -6)
+    ping_res=$(timeout 2 "${pcmd[@]}" -c 1 -W 1 "$target_ip" 2>/dev/null || true)
+    if echo "$ping_res" | grep -q 'time='; then
+        ping_val=$(echo "$ping_res" | grep -oP 'time=\K[0-9.]+' | head -n1 | awk '{print int($1+0.5)}')
+        echo "${ping_val}ms"; return
+    fi
+    if [ -n "$t_name" ]; then
+        tcp_rtt=$(pq_unit_tcp_rtt "$t_name" "$target_ip" 2>/dev/null || true)
+        [ -n "$tcp_rtt" ] && { echo "$tcp_rtt"; return; }
+    fi
+    if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]] && [[ "$target_ip" != *:* ]]; then
+        start_ts=$(date +%s%3N 2>/dev/null)
         if timeout 1 bash -c "</dev/tcp/$target_ip/$port" 2>/dev/null; then
-            local end_ts=$(date +%s%3N 2>/dev/null)
-            if [[ "$start_ts" =~ ^[0-9]+$ ]] && [[ "$end_ts" =~ ^[0-9]+$ ]]; then
-                local t_rtt=$((end_ts - start_ts))
-                [ "$t_rtt" -le 0 ] && t_rtt=1
-                echo "${t_rtt}ms*"
-                return
+            end_ts=$(date +%s%3N 2>/dev/null)
+            if [[ "$start_ts" =~ ^[0-9]+$ && "$end_ts" =~ ^[0-9]+$ ]]; then
+                t_rtt=$((end_ts-start_ts)); [ "$t_rtt" -le 0 ] && t_rtt=1
+                echo "${t_rtt}ms*"; return
             fi
         fi
     fi
-
     echo "Timeout"
 }
 
@@ -993,13 +1012,16 @@ get_peer_ping() {
 HDR_ROWS_FILE="$SECURE_TMP/.mpaqet_hdr_rows"
 HDR_DRAWN_ROWS=0
 hdr_ping_probe() {
-    local ip="$1" res loss avg="---" bin="ping"
-    [[ "$ip" == *:* ]] && bin="ping -6"
-    res=$(timeout 3 $bin -c 2 -i 0.2 -W 1 "$ip" 2>/dev/null)
-    loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)'); [ -z "$loss" ] && loss=100
-    if echo "$res" | grep -q "min/avg/max"; then
-        avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-        [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')ms" || avg="---"
+    local ip="$1" name="${2:-}" res loss avg="---" tcp_rtt
+    local -a pcmd=(ping); [[ "$ip" == *:* ]] && pcmd=(ping -6)
+    res=$(timeout 3 "${pcmd[@]}" -c 2 -i 0.2 -W 1 "$ip" 2>/dev/null || true)
+    loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1); [ -n "$loss" ] || loss=100
+    if echo "$res" | grep -q 'min/avg/max'; then
+        avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
+        [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')" || avg="---"
+    elif [ -n "$name" ]; then
+        tcp_rtt=$(pq_unit_tcp_rtt "$name" "$ip" 2>/dev/null || true)
+        if [ -n "$tcp_rtt" ]; then avg="$tcp_rtt"; loss="---"; fi
     fi
     echo "${avg}|${loss}"
 }
@@ -1029,7 +1051,8 @@ hdr_conf_has() {
     [ -n "$v" ]
 }
 collect_header_rows() {
-    local mode="${1:-}" tmp="$HDR_ROWS_FILE.tmp" conf name role port remote peer fwd up avg loss st act="" ina="" line
+    local mode="${1:-}" tmp conf name role port remote peer fwd up avg loss st act="" ina="" line
+    tmp=$(mktemp "$SECURE_TMP/.mpaqet_hdr_rows.XXXXXX") || return 1
     for conf in "$CONF_DIR"/*.meta; do
         [ -f "$conf" ] || continue
         name=$(basename "$conf" .meta)
@@ -1044,7 +1067,7 @@ collect_header_rows() {
         [ -n "$peer" ] && [ "$peer" != "0.0.0.0" ] || peer="---"
         avg="---"; loss="---"
         if [ "$st" = 1 ] && hdr_is_ip "$peer"; then
-            if [ "$mode" = fast ]; then avg="..."; else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer")"; fi
+            if [ "$mode" = fast ]; then avg="..."; else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer" "$name")"; fi
         fi
         fwd="RAW"
         up="STOPPED"; [ "$st" = 1 ] && up=$(hdr_unit_uptime "mpaqet@${name}")
@@ -1157,7 +1180,7 @@ draw_header() {
         fi
     fi
 
-    local peer_ip=""
+    local peer_ip="" peer_name=""
     local tmp_port=""
     for conf in "$CONF_DIR"/*.meta; do
         if [ -f "$conf" ]; then
@@ -1167,11 +1190,13 @@ draw_header() {
             
             if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
                 peer_ip="$tmp_remote"
+                peer_name=$(basename "$conf" .meta)
                 break
             elif [ "$tmp_role" == "1" ]; then
-                local srv_peer=$(get_server_peer_ip "$(basename "$conf" .meta)")
+                local tmp_name=$(basename "$conf" .meta)
+                local srv_peer=$(get_server_peer_ip "$tmp_name")
                 if [ -n "$srv_peer" ]; then
-                    peer_ip="$srv_peer"
+                    peer_ip="$srv_peer"; peer_name="$tmp_name"
                     break
                 fi
             fi
@@ -1180,8 +1205,9 @@ draw_header() {
 
     local g_color="${DIM}"; local g_text="N/A"
     if [ -n "$peer_ip" ]; then
-        local ping_cache="$SECURE_TMP/.mpaqet_ping_cache"
-        local ping_lock="$SECURE_TMP/.mpaqet_ping_lock"
+        local cache_key="${peer_name:-peer}"; cache_key="${cache_key//[^A-Za-z0-9_.-]/_}"
+        local ping_cache="$SECURE_TMP/.mpaqet_ping_${cache_key}"
+        local ping_lock="$SECURE_TMP/.mpaqet_ping_${cache_key}.lock"
         local now=$(date +%s)
         local cache_ts=0; [ -f "$ping_cache" ] && cache_ts=$(stat -c %Y "$ping_cache" 2>/dev/null || echo 0)
         local cache_age=$(( now - cache_ts ))
@@ -1208,7 +1234,7 @@ draw_header() {
         if { [ ! -f "$ping_cache" ] || [ "$cache_age" -ge 15 ]; } && { [ ! -f "$ping_lock" ] || [ "$lock_age" -gt 5 ]; }; then
             touch "$ping_lock"
             (
-                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port")
+                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port" "$peer_name")
                 echo "$bg_val" > "$ping_cache"
                 rm -f "$ping_lock"
                 if [ -f "$SECURE_TMP/.mpaqet_in_menu" ]; then
@@ -1328,12 +1354,12 @@ show_tunnel_registry() {
         local connected_peer=""
 
         if [ "$ROLE" == "2" ] && [ -n "$REMOTE_IP" ] && [ "$REMOTE_IP" != "0.0.0.0" ]; then
-            ping_val=$(get_peer_ping "$REMOTE_IP" "$TUN_PORT")
+            ping_val=$(get_peer_ping "$REMOTE_IP" "$TUN_PORT" "$t_name")
             connected_peer="$REMOTE_IP"
         elif [ "$ROLE" == "1" ]; then
             local p_ip=$(get_server_peer_ip "$t_name")
             if [ -n "$p_ip" ]; then
-                ping_val=$(get_peer_ping "$p_ip" "$TUN_PORT")
+                ping_val=$(get_peer_ping "$p_ip" "$TUN_PORT" "$t_name")
                 connected_peer="$p_ip"
             else
                 ping_val="N/A"

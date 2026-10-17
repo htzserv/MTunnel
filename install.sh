@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.0.3"
+MODULE_VERSION="1.0.6"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 

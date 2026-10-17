@@ -4,7 +4,7 @@
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.0.3"
+MTUNNEL_RELEASE_VERSION="1.0.6"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -142,7 +142,7 @@ mt_is_newer_version() {
 }
 
 # Release-line migration support. MTunnel 15.x/16.x was renumbered to the 1.x line.
-# Numeric sort alone sees 16.0.2 -> 1.0.3 as a downgrade, but for MTunnel this is
+# Numeric sort alone sees 16.0.2 -> 1.0.6 as a downgrade, but for MTunnel this is
 # an intentional forward migration. The inverse (1.x -> 15.x/16.x) remains blocked.
 MTUNNEL_RETIRED_MAJOR_MIN=15
 MTUNNEL_RETIRED_MAJOR_MAX=16

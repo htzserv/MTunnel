@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.0.3"
+MODULE_VERSION="1.0.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -581,33 +581,37 @@ if [[ "${1:-}" != --* ]]; then
 fi
 
 check_ping_bg() {
-    local count=0
-    local conf TYPE T_NAME CORE_SUBNET CORE_V6 TUN_PROTO tip res loss avg
-    > "$SECURE_TMP/.mgre_stats_cache.tmp"
+    local count=0 conf TYPE T_NAME TUN_ID CORE_SUBNET CORE_V6 TUN_PROTO tip res loss avg tmp
+    tmp=$(mktemp "$SECURE_TMP/.mgre_stats_cache.XXXXXX") || return 1
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; T_NAME=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; source "$conf" 2>/dev/null
-        [ -z "$T_NAME" ] && continue
-        
-        ((count++))
-        [ "$count" -gt 3 ] && break
+        TYPE=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"
+        source "$conf" 2>/dev/null
+        [ -n "$T_NAME" ] || continue
+        ((count++)); [ "$count" -gt 3 ] && break
 
-        mgre_core_ips; tip="$CORE_TIP"
-        res=$(timeout 2 $CORE_PING -c 3 -i 0.2 -W 1 "$tip" 2>/dev/null)
-        loss=$(echo "$res" | grep -oP '[0-9]+(?=% packet loss)')
-        [ -z "$loss" ] && loss="100"
-        
-        avg="---"
-        if echo "$res" | grep -q "min/avg/max"; then
-            avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            if [ -n "$avg" ]; then
-                avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                avg="${avg}ms"
-            fi
+        if ! mgre_core_ips; then
+            echo "${T_NAME}|---|100" >> "$tmp"
+            continue
         fi
-        echo "${T_NAME}|${avg}|${loss}" >> "$SECURE_TMP/.mgre_stats_cache.tmp"
+        tip="$CORE_TIP"
+        local -a pcmd=(ping)
+        [ "$CORE_PING" = "ping -6" ] && pcmd=(ping -6)
+        # Bind every probe to its own interface. With multiple GRE/IPIP
+        # instances this prevents the kernel from resolving the peer through
+        # another tunnel that happens to have a matching/legacy route.
+        ip link show "$T_NAME" >/dev/null 2>&1 && pcmd+=(-I "$T_NAME")
+        res=$(timeout 3 "${pcmd[@]}" -c 3 -i 0.2 -W 1 "$tip" 2>/dev/null || true)
+        loss=$(printf '%s\n' "$res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1)
+        [ -n "$loss" ] || loss=100
+        avg="---"
+        if printf '%s\n' "$res" | grep -q 'min/avg/max'; then
+            avg=$(printf '%s\n' "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
+            [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')"
+        fi
+        echo "${T_NAME}|${avg}|${loss}" >> "$tmp"
     done
-    mv -f "$SECURE_TMP/.mgre_stats_cache.tmp" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null
+    mv -f "$tmp" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null || rm -f "$tmp"
 }
 
 ping_watcher_loop() {
@@ -710,7 +714,7 @@ draw_mgre_header() {
             T_NAME=''; REMOTE_PUB=''; REMOTE_V4=''; TUN_PROTO='ipv4'; source "$conf" 2>/dev/null; [ -n "$T_NAME" ] || continue
             ((cshown++)); [ "$cshown" -gt 3 ] && break
             peer="$REMOTE_PUB"; mgre_proto_is_v6 "$TUN_PROTO" && peer="${REMOTE_V4:-$REMOTE_PUB6}"
-            p='---'; loss='---'; if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then local ce; ce=$(grep "^${T_NAME}|" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null | head -n1); [ -z "$ce" ] || { p=$(echo "$ce"|cut -d'|' -f2); loss=$(echo "$ce"|cut -d'|' -f3); }; fi
+            p='---'; loss='---'; if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then local ce; ce=$(awk -F'|' -v n="$T_NAME" '$1==n {print; exit}' "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null); [ -z "$ce" ] || { p=$(echo "$ce"|cut -d'|' -f2); loss=$(echo "$ce"|cut -d'|' -f3); }; fi
             up=$(get_iface_uptime "$T_NAME")
             [ -n "$peer" ] || peer="---"
             line="$(get_pure_tun_name "$T_NAME") [$(mgre_proto_tag "$TUN_PROTO")] | ${peer} | Ping ${p} | Loss ${loss}% | Up ${up}"
@@ -781,7 +785,7 @@ draw_mgre_header() {
 
         live_ping="---"; live_loss=""
         if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
-            cached_entry=$(grep "^${T_NAME}|" "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null | head -n1)
+            cached_entry=$(awk -F'|' -v n="$T_NAME" '$1==n {print; exit}' "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null)
             if [ -n "$cached_entry" ]; then
                 live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
                 live_loss=$(echo "$cached_entry" | cut -d'|' -f3)

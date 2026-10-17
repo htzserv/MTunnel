@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.0.3 ---
+# --- MTunnel Master Core | Central Dashboard v1.0.6 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="1.0.3"
+MODULE_VERSION="1.0.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -257,23 +257,80 @@ collect_system_vitals() {
     mv -f "$sys_target" "$SECURE_TMP/.main_sys_stats" 2>/dev/null
 }
 
+mt_endpoint_host() {
+    local ep="$1" host
+    [ -n "$ep" ] || return 1
+    if [[ "$ep" == \[*\]:* ]]; then
+        host="${ep#\[}"; host="${host%\]:*}"
+    else
+        host="${ep%:*}"
+    fi
+    host="${host#::ffff:}"
+    printf '%s' "$host"
+}
+
+# Resolve the TCP peer for exactly one systemd instance. PID scoping keeps
+# same-engine tunnels from borrowing each other's live socket.
+mt_unit_peer_ip() {
+    local unit="$1" local_port="${2:-}" pid line lep pep p
+    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    while IFS= read -r line; do
+        [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]] || continue
+        lep=$(awk '{print $3}' <<< "$line"); pep=$(awk '{print $4}' <<< "$line")
+        [ -n "$pep" ] || continue
+        if [ -n "$local_port" ] && [[ "$local_port" =~ ^[0-9]+$ ]]; then
+            p="${lep##*:}"; [ "$p" = "$local_port" ] || continue
+        fi
+        mt_endpoint_host "$pep"; return 0
+    done < <(ss -Htnp state established 2>/dev/null)
+    return 1
+}
+
+# Exact-instance TCP RTT fallback for hosts that block ICMP. Loss is left
+# unknown in that case rather than incorrectly showing 100%.
+mt_unit_tcp_rtt() {
+    local unit="$1" target="$2" pid line rtt hit=0
+    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    while IFS= read -r line; do
+        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
+            if [[ "$line" == *"$target"* ]]; then
+                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
+                hit=1; continue
+            fi
+            hit=0
+        elif [ "$hit" = 1 ]; then
+            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
+            [[ "$line" =~ ^[[:space:]] ]] || hit=0
+        fi
+    done < <(ss -Htinp 2>/dev/null)
+    [ -n "$rtt" ] || return 1
+    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
+}
+
 mt_ping_stats() {
-    local target="$1" ping_res loss avg='---'; local -a cmd=(ping)
+    local target="$1" iface="${2:-}" unit="${3:-}" ping_res loss avg='---' tcp_rtt
+    local -a cmd=(ping)
     mt_valid_host "$target" || { printf '%s|%s' '---' '---'; return 1; }
     [[ "$target" == *:* ]] && cmd=(ping -6)
+    if [ -n "$iface" ] && ip link show "$iface" >/dev/null 2>&1; then cmd+=(-I "$iface"); fi
     ping_res=$(timeout 3 "${cmd[@]}" -c 2 -i 0.2 -W 1 "$target" 2>/dev/null || true)
     loss=$(printf '%s\n' "$ping_res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1)
     [ -n "$loss" ] || loss=100
     if printf '%s\n' "$ping_res" | grep -q 'min/avg/max'; then
         avg=$(printf '%s\n' "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
         [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')"
+    elif [ -n "$unit" ]; then
+        tcp_rtt=$(mt_unit_tcp_rtt "$unit" "$target" 2>/dev/null || true)
+        if [ -n "$tcp_rtt" ]; then avg="$tcp_rtt"; loss='---'; fi
     fi
     printf '%s|%s' "$avg" "$loss"
 }
 
 collect_active_tunnels_stats() {
-    local tmp_target="$SECURE_TMP/.main_tun_stats.tmp"
-    > "$tmp_target"
+    local tmp_target
+    tmp_target=$(mktemp "$SECURE_TMP/.main_tun_stats.XXXXXX") || return 1
     local count=0
     # 1. GRE
     for conf in /etc/mgre/tunnels/*.conf; do
@@ -290,17 +347,8 @@ collect_active_tunnels_stats() {
         
         local vip_stat="OFF"
         [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null && vip_stat="+${MAX_IPS}"
-        local ping_res=$(timeout 2 ping -c 2 -i 0.2 -W 1 "$peer_vip" 2>/dev/null)
-        local loss=$(echo "$ping_res" | grep -oP '[0-9]+(?=% packet loss)')
-        [ -z "$loss" ] && loss="100"
-        local avg="---"
-        if echo "$ping_res" | grep -q "min/avg/max"; then
-            avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-            if [ -n "$avg" ]; then
-                avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                avg="${avg}ms"
-            fi
-        fi
+        local avg="---" loss="---"
+        IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_vip" "$T_NAME")"
         local fwd_str="OFF"
         if [ "$TYPE" == "1" ]; then
             if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
@@ -316,7 +364,7 @@ collect_active_tunnels_stats() {
     if [ "$count" -lt 3 ]; then
         for conf in /etc/mgre/vxlan/*.conf; do
             [ -f "$conf" ] || continue
-                TYPE=""; VX_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; TUN_ID=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
+                TYPE=""; VX_NAME=""; BR_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; TUN_ID=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
             [ -z "$VX_NAME" ] && continue
             ip link show "$VX_NAME" >/dev/null 2>&1 || continue
             [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" == "down" ] && continue
@@ -326,17 +374,8 @@ collect_active_tunnels_stats() {
             local peer_vip="$MT_CORE_PEER"; REMOTE_PUB="$MT_REMOTE_PUBLIC"
             local vip_stat="OFF"
             [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null && vip_stat="+${MAX_IPS}"
-            local ping_res=$(timeout 2 ping -c 2 -i 0.2 -W 1 "$peer_vip" 2>/dev/null)
-            local loss=$(echo "$ping_res" | grep -oP '[0-9]+(?=% packet loss)')
-            [ -z "$loss" ] && loss="100"
-            local avg="---"
-            if echo "$ping_res" | grep -q "min/avg/max"; then
-                avg=$(echo "$ping_res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2)
-                if [ -n "$avg" ]; then
-                    avg=$(awk -v v="$avg" 'BEGIN {printf "%.0f", v}')
-                    avg="${avg}ms"
-                fi
-            fi
+            local avg="---" loss="---"
+            IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_vip" "$BR_NAME")"
             local fwd_str="OFF"
             if [ "$TYPE" == "1" ]; then
                 if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
@@ -367,14 +406,13 @@ collect_active_tunnels_stats() {
                 if [ "$TRANSPORT" = udp ]; then
                     peer_ip="UDP Listening"
                 else
-                    local conn=$(ss -tn src ":$TUN_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-                    peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+                    peer_ip=$(mt_unit_peer_ip "mbackhaul@${t_name}" "$TUN_PORT" 2>/dev/null || true)
                     [ -z "$peer_ip" ] && peer_ip="Listening"
                 fi
             fi
             local avg="---" loss="---"
             if mt_valid_host "$peer_ip" 2>/dev/null; then
-                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip")"
+                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip" "" "mbackhaul@${t_name}")"
             fi
             local fwd_str="OFF"
             [ -n "$PORTS" ] && fwd_str="ACT"
@@ -398,13 +436,12 @@ collect_active_tunnels_stats() {
             systemctl is-active --quiet "mrathole@${t_name}" || continue
             local peer_ip="$REMOTE_IP"
             if [ "$TYPE" == "1" ]; then
-                local conn=$(ss -tn src ":$LINK_PORT" 2>/dev/null | grep -E "^ESTAB" | awk '{print $5}' | head -n 1)
-                peer_ip=$(echo "$conn" | rev | cut -d':' -f2- | rev | tr -d '[]')
+                peer_ip=$(mt_unit_peer_ip "mrathole@${t_name}" "$LINK_PORT" 2>/dev/null || true)
                 [ -z "$peer_ip" ] && peer_ip="Listening"
             fi
             local avg="---" loss="---"
             if mt_valid_host "$peer_ip" 2>/dev/null; then
-                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip")"
+                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip" "" "mrathole@${t_name}")"
             fi
             local fwd_str="OFF"
             [ -n "$TCP_PORTS" ] || [ -n "$UDP_PORTS" ] && fwd_str="ACT"
@@ -436,7 +473,7 @@ collect_active_tunnels_stats() {
             fi
             local avg="---" loss="---"
             if mt_valid_host "$peer_ip" 2>/dev/null; then
-                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip")"
+                IFS='|' read -r avg loss <<< "$(mt_ping_stats "$peer_ip" "" "mpaqet@${t_name}")"
             fi
             echo "PAQET|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|pq_${t_name}|RAW" >> "$tmp_target"
             ((count++))
@@ -668,7 +705,8 @@ draw_header_lines_only() {
         if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
             while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
                 [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
-                compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${t_loss:-}%"
+                local compact_loss="${t_loss:----}"; [[ "$t_loss" =~ ^[0-9]+$ ]] && compact_loss="${t_loss}%"
+                compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${compact_loss}"
                 printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
 " "$((content_w-2))" "$((content_w-2))" "$compact_line"
             done < "$SECURE_TMP/.main_tun_stats"
@@ -689,7 +727,7 @@ draw_header_lines_only() {
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
     mt_main_header_row4 \
         "${W}MDesign Master Core v${MODULE_VERSION}${NC}" \
-        "${DIM}Local:${NC} ${M}${s_ip}${NC}" \
+        "${DIM}Local:${NC} ${W}${s_ip}${NC}" \
         "${DIM}Porter:${NC} ${porter_col}${porter_icon} ${porter_text}${NC}" \
         "${DIM}BBR:${NC} ${bbr_col}${bbr_icon} ${bbr_text}${NC}  ${DIM}IPv6:${NC} ${v6_col}${v6_icon} ${v6_text}${NC}"
     printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
@@ -705,13 +743,14 @@ draw_header_lines_only() {
             [[ -n "$t_proto" ]] || continue
             ((shown+=1))
             ((shown<=3)) || break
-            local uptime status_color="${G}" status_icon='●' loss_color="${DIM}"
+            local uptime status_color="${G}" status_icon='●' loss_color="${DIM}" loss_text="${t_loss:----}"
             uptime=$(get_iface_uptime_pure "$t_dev")
             if [[ "$uptime" == DOWN ]]; then status_icon='○'; status_color="$R"; fi
             if [[ "$t_loss" =~ ^[0-9]+$ ]]; then
                 if (( t_loss == 0 )); then loss_color="$G"
                 elif (( t_loss < 30 )); then loss_color="$Y"
                 else loss_color="$R"; fi
+                loss_text="${t_loss}%"
             fi
             local vip_color="$G" fwd_color="$C"
             case "${t_vip^^}" in OFF|NONE|0|-) vip_color="$DIM";; esac
@@ -721,7 +760,7 @@ draw_header_lines_only() {
                 "${DIM}Peer:${NC} ${Y}${t_remote}${NC}" \
                 "${DIM}vIP:${NC} ${vip_color}${t_vip}${NC}" \
                 "${DIM}Ping:${NC} ${Y}${t_ping:----}${NC}" \
-                "${DIM}Loss:${NC} ${loss_color}${t_loss:----}%${NC}" \
+                "${DIM}Loss:${NC} ${loss_color}${loss_text}${NC}" \
                 "${DIM}Up:${NC} ${W}${uptime}${NC}" \
                 "${DIM}F:${NC}${fwd_color}${t_fwd}${NC}"
         done < "$SECURE_TMP/.main_tun_stats"

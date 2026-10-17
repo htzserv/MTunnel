@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v16.0.0 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v16.0.1 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="16.0.0"
+MODULE_VERSION="16.0.1"
 umask 077
 
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
@@ -193,7 +193,7 @@ self_update_module() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Terminal / Editor)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
@@ -202,11 +202,11 @@ self_update_module() {
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
     tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
     if [ "$src_opt" == 4 ]; then
-        if command -v nano >/dev/null 2>&1; then
-            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
-            nano "$tmp_file"
-        elif command -v vi >/dev/null 2>&1; then vi "$tmp_file"
-        else rm -f "$tmp_file"; echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; return 1; fi
+        if ! mt_capture_manual_script "$tmp_file"; then
+            rm -f "$tmp_file"
+            echo -e "  ${R}✖ Manual paste failed or was cancelled. Existing script preserved.${NC}"
+            return 1
+        fi
     else
         case "$src_opt" in
             1) dl_url="${MTUNNEL_GITHUB_BASE}/$rel_path";;
@@ -1527,7 +1527,7 @@ show_tunnel_logs() {
     if [ -n "$int_trap" ]; then eval "$int_trap"; else trap - INT; fi
 }
 
-# BEGIN MTUNNEL WORKSPACE V16.0.0
+# BEGIN MTUNNEL WORKSPACE V16.0.1
 # Embedded in each module: no external library or sourced setup-link code.
 # mt_header_refresh_now supplied by core/common.sh
 # mt_live_readline supplied by core/common.sh
@@ -1662,7 +1662,7 @@ mt_link_import() {
 }
 # mt_workspace_vip supplied by core/common.sh
 # mt_workspace_backup supplied by core/common.sh
-# END MTUNNEL WORKSPACE V16.0.0
+# END MTUNNEL WORKSPACE V16.0.1
 
 mt_link_paqet_values() {
     local yaml="$1" key val source

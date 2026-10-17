@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v16.0.0 ---
+# --- MTunnel Master Core | Central Dashboard v16.0.1 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Fixed 117-Col Matrix]
-MODULE_VERSION="16.0.0"
+MODULE_VERSION="16.0.1"
 umask 077
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
 # Source next to a checkout first, or from the system-wide installed location.
@@ -488,6 +488,70 @@ is_package_or_bin_installed() {
         command -v "$item" >/dev/null 2>&1
     fi
 }
+# Terminal-frame helpers: strip SGR sequences only for measuring visible columns.
+# C.UTF-8 ensures box glyphs and status symbols count as characters, not bytes.
+mt_main_visible_text() {
+    local rendered
+    rendered=$(printf '%b' "$1")
+    printf '%s' "$rendered" | sed -E $'s/\033\\[[0-9;]*m//g'
+}
+mt_main_frame_row() {
+    local raw="$1" width="$2" frame_color="${3:-$B}"
+    local rendered plain padding
+    local LC_CTYPE=C.UTF-8
+    rendered=$(printf '%b' "$raw")
+    plain=$(mt_main_visible_text "$rendered")
+    if (( ${#plain} > width )); then
+        rendered="${plain:0:width}"   # safe overflow fallback, do not split ANSI codes
+        plain="$rendered"
+    fi
+    padding=$((width-${#plain}))
+    printf '  %b│%b%s%*s%b│%b\033[K\n' "$frame_color" "$NC" "$rendered" "$padding" '' "$frame_color" "$NC"
+}
+mt_main_header_cell() {
+    local width="$1" raw="$2" rendered plain padding
+    local LC_CTYPE=C.UTF-8
+    rendered=$(printf '%b' "$raw")
+    plain=$(mt_main_visible_text "$rendered")
+    if (( ${#plain} > width-2 )); then
+        rendered="${plain:0:width-2}"
+        plain="$rendered"
+    fi
+    padding=$((width-2-${#plain}))
+    printf ' %s%*s ' "$rendered" "$padding" ''
+}
+mt_main_header_row4() {
+    # Four columns of 30,23,29,26 chars plus 3 x ' │ ' = 117
+    local join
+    join=$(printf '%b' " ${B}│${NC} ")
+    mt_main_frame_row "$(mt_main_header_cell 30 "$1")${join}$(mt_main_header_cell 23 "$2")${join}$(mt_main_header_cell 29 "$3")${join}$(mt_main_header_cell 26 "$4")" 117
+}
+mt_main_header_row7() {
+    # 17+24+11+12+12+12+11 plus 6 x ' │ ' = 117
+    local join
+    join=$(printf '%b' " ${B}│${NC} ")
+    mt_main_frame_row "$(mt_main_header_cell 17 "$1")${join}$(mt_main_header_cell 24 "$2")${join}$(mt_main_header_cell 11 "$3")${join}$(mt_main_header_cell 12 "$4")${join}$(mt_main_header_cell 12 "$5")${join}$(mt_main_header_cell 12 "$6")${join}$(mt_main_header_cell 11 "$7")" 117
+}
+mt_main_menu_separator() {
+    local w="$1" title="${2:-}" border=''
+    printf -v border '%*s' "$w" ''
+    border="${border// /─}"
+    if [[ -n $title ]]; then
+        local prefix="─[ $title ]" title_len
+        local LC_CTYPE=C.UTF-8
+        title_len=${#prefix}
+        if (( title_len < w )); then
+            border="${prefix}${border:0:w-title_len}"
+        fi
+    fi
+    printf '  %b├%s┤%b\033[K\n' "$DIM" "$border" "$NC"
+}
+mt_main_menu_option() {
+    local w="$1" number="$2" color="$3" label="$4" module="${5:-}" badge=''
+    [[ -z "$module" ]] || badge=$(module_update_badge "$module")
+    mt_main_frame_row "  ${W}$(printf '%-2s' "$number")${NC} ${DIM}❯${NC} ${color}${label}${NC}${badge}" "$w" "$DIM"
+}
+
 draw_header_lines_only() {
     local s_ip=$(get_local_ip)
     s_ip="${s_ip:0:16}"
@@ -580,80 +644,47 @@ draw_header_lines_only() {
     local border
     printf -v border '%*s' 117 ''
     border="${border// /─}"
-
-    printf "\033[K\n"
-    printf "  ${B}╭${border}╮${NC}\033[K\n"
-    # Row 1: 31 | 25 | 21 | 18 | 18 = 117 columns
-    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-16.16s${NC} ${B}│${NC} ${DIM}Porter:${NC} %b%s%b %-18.18s ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-20.20s ${B}│${NC}\033[K\n" \
-        "MDesign Master Core v${MODULE_VERSION}" "$s_ip" \
-        "$porter_col" "$porter_icon" "$NC" "$porter_text" \
-        "$bbr_col" "$bbr_icon" "$NC" "$bbr_text"
-    printf "  ${B}├${border}┤${NC}\033[K\n"
-    # Row 2: 31 | 25 | 21 | 18 | 18 = 117 columns
-    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-12.12s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-9.9s%b ${B}│${NC} ${DIM}IPv6:${NC} %b%s%b %-8.8s ${B}│${NC}\033[K\n" \
-        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
-        "$ram_col" "$ram_str" "$NC" \
-        "$rx_col" "$rx_speed" "$NC" \
-        "$tx_col" "$tx_speed" "$NC" \
-        "$v6_col" "$v6_icon" "$NC" "$v6_text"
-    printf "  ${B}├${border}┤${NC}\033[K\n"
-
+    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
+    mt_main_header_row4 \
+        "${W}MDesign Master Core v${MODULE_VERSION}${NC}" \
+        "${DIM}Local:${NC} ${W}${s_ip}${NC}" \
+        "${DIM}Porter:${NC} ${porter_col}${porter_icon} ${porter_text}${NC}" \
+        "${DIM}BBR:${NC} ${bbr_col}${bbr_icon} ${bbr_text}${NC}  ${DIM}IPv6:${NC} ${v6_col}${v6_icon} ${v6_text}${NC}"
+    printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
+    mt_main_header_row4 \
+        "${DIM}CPU:${NC} ${cpu_col}${cpu_str}${NC}  ${DIM}Cores:${NC} ${W}${core_label}${NC}" \
+        "${DIM}RAM:${NC} ${ram_col}${ram_str}${NC}" \
+        "${DIM}Net ▼:${NC} ${rx_col}${rx_speed}${NC}" \
+        "${DIM}Net ▲:${NC} ${tx_col}${tx_speed}${NC}"
+    printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
     local shown=0
-    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
+    if [[ -f "$SECURE_TMP/.main_tun_stats" ]]; then
         while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
-            [ -z "$t_proto" ] && continue
-            ((shown++))
-            [ "$shown" -gt 3 ] && break
-
-            local pure_name=$(echo "$t_name" | tr -d ' ')
-            [ ${#pure_name} -gt 8 ] && pure_name="${pure_name:0:8}"
-            local name_tag="${pure_name} [${t_proto}]"
-            [ ${#name_tag} -gt 17 ] && name_tag="${name_tag:0:17}"
-
-            [ ${#t_remote} -gt 16 ] && t_remote="${t_remote:0:16}"
-
-            local if_uptime=$(get_iface_uptime_pure "$t_dev")
-            local stat_icon="●"; local stat_col="${G}"
-            if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-            [ ${#if_uptime} -gt 10 ] && if_uptime="${if_uptime:0:10}"
-
-            local fwd_col="${DIM}"; [ "$t_fwd" != "OFF" ] && fwd_col="${C}"
-            local fwd_str="${t_fwd:0:9}"
-
-            local vip_col="${DIM}"; [ "$t_vip" != "OFF" ] && vip_col="${G}"
-            local vip_stat="${t_vip:0:5}"
-
-            local live_ping="---"
-            if [ -n "$t_ping" ] && [ "$t_ping" != "---" ]; then
-                local num_p="${t_ping%ms}"
-                if [[ "$num_p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-                    live_ping=$(awk -v v="$num_p" 'BEGIN {printf "%.0fms", v}')
-                else
-                    live_ping="$t_ping"
-                fi
+            [[ -n "$t_proto" ]] || continue
+            ((shown+=1))
+            ((shown<=3)) || break
+            local uptime status_color="${G}" status_icon='●' loss_color="${DIM}"
+            uptime=$(get_iface_uptime_pure "$t_dev")
+            if [[ "$uptime" == DOWN ]]; then status_icon='○'; status_color="$R"; fi
+            if [[ "$t_loss" =~ ^[0-9]+$ ]]; then
+                if (( t_loss == 0 )); then loss_color="$G"
+                elif (( t_loss < 30 )); then loss_color="$Y"
+                else loss_color="$R"; fi
             fi
-            [ ${#live_ping} -gt 5 ] && live_ping="${live_ping:0:5}"
-
-            local loss_col="${DIM}"; local loss_disp="---"
-            if [ "$t_loss" != "---" ] && [ -n "$t_loss" ]; then
-                loss_disp="${t_loss}%"
-                if [ "$t_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
-                elif [ "$t_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
-                else loss_col="${R}"; fi
-            fi
-            [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
-
-            printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-16.16s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${B}│${NC}\033[K\n" \
-                "$stat_col" "$stat_icon" "$NC" "$name_tag" "$t_remote" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
+            mt_main_header_row7 \
+                "${status_color}${status_icon}${NC} ${W}${t_name} [${t_proto}]${NC}" \
+                "${DIM}Peer:${NC} ${Y}${t_remote}${NC}" \
+                "${DIM}vIP:${NC} ${G}${t_vip}${NC}" \
+                "${DIM}Ping:${NC} ${Y}${t_ping:----}${NC}" \
+                "${DIM}Loss:${NC} ${loss_color}${t_loss:----}%${NC}" \
+                "${DIM}Up:${NC} ${W}${uptime}${NC}" \
+                "${DIM}F:${NC}${C}${t_fwd}${NC}"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
-
-    if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}● %-111.111s${NC}  ${B}│${NC}[K
-" "No active tunnels or fabrics deployed across the ecosystem."
+    if (( shown == 0 )); then
+        mt_main_frame_row " ${DIM}● No active tunnels or fabrics deployed across the ecosystem.${NC}" 117
     fi
-    printf "  ${B}╰${border}╯${NC}[K
-"
+    printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
 }
 
 draw_main_header() {
@@ -932,7 +963,7 @@ render_ota_menu() {
     echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Raw Editor)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Terminal / Editor)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ LOCAL INSTALL ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1062,12 +1093,9 @@ show_ota_update_hub() {
                     fi
                 else
                     if ! choose_module EDITOR; then rm -rf "$work"; continue; fi
-                    echo -e "\n  ${DIM}● Opening clean editor... Paste your raw code, save (Ctrl+O, Enter) and exit (Ctrl+X).${NC}\n"
-                    if command -v nano >/dev/null 2>&1; then nano "$file"
-                    elif command -v vi >/dev/null 2>&1; then vi "$file"
-                    else echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; rm -rf "$work"; ota_pause; continue; fi
-                    if ! mt_validate_script "$file"; then
-                        echo -e "\n  ${R}✖ Invalid format or empty paste!${NC}\n"
+                    : > "$file"
+                    if ! mt_capture_manual_script "$file"; then
+                        echo -e "\n  ${R}✖ Manual paste failed or cancelled. Previous module preserved.${NC}\n"
                         rm -rf "$work"; ota_pause; continue
                     fi
                 fi
@@ -1286,28 +1314,39 @@ use_peer_code() {
 }
 render_main_menu() {
     draw_main_header
-    echo -e "\n  ${DIM}┌─[ TUNNEL INFRASTRUCTURE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC}  ${DIM}❯${NC} ${G}Use Peer Code${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC}  ${DIM}❯${NC} ${C}GRE / GRE6 / IPIP Tunnel${NC} $(module_update_badge mgre)"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC}  ${DIM}❯${NC} ${M}VXLAN Virtual Mesh Fabric${NC} $(module_update_badge mxlan)"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC}  ${DIM}❯${NC} ${R}Rathole Reverse Tunnel${NC} $(module_update_badge mrathole)"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC}  ${DIM}❯${NC} ${G}Backhaul Multiplexer${NC} $(module_update_badge mbackhaul)"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC}  ${DIM}❯${NC} ${M}Paqet Raw Packet KCP Tunnel${NC} $(module_update_badge mpaqet)"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ ROUTING, MONITORING & BENCHMARK ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC}  ${DIM}❯${NC} ${G}Port Forwarding Matrix (Mporter)${NC} $(module_update_badge mporter)"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC}  ${DIM}❯${NC} ${C}iPerf3 Bandwidth Benchmark${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Update & Local Install${NC} $(module_update_badge main)"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${R}Nuclear Wipe (Uninstall)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├────────────────────────────${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}q${NC}  ${DIM}❯${NC} ${DIM}Exit Terminal${NC}\n"
+    local term_cols menu_width border
+    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-120}")
+    [[ "$term_cols" =~ ^[0-9]+$ ]] || term_cols=120
+    menu_width=$((term_cols - 4))
+    ((menu_width > 64)) && menu_width=64
+    ((menu_width < 32)) && menu_width=32
+    printf -v border '%*s' "$menu_width" ''
+    border="${border// /─}"
+    printf '\n  %b╭%s╮%b\033[K\n' "$DIM" "$border" "$NC"
+    mt_main_frame_row " ${DIM}[ TUNNEL INFRASTRUCTURE ]${NC}" "$menu_width" "$DIM"
+    mt_main_frame_row '' "$menu_width" "$DIM"
+    mt_main_menu_option "$menu_width" 1 "$G" 'Use Peer Code'
+    mt_main_menu_option "$menu_width" 2 "$C" 'GRE / GRE6 / IPIP Tunnel' mgre
+    mt_main_menu_option "$menu_width" 3 "$M" 'VXLAN Virtual Mesh Fabric' mxlan
+    mt_main_menu_option "$menu_width" 4 "$R" 'Rathole Reverse Tunnel' mrathole
+    mt_main_menu_option "$menu_width" 5 "$G" 'Backhaul Multiplexer' mbackhaul
+    mt_main_menu_option "$menu_width" 6 "$M" 'Paqet Raw Packet KCP Tunnel' mpaqet
+    mt_main_menu_separator "$menu_width" 'ROUTING, MONITORING & BENCHMARK'
+    mt_main_frame_row '' "$menu_width" "$DIM"
+    mt_main_menu_option "$menu_width" 7 "$G" 'Port Forwarding Matrix (Mporter)' mporter
+    mt_main_menu_option "$menu_width" 8 "$C" 'iPerf3 Bandwidth Benchmark'
+    mt_main_menu_separator "$menu_width" 'SYSTEM OPERATIONS'
+    mt_main_frame_row '' "$menu_width" "$DIM"
+    mt_main_menu_option "$menu_width" 9 "$G" 'Update & Local Install' main
+    mt_main_menu_option "$menu_width" 10 "$R" 'Nuclear Wipe (Uninstall)'
+    mt_main_frame_row '' "$menu_width" "$DIM"
+    mt_main_menu_separator "$menu_width"
+    mt_main_frame_row '' "$menu_width" "$DIM"
+    mt_main_menu_option "$menu_width" 0 "$DIM" 'Exit Terminal'
+    mt_main_frame_row '' "$menu_width" "$DIM"
+    printf '  %b╰%s╯%b\033[K\n\n' "$DIM" "$border" "$NC"
 }
+
 show_local_install() {
     local local_input
     draw_main_header
@@ -1333,7 +1372,7 @@ while true; do
         6) run_mod "mpaqet" ;;
         7) run_mod "mporter" ;;
         8) run_iperf3 ;;
-        q|Q) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
+        0) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
         9) show_ota_update_hub ;;
         10)
             draw_main_header

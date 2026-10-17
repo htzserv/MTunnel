@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v16.0.0; modular layout revision 2).
+# MTunnel shared core API 1 (v16.0.1; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="16.0.0"
+MTUNNEL_RELEASE_VERSION="16.0.1"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -215,6 +215,76 @@ mt_validate_script() {
     version=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$file")
     [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
 }
+# Read a complete Bash module directly from an SSH terminal without relying on
+# nano/vi. Pasted text is written to a private file and NEVER evaluated here.
+# A unique terminator prevents accidental execution of following commands.
+mt_capture_manual_script() {
+    local output="${1:-}" line first=1 fenced=0 ended=0 lines=0 bytes=0 editor
+    [[ -n "$output" && -f "$output" && ! -L "$output" ]] || { echo 'Manual paste: invalid destination.' >&2; return 1; }
+    : > "$output" || return 1
+    printf '\n  ┌─[ MANUAL CODE PASTE ]\n' >&2
+    printf '  │ Paste the COMPLETE Bash module (shebang and MODULE_VERSION included).\n' >&2
+    printf '  │ Finish by entering MTUNNEL_END on its OWN line, then press Enter.\n' >&2
+    printf '  │ On the first line: :editor = nano/vi, :cancel = abort.\n' >&2
+    printf '  └─ Waiting for code...\n\n' >&2
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        if (( first )); then
+            line="${line#$'\xef\xbb\xbf'}"
+            [[ -n "$line" ]] || continue
+            case "$line" in
+                :cancel) echo 'Manual paste cancelled.' >&2; return 1 ;;
+                :editor)
+                    if command -v nano >/dev/null 2>&1; then editor=nano
+                    elif command -v vi >/dev/null 2>&1; then editor=vi
+                    else echo 'No text editor found (nano/vi).' >&2; return 1; fi
+                    "$editor" "$output" || { echo 'Editor failed.' >&2; return 1; }
+                    ended=1
+                    break ;;
+                '```'|'```bash'|'```sh') fenced=1; first=0; continue ;;
+            esac
+            first=0
+        fi
+        # An optional UTF-8 BOM can be on the first script line, after a fence.
+        if (( lines == 0 )); then line="${line#$'\xef\xbb\xbf'}"; fi
+        if [[ "$line" == MTUNNEL_END ]]; then ended=1; break; fi
+        # Paste from a Markdown code block: drop only the surrounding fences.
+        if (( fenced )) && [[ "$line" == '```' ]]; then fenced=0; continue; fi
+        lines=$((lines+1)); bytes=$((bytes+${#line}+1))
+        if (( lines > 50000 || bytes > 2097152 )); then
+            echo 'Manual paste exceeded the 2 MiB / 50,000-line limit.' >&2
+            return 1
+        fi
+        printf '%s\n' "$line" >> "$output" || return 1
+    done
+    if (( ! ended )); then
+        echo 'Manual paste incomplete: MTUNNEL_END was not received. Nothing installed.' >&2
+        return 1
+    fi
+    if [[ ! -s "$output" ]]; then echo 'Manual paste was empty. Nothing installed.' >&2; return 1; fi
+    # The output is data until validated. Do not source or run pasted code.
+    if ! head -n 1 "$output" | grep -qE '^#!(/bin/bash|/usr/bin/env bash)$'; then
+        echo 'Invalid script: first line must be #!/bin/bash or #!/usr/bin/env bash.' >&2
+        return 1
+    fi
+    if ! bash -n "$output"; then
+        echo 'Invalid Bash syntax; old module has not been changed.' >&2
+        return 1
+    fi
+    if ! grep -qE '^MODULE_VERSION="[0-9]+\.[0-9]+(\.[0-9]+)?"$' "$output"; then
+        echo 'Missing MODULE_VERSION="x.y.z"; paste the whole module, not a code fragment.' >&2
+        return 1
+    fi
+    local pasted_version
+    pasted_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$output" | head -n1)
+    if [[ -n "${MTUNNEL_RELEASE_VERSION:-}" && "$pasted_version" != "$MTUNNEL_RELEASE_VERSION" ]]; then
+        printf 'Pasted module v%s is not compatible with shared core v%s. Update the FULL bundle instead.\n' "$pasted_version" "$MTUNNEL_RELEASE_VERSION" >&2
+        return 1
+    fi
+    echo 'Manual paste received and validated. Review the target/version before confirming.' >&2
+    return 0
+}
+
 mt_download() {
     local url="$1" dest="$2" expected="${3:-}" tmp rc=1
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
@@ -689,7 +759,7 @@ mt_bbr_menu() {
     while true; do
         clear 2>/dev/null || true
         echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-16.0.0}" "$(mt_bbr_status)" 21 ''
+        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-16.0.1}" "$(mt_bbr_status)" 21 ''
         echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Enable BBR${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Disable BBR${NC}"

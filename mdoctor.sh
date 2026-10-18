@@ -86,13 +86,13 @@ doc_row() {
         return
     fi
     color=$(_doc_status_color "$state"); icon=$(_doc_icon "$state")
-    printf '  %b├─%b %b%s%b %-27s %b%s%b\n' "$DIM" "$NC" "$color" "$icon" "$NC" "$label" "$color" "$value" "$NC"
+    printf '  %b├─%b %b%s%b %b%-27s%b %b%s%b\n' "$DIM" "$NC" "$color" "$icon" "$NC" "$W" "$label" "$NC" "$color" "$value" "$NC"
 }
 
 doc_info() {
     local label="$1" value="$2"
     if [ "$DOC_PLAIN" = 1 ]; then printf '  INFO %-27s %s\n' "$label" "$value"
-    else printf '  %b├─%b %b●%b %-27s %b%s%b\n' "$DIM" "$NC" "$C" "$NC" "$label" "$W" "$value" "$NC"; fi
+    else printf '  %b├─%b %b●%b %b%-27s%b %b%s%b\n' "$DIM" "$NC" "$C" "$NC" "$W" "$label" "$NC" "$W" "$value" "$NC"; fi
 }
 
 doc_note() {

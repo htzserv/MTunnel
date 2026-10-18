@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.2.2 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.2.3 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.2.2"
+MODULE_VERSION="1.2.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

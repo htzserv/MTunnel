@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel LinkTest | Link & Protocol Benchmark v1.2.2 ---
-# [Features: Protocol Matrix | TCP Speedtest | MTU/Loss Discovery | Port Reachability]
-MODULE_VERSION="1.2.2"
+# --- MTunnel LinkTest | Link & Protocol Benchmark v1.2.4 ---
+# [Features: Full Option-1 Matrix | Native Protocols | BH/RH Dual-Stack Engine Lab | TCP/UDP/ICMP Probes | MTU/Loss]
+MODULE_VERSION="1.2.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -63,7 +63,8 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
 fi
 
 cleanup() {
-    for pid in "${LISTENER_PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
+    local pid
+    for pid in "${LISTENER_PIDS[@]}" "${ENGINE_PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done
     rm -rf "$TMP_DIR" 2>/dev/null || true
     ip link del mtest_gre 2>/dev/null || true
     ip tunnel del mtest_gre 2>/dev/null || true
@@ -73,6 +74,19 @@ cleanup() {
     ip link del mtest_br 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+cleanup_session() {
+    local pid
+    for pid in "${LISTENER_PIDS[@]}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done
+    LISTENER_PIDS=()
+    if declare -F lt_stop_engine_pids >/dev/null 2>&1; then lt_stop_engine_pids; fi
+    ip link del mtest_gre 2>/dev/null || true
+    ip tunnel del mtest_gre 2>/dev/null || true
+    ip link del mtest_sit 2>/dev/null || true
+    ip tunnel del mtest_sit 2>/dev/null || true
+    ip link del mtest_vx 2>/dev/null || true
+    ip link del mtest_br 2>/dev/null || true
+    find "$TMP_DIR" -mindepth 1 -maxdepth 1 -type f -delete 2>/dev/null || true
+}
 
 check_requirements() {
     local missing=()
@@ -239,13 +253,15 @@ run_protocol_matrix_test() {
     done
     [[ "$s_role" == "q" ]] && return
 
-    local local_ip=$(get_local_ip)
-    echo -ne "  ${C}●${NC} ${W}Local Public IP [${Y}${local_ip}${W}]: ${NC}"; read custom_l
-    local_ip=${custom_l:-$local_ip}
+    local local_ip=$(mt_local_ipv4)
+    [ "$local_ip" != "Unknown" ] || local_ip=$(get_local_ip)
+    echo -ne "  ${C}●${NC} ${W}Local Public IPv4 [${Y}${local_ip}${W}]: ${NC}"; read custom_l
+    local_ip=${custom_l:-$local_ip}; local_ip="${local_ip// /}"
+    mt_valid_ipv4 "$local_ip" || { echo -e "  ${R}● A valid local IPv4 is required for the native GRE/SIT/VXLAN stage.${NC}"; sleep 1.5; return; }
 
-    echo -ne "  ${C}●${NC} ${W}Remote Peer Public IP: ${NC}"; read remote_ip
+    echo -ne "  ${C}●${NC} ${W}Remote Peer Public IPv4: ${NC}"; read remote_ip
     remote_ip=$(echo "$remote_ip" | tr -d '\r' | tr -d ' ')
-    if [ -z "$remote_ip" ]; then echo -e "  ${R}● Remote Peer IP is required!${NC}"; sleep 1.5; return; fi
+    if ! mt_valid_ipv4 "$remote_ip"; then echo -e "  ${R}● A valid remote IPv4 is required for Option 1 native tests.${NC}"; sleep 1.5; return; fi
 
     if [ "$s_role" == "1" ]; then
         echo -e "\n  ${G}● IRAN Responder Active.${NC} Awaiting Sync Trigger from Kharej..."
@@ -302,12 +318,15 @@ PY
         local resp_pid=$!
         LISTENER_PIDS+=("$resp_pid")
         sleep 1
-        if ! kill -0 "$resp_pid" 2>/dev/null; then wait "$resp_pid"; cleanup; echo 'Responder could not bind all ports.' >&2; return 1; fi
+        if ! kill -0 "$resp_pid" 2>/dev/null; then wait "$resp_pid"; cleanup_session; echo 'Responder could not bind all ports.' >&2; return 1; fi
 
-        echo -e "  ${C}✓ All Test Interfaces, Ports & Speedtest Listeners bound.${NC}"
+        # Option 1 is the complete lab: prepare real BH/RH dual-stack engines too.
+        lt_start_engine_responder --no-wait || true
+
+        echo -e "  ${C}✓ Native tunnels, test ports, and BH/RH matrix responder are ready.${NC}"
         echo -e "  ${Y}● Go to KHAREJ server now and start Option 1.${NC}"
         echo -ne "\n  ${DIM}Press Enter when Kharej tests are finished to tear down...${NC}"; read dummy
-        cleanup
+        cleanup_session
         echo -e "  ${G}● Teardown complete. All test interfaces purged.${NC}"; sleep 1.5
         return
 
@@ -431,14 +450,458 @@ PY
             fi
         fi
 
+        # Full Matrix continues with real Backhaul/Rathole IPv4↔IPv6 paths.
+        local engine_remote6=''
+        echo -ne "\n  ${C}●${NC} ${W}Responder IPv6 for BH/RH 4↔6 / 6↔6 tests [blank if unavailable]: ${NC}"; read -r engine_remote6
+        engine_remote6=$(mt_normalize_host "${engine_remote6// /}")
+        if [ -z "$engine_remote6" ] || mt_valid_ipv6 "$engine_remote6"; then
+            lt_run_engine_matrix_tester "$remote_ip" "$engine_remote6" || true
+        else
+            echo -e "  ${Y}⚠ Invalid IPv6; IPv6 engine paths skipped.${NC}"
+            lt_run_engine_matrix_tester "$remote_ip" "" || true
+        fi
+
         ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
         ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
+        lt_stop_engine_pids 2>/dev/null || true
 
-        echo -e "\n  ${DIM}Benchmark finished. All local test interfaces cleaned up.${NC}"
+        echo -e "\n  ${DIM}Full Matrix finished. Native tunnels, BH/RH engines, and temporary listeners cleaned up.${NC}"
         echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
     fi
 }
+
+# --- BACKHAUL / RATHOLE IPv4+IPv6 ENGINE MATRIX ---
+ENGINE_CTRL_PORT=49997
+ENGINE_UDP_PORT=49996
+ENGINE_PIDS=()
+
+lt_core_path() {
+    local name="$1" p
+    case "$name" in
+        bh) for p in /usr/local/bin/bh /usr/bin/bh; do [ -x "$p" ] && { printf '%s' "$p"; return 0; }; done ;;
+        rathole) for p in /usr/local/bin/rathole /usr/bin/rathole; do [ -x "$p" ] && { printf '%s' "$p"; return 0; }; done ;;
+    esac
+    return 1
+}
+
+lt_hp() {
+    if [[ "$1" == *:* ]]; then printf '[%s]:%s' "$1" "$2"; else printf '%s:%s' "$1" "$2"; fi
+}
+
+lt_engine_record() {
+    case "$1" in
+        BH44) printf 'BH|4|4|51040|51140|51240' ;;
+        BH46) printf 'BH|4|6|51041|51141|51241' ;;
+        BH64) printf 'BH|6|4|51042|51142|51242' ;;
+        BH66) printf 'BH|6|6|51043|51143|51243' ;;
+        RH44) printf 'RH|4|4|51050|51150|51250' ;;
+        RH46) printf 'RH|4|6|51051|51151|51251' ;;
+        RH64) printf 'RH|6|4|51052|51152|51252' ;;
+        RH66) printf 'RH|6|6|51053|51153|51253' ;;
+        *) return 1 ;;
+    esac
+}
+
+lt_engine_label() {
+    case "$1" in
+        BH44) echo 'BH 4→4' ;; BH46) echo 'BH 4→6' ;; BH64) echo 'BH 6→4' ;; BH66) echo 'BH 6→6' ;;
+        RH44) echo 'RH 4→4' ;; RH46) echo 'RH 4→6' ;; RH64) echo 'RH 6→4' ;; RH66) echo 'RH 6→6' ;;
+    esac
+}
+
+lt_engine_detail() {
+    local rec engine payload link a b c
+    rec=$(lt_engine_record "$1") || return 1
+    IFS='|' read -r engine payload link a b c <<< "$rec"
+    printf 'IPv%s payload / IPv%s link' "$payload" "$link"
+}
+
+lt_write_bh_server() {
+    local file="$1" linkfam="$2" payloadfam="$3" linkport="$4" publicport="$5" backendport="$6"
+    local linkbind='0.0.0.0' publicbind='0.0.0.0' backend='127.0.0.1'
+    [ "$linkfam" = 6 ] && linkbind='::'
+    [ "$payloadfam" = 6 ] && { publicbind='::'; backend='::1'; }
+    cat > "$file" <<EOF_BH
+[server]
+bind_addr = "$(lt_hp "$linkbind" "$linkport")"
+transport = "tcp"
+accept_udp = false
+token = "mtunnel_linktest_123"
+log_level = "error"
+sniffer = false
+web_port = 0
+channel_size = 1024
+heartbeat = 10
+keepalive_period = 30
+nodelay = true
+mss = 1360
+so_rcvbuf = 0
+so_sndbuf = 0
+proxy_protocol = false
+ports = [ "$(lt_hp "$publicbind" "$publicport")=$(lt_hp "$backend" "$backendport")" ]
+EOF_BH
+}
+
+lt_write_bh_client() {
+    local file="$1" remote="$2" linkport="$3"
+    cat > "$file" <<EOF_BH
+[client]
+remote_addr = "$(lt_hp "$remote" "$linkport")"
+transport = "tcp"
+token = "mtunnel_linktest_123"
+log_level = "error"
+sniffer = false
+web_port = 0
+connection_pool = 2
+retry_interval = 1
+dial_timeout = 5
+aggressive_pool = false
+keepalive_period = 30
+nodelay = true
+mss = 1360
+so_rcvbuf = 0
+so_sndbuf = 0
+EOF_BH
+}
+
+lt_write_rh_server() {
+    local file="$1" linkfam="$2" payloadfam="$3" linkport="$4" publicport="$5"
+    local linkbind='0.0.0.0' publicbind='0.0.0.0'
+    [ "$linkfam" = 6 ] && linkbind='::'
+    [ "$payloadfam" = 6 ] && publicbind='::'
+    cat > "$file" <<EOF_RH
+[server]
+bind_addr = "$(lt_hp "$linkbind" "$linkport")"
+default_token = "mtunnel_linktest_123"
+heartbeat_interval = 10
+
+[server.transport]
+type = "tcp"
+[server.transport.tcp]
+nodelay = true
+
+[server.services.linktest]
+type = "tcp"
+bind_addr = "$(lt_hp "$publicbind" "$publicport")"
+EOF_RH
+}
+
+lt_write_rh_client() {
+    local file="$1" remote="$2" linkport="$3" payloadfam="$4" backendport="$5"
+    local backend='127.0.0.1'; [ "$payloadfam" = 6 ] && backend='::1'
+    cat > "$file" <<EOF_RH
+[client]
+remote_addr = "$(lt_hp "$remote" "$linkport")"
+default_token = "mtunnel_linktest_123"
+heartbeat_timeout = 30
+retry_interval = 1
+
+[client.transport]
+type = "tcp"
+[client.transport.tcp]
+nodelay = true
+
+[client.services.linktest]
+type = "tcp"
+local_addr = "$(lt_hp "$backend" "$backendport")"
+EOF_RH
+}
+
+lt_start_bg() {
+    local log="$1"; shift
+    "$@" >"$log" 2>&1 &
+    LT_LAST_PID=$!
+    ENGINE_PIDS+=("$LT_LAST_PID")
+    sleep 0.35
+    kill -0 "$LT_LAST_PID" 2>/dev/null
+}
+
+lt_forget_pid() {
+    local drop="$1" p; local -a keep=()
+    for p in "${ENGINE_PIDS[@]:-}"; do [ "$p" = "$drop" ] || keep+=("$p"); done
+    ENGINE_PIDS=("${keep[@]}")
+}
+
+lt_start_echo_backend() {
+    local fam="$1" port="$2"
+    LT_FAM="$fam" LT_PORT="$port" python3 - <<'PY' >/dev/null 2>&1 &
+import os, socket, threading
+fam = socket.AF_INET6 if os.environ['LT_FAM'] == '6' else socket.AF_INET
+host = '::1' if fam == socket.AF_INET6 else '127.0.0.1'
+s = socket.socket(fam, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+if fam == socket.AF_INET6:
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+s.bind((host, int(os.environ['LT_PORT'])))
+s.listen(64)
+def h(c):
+    try:
+        while True:
+            d = c.recv(65536)
+            if not d: break
+            c.sendall(d)
+    except Exception:
+        pass
+    finally:
+        c.close()
+while True:
+    c, _ = s.accept()
+    threading.Thread(target=h, args=(c,), daemon=True).start()
+PY
+    LT_ECHO_PID=$!
+    ENGINE_PIDS+=("$LT_ECHO_PID")
+    sleep 0.2
+    kill -0 "$LT_ECHO_PID" 2>/dev/null
+}
+
+lt_roundtrip_ms() {
+    LT_HOST="$1" LT_PORT="$2" python3 - <<'PY' 2>/dev/null
+import os, socket, time
+host=os.environ['LT_HOST']; port=int(os.environ['LT_PORT']); marker=b'MTUNNEL-LINKTEST-123\n'
+try:
+    t=time.monotonic(); s=socket.create_connection((host,port),2.0); s.settimeout(2.0)
+    s.sendall(marker); data=b''
+    while len(data)<len(marker):
+        chunk=s.recv(4096)
+        if not chunk: break
+        data += chunk
+    s.close()
+    if data == marker: print(max(1, round((time.monotonic()-t)*1000)))
+    else: print('ERR')
+except Exception:
+    print('ERR')
+PY
+}
+
+lt_wait_roundtrip() {
+    local host="$1" port="$2" i value
+    for ((i=0;i<16;i++)); do
+        value=$(lt_roundtrip_ms "$host" "$port")
+        if [[ "$value" =~ ^[0-9]+$ ]]; then printf '%s' "$value"; return 0; fi
+        sleep 0.5
+    done
+    return 1
+}
+
+lt_start_control_server() {
+    local caps_file="$1"
+    LT_CAPS_FILE="$caps_file" LT_CTRL_PORT="$ENGINE_CTRL_PORT" LT_UDP_PORT="$ENGINE_UDP_PORT" python3 - <<'PY' >"$TMP_DIR/control.log" 2>&1 &
+import os, socket, threading, select
+caps_file=os.environ['LT_CAPS_FILE']; ctrl=int(os.environ['LT_CTRL_PORT']); udp=int(os.environ['LT_UDP_PORT'])
+def caps():
+    try: return open(caps_file,'r',encoding='utf-8').read().strip()+'\n'
+    except Exception: return '\n'
+def tcp_loop(s):
+    while True:
+        c,_=s.accept()
+        try:
+            c.settimeout(2); data=c.recv(128)
+            c.sendall(caps().encode() if data.startswith(b'CAPS') else b'OK\n')
+        except Exception: pass
+        finally: c.close()
+def udp_loop(s):
+    while True:
+        try:
+            d,a=s.recvfrom(2048); s.sendto(d,a)
+        except Exception: pass
+socks=[]
+try:
+    s6=socket.socket(socket.AF_INET6,socket.SOCK_STREAM); s6.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s6.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1); s6.bind(('::',ctrl)); s6.listen(32); socks.append(s6); threading.Thread(target=tcp_loop,args=(s6,),daemon=True).start()
+except Exception: pass
+try:
+    s4=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s4.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s4.bind(('0.0.0.0',ctrl)); s4.listen(32); socks.append(s4); threading.Thread(target=tcp_loop,args=(s4,),daemon=True).start()
+except Exception: pass
+for fam,host in ((socket.AF_INET,'0.0.0.0'),(socket.AF_INET6,'::')):
+    try:
+        u=socket.socket(fam,socket.SOCK_DGRAM); u.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+        if fam==socket.AF_INET6: u.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1)
+        u.bind((host,udp)); socks.append(u); threading.Thread(target=udp_loop,args=(u,),daemon=True).start()
+    except Exception: pass
+if not socks: raise SystemExit(1)
+threading.Event().wait()
+PY
+    LT_LAST_PID=$!; ENGINE_PIDS+=("$LT_LAST_PID"); sleep 0.3; kill -0 "$LT_LAST_PID" 2>/dev/null
+}
+
+lt_query_caps() {
+    LT_HOST="$1" LT_PORT="$ENGINE_CTRL_PORT" python3 - <<'PY' 2>/dev/null
+import os, socket
+try:
+    s=socket.create_connection((os.environ['LT_HOST'],int(os.environ['LT_PORT'])),2.5); s.settimeout(2.5)
+    s.sendall(b'CAPS\n'); print(s.recv(4096).decode(errors='ignore').strip()); s.close()
+except Exception: pass
+PY
+}
+
+lt_udp_probe() {
+    LT_HOST="$1" LT_PORT="$ENGINE_UDP_PORT" python3 - <<'PY' 2>/dev/null
+import os,socket,time
+h=os.environ['LT_HOST']; p=int(os.environ['LT_PORT']); fam=socket.AF_INET6 if ':' in h else socket.AF_INET
+try:
+    s=socket.socket(fam,socket.SOCK_DGRAM); s.settimeout(2); msg=b'MT-LT-UDP'; t=time.monotonic(); s.sendto(msg,(h,p)); d,_=s.recvfrom(128); s.close()
+    print(max(1,round((time.monotonic()-t)*1000)) if d==msg else 'ERR')
+except Exception: print('ERR')
+PY
+}
+
+lt_stop_engine_pids() {
+    local pid
+    for pid in "${ENGINE_PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done
+    ENGINE_PIDS=()
+    rm -f "$TMP_DIR"/*.server.toml "$TMP_DIR"/*.client.toml "$TMP_DIR"/*.server.log "$TMP_DIR"/*.client.log "$TMP_DIR/engine_caps" "$TMP_DIR/control.log" 2>/dev/null || true
+}
+
+lt_start_engine_responder() {
+    local key rec engine payload link linkport publicport backendport core cfg log bindok cap='' local4 local6
+    local4=$(mt_local_ipv4); local6=$(mt_local_ipv6)
+    [ "$local4" != Unknown ] || local4=''
+    echo -e "\n  ${DIM}┌─[ BH / RH DUAL-STACK RESPONDER ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}IPv4:${NC} ${C}${local4:-Unavailable}${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}IPv6:${NC} ${C}${local6:-Unavailable}${NC}"
+    echo -e "  ${DIM}├────────────────────────────────────────────────────────────${NC}"
+    local caps_file="$TMP_DIR/engine_caps"; : > "$caps_file"
+    for key in BH44 BH46 BH64 BH66 RH44 RH46 RH64 RH66; do
+        rec=$(lt_engine_record "$key"); IFS='|' read -r engine payload link linkport publicport backendport <<< "$rec"
+        if { [ "$link" = 4 ] && [ -z "$local4" ]; } || { [ "$payload" = 4 ] && [ -z "$local4" ]; } || { [ "$link" = 6 ] && [ -z "$local6" ]; } || { [ "$payload" = 6 ] && [ -z "$local6" ]; }; then
+            printf '  %b├─%b %-9s %bUNAVAILABLE%b  %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
+            continue
+        fi
+        core=''
+        if [ "$engine" = BH ]; then core=$(lt_core_path bh 2>/dev/null || true); else core=$(lt_core_path rathole 2>/dev/null || true); fi
+        if [ -z "$core" ]; then
+            printf '  %b├─%b %-9s %bCORE MISSING%b  %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
+            continue
+        fi
+        if mt_port_busy "$linkport" tcp || mt_port_busy "$publicport" tcp; then
+            printf '  %b├─%b %-9s %bPORT BUSY%b    %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
+            continue
+        fi
+        cfg="$TMP_DIR/${key}.server.toml"; log="$TMP_DIR/${key}.server.log"
+        if [ "$engine" = BH ]; then lt_write_bh_server "$cfg" "$link" "$payload" "$linkport" "$publicport" "$backendport"; lt_start_bg "$log" "$core" -c "$cfg"
+        else lt_write_rh_server "$cfg" "$link" "$payload" "$linkport" "$publicport"; lt_start_bg "$log" "$core" "$cfg"; fi
+        if kill -0 "$LT_LAST_PID" 2>/dev/null; then
+            cap+="${cap:+,}$key"; printf '  %b├─%b %-9s %bREADY%b        %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$G" "$NC" "$(lt_engine_detail "$key")"
+        else
+            printf '  %b├─%b %-9s %bENGINE FAIL%b  %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$R" "$NC" "$(lt_engine_detail "$key")"
+        fi
+    done
+    printf '%s' "$cap" > "$caps_file"
+    if ! mt_port_busy "$ENGINE_CTRL_PORT" tcp && lt_start_control_server "$caps_file"; then
+        echo -e "  ${DIM}├────────────────────────────────────────────────────────────${NC}"
+        echo -e "  ${G}✔ Control + TCP/UDP family probes are ready.${NC}"
+    else
+        echo -e "  ${R}✖ Control port ${ENGINE_CTRL_PORT} could not be opened.${NC}"
+    fi
+    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}"
+    if [ "${1:-}" = "--no-wait" ]; then
+        echo -e "  ${G}✔ Embedded in Option 1 Full Matrix; responder remains active.${NC}"
+        return 0
+    fi
+    echo -e "\n  ${Y}● On the peer server choose this same option and select KHAREJ / Tester.${NC}"
+    echo -ne "  ${DIM}Press Enter after testing is finished to tear everything down...${NC}"; read -r _
+}
+
+lt_matrix_row() {
+    local label="$1" status="$2" latency="$3" detail="$4" color="$5"
+    printf '  %b│%b %-10s %b│%b %b%-11s%b %b│%b %-9s %b│%b %-34s %b│%b\n' "$B" "$NC" "$label" "$B" "$NC" "$color" "$status" "$NC" "$B" "$NC" "$latency" "$B" "$NC" "$detail" "$B" "$NC"
+}
+
+lt_run_one_engine_test() {
+    local key="$1" remote4="$2" remote6="$3" caps="$4" rec engine payload link linkport publicport backendport core remote_link remote_public cfg log lat clientpid echopid
+    rec=$(lt_engine_record "$key"); IFS='|' read -r engine payload link linkport publicport backendport <<< "$rec"
+    if [[ ",$caps," != *",$key,"* ]]; then LT_STATUS='UNAVAILABLE'; LT_LAT='---'; LT_DETAIL='Responder/core not ready'; return 1; fi
+    remote_link="$remote4"; [ "$link" = 6 ] && remote_link="$remote6"
+    remote_public="$remote4"; [ "$payload" = 6 ] && remote_public="$remote6"
+    if [ -z "$remote_link" ] || [ -z "$remote_public" ]; then LT_STATUS='NO ADDRESS'; LT_LAT='---'; LT_DETAIL="Need IPv${link} link + IPv${payload} service"; return 1; fi
+    core=''
+    if [ "$engine" = BH ]; then core=$(lt_core_path bh 2>/dev/null || true); else core=$(lt_core_path rathole 2>/dev/null || true); fi
+    if [ -z "$core" ]; then LT_STATUS='CORE MISSING'; LT_LAT='---'; LT_DETAIL="Install ${engine} core locally"; return 1; fi
+    if ! lt_start_echo_backend "$payload" "$backendport"; then LT_STATUS='LOCAL PORT'; LT_LAT='---'; LT_DETAIL="Backend :${backendport} unavailable"; return 1; fi
+    echopid="$LT_ECHO_PID"; cfg="$TMP_DIR/${key}.client.toml"; log="$TMP_DIR/${key}.client.log"
+    if [ "$engine" = BH ]; then lt_write_bh_client "$cfg" "$remote_link" "$linkport"; lt_start_bg "$log" "$core" -c "$cfg"
+    else lt_write_rh_client "$cfg" "$remote_link" "$linkport" "$payload" "$backendport"; lt_start_bg "$log" "$core" "$cfg"; fi
+    clientpid="$LT_LAST_PID"
+    if ! kill -0 "$clientpid" 2>/dev/null; then
+        kill "$echopid" 2>/dev/null || true; lt_forget_pid "$echopid"; lt_forget_pid "$clientpid"
+        LT_STATUS='ENGINE FAIL'; LT_LAT='---'; LT_DETAIL='Client config/core rejected'; return 1
+    fi
+    if lat=$(lt_wait_roundtrip "$remote_public" "$publicport"); then
+        LT_STATUS='PASSED'; LT_LAT="${lat}ms"; LT_DETAIL="$(lt_engine_detail "$key")"
+        kill "$clientpid" "$echopid" 2>/dev/null || true; lt_forget_pid "$clientpid"; lt_forget_pid "$echopid"; return 0
+    fi
+    kill "$clientpid" "$echopid" 2>/dev/null || true; lt_forget_pid "$clientpid"; lt_forget_pid "$echopid"
+    LT_STATUS='BLOCKED'; LT_LAT='---'; LT_DETAIL="$(lt_engine_detail "$key")"; return 1
+}
+
+lt_run_engine_matrix_tester() {
+    local remote4="$1" remote6="$2" caps cap_host key status_color ud4 ud6 ping4 ping6
+    [ -z "$remote4" ] || mt_valid_ipv4 "$remote4" || { echo -e "  ${R}✖ Invalid IPv4.${NC}"; return 1; }
+    [ -z "$remote6" ] || mt_valid_ipv6 "$remote6" || { echo -e "  ${R}✖ Invalid IPv6.${NC}"; return 1; }
+    [ -n "$remote4$remote6" ] || { echo -e "  ${R}✖ Enter at least one peer address.${NC}"; return 1; }
+
+    cap_host="$remote6"; [ -n "$cap_host" ] || cap_host="$remote4"
+    caps=$(lt_query_caps "$cap_host")
+    if [ -z "$caps" ] && [ -n "$remote4" ] && [ "$cap_host" != "$remote4" ]; then caps=$(lt_query_caps "$remote4"); fi
+    if [ -z "$caps" ]; then
+        echo -e "\n  ${Y}⚠ BH/RH engine responder control channel is not reachable.${NC}"
+        echo -e "  ${DIM}Native protocol results above remain valid; BH/RH real-engine rows are skipped.${NC}"
+        return 1
+    fi
+
+    echo -e "\n  ${DIM}┌─[ REAL BACKHAUL / RATHOLE IPv4 ↔ IPv6 ENGINE MATRIX ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4→6:${NC} IPv4 payload over IPv6 engine link"
+    echo -e "  ${DIM}├─${NC} ${W}6→4:${NC} IPv6 payload over IPv4 engine link"
+    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}\n"
+    echo -e "  ${B}╭────────────┬─────────────┬───────────┬────────────────────────────────────╮${NC}"
+    echo -e "  ${B}│${NC} ${W}ENGINE     ${NC}${B}│${NC} ${W}STATUS      ${NC}${B}│${NC} ${W}LATENCY  ${NC}${B}│${NC} ${W}PATH / DIAGNOSTIC                  ${NC}${B}│${NC}"
+    echo -e "  ${B}├────────────┼─────────────┼───────────┼────────────────────────────────────┤${NC}"
+    for key in BH44 BH46 BH64 BH66 RH44 RH46 RH64 RH66; do
+        if lt_run_one_engine_test "$key" "$remote4" "$remote6" "$caps"; then
+            status_color="$G"
+        else
+            case "$LT_STATUS" in BLOCKED|'ENGINE FAIL') status_color="$R";; *) status_color="$Y";; esac
+        fi
+        lt_matrix_row "$(lt_engine_label "$key")" "$LT_STATUS" "$LT_LAT" "$LT_DETAIL" "$status_color"
+    done
+    echo -e "  ${B}╰────────────┴─────────────┴───────────┴────────────────────────────────────╯${NC}"
+
+    echo -e "\n  ${DIM}┌─[ EXTRA NETWORK FAMILY PROBES ]${NC}"
+    if [ -n "$remote4" ]; then
+        if mt_tcp_probe "$remote4" "$ENGINE_CTRL_PORT"; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}TCP IPv4${NC}   ${C}reachable${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}TCP IPv4${NC}   blocked"; fi
+        ud4=$(lt_udp_probe "$remote4"); if [[ "$ud4" =~ ^[0-9]+$ ]]; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}UDP IPv4${NC}   ${C}${ud4}ms${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}UDP IPv4${NC}   blocked"; fi
+        ping4=$(ping -c 2 -W 1 "$remote4" 2>/dev/null | grep -oP 'time=\K[0-9.]+' | head -1); [ -n "$ping4" ] && echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}ICMP IPv4${NC}  ${C}${ping4}ms${NC}" || echo -e "  ${DIM}├─${NC} ${Y}●${NC} ${W}ICMP IPv4${NC}  no reply"
+    fi
+    if [ -n "$remote6" ]; then
+        if mt_tcp_probe "$remote6" "$ENGINE_CTRL_PORT"; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}TCP IPv6${NC}   ${C}reachable${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}TCP IPv6${NC}   blocked"; fi
+        ud6=$(lt_udp_probe "$remote6"); if [[ "$ud6" =~ ^[0-9]+$ ]]; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}UDP IPv6${NC}   ${C}${ud6}ms${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}UDP IPv6${NC}   blocked"; fi
+        ping6=$(ping -6 -c 2 -W 1 "$remote6" 2>/dev/null | grep -oP 'time=\K[0-9.]+' | head -1); [ -n "$ping6" ] && echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}ICMP IPv6${NC}  ${C}${ping6}ms${NC}" || echo -e "  ${DIM}├─${NC} ${Y}●${NC} ${W}ICMP IPv6${NC}  no reply"
+    fi
+    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}"
+    return 0
+}
+
+run_engine_family_matrix() {
+    draw_header
+    echo -e "\n  ${DIM}┌─[ BACKHAUL / RATHOLE IPv4 ↔ IPv6 MATRIX ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4→6 means IPv4 payload over an IPv6 engine link.${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6→4 means IPv6 payload over an IPv4 engine link.${NC}"
+    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}\n"
+    local role remote4 remote6
+    while true; do
+        echo -ne "  ${C}●${NC} ${W}Role [1: IRAN / Responder | 2: KHAREJ / Tester | q: Back]: ${NC}"; read -r role
+        [[ "$role" =~ ^[12qQ]$ ]] && break
+    done
+    [[ "$role" =~ ^[qQ]$ ]] && return 0
+    if [ "$role" = 1 ]; then lt_start_engine_responder; lt_stop_engine_pids; return 0; fi
+
+    echo -ne "  ${C}●${NC} ${W}IRAN / Responder IPv4 [blank if unavailable]: ${NC}"; read -r remote4; remote4="${remote4// /}"
+    echo -ne "  ${C}●${NC} ${W}IRAN / Responder IPv6 [blank if unavailable]: ${NC}"; read -r remote6; remote6=$(mt_normalize_host "${remote6// /}")
+    lt_run_engine_matrix_tester "$remote4" "$remote6"
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r _
+}
+# --- END ENGINE MATRIX ---
+
 
 run_mtu_discovery() {
     draw_header
@@ -487,26 +950,28 @@ while true; do
     draw_header
     echo -e "\n  ${DIM}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Strict Auto-Synced Protocol Benchmark & Speedtest${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run Dynamic MTU & Loss Discovery Test${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Full Auto-Synced Protocol + BH/RH Matrix & Speedtest${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Backhaul / Rathole IPv4 ↔ IPv6 Matrix${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Run Dynamic MTU & Loss Discovery Test${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ DIAGNOSTIC UTILITIES ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Run as Listener (Open Temporary Test Ports)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Run as Tester (Check Peer Ports & Filtering)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}View Active Listening Ports (OS Socket State)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Run as Listener (Open Temporary Test Ports)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Run as Tester (Check Peer Ports & Filtering)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}View Active Listening Ports (OS Socket State)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 
     echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read opt
     case $opt in
         1) run_protocol_matrix_test ;;
-        2) run_mtu_discovery ;;
-        3) 
+        2) run_engine_family_matrix ;;
+        3) run_mtu_discovery ;;
+        4) 
            draw_header
            echo -ne "\n  ${C}●${NC} ${W}Target ports to open [e.g. 80,443,8443]: ${NC}"; read p_in
            p_in=${p_in:-"80,443,2053,2083,8080,8443,9743"}
@@ -529,8 +994,9 @@ while True:
                echo -e "  ${G}OK${NC} Port $p is now listening."
            done
            echo -ne "\n  ${Y}Press Enter to stop listeners...${NC}"; read dummy
-           cleanup ;;
-        4) 
+           for listener_pid in "${LISTENER_PIDS[@]}"; do kill "$listener_pid" 2>/dev/null || true; done
+           LISTENER_PIDS=() ;;
+        5) 
            draw_header
            echo -ne "\n  ${C}●${NC} ${W}Target Peer IP: ${NC}"; read r_p
            echo -ne "  ${C}●${NC} ${W}Test Ports [e.g. 80,443,8443]: ${NC}"; read p_in
@@ -544,12 +1010,12 @@ while True:
                fi
            done
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
-        5)
+        6)
            draw_header
            echo -e "\n  ${DIM}┌─[ SYSTEM LISTENING PORTS ]${NC}"
            ss -lntp 2>/dev/null | awk 'NR>1 {split($5, a, ":"); port = a[length(a)]; proc = $0; gsub(/.*users:\(\("/, "", proc); gsub(/".*/, "", proc); if (port != "") printf "  %-7s %-47s\n", port, proc;}' || true
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
-        6) self_update_module ;;
+        7) self_update_module ;;
         0) break ;;
     esac
 done

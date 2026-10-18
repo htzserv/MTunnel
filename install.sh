@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.2.2"
+MODULE_VERSION="1.2.4"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -173,7 +173,7 @@ installer_main() {
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
                 echo '  --online             Force online install from the official GitHub source.'
-                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.2.'
+                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.4.'
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'

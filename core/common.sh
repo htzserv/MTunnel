@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.2.2; modular layout revision 2).
+# MTunnel shared core API 1 (v1.2.3; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.2.2"
+MTUNNEL_RELEASE_VERSION="1.2.4"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -177,7 +177,7 @@ mt_retired_bundle_blocked() {
 }
 
 # Legacy downgrade-confirmation hook retained for older callers.
-# 1.2.2 permits switching to any selected version without a version-direction prompt.
+# 1.2.3 permits switching to any selected version without a version-direction prompt.
 mt_confirm_downgrade() {
     return 0   # version restrictions disabled: install whatever version was selected
 }

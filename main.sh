@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.2 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.3 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.2"
+MODULE_VERSION="1.2.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

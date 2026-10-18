@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v1.2.3 ---
+# --- MTunnel MRathole | Reverse Tunnel Engine v1.2.5 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -589,7 +589,7 @@ generate_toml() {
     local toml="$dir/config.toml"
     
     local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
-    source "$meta" 2>/dev/null
+    mt_source_conf "$meta" 2>/dev/null
     
     mt_valid_port "$LINK_PORT" && [[ "$TYPE" =~ ^[12]$ ]] || return 1
     BIND_HOST=$(mt_normalize_host "$BIND_HOST")
@@ -687,7 +687,7 @@ rat_unit_tcp_rtt() { mt_unit_tcp_rtt "mrathole@${1}" "$2"; }
 get_tunnel_status() {
     local t_name="$1" known_active="${2:-0}" meta="$CONF_DIR/$t_name/meta.conf"
     local TYPE="" LINK_PORT="" REMOTE_IP="" peer
-    source "$meta" 2>/dev/null
+    mt_source_conf "$meta" 2>/dev/null
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mrathole@$t_name"; then echo "OFFLINE"; return; fi
     if [ "$TYPE" = "1" ]; then peer=$(rat_unit_peer_ip "$t_name" "$LINK_PORT" 2>/dev/null || true)
     else peer=$(rat_unit_peer_ip "$t_name" "" "$REMOTE_IP" 2>/dev/null || true); fi
@@ -942,7 +942,7 @@ show_tunnel_registry() {
         [ ! -d "$d" ] && continue
         local t_name=$(basename "$d")
         local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
-        source "$d/meta.conf" 2>/dev/null
+        mt_source_conf "$d/meta.conf" 2>/dev/null
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
         local ping_val="N/A"
@@ -1028,7 +1028,7 @@ show_live_radar() {
             [ ! -d "$d" ] && continue
             local t_name=$(basename "$d")
             local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
-            source "$d/meta.conf" 2>/dev/null
+            mt_source_conf "$d/meta.conf" 2>/dev/null
             
             local st=$(get_tunnel_status "$t_name")
             local st_color="${R}"; local st_text="OFFLINE"
@@ -1167,7 +1167,7 @@ select_tunnel() {
 
 if [ "${1:-}" == --counters ]; then
     [[ "${2:-}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "$CONF_DIR/$2/meta.conf" ] || exit 1
-    TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; source "$CONF_DIR/$2/meta.conf"
+    TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; mt_source_conf "$CONF_DIR/$2/meta.conf"
     mt_setup_counter_pair RAT "$2" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
     exit $?
 fi
@@ -1177,7 +1177,7 @@ if [ "${1:-}" == --apply ]; then
 fi
 for dir in "$CONF_DIR"/*; do
     [ -f "$dir/meta.conf" ] || continue
-    TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; source "$dir/meta.conf"
+    TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; mt_source_conf "$dir/meta.conf"
     mt_setup_counter_pair RAT "$(basename "$dir")" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
 done
 
@@ -1593,7 +1593,7 @@ EOF
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
            TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; BIND_HOST="0.0.0.0"
-           source "$SELECTED_TUN/meta.conf" 2>/dev/null
+           mt_source_conf "$SELECTED_TUN/meta.conf" 2>/dev/null
            
            if [[ "$opt" == "3" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip

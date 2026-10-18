@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v1.2.3 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v1.2.5 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -538,7 +538,7 @@ if [[ "$1" == "--apply" ]]; then
     for conf in "$CONF_DIR"/*.meta; do
         [ -f "$conf" ] || continue
         t_name=$(basename "$conf" .meta)
-        ROLE=""; TUN_PORT=""; TCP_PORTS=""; source "$conf" 2>/dev/null
+        ROLE=""; TUN_PORT=""; TCP_PORTS=""; mt_source_conf "$conf" 2>/dev/null
         
         if [ "$ROLE" == "1" ]; then
             setup_paqet_counters "$t_name" "$TUN_PORT"
@@ -1284,7 +1284,7 @@ show_tunnel_registry() {
         [ ! -f "$conf" ] && continue
         local t_name=$(basename "$conf" .meta)
         ROLE=""; TUN_PORT=""; REMOTE_IP=""; TCP_PORTS=""
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         
         local yaml_f="$CONF_DIR/${t_name}.yaml"
         [ ! -f "$yaml_f" ] && continue
@@ -2226,7 +2226,7 @@ EOF
                    mv "$sel_cfg" "$CONF_DIR/${new_t_name}.yaml"
                    mv "$CONF_DIR/${old_tname}.meta" "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
                    
-                   ROLE=""; TUN_PORT=""; TCP_PORTS=""; source "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
+                   ROLE=""; TUN_PORT=""; TCP_PORTS=""; mt_source_conf "$CONF_DIR/${new_t_name}.meta" 2>/dev/null
                    if [ "$ROLE" == "1" ]; then
                        setup_paqet_counters "$new_t_name" "$TUN_PORT"
                    else

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.2.3; modular layout revision 2).
+# MTunnel shared core API 1 (v1.2.5; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.2.4"
+MTUNNEL_RELEASE_VERSION="1.2.5"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -177,7 +177,7 @@ mt_retired_bundle_blocked() {
 }
 
 # Legacy downgrade-confirmation hook retained for older callers.
-# 1.2.3 permits switching to any selected version without a version-direction prompt.
+# Version switching is unrestricted: any selected version may be installed (no version-direction prompt).
 mt_confirm_downgrade() {
     return 0   # version restrictions disabled: install whatever version was selected
 }
@@ -251,11 +251,21 @@ mt_port_busy() {
         { for (i=1;i<=NF;i++) if ($i ~ /:[0-9]+$/) {n=$i;sub(/^.*:/,"",n);if(n+0==p) found=1;break} }
         END {exit !found}'
 }
+# One listening port number per line (tcp, udp or both). A single ss call, so
+# validating a wide range never spawns a process per port.
+mt_busy_ports() {
+    local proto="${1:-both}" opts='-Hln'
+    case "$proto" in tcp) opts+='t';; udp) opts+='u';; *) opts+='tu';; esac
+    ss "$opts" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if ($i ~ /:[0-9]+$/) { n=$i; sub(/^.*:/,"",n); print n+0; break } }' | sort -un
+}
 mt_validate_port_list() {
-    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item a b p
-    local -A seen=(); local -a parts=()
+    local list="$1" check="$2" proto="${3:-both}" owned="${4:-}" item a b p bp
+    local -A seen=() busy=(); local -a parts=()
     [ -z "$list" ] && return 0
     [[ "$list" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || return 1
+    if [ "$check" == 1 ]; then
+        while read -r bp; do [ -n "$bp" ] && busy[$bp]=1; done < <(mt_busy_ports "$proto")
+    fi
     IFS=, read -ra parts <<< "$list"
     for item in "${parts[@]}"; do
         if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
@@ -266,7 +276,7 @@ mt_validate_port_list() {
         fi
         for ((p=a; p<=b; p++)); do
             [ -z "${seen[$p]:-}" ] || return 1; seen[$p]=1
-            if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$p" && mt_port_busy "$p" "$proto"; then return 1; fi
+            if [ "$check" == 1 ] && [ -n "${busy[$p]:-}" ] && ! mt_list_has_port "$owned" "$p"; then return 1; fi
         done
     done
 }
@@ -276,6 +286,32 @@ mt_validate_script() {
     bash -n "$file" 2>/dev/null || return 1
     version=$(sed -n 's/^MODULE_VERSION="\([0-9][0-9.]*\)"$/\1/p' "$file")
     [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+}
+
+# Data-only configuration loader. Tunnel/meta files are KEY=VALUE lists that the
+# modules used to `source` blindly. A line is accepted only when it is a plain
+# assignment whose value cannot run code: unquoted values may not contain
+# whitespace or shell metacharacters; "double" values may not contain $ ` \ or ";
+# 'single' values may not contain '. Anything else fails closed (variables stay
+# at the caller's defaults) instead of executing the file.
+mt_conf_safe() {
+    local file="$1" line value
+    [ -f "$file" ] && [ -r "$file" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || return 1
+        value="${line#*=}"
+        case "$value" in
+            \"*\") value="${value:1:${#value}-2}"; case "$value" in *[\"\$\`\\]*) return 1;; esac;;
+            \'*\') value="${value:1:${#value}-2}"; case "$value" in *\'*) return 1;; esac;;
+            *) case "$value" in *[[:space:]\;\&\|\<\>\(\)\{\}\$\`\\\'\"\!]*) return 1;; esac;;
+        esac
+    done < "$file"
+}
+mt_source_conf() {
+    local __mt_f="$1"
+    mt_conf_safe "$__mt_f" || { echo "MTunnel: refusing unsafe or unreadable config: $__mt_f" >&2; return 1; }
+    source "$__mt_f"
 }
 # Open GNU nano on a disposable candidate, then syntax/version-check it.
 # nano -t (--saveonexit) means Ctrl+X saves without asking Y/N + filename.

@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -10,7 +10,11 @@ DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubuse
 mt_installer_load_common() {
     local script_dir='' source_dir='' remote='' mode='' arg candidate tmp rc
     local -a args=("$@")
-    script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+    # When piped (curl | bash) BASH_SOURCE[0] is not a file: there is no "adjacent"
+    # directory, and the current directory must never be trusted as a source.
+    if [[ -f "${BASH_SOURCE[0]:-}" ]]; then
+        script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+    fi
     for ((arg=0; arg<${#args[@]}; arg++)); do
         case "${args[$arg]}" in
             --local)
@@ -27,16 +31,16 @@ mt_installer_load_common() {
         [[ -f "$candidate" && -r "$candidate" ]] || { echo "Missing local shared core: $candidate" >&2; return 1; }
         # A newer installer must run its own matching helper API while staging
         # an older target bundle. The target core is separately validated.
-        if [[ -f "$script_dir/core/common.sh" ]] &&
+        if [[ -n "$script_dir" && -f "$script_dir/core/common.sh" ]] &&
            grep -Fqx "MTUNNEL_RELEASE_VERSION=\"${MODULE_VERSION}\"" "$script_dir/core/common.sh"; then
             candidate="$script_dir/core/common.sh"
         fi
-    elif [[ "$mode" == remote && -f "$script_dir/core/common.sh" ]] &&
+    elif [[ "$mode" == remote && -n "$script_dir" && -f "$script_dir/core/common.sh" ]] &&
          grep -Fqx "MTUNNEL_RELEASE_VERSION=\"${MODULE_VERSION}\"" "$script_dir/core/common.sh"; then
         candidate="$script_dir/core/common.sh"
-    elif [[ "$mode" != remote && -f "$script_dir/core/common.sh" ]]; then
+    elif [[ "$mode" != remote && -n "$script_dir" && -f "$script_dir/core/common.sh" ]]; then
         candidate="$script_dir/core/common.sh"
-    elif [[ "$mode" != remote && -f "$PWD/core/common.sh" ]]; then
+    elif [[ "$mode" != remote && -n "$script_dir" && -f "$PWD/core/common.sh" ]]; then
         candidate="$PWD/core/common.sh"
     else
         # A curl/process-substitution bootstrap must not borrow an older installed
@@ -152,10 +156,47 @@ mt_validate_shared_core() {
     local file="$1"
     [ -s "$file" ] && bash -n "$file" 2>/dev/null && grep -q '^MTUNNEL_CORE_API=1$' "$file" && grep -q '^MTUNNEL_LAYOUT_REV=2$' "$file"
 }
+# Retire components that were folded into core/common.sh (or removed on purpose).
+# Nothing is deleted before a copy is stored under /root/mtunnel/backup, and any
+# cron/systemd entry that still points at a retired tool is reported, not edited.
+mt_installer_retire_legacy() {
+    local f stamp backup_dir found=0 failed=0 refs=''
+    local -a legacy=(/etc/mweb /etc/systemd/system/mweb.service /usr/bin/mweb /root/mtunnel/tools/mweb.sh
+        /usr/bin/mbbr /usr/bin/mhealer /usr/bin/minterface
+        /root/mtunnel/tools/mbbr.sh /root/mtunnel/tools/mhealer.sh /root/mtunnel/tools/minterface.sh)
+    for f in "${legacy[@]}"; do
+        if [ -e "$f" ] || [ -L "$f" ]; then found=1; break; fi
+    done
+    [ "$found" == 1 ] || return 0
+    stamp=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)
+    backup_dir="/root/mtunnel/backup/legacy-$stamp"
+    mkdir -p "$backup_dir" && chmod 700 "$backup_dir" || {
+        echo -e "  ${Y}● Cannot create $backup_dir; legacy files were left untouched.${NC}" >&2; return 0; }
+    for f in "${legacy[@]}"; do
+        if [ -e "$f" ] || [ -L "$f" ]; then cp -a --parents "$f" "$backup_dir" 2>/dev/null || failed=1; fi
+    done
+    if [ "$failed" == 1 ]; then
+        echo -e "  ${Y}● Backup of legacy files failed; they were left untouched.${NC}" >&2; return 0
+    fi
+    systemctl disable --now mweb.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/mweb.service /usr/bin/mweb /root/mtunnel/tools/mweb.sh
+    rm -rf /etc/mweb
+    rm -f /usr/bin/mbbr /usr/bin/mhealer /usr/bin/minterface /root/mtunnel/tools/mbbr.sh /root/mtunnel/tools/mhealer.sh /root/mtunnel/tools/minterface.sh
+    rmdir /root/mtunnel/tools 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    echo -e "  ${DIM}● Retired legacy mweb web panel and standalone mbbr/mhealer/minterface scripts (now part of the shared core).${NC}"
+    echo -e "  ${DIM}  A copy was stored in ${backup_dir}.${NC}"
+    refs=$(grep -rlE '/usr/bin/(mweb|mbbr|mhealer|minterface)\b' /etc/cron.d /etc/cron.daily /etc/cron.hourly /var/spool/cron /etc/systemd/system 2>/dev/null | head -n 5)
+    if [ -n "$refs" ]; then
+        echo -e "  ${Y}● These files still reference a retired tool; please review them:${NC}"
+        while IFS= read -r f; do echo -e "    ${Y}-${NC} $f"; done <<< "$refs"
+    fi
+    return 0
+}
 installer_main() {
-    local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
-    local script_file="${BASH_SOURCE[0]}" script_dir
-    script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
+    local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target item
+    local script_file="${BASH_SOURCE[0]:-}" script_dir=''
+    [[ ! -f "$script_file" ]] || script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh)
     local -a active_modules=()
     local -a files=()
@@ -173,7 +214,7 @@ installer_main() {
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
                 echo '  --online             Force online install from the official GitHub source.'
-                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.4.'
+                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted.'
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'
@@ -194,8 +235,8 @@ installer_main() {
         [ "$root" != / ] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
-        if [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
-        elif [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
+        if [ -n "$script_dir" ] && [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
+        elif [ -n "$script_dir" ] && [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
         else remote="$DEFAULT_REMOTE"; fi
     fi
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
@@ -233,19 +274,10 @@ installer_main() {
     mt_validate_shared_core "$source_dir/core/common.sh" || {
         echo 'Shared core is missing or invalid. Existing installation preserved.' >&2; return 1;
     }
-    # Do not combine scripts from different release versions in one installation.
-    local bundle_version=''
-    for item in "${modules[@]}"; do
-        path="${item#*:}"
-        mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-        # Version numbers are informational only; any mix of versions is accepted.
-        [ -n "$bundle_version" ] || bundle_version="$mod_ver"
-    done
-    local core_version
-    core_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/core/common.sh")
+    # Release numbers are informational and any compatible mix of module versions is
+    # accepted. The only gate is the shared-core API/layout contract (validated above
+    # and re-checked by every module at start-up).
     mt_validate_script "$source_dir/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; return 1; }
-    local installer_version
-    installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/install.sh")
     if [ -n "$remote" ]; then
         active_modules=("${modules[@]}")
     else
@@ -256,33 +288,6 @@ installer_main() {
         done
         active_modules=("${modules[@]}")
     fi
-    # A full-bundle downgrade is authorized once after the whole staged bundle
-    # and its shared core version have passed validation.
-    local highest_installed='' old_v old_target unknown_installed=0 conf_installed
-    for item in "${active_modules[@]}"; do
-        name="${item%%:*}"; old_target="$root/usr/bin/$name"
-        [ "$name" != main ] || old_target="$root/usr/bin/mtunnel"
-        old_v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$old_target" 2>/dev/null)
-        if [ -z "$old_v" ]; then
-            [ ! -f "$old_target" ] || unknown_installed=1
-        elif [ -z "$highest_installed" ] || mt_is_newer_version "$old_v" "$highest_installed"; then
-            highest_installed="$old_v"
-        fi
-    done
-    # The installed shared core and installer copy count as well.
-    for old_target in "$root/usr/lib/mtunnel/common.sh" "$root/root/mtunnel/install.sh"; do
-        case "$old_target" in
-            */install.sh) old_v=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$old_target" 2>/dev/null);;
-            *) old_v=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$old_target" 2>/dev/null);;
-        esac
-        if [ -n "$old_v" ] && { [ -z "$highest_installed" ] || mt_is_newer_version "$old_v" "$highest_installed"; }; then
-            highest_installed="$old_v"
-        fi
-    done
-    conf_installed="$highest_installed"
-    # An unreadable installed version is treated as unknown unless the bundle is
-    # strictly newer than every readable installed version.
-    if [ "$unknown_installed" == 1 ] && { [ -z "$conf_installed" ] || ! mt_is_newer_version "$bundle_version" "$conf_installed"; }; then conf_installed=unknown; fi
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
     files+=("$source_dir/core/common.sh" "$root/usr/lib/mtunnel/common.sh"
@@ -291,11 +296,6 @@ installer_main() {
         name="${item%%:*}"; path="${item#*:}"; target="$root/usr/bin/$name"
         [ "$name" != main ] || target="$root/usr/bin/mtunnel"
         mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
-        if mt_validate_script "$target" 2>/dev/null; then
-            cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$target")
-            next=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            # Downgrade was explicitly approved above for the complete bundle.
-        fi
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
         if [ -z "$remote" ]; then
             current=$((current+1))
@@ -330,14 +330,7 @@ installer_main() {
         MTUNNEL_TEST_ROOT="$root" mt_owned_binary_register "$name" "$root/usr/local/bin/$name" || echo "Warning: Could not record $name ownership" >&2
     done
     if [ -z "$root" ]; then
-        # Retire the old insecure web service only after a successful new install.
-        systemctl disable --now mweb.service >/dev/null 2>&1 || true
-        rm -f /etc/systemd/system/mweb.service /usr/bin/mweb /root/mtunnel/tools/mweb.sh
-        rm -rf /etc/mweb
-        # Former utility scripts have been incorporated in core/common.sh.
-        rm -f /usr/bin/mbbr /usr/bin/mhealer /usr/bin/minterface /root/mtunnel/tools/mbbr.sh /root/mtunnel/tools/mhealer.sh /root/mtunnel/tools/minterface.sh
-        rmdir /root/mtunnel/tools 2>/dev/null || true
-        systemctl daemon-reload >/dev/null 2>&1 || true
+        mt_installer_retire_legacy
     fi
     if [ "$launch" == 1 ]; then
         echo -e "\n  ${G}● MTunnel Installation Complete! Launching Core Dashboard...${NC}\n"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.2.3 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.2.5 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -509,7 +509,7 @@ check_ping_bg() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         [ -n "$T_NAME" ] || continue
         ((count++)); [ "$count" -gt 3 ] && break
 
@@ -607,7 +607,7 @@ mgre_header_rows() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         T_NAME=''; TYPE=''; REMOTE_PUB=''; REMOTE_V4=''; REMOTE_PUB6=''; TUN_PROTO='ipv4'; MAX_IPS='0'; FWD_TCP=''; FWD_UDP=''
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         [ -n "$T_NAME" ] || continue
         HDR_TOTAL=$((HDR_TOTAL+1))
         up=$(get_iface_uptime "$T_NAME"); st=1
@@ -734,7 +734,7 @@ apply_tunnel() {
     [ ! -s "$conf" ] && return
     local TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" CORE_V6="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0"
     mt_validate_tunnel_conf "$conf" gre || { echo "Invalid tunnel config: $conf" >&2; return 1; }
-    source "$conf" 2>/dev/null
+    mt_source_conf "$conf" 2>/dev/null
     [ -z "$T_NAME" ] && return
     mgre_endpoints; mgre_core_ips
 
@@ -865,7 +865,7 @@ select_tunnel_interactive() {
 manage_port_forwarding() {
     local target_conf="$1"
     local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
-    source "$target_conf" 2>/dev/null
+    mt_source_conf "$target_conf" 2>/dev/null
     mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return; }
     
     if [ "$TYPE" != "1" ]; then
@@ -880,7 +880,7 @@ manage_port_forwarding() {
 
     local pf_opt add_tcp add_udp m_tcp m_udp rm_tcp rm_udp new_tcp new_udp new_lb
     while true; do
-        FWD_TARGETS=''; LB_MODE=0; source "$target_conf" 2>/dev/null
+        FWD_TARGETS=''; LB_MODE=0; mt_source_conf "$target_conf" 2>/dev/null
         mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return; }
         mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_$T_NAME"
         draw_mgre_header
@@ -981,7 +981,7 @@ show_mgre_monitor() {
 
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; mt_source_conf "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         mgre_endpoints; mgre_core_ips
         mapfile -t v_ips < <(ip -4 addr show dev "$T_NAME" label "${T_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
@@ -1063,7 +1063,7 @@ show_tunnel_details() {
     local conf TYPE LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET CORE_V6 TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE CUSTOM_MTU ENCRYPT FWD_TARGETS
     local lip tip t_role t_sec t_id proto_lbl lb_txt left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 r3 pad3 sp3 l4 pad4 sp4 l5 r5 pad5 sp5 act_mtu def_mtu curr_mtu sync_disp fwd_disp tn_s
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; FWD_TARGETS=""; CUSTOM_MTU=""; ENCRYPT="0"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; T_NAME=""; TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; FWD_TARGETS=""; CUSTOM_MTU=""; ENCRYPT="0"; mt_source_conf "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         mgre_endpoints; mgre_core_ips
         lip="$CORE_LIP"; tip="$CORE_TIP"
@@ -1145,7 +1145,7 @@ menu_delete_tunnels() {
         local conf n=0 TYPE TUN_PROTO T_NAME role sel confirm idx
         for conf in "${configs[@]}"; do
             [ -f "$conf" ] || continue
-            TUN_PROTO="ipv4"; TYPE=""; T_NAME=""; source "$conf" 2>/dev/null
+            TUN_PROTO="ipv4"; TYPE=""; T_NAME=""; mt_source_conf "$conf" 2>/dev/null
             n=$((n+1))
             role=$([ "$TYPE" == "1" ] && echo IRAN || echo KHAREJ)
             echo -e "  ${W}${n}${NC} ${DIM}❯${NC} ${Y}${T_NAME}${NC} ${DIM}|${NC} ${C}$(mgre_proto_label "$TUN_PROTO")${NC} ${DIM}|${NC} ${role}"
@@ -1173,7 +1173,7 @@ menu_delete_tunnels() {
         idx=$(pick_index "$sel" "$n") || { echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; continue; }
         conf="${configs[$idx]}"
         [ -f "$conf" ] || { echo -e "  ${R}✖ Tunnel configuration not found.${NC}"; sleep 1; continue; }
-        T_NAME=""; source "$conf" 2>/dev/null
+        T_NAME=""; mt_source_conf "$conf" 2>/dev/null
         echo -ne "  ${R}Delete tunnel [${T_NAME}]? Type 'yes' to confirm: ${NC}"; read -r confirm
         [ "$confirm" == "yes" ] || continue
         teardown_tunnel "$conf"
@@ -1282,7 +1282,7 @@ mgre_apply_fwd() {
     local conf="$1"
     local TYPE="" T_NAME="" TUN_ID="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
     mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
-    source "$conf" 2>/dev/null
+    mt_source_conf "$conf" 2>/dev/null
     mgre_fill_legacy_core || { echo "Invalid legacy core subnet in $conf" >&2; return 1; }
     clean_fwd_rules "$T_NAME"
     [ "$TYPE" == "1" ] || return 0
@@ -1300,7 +1300,7 @@ mgre_apply_fwd() {
 
 teardown_tunnel() {
     local conf="$1" T_NAME=""
-    source "$conf" 2>/dev/null
+    mt_source_conf "$conf" 2>/dev/null
     [ -z "$T_NAME" ] && return
     clean_fwd_rules "$T_NAME"; clean_mss_rules "$T_NAME"; xfrm_clear "$T_NAME"
     ip link del "$T_NAME" >/dev/null 2>&1; ip link del "sit_$T_NAME" >/dev/null 2>&1
@@ -1323,7 +1323,7 @@ rebuild_guard() {
     local h_gre4=0 h_6to4=0 h_ipip4=0 h_gre6=0 h_ip4in6=0 h_ip6in6=0 peers4=0 peers6=0
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; REMOTE_PUB=""; LOCAL_PUB=""; REMOTE_PUB6=""; LOCAL_PUB6=""; REMOTE_IP6=""; LOCAL_IP6=""; TUN_PROTO="ipv4"; source "$conf" 2>/dev/null
+        TYPE=""; REMOTE_PUB=""; LOCAL_PUB=""; REMOTE_PUB6=""; LOCAL_PUB6=""; REMOTE_IP6=""; LOCAL_IP6=""; TUN_PROTO="ipv4"; mt_source_conf "$conf" 2>/dev/null
         mgre_endpoints
         if [ "$EP_V6" -eq 1 ]; then
             is_ipv6 "$EP_R" || continue
@@ -1358,7 +1358,7 @@ mgre_watchdog() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; T_NAME=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; MAX_IPS="0"; SYNC_KEY=""; LB_MODE="0"; FWD_TCP=""; FWD_UDP=""; FWD_TARGETS=''
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         mgre_fill_legacy_core || { wd_log "$(basename "$conf"): invalid legacy core subnet"; continue; }
         [ -z "$T_NAME" ] && continue
         mgre_core_ips
@@ -1397,7 +1397,7 @@ mgre_status_cli() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; T_NAME=""; CORE_SUBNET=""; CORE_V6=""; ENCRYPT="0"; TUN_PROTO="ipv4"; LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
         mgre_endpoints; mgre_core_ips
         lat=$($CORE_PING -c1 -W1 "$CORE_TIP" 2>/dev/null | grep -oP 'time=\K[0-9.]+')
@@ -1410,7 +1410,7 @@ mgre_status_cli() {
 # ---------------- ADVANCED MENU ACTIONS ----------------
 menu_encrypt() {
     select_tunnel_interactive || return
-    local ENCRYPT="0" T_NAME="" TYPE="" TUN_PROTO="ipv4"; source "$SELECTED_CONF" 2>/dev/null
+    local ENCRYPT="0" T_NAME="" TYPE="" TUN_PROTO="ipv4"; mt_source_conf "$SELECTED_CONF" 2>/dev/null
     draw_mgre_header
     if [ -z "$(mgre_enc_selector "$TUN_PROTO")" ]; then
         echo -e "\n  ${Y}● IPsec encryption is not supported for $(mgre_proto_label "$TUN_PROTO") tunnels (IPv6-outer IPIP). Use GRE6 instead if you need encryption.${NC}"
@@ -1461,7 +1461,7 @@ show_traffic_monitor() {
         printf "  ${DIM}%-16s %-14s %-14s %-12s %-12s${NC}\n" "TUNNEL" "RX RATE" "TX RATE" "RX TOTAL" "TX TOTAL"
         for conf in "$CONF_DIR"/*.conf; do
             [ -f "$conf" ] || continue
-            T_NAME=""; source "$conf" 2>/dev/null
+            T_NAME=""; mt_source_conf "$conf" 2>/dev/null
             [ -d "/sys/class/net/$T_NAME" ] || { printf "  %-16s ${R}%s${NC}\n" "$T_NAME" "DOWN"; continue; }
             rx=$(cat "/sys/class/net/$T_NAME/statistics/rx_bytes"); tx=$(cat "/sys/class/net/$T_NAME/statistics/tx_bytes")
             drx=$(( rx - ${prx[$T_NAME]:-$rx} )); dtx=$(( tx - ${ptx[$T_NAME]:-$tx} ))
@@ -1481,7 +1481,7 @@ restore_validated_backup() {
     for conf in "$stage/tunnels"/*.conf; do
         [ -f "$conf" ] || continue
         if ! mt_validate_tunnel_conf "$conf" gre; then rm -rf "$stage"; return 1; fi
-        TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; source "$conf"
+        TUN_ID=""; CORE_SUBNET=""; CORE_V6=""; TUN_PROTO="ipv4"; mt_source_conf "$conf"
         [ -n "$CORE_SUBNET" ] || CORE_SUBNET="$(mt_legacy_core_subnet "$TUN_ID" gre)" || { echo "Invalid legacy TUN_ID: $TUN_ID" >&2; rm -rf "$stage"; return 1; }
         [ -z "${seen_id[$TUN_ID]:-}" ] || { echo "Duplicate TUN_ID in backup: $TUN_ID" >&2; rm -rf "$stage"; return 1; }
         seen_id[$TUN_ID]=1
@@ -1999,7 +1999,7 @@ while true; do
         2)
            select_tunnel_interactive || continue
            draw_mgre_header
-           T_NAME=""; MAX_IPS="0"; TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
+           T_NAME=""; MAX_IPS="0"; TUN_SECRET=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
            while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read -r vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
            [[ "$vip_action" == "q" ]] && continue
@@ -2038,7 +2038,7 @@ while true; do
         8)
            select_tunnel_interactive || continue
            draw_mgre_header
-           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; REMOTE_V4=""; TUN_PROTO="ipv4"; T_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; REMOTE_V4=""; TUN_PROTO="ipv4"; T_NAME=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            if mgre_proto_is_v6 "$TUN_PROTO"; then
                echo -ne "  ${C}●${NC} ${W}New Local Public IPv6 [${Y}${LOCAL_PUB6:-$LOCAL_IP6}${W}]: ${NC}"; read -r new_local6
                echo -ne "  ${C}●${NC} ${W}New Remote Public IPv6 [${Y}${REMOTE_PUB6:-$REMOTE_IP6}${W}]: ${NC}"; read -r new_remote6
@@ -2069,7 +2069,7 @@ while true; do
         9)
            select_tunnel_interactive || continue
            draw_mgre_header
-           TUN_SECRET=""; T_NAME=""; TUN_PROTO="ipv4"; source "$SELECTED_CONF" 2>/dev/null
+           TUN_SECRET=""; T_NAME=""; TUN_PROTO="ipv4"; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates Network): ${NC}"; read -r new_tok
            new_tok=$(echo "$new_tok" | tr -dc 'a-zA-Z0-9_=-')
            if [ -n "$new_tok" ]; then
@@ -2098,7 +2098,7 @@ while true; do
         10)
            select_tunnel_interactive || continue
            draw_mgre_header
-           CORE_SUBNET=""; source "$SELECTED_CONF" 2>/dev/null
+           CORE_SUBNET=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.76.5) [Current: ${Y}${CORE_SUBNET}${W}]: ${NC}"; read -r new_sub
            new_sub=$(echo "$new_sub" | tr -dc '0-9.')
            if [ -n "$new_sub" ] && ! is_subnet3 "$new_sub"; then echo -e "  ${R}✖ Format must be X.Y.Z (e.g. 10.76.5).${NC}"; sleep 2; continue; fi
@@ -2116,7 +2116,7 @@ while true; do
         7)
            select_tunnel_interactive || continue
            draw_mgre_header
-           T_NAME=""; TUN_PROTO="ipv4"; TYPE=""; source "$SELECTED_CONF" 2>/dev/null
+           T_NAME=""; TUN_PROTO="ipv4"; TYPE=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Interface Suffix (Current: ${Y}$(get_pure_tun_name "$T_NAME")${W}): ${NC}"; read -r new_suffix
            new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
            if [ -n "$new_suffix" ]; then
@@ -2138,7 +2138,7 @@ while true; do
         11)
            select_tunnel_interactive || continue
            draw_mgre_header
-           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            read -r min_mtu max_mtu def_mtu <<< "$(mgre_mtu_limits "$TUN_PROTO")"
 
            act_mtu=""

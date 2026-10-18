@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MXLAN | VXLAN Fabric Engine v1.2.3 ---
+# --- MTunnel MXLAN | VXLAN Fabric Engine v1.2.5 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -452,7 +452,7 @@ check_ping_bg() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         [ -n "$VX_NAME" ] || continue
         ((count++)); [ "$count" -gt 3 ] && break
 
@@ -536,7 +536,7 @@ mxlan_header_rows() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         VX_NAME=''; TYPE=''; REMOTE_PUB=''; REMOTE_V4=''; REMOTE_PUB6=''; FAB_PROTO='ipv4'; MAX_IPS='0'; FWD_TCP=''; FWD_UDP=''
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         [ -n "$VX_NAME" ] || continue
         HDR_TOTAL=$((HDR_TOTAL+1))
         up=$(get_iface_uptime "$VX_NAME"); st=1
@@ -717,7 +717,7 @@ apply_fabric() {
     [ ! -s "$conf" ] && return
     local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" VNI_ID="" BR_NAME="" VX_NAME="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4"
     mt_validate_tunnel_conf "$conf" vxlan || { echo "Invalid tunnel config: $conf" >&2; return 1; }
-    source "$conf" 2>/dev/null
+    mt_source_conf "$conf" 2>/dev/null
     [ -z "$VX_NAME" ] || [ -z "$BR_NAME" ] && return
     local MX_VX_PREEXIST=0 MX_BR_PREEXIST=0 MX_VX_CREATED=0 MX_BR_CREATED=0
     local MX_OLD_LAYOUT="" MX_OLD_VX_MTU="" MX_OLD_BR_MTU="" MX_OLD_CORE=""
@@ -853,7 +853,7 @@ select_fabric_interactive() {
 manage_port_forwarding() {
     local target_conf="$1"
     local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VX_NAME TUN_ID CORE_SUBNET VNI_ID TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
-    source "$target_conf" 2>/dev/null
+    mt_source_conf "$target_conf" 2>/dev/null
 
     if [ "$TYPE" != "1" ]; then
         echo -e "\n  ${Y}● Port Forwarding & Load Balancer is only available on IRAN (Access) role!${NC}"
@@ -863,7 +863,7 @@ manage_port_forwarding() {
 
     local pf_opt add_tcp add_udp m_tcp m_udp rm_tcp rm_udp new_tcp new_udp new_lb
     while true; do
-        FWD_TARGETS=''; LB_MODE=0; source "$target_conf" 2>/dev/null
+        FWD_TARGETS=''; LB_MODE=0; mt_source_conf "$target_conf" 2>/dev/null
         mt_fwd_conflict_refresh "$VX_NAME" "$FWD_TCP" "$FWD_UDP" "MXLAN_FWD_$VX_NAME"
         draw_mxlan_header
         echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
@@ -964,7 +964,7 @@ show_fabric_details() {
     local conf TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET VNI_ID BR_NAME VX_NAME CORE_SUBNET LOCAL_PUB6 REMOTE_PUB6 FAB_PROTO
     local c_sub lip tip t_role t_sec left_p right_p pad sp l1 r1 pad1 sp1 l2 r2 pad2 sp2 l3 pad3 sp3 l4 pad4 sp4
     for conf in "${configs[@]}"; do
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; CORE_SUBNET=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; TUN_SECRET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; CORE_SUBNET=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; mt_source_conf "$conf" 2>/dev/null
         mx_endpoints
         c_sub="$(mx_core_sub)"
         lip=$([ "$TYPE" == "1" ] && echo "${c_sub}.1" || echo "${c_sub}.2")
@@ -1013,7 +1013,7 @@ show_mxlan_monitor() {
 
     for conf in "$CONF_DIR"/*.conf; do
         [ ! -f "$conf" ] && continue
-        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; CORE_SUBNET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; source "$conf" 2>/dev/null
+        TYPE=""; LOCAL_PUB=""; REMOTE_PUB=""; MAX_IPS="0"; SYNC_KEY=""; CORE_SUBNET=""; VNI_ID=""; BR_NAME=""; VX_NAME=""; FWD_TCP=""; FWD_UDP=""; LB_MODE="0"; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; mt_source_conf "$conf" 2>/dev/null
         mx_endpoints
         mapfile -t v_ips < <(ip -4 addr show dev "$BR_NAME" label "${BR_NAME}:m" 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d'/' -f1)
 
@@ -1158,7 +1158,7 @@ mxlan_apply_fwd() {
     local conf="$1"
     local TYPE="" VX_NAME="" CORE_SUBNET="" VNI_ID="" BR_NAME="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" FWD_TARGETS=''
     mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
-    source "$conf" 2>/dev/null
+    mt_source_conf "$conf" 2>/dev/null
     clean_fwd_rules "$VX_NAME"
     [ "$TYPE" == "1" ] || return 0
     if [ -n "$FWD_TCP" ]; then FWD_TCP=$(mt_sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$VX_NAME"; return 1; }; fi
@@ -1175,7 +1175,7 @@ mxlan_apply_fwd() {
 
 teardown_fabric() {
     local conf="$1" VX_NAME="" BR_NAME=""
-    source "$conf" 2>/dev/null
+    mt_source_conf "$conf" 2>/dev/null
     [ -z "$VX_NAME" ] && return
     clean_fwd_rules "$VX_NAME"; clean_mss_rules "$VX_NAME"; xfrm_clear "$VX_NAME"
     ip link del "$VX_NAME" >/dev/null 2>&1; [ -n "$BR_NAME" ] && ip link del "$BR_NAME" >/dev/null 2>&1
@@ -1195,7 +1195,7 @@ rebuild_guard() {
     local conf REMOTE_PUB REMOTE_PUB6 LOCAL_PUB LOCAL_PUB6 FAB_PROTO peers4=0 peers6=0
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        REMOTE_PUB=""; REMOTE_PUB6=""; LOCAL_PUB=""; LOCAL_PUB6=""; FAB_PROTO="ipv4"; source "$conf" 2>/dev/null
+        REMOTE_PUB=""; REMOTE_PUB6=""; LOCAL_PUB=""; LOCAL_PUB6=""; FAB_PROTO="ipv4"; mt_source_conf "$conf" 2>/dev/null
         if mx_is_v6; then
             if is_ipv6 "$REMOTE_PUB6"; then
                 [ "$peers6" -eq 0 ] && ip6tables -N MXLAN6_GUARD 2>/dev/null
@@ -1228,7 +1228,7 @@ mxlan_watchdog() {
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
         TYPE=""; VX_NAME=""; CORE_SUBNET=""; VNI_ID=""; MAX_IPS="0"; SYNC_KEY=""; LB_MODE="0"; FWD_TCP=""; FWD_UDP=""; FWD_TARGETS=''
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         [ -z "$VX_NAME" ] && continue
         tip=$([ "$TYPE" == "1" ] && echo "$(mx_core_sub).2" || echo "$(mx_core_sub).1")
         if [ "$TYPE" == "1" ]; then mt_fwd_conflict_refresh "$VX_NAME" "$FWD_TCP" "$FWD_UDP" "MXLAN_FWD_${VX_NAME}" wd_log; fi
@@ -1265,7 +1265,7 @@ mxlan_status_cli() {
     printf "%-16s %-28s %-6s %-8s %-8s %s\n" "FABRIC" "PEER" "ROLE" "LINK" "PING" "ENC"
     for conf in "$CONF_DIR"/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; VX_NAME=""; REMOTE_PUB=""; REMOTE_PUB6=""; LOCAL_PUB=""; LOCAL_PUB6=""; FAB_PROTO="ipv4"; CORE_SUBNET=""; VNI_ID=""; ENCRYPT="0"; source "$conf" 2>/dev/null
+        TYPE=""; VX_NAME=""; REMOTE_PUB=""; REMOTE_PUB6=""; LOCAL_PUB=""; LOCAL_PUB6=""; FAB_PROTO="ipv4"; CORE_SUBNET=""; VNI_ID=""; ENCRYPT="0"; mt_source_conf "$conf" 2>/dev/null
         mx_endpoints
         tip=$([ "$TYPE" == "1" ] && echo "$(mx_core_sub).2" || echo "$(mx_core_sub).1")
         st=$([ -d "/sys/class/net/$VX_NAME" ] && echo UP || echo DOWN)
@@ -1277,7 +1277,7 @@ mxlan_status_cli() {
 # ---------------- ADVANCED MENU ACTIONS ----------------
 menu_encrypt() {
     select_fabric_interactive || return
-    local ENCRYPT="0" VX_NAME="" TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4" TUN_SECRET=""; source "$SELECTED_CONF" 2>/dev/null
+    local ENCRYPT="0" VX_NAME="" TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4" TUN_SECRET=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
     draw_mxlan_header
     echo -e "\n  ${DIM}┌─[ IPsec ESP ENCRYPTION: ${W}${VX_NAME}${DIM} ]${NC}"
     echo -e "  ${DIM}│${NC} Status : $([ "$ENCRYPT" == "1" ] && echo -e "${G}ENCRYPTED (AES-256-CBC + HMAC-SHA256)${NC}" || echo -e "${R}PLAINTEXT VXLAN${NC}")"
@@ -1318,7 +1318,7 @@ menu_guard() {
 menu_manual_mtu() {
     select_fabric_interactive || return 0
     local VX_NAME="" FAB_PROTO="ipv4" CUSTOM_MTU="" ENCRYPT="0" best="" fab_max act
-    source "$SELECTED_CONF" 2>/dev/null
+    mt_source_conf "$SELECTED_CONF" 2>/dev/null
     fab_max=$(mx_mtu_max "$FAB_PROTO")
     [ "$ENCRYPT" != 1 ] || fab_max=$((fab_max - 64))
     draw_mxlan_header
@@ -1353,7 +1353,7 @@ show_traffic_monitor() {
         printf "  ${DIM}%-16s %-14s %-14s %-12s %-12s${NC}\n" "TUNNEL" "RX RATE" "TX RATE" "RX TOTAL" "TX TOTAL"
         for conf in "$CONF_DIR"/*.conf; do
             [ -f "$conf" ] || continue
-            VX_NAME=""; source "$conf" 2>/dev/null
+            VX_NAME=""; mt_source_conf "$conf" 2>/dev/null
             [ -d "/sys/class/net/$VX_NAME" ] || { printf "  %-16s ${R}%s${NC}\n" "$VX_NAME" "DOWN"; continue; }
             rx=$(cat "/sys/class/net/$VX_NAME/statistics/rx_bytes"); tx=$(cat "/sys/class/net/$VX_NAME/statistics/tx_bytes")
             drx=$(( rx - ${prx[$VX_NAME]:-$rx} )); dtx=$(( tx - ${ptx[$VX_NAME]:-$tx} ))
@@ -1373,7 +1373,7 @@ restore_validated_backup() {
     for conf in "$stage/vxlan"/*.conf; do
         [ -f "$conf" ] || continue
         if ! mt_validate_tunnel_conf "$conf" vxlan; then rm -rf "$stage"; return 1; fi
-        VNI_ID=""; CORE_SUBNET=""; source "$conf"
+        VNI_ID=""; CORE_SUBNET=""; mt_source_conf "$conf"
         [ -z "${seen_vni[$VNI_ID]:-}" ] || { echo "Duplicate VNI_ID in backup: $VNI_ID" >&2; rm -rf "$stage"; return 1; }
         [ -z "${seen_sub[$CORE_SUBNET]:-}" ] || { echo "Duplicate core subnet in backup: $CORE_SUBNET" >&2; rm -rf "$stage"; return 1; }
         seen_vni[$VNI_ID]=1; seen_sub[$CORE_SUBNET]=1
@@ -1900,7 +1900,7 @@ while true; do
                fi; continue
            fi
            if d_zero=$(pick_index "$del_idx" "${#configs[@]}"); then
-               VX_NAME=""; BR_NAME=""; source "${configs[$d_zero]}" 2>/dev/null
+               VX_NAME=""; BR_NAME=""; mt_source_conf "${configs[$d_zero]}" 2>/dev/null
                echo -ne "  ${R}● Delete fabric [${VX_NAME}]? (y/n): ${NC}"; read -r confirm_one
                [[ "${confirm_one,,}" == "y" ]] || continue
                teardown_fabric "${configs[$d_zero]}"; rm -f "${configs[$d_zero]}"; rebuild_guard
@@ -1912,7 +1912,7 @@ while true; do
         2)
            select_fabric_interactive || continue
            draw_mxlan_header
-           VX_NAME=""; MAX_IPS="0"; TUN_SECRET=""; VNI_ID=""; source "$SELECTED_CONF" 2>/dev/null
+           VX_NAME=""; MAX_IPS="0"; TUN_SECRET=""; VNI_ID=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -e "\n  ${DIM}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
            while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read -r vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
            [[ "$vip_action" == "q" ]] && continue
@@ -1950,7 +1950,7 @@ while true; do
         8)
            select_fabric_interactive || continue
            draw_mxlan_header
-           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; REMOTE_V4=""; FAB_PROTO="ipv4"; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           LOCAL_PUB=""; REMOTE_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; REMOTE_V4=""; FAB_PROTO="ipv4"; VX_NAME=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            if mx_is_v6; then
                echo -ne "  ${C}●${NC} ${W}New Local Public IPv6 [Current: ${Y}${LOCAL_PUB6}${W}, Enter to skip]: ${NC}"; read -r new_lip6
                echo -ne "  ${C}●${NC} ${W}New Remote Public IPv6 [Current: ${Y}${REMOTE_PUB6}${W}, Enter to skip]: ${NC}"; read -r new_rip6
@@ -1984,7 +1984,7 @@ while true; do
         9)
            select_fabric_interactive || continue
            draw_mxlan_header
-           TUN_SECRET=""; VX_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           TUN_SECRET=""; VX_NAME=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Master Secret Token (Regenerates VNI & Subnet): ${NC}"; read -r new_tok
            new_tok=$(echo "$new_tok" | tr -dc 'a-zA-Z0-9_=-')
            if [ -n "$new_tok" ]; then
@@ -2014,7 +2014,7 @@ while true; do
         10)
            select_fabric_interactive || continue
            draw_mxlan_header
-           CORE_SUBNET=""; source "$SELECTED_CONF" 2>/dev/null
+           CORE_SUBNET=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Core Subnet Base (e.g. 10.88.5) [Current: ${Y}${CORE_SUBNET}${W}, Enter to skip]: ${NC}"; read -r new_sub
            new_sub=$(echo "$new_sub" | tr -dc '0-9.')
            if [ -n "$new_sub" ] && ! is_subnet3 "$new_sub"; then echo -e "  ${R}✖ Format must be X.Y.Z (e.g. 10.88.5).${NC}"; sleep 2; continue; fi
@@ -2032,7 +2032,7 @@ while true; do
         7)
            select_fabric_interactive || continue
            draw_mxlan_header
-           VX_NAME=""; BR_NAME=""; source "$SELECTED_CONF" 2>/dev/null
+           VX_NAME=""; BR_NAME=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
            echo -ne "  ${C}●${NC} ${W}New Fabric Suffix (Current: ${Y}$(get_pure_vx_name "$VX_NAME")${W}, Max 4-5 chars): ${NC}"; read -r new_suffix
            new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
            if [ -n "$new_suffix" ]; then

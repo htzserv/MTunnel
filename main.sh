@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.3 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.5 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -301,12 +301,19 @@ collect_active_tunnels_stats() {
     local tmp_target
     tmp_target=$(mktemp "$SECURE_TMP/.main_tun_stats.XXXXXX") || return 1
     local count=0
+    # Fair selection under the 3-row header cap: pass 1 takes at most one tunnel
+    # per protocol (so GRE can never starve Backhaul/Rathole/Paqet); pass 2 fills
+    # any remaining rows with the not-yet-shown tunnels.
+    local -A picked=(); local cap sec_n=0
+    for cap in 1 3; do
+    [ "$count" -lt 3 ] || break
+    sec_n=0
     # 1. GRE
     for conf in /etc/mgre/tunnels/*.conf; do
         [ -f "$conf" ] || continue
-        TYPE=""; T_NAME=""; REMOTE_PUB=""; LOCAL_PUB=""; CORE_SUBNET=""; CORE_V6=""; TUN_ID=""; VNI_ID=""; TUN_PROTO="ipv4"; FAB_PROTO="ipv4"; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
+        TYPE=""; T_NAME=""; REMOTE_PUB=""; LOCAL_PUB=""; CORE_SUBNET=""; CORE_V6=""; TUN_ID=""; VNI_ID=""; TUN_PROTO="ipv4"; FAB_PROTO="ipv4"; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; mt_source_conf "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
-        
+        [ -z "${picked[GRE|$T_NAME]:-}" ] || continue
         ip link show "$T_NAME" >/dev/null 2>&1 || continue
         [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" == "down" ] && continue
         local pure="${T_NAME#gre6ir}"; pure="${pure#gre6kh}"; pure="${pure#greir}"; pure="${pure#grekh}"
@@ -327,14 +334,16 @@ collect_active_tunnels_stats() {
         else fwd_str="GW"; fi
         echo "GRE|${pure:-$T_NAME}|${REMOTE_PUB}|${vip_stat}|${avg}|${loss}|${T_NAME}|${fwd_str}" >> "$tmp_target"
         ((count++))
-        [ "$count" -ge 3 ] && break 2
+        picked["GRE|$T_NAME"]=1; ((sec_n++)); [ "$count" -ge 3 ] && break 2; [ "$sec_n" -ge "$cap" ] && break
     done
+    sec_n=0
     # 2. VXLAN
     if [ "$count" -lt 3 ]; then
         for conf in /etc/mgre/vxlan/*.conf; do
             [ -f "$conf" ] || continue
-                TYPE=""; VX_NAME=""; BR_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; TUN_ID=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; source "$conf" 2>/dev/null
+                TYPE=""; VX_NAME=""; BR_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; TUN_ID=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; mt_source_conf "$conf" 2>/dev/null
             [ -z "$VX_NAME" ] && continue
+            [ -z "${picked[VXLAN|$VX_NAME]:-}" ] || continue
             ip link show "$VX_NAME" >/dev/null 2>&1 || continue
             [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" == "down" ] && continue
             local pure="${VX_NAME#vx_}"
@@ -354,9 +363,10 @@ collect_active_tunnels_stats() {
             else fwd_str="GW"; fi
             echo "VXLAN|${pure:-$VX_NAME}|${REMOTE_PUB}|${vip_stat}|${avg}|${loss}|${VX_NAME}|${fwd_str}" >> "$tmp_target"
             ((count++))
-            [ "$count" -ge 3 ] && break 2
+            picked["VXLAN|$VX_NAME"]=1; ((sec_n++)); [ "$count" -ge 3 ] && break 2; [ "$sec_n" -ge "$cap" ] && break
         done
     fi
+    sec_n=0
     # 3. Backhaul
     if [ "$count" -lt 3 ]; then
         for conf in /etc/mbackhaul/tunnels/*.meta; do
@@ -368,6 +378,7 @@ collect_active_tunnels_stats() {
             PORTS=$(mt_read_kv "$conf" PORTS 2>/dev/null || true)
             TRANSPORT=$(mt_read_kv "$conf" TRANSPORT 2>/dev/null || true); [ -n "$TRANSPORT" ] || TRANSPORT=tcp
             [[ "$ROLE" =~ ^[12]$ && "$TRANSPORT" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ ]] && mt_valid_port "$TUN_PORT" || continue
+            [ -z "${picked[BH|$t_name]:-}" ] || continue
             systemctl is-active --quiet "mbackhaul@${t_name}" || continue
             local pure="${t_name#bh_}"
             local peer_ip="$REMOTE_IP"
@@ -389,9 +400,10 @@ collect_active_tunnels_stats() {
             [ "$ROLE" == "2" ] && fwd_str="CLI"
             echo "BH|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|bh_${t_name}|${fwd_str}" >> "$tmp_target"
             ((count++))
-            [ "$count" -ge 3 ] && break 2
+            picked["BH|$t_name"]=1; ((sec_n++)); [ "$count" -ge 3 ] && break 2; [ "$sec_n" -ge "$cap" ] && break
         done
     fi
+    sec_n=0
     # 4. Rathole
     if [ "$count" -lt 3 ]; then
         for d in /etc/mrathole/tunnels/*; do
@@ -403,6 +415,7 @@ collect_active_tunnels_stats() {
             TCP_PORTS=$(mt_read_kv "$d/meta.conf" TCP_PORTS 2>/dev/null || true)
             UDP_PORTS=$(mt_read_kv "$d/meta.conf" UDP_PORTS 2>/dev/null || true)
             [[ "$TYPE" =~ ^[12]$ ]] && mt_valid_port "$LINK_PORT" || continue
+            [ -z "${picked[RAT|$t_name]:-}" ] || continue
             systemctl is-active --quiet "mrathole@${t_name}" || continue
             local peer_ip="$REMOTE_IP"
             if [ "$TYPE" == "1" ]; then
@@ -419,9 +432,10 @@ collect_active_tunnels_stats() {
             [ "$TYPE" == "2" ] && fwd_str="CLI"
             echo "RAT|${t_name}|${peer_ip}|OFF|${avg}|${loss}|rat_${t_name}|${fwd_str}" >> "$tmp_target"
             ((count++))
-            [ "$count" -ge 3 ] && break 2
+            picked["RAT|$t_name"]=1; ((sec_n++)); [ "$count" -ge 3 ] && break 2; [ "$sec_n" -ge "$cap" ] && break
         done
     fi
+    sec_n=0
     # 5. Paqet
     if [ "$count" -lt 3 ]; then
         for conf in /etc/paqet/*.meta; do
@@ -431,6 +445,7 @@ collect_active_tunnels_stats() {
             TUN_PORT=$(mt_read_kv "$conf" TUN_PORT) || continue
             REMOTE_IP=$(mt_read_kv "$conf" REMOTE_IP 2>/dev/null || true)
             [[ "$ROLE" =~ ^[12]$ ]] && mt_valid_port "$TUN_PORT" || continue
+            [ -z "${picked[PAQET|$t_name]:-}" ] || continue
             systemctl is-active --quiet "mpaqet@${t_name}" || continue
             local pure="${t_name#pq_}"
             local peer_ip="$REMOTE_IP"
@@ -448,9 +463,10 @@ collect_active_tunnels_stats() {
             fi
             echo "PAQET|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|pq_${t_name}|RAW" >> "$tmp_target"
             ((count++))
-            [ "$count" -ge 3 ] && break 2
+            picked["PAQET|$t_name"]=1; ((sec_n++)); [ "$count" -ge 3 ] && break 2; [ "$sec_n" -ge "$cap" ] && break
         done
     fi
+    done
     mv -f "$tmp_target" "$SECURE_TMP/.main_tun_stats" 2>/dev/null
 }
 stats_watcher_loop() {

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MBackhaul | Multiplexer Engine v1.2.3 ---
+# --- MTunnel MBackhaul | Multiplexer Engine v1.2.5 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.2.4"
+MODULE_VERSION="1.2.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1097,7 +1097,7 @@ if [[ "$1" == "--apply" ]]; then
     for conf in "$CONF_DIR"/*.meta; do
         [ -f "$conf" ] || continue
         t_name=$(basename "$conf" .meta)
-        ROLE=""; TUN_PORT=""; REMOTE_IP=""; BIND_HOST="0.0.0.0"; source "$conf" 2>/dev/null
+        ROLE=""; TUN_PORT=""; REMOTE_IP=""; BIND_HOST="0.0.0.0"; mt_source_conf "$conf" 2>/dev/null
         setup_bh_counters "$t_name" "$TUN_PORT" "$REMOTE_IP" "$ROLE" "$BIND_HOST"
     done
     exit 0
@@ -1128,7 +1128,7 @@ check_bh_connection() {
     local t_name="$1" known_active="${2:-0}" meta="$CONF_DIR/${t_name}.meta"
     local ROLE="" TUN_PORT="" REMOTE_IP="" TRANSPORT="tcp" peer
     [ -f "$meta" ] || { echo "OFFLINE"; return; }
-    source "$meta" 2>/dev/null
+    mt_source_conf "$meta" 2>/dev/null
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$TRANSPORT" = udp ]; then
@@ -1621,7 +1621,7 @@ show_tunnel_registry() {
         [ ! -f "$conf" ] && continue
         local t_name=$(basename "$conf" .meta)
         ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         
         local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
         local ping_val="N/A"
@@ -1712,7 +1712,7 @@ show_live_radar() {
     for conf in "$CONF_DIR"/*.meta; do
         [ ! -f "$conf" ] && continue
         local t_name=$(basename "$conf" .meta)
-        source "$conf" 2>/dev/null
+        mt_source_conf "$conf" 2>/dev/null
         setup_bh_counters "$t_name" "$TUN_PORT" "$REMOTE_IP" "$ROLE" "$BIND_HOST"
         rx_old[$t_name]=$(get_bh_rx "$t_name")
         sample_old[$t_name]=$(mt_milliseconds)
@@ -2314,7 +2314,7 @@ while true; do
            t_name=$(basename "$SELECTED_TUN" .meta)
            ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul
            BH_SETTINGS_FILE=""
-           source "$SELECTED_TUN" 2>/dev/null
+           mt_source_conf "$SELECTED_TUN" 2>/dev/null
            [ -z "$ENABLE_UDP" ] && ENABLE_UDP="true"
            
            if [[ "$opt" == "3" ]]; then

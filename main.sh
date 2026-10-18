@@ -732,32 +732,49 @@ draw_header_lines_only() {
         return 0
     fi
 
-    # Wide dashboard: base width 117 (original main layout). Any extra terminal width
-    # (up to 150 columns total) is donated to the Peer cell and the last cells of rows 1-2.
-    local total=$((term_cols - 4)) extra peer_w v6_addr
-    (( total < 117 )) && total=117
-    (( total > 150 )) && total=150
-    extra=$((total - 117)); peer_w=$((16 + extra))
+    # Wide dashboard (responsive): the frame is sized from what has to be shown.
+    #   - never narrower than 117 columns (original layout), never wider than the terminal / 150
+    #   - grows only as far as needed for the server IPv6 and the longest tunnel Peer
+    #   - when the server has no IPv6 the IPv6 cell shrinks and so does the whole header
+    local total extra peer_w v6_addr v6_need peer_need need_total w6 w4 v6_field
     v6_addr=$(get_local_ipv6)
-    if [ -n "$v6_addr" ]; then v6_col="${M}"; v6_icon="●"; v6_text="$v6_addr"
-    else v6_col="${DIM}"; v6_icon="○"; v6_text="OFF"; fi
+    if [ -n "$v6_addr" ]; then v6_col="${M}"; v6_text="$v6_addr"; v6_need=$(( ${#v6_addr} + 10 ))
+    else v6_col="${DIM}"; v6_text="OFF"; v6_need=21; fi
+    (( v6_need < 21 )) && v6_need=21
+    peer_need=16
+    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
+        peer_need=$(awk -F'|' 'NF>2 && n<3 {n++; l=length($3); if(l>m)m=l} END{print (m<16?16:m)}' "$SECURE_TMP/.main_tun_stats" 2>/dev/null)
+        [[ "$peer_need" =~ ^[0-9]+$ ]] || peer_need=16
+    fi
+    need_total=$(( 31 + 25 + v6_need + 29 + 3 ))
+    (( need_total < 117 )) && need_total=117
+    (( 117 + peer_need - 16 > need_total )) && need_total=$(( 117 + peer_need - 16 ))
+    total=$(( term_cols - 4 ))
+    (( total > 150 )) && total=150
+    (( total > need_total )) && total=$need_total
+    (( total < 117 )) && total=117
+    extra=$(( total - 117 )); peer_w=$(( 16 + extra ))
+    w6=$v6_need
+    (( w6 > total - 31 - 25 - 29 - 3 )) && w6=$(( total - 31 - 25 - 29 - 3 ))
+    w4=$(( total - 31 - 25 - w6 - 3 ))
+    v6_field=$(( w6 - 10 ))
     printf -v border '%*s' "$total" ''
     border="${border// /─}"
 
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
-    # Row 1: 31 | 25 | 21 | 37(+extra) = 117(+extra) columns (Web cell removed)
-    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${B}│${NC} ${DIM}Porter:${NC} %b%s%b %-9.9s ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${B}│${NC}\033[K\n" \
+    # Row 1: title 31 | IPv4 25 | IPv6 w6 | BBR + Porter w4
+    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${B}│${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${B}│${NC}\033[K\n" \
         "MDesign Master Core v${MODULE_VERSION}" "$s_ip" \
-        "$porter_col" "$porter_icon" "$NC" "$porter_text" \
+        "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
-        "$v6_col" "$((16+extra))" "$((16+extra))" "$v6_text" "$NC"
+        "$porter_col" "$porter_icon" "$NC" "$((w4-24))" "$((w4-24))" "$porter_text"
     printf "  ${B}├${border}┤${NC}\033[K\n"
-    # Row 2: 31 | 25 | 21 | 37(+extra)
-    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-12.12s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
+    # Row 2: CPU 31 | RAM 25 | Net ▼ w6 | Net ▲ w4
+    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
         "$cpu_col" "$cpu_str" "$NC" "$core_label" \
         "$ram_col" "$ram_str" "$NC" \
-        "$rx_col" "$rx_speed" "$NC" \
-        "$tx_col" "$((28+extra))" "$((28+extra))" "$tx_speed" "$NC"
+        "$rx_col" "$((w6-9))" "$((w6-9))" "$rx_speed" "$NC" \
+        "$tx_col" "$((w4-9))" "$((w4-9))" "$tx_speed" "$NC"
     printf "  ${B}├${border}┤${NC}\033[K\n"
 
     local shown=0

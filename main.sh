@@ -46,8 +46,9 @@ declare -A MOD_MAP=(
     ["mrathole"]="tunnels/mrathole.sh"
     ["mbackhaul"]="tunnels/mbackhaul.sh"
     ["mpaqet"]="tunnels/mpaqet.sh"
+    ["mdoctor"]="tools/mdoctor.sh"
 )
-ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet")
+ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor")
 # Every shell component can also be updated independently from GitHub/mirror,
 # a direct link, or Manual Code Paste. Bundle sync remains available separately.
 declare -A COMPONENT_MAP=(
@@ -58,11 +59,12 @@ declare -A COMPONENT_MAP=(
     ["mrathole"]="tunnels/mrathole.sh"
     ["mbackhaul"]="tunnels/mbackhaul.sh"
     ["mpaqet"]="tunnels/mpaqet.sh"
+    ["mdoctor"]="tools/mdoctor.sh"
     ["common"]="core/common.sh"
     ["install"]="install.sh"
 )
-EDITABLE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "common" "install")
-UPDATE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "common" "install")
+EDITABLE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "common" "install")
+UPDATE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "common" "install")
 ALL_PACKAGES=(
     "bh"
     "rathole"
@@ -1018,17 +1020,12 @@ sync_script_bundle() {
        ! grep -q '^MTUNNEL_LAYOUT_REV=2$' "$stage/core/common.sh"; then
         rm -rf "$stage"; return 1
     fi
-    # Optional release marker: if the source publishes VERSION it must match the
-    # core, otherwise the mirror/cache is only partly refreshed.
-    local marker core_ver
-    core_ver=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$stage/core/common.sh")
-    if mt_download "$base/VERSION" "$stage/VERSION" 2>/dev/null; then
-        marker=$(head -c 32 "$stage/VERSION" | tr -d '\r\n ')
-        if [ "$marker" != "$core_ver" ]; then
-            echo "Source is inconsistent: VERSION says v$marker but shared core is v$core_ver. Refresh the mirror/cache." >&2
-            rm -rf "$stage"; return 1
-        fi
-    fi
+    # VERSION is metadata only. Mirrors, caches and custom sources may refresh
+    # files at different times, so a marker/core version mismatch must never
+    # block a sync. The staged scripts are still syntax-checked and the shared
+    # core API/layout contract is validated above before anything is installed.
+    # Fetch VERSION only as optional cached metadata; ignore absence/mismatch.
+    mt_download "$base/VERSION" "$stage/VERSION" 2>/dev/null || true
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
@@ -1615,8 +1612,9 @@ render_main_menu() {
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
-    printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
-    printf '  %b├─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b9%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
+    printf '  %b├─%b %b10%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
+    printf '  %b├─%b %b11%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
@@ -1649,9 +1647,10 @@ while true; do
         6) run_mod "mpaqet" ;;
         7) run_mod "mporter" ;;
         8) run_iperf3 ;;
+        9) run_mod "mdoctor" ;;
         0) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
-        9) show_ota_update_hub ;;
-        10)
+        10) show_ota_update_hub ;;
+        11)
             draw_main_header
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"
@@ -1707,7 +1706,7 @@ while true; do
                     mt_owned_binary_remove "$core_bin" "/usr/local/bin/$core_bin" "/usr/bin/$core_bin" || true
                 done
                 rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
-                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole
+                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor
                 rm -f /usr/local/bin/mtunnel
                 kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
                 echo -e "\n  ${G}✓ MTunnel ecosystem completely wiped from this system.${NC}\n"; exit 0

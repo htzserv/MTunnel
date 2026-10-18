@@ -478,6 +478,7 @@ mt_validate_module_role() {
         tunnels/mrathole.sh) role='MRathole';;
         tunnels/mbackhaul.sh) role='MBackhaul';;
         tunnels/mpaqet.sh) role='MPaqet';;
+        tools/mdoctor.sh) role='Doctor';;
         *) echo "Unrecognized MTunnel module path: $rel" >&2; return 1;;
     esac
     # Header check guards against accidental cross-module paste, not malicious code.

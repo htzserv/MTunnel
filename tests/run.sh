@@ -16,7 +16,7 @@ section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 reset_fix() { rm -f "$MT_FIX"/*.txt "$MT_FIX"/ipt.log; : > "$MT_FIX/ipt.log"; }
 
 section "syntax (bash -n)"
-for f in main.sh mporter.sh install.sh core/common.sh tunnels/*.sh; do
+for f in main.sh mporter.sh install.sh core/common.sh tunnels/*.sh tools/mdoctor.sh; do
     if bash -n "$ROOT/$f" 2>/dev/null; then ok "$f"; else bad "$f" "no syntax error" "syntax error"; fi
 done
 

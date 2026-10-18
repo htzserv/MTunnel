@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# Test shim: units listed in $MT_FIX/active.txt are "active".
-case "$1" in
-    is-active) [ "$2" = --quiet ] && u="$3" || u="$2"; grep -qxF "$u" "$MT_FIX/active.txt" 2>/dev/null ;;
-    show) echo "/system.slice/test.service" ;;
-    *) exit 0 ;;
-esac

@@ -1,8 +1,0 @@
-#!/usr/bin/env bash
-# Test shim: replays fixtures instead of reading real sockets.
-case "$*" in
-    *established*) cat "$MT_FIX/ss_established.txt" 2>/dev/null ;;
-    *-lntup*)      cat "$MT_FIX/ss_listen.txt" 2>/dev/null ;;
-    *-tlnp*|*-tlnpH*) grep -i sshd "$MT_FIX/ss_listen.txt" 2>/dev/null ;;
-esac
-exit 0

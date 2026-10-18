@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.2.0"
+MODULE_VERSION="1.2.1"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -55,7 +55,7 @@ mt_installer_load_common() {
         [[ "$rc" == 0 && -s "$tmp" ]] || { echo 'Unable to fetch the shared MTunnel core.' >&2; rm -f "$tmp"; return 1; }
         candidate="$tmp"
     fi
-    bash -n "$candidate" || return 1
+    bash -n "$candidate" 2>/dev/null || return 1
     # shellcheck source=core/common.sh
     source "$candidate" || return 1
     [[ "${MTUNNEL_CORE_API:-}" == 1 && "${MTUNNEL_LAYOUT_REV:-}" == 2 ]] || { echo "Incompatible shared core: $candidate" >&2; return 1; }
@@ -150,7 +150,7 @@ draw_installer_header() {
 
 mt_validate_shared_core() {
     local file="$1"
-    [ -s "$file" ] && bash -n "$file" && grep -q '^MTUNNEL_CORE_API=1$' "$file" && grep -q '^MTUNNEL_LAYOUT_REV=2$' "$file"
+    [ -s "$file" ] && bash -n "$file" 2>/dev/null && grep -q '^MTUNNEL_CORE_API=1$' "$file" && grep -q '^MTUNNEL_LAYOUT_REV=2$' "$file"
 }
 installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
@@ -173,7 +173,7 @@ installer_main() {
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
                 echo '  --online             Force online install from the official GitHub source.'
-                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.0.'
+                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.1.'
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'

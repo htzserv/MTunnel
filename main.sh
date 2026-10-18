@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.0 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.1 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.0"
+MODULE_VERSION="1.2.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -828,7 +828,7 @@ sync_script_bundle() {
     # Stage the shared core and all scripts before committing any module.
     mkdir -p "$stage/core"
     if ! mt_download "$base/core/common.sh" "$stage/core/common.sh" ||
-       ! bash -n "$stage/core/common.sh" ||
+       ! bash -n "$stage/core/common.sh" 2>/dev/null ||
        ! grep -q '^MTUNNEL_CORE_API=1$' "$stage/core/common.sh" ||
        ! grep -q '^MTUNNEL_LAYOUT_REV=2$' "$stage/core/common.sh"; then
         rm -rf "$stage"; return 1
@@ -842,9 +842,24 @@ sync_script_bundle() {
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
-        if ! mt_download "$base/$rel" "$stage/$rel" || ! mt_validate_script "$stage/$rel"; then rc=1; break; fi
+        if ! mt_download "$base/$rel" "$stage/$rel"; then
+            echo "Could not download $rel; existing scripts preserved." >&2
+            rc=1; break
+        fi
+        if ! mt_validate_script "$stage/$rel" 2>/dev/null; then
+            echo "Invalid Bash module from source: $rel; existing scripts preserved." >&2
+            rc=1; break
+        fi
     done
-    if [ "$rc" == 0 ] && { ! mt_download "$base/install.sh" "$stage/install.sh" || ! mt_validate_script "$stage/install.sh"; }; then rc=1; fi
+    if [ "$rc" == 0 ]; then
+        if ! mt_download "$base/install.sh" "$stage/install.sh"; then
+            echo 'Could not download install.sh; existing scripts preserved.' >&2
+            rc=1
+        elif ! mt_validate_script "$stage/install.sh" 2>/dev/null; then
+            echo 'Invalid Bash installer from source: install.sh; existing scripts preserved.' >&2
+            rc=1
+        fi
+    fi
     [ "$rc" != 0 ] || install_bundle_scripts "$stage" "${2:-0}" || rc=$?
     rm -rf "$stage"
     return "$rc"

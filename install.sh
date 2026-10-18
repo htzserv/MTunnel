@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.2.1"
+MODULE_VERSION="1.2.2"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -156,7 +156,7 @@ installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target cur next item
     local script_file="${BASH_SOURCE[0]}" script_dir
     script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
-    local -a modules=(main:main.sh mporter:mporter.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh)
+    local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh)
     local -a active_modules=()
     local -a files=()
     local current=0 mod_ver
@@ -173,7 +173,7 @@ installer_main() {
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
                 echo '  --online             Force online install from the official GitHub source.'
-                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.1.'
+                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.2.'
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'

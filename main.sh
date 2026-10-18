@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.1 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.1"
+MODULE_VERSION="1.2.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -47,8 +47,9 @@ declare -A MOD_MAP=(
     ["mbackhaul"]="tunnels/mbackhaul.sh"
     ["mpaqet"]="tunnels/mpaqet.sh"
     ["mdoctor"]="mdoctor.sh"
+    ["linktest"]="linktest.sh"
 )
-ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor")
+ALL_MODULES=("main" "mporter" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor")
 # Every shell component can also be updated independently from GitHub/mirror,
 # a direct link, or Manual Code Paste. Bundle sync remains available separately.
 declare -A COMPONENT_MAP=(
@@ -60,11 +61,12 @@ declare -A COMPONENT_MAP=(
     ["mbackhaul"]="tunnels/mbackhaul.sh"
     ["mpaqet"]="tunnels/mpaqet.sh"
     ["mdoctor"]="mdoctor.sh"
+    ["linktest"]="linktest.sh"
     ["common"]="core/common.sh"
     ["install"]="install.sh"
 )
-EDITABLE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "common" "install")
-UPDATE_COMPONENTS=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "common" "install")
+EDITABLE_COMPONENTS=("main" "mporter" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "common" "install")
+UPDATE_COMPONENTS=("main" "mporter" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "common" "install")
 ALL_PACKAGES=(
     "bh"
     "rathole"
@@ -1433,13 +1435,14 @@ render_main_menu() {
     printf '  %b├─[ TOOLS & BENCHMARK UTILITIES ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
-    printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b9%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
+    printf '  %b├─%b %b8%b %b❯%b %bLink Test & Protocol Benchmark%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge linktest)"
+    printf '  %b├─%b %b9%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b10%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
-    printf '  %b├─%b %b10%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
-    printf '  %b├─%b %b11%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b11%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
+    printf '  %b├─%b %b12%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
@@ -1465,6 +1468,11 @@ mtunnel_cli() {
         --version|-V)
             printf 'MTunnel %s\n' "$MODULE_VERSION"
             return 0
+            ;;
+        --linktest)
+            shift
+            ensure_module linktest || return 1
+            exec /usr/bin/linktest "$@"
             ;;
         --doctor)
             shift
@@ -1505,6 +1513,7 @@ mtunnel_cli() {
             cat <<EOF
 MTunnel v$MODULE_VERSION
 Usage: mtunnel [option]
+  --linktest         Open Link Test & Protocol Benchmark
   --doctor [args]   Open MTunnel Doctor or pass Doctor arguments
   --status          Run non-interactive health scan
   --report          Export Doctor diagnostic report
@@ -1543,11 +1552,12 @@ while true; do
         5) run_mod "mbackhaul" ;;
         6) run_mod "mpaqet" ;;
         7) run_mod "mporter" ;;
-        8) run_iperf3 ;;
-        9) run_mod "mdoctor" ;;
+        8) run_mod "linktest" ;;
+        9) run_iperf3 ;;
+        10) run_mod "mdoctor" ;;
         0) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
-        10) show_ota_update_hub ;;
-        11)
+        11) show_ota_update_hub ;;
+        12)
             draw_main_header
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"
@@ -1603,7 +1613,7 @@ while true; do
                     mt_owned_binary_remove "$core_bin" "/usr/local/bin/$core_bin" "/usr/bin/$core_bin" || true
                 done
                 rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
-                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor
+                rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest
                 rm -f /usr/local/bin/mtunnel
                 kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
                 echo -e "\n  ${G}✓ MTunnel ecosystem completely wiped from this system.${NC}\n"; exit 0

@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Doctor | System Diagnostics v1.2.1 ---
+# --- MTunnel Doctor | System Diagnostics v1.2.2 ---
 # [Features: Full Health Scan | Network/IPv6 | Firewall/Ports | Core & Script Health | Safe Repair | Export Report]
-MODULE_VERSION="1.2.1"
+MODULE_VERSION="1.2.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

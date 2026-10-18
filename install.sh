@@ -79,26 +79,8 @@ fi
 if ! declare -F mt_release_migration >/dev/null; then
     mt_release_migration() { mt_is_retired_version "$1" && mt_is_current_release_line "$2"; }
 fi
-if ! declare -F mt_retired_bundle_blocked >/dev/null; then
-    mt_retired_bundle_blocked() {
-        [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && [ -n "${2:-}" ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"
-    }
-fi
-if ! declare -F mt_confirm_downgrade >/dev/null; then
-    mt_confirm_downgrade() {
-        local installed="${1:-}" downloaded="${2:-}" subject="${3:-MTunnel}" answer=''
-        [ -n "$installed" ] || return 0
-        [ "$installed" = unknown ] || ! mt_release_migration "$installed" "$downloaded" || return 0
-        if [ "$installed" != unknown ] && ! mt_is_newer_version "$installed" "$downloaded"; then return 0; fi
-        [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] || return 0
-        printf '\n  ┌─[ DOWNGRADE CONFIRMATION: %s ]\n' "$subject" >&2
-        printf '  ├─ Installed Version : %s\n' "$installed" >&2
-        printf '  ├─ Downloaded Version: v%s\n' "$downloaded" >&2
-        printf '  └─ Downgrade to v%s? (y/N): ' "$downloaded" >&2
-        IFS= read -r answer || return 1
-        case "$answer" in y|Y|yes|YES|Yes) return 0;; *) return 2;; esac
-    }
-fi
+if ! declare -F mt_retired_bundle_blocked >/dev/null; then mt_retired_bundle_blocked() { return 1; }; fi
+if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { return 0; }; fi
 
 
 
@@ -255,23 +237,14 @@ installer_main() {
     for item in "${modules[@]}"; do
         path="${item#*:}"
         mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-        [[ "$mod_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid module version: $path" >&2; return 1; }
-        if [ -n "$bundle_version" ] && [ "$mod_ver" != "$bundle_version" ]; then
-            echo "Inconsistent bundle versions: $path is $mod_ver; expected $bundle_version" >&2; return 1;
-        fi
-        bundle_version="$mod_ver"
+        # Version numbers are informational only; any mix of versions is accepted.
+        [ -n "$bundle_version" ] || bundle_version="$mod_ver"
     done
     local core_version
     core_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/core/common.sh")
-    [ "$bundle_version" = "$core_version" ] || {
-        echo "Mismatched shared core version: $core_version; modules: $bundle_version" >&2; return 1;
-    }
     mt_validate_script "$source_dir/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; return 1; }
     local installer_version
     installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/install.sh")
-    [ "$installer_version" = "$bundle_version" ] || {
-        echo "Mismatched installer version: $installer_version; bundle: $bundle_version" >&2; return 1;
-    }
     if [ -n "$remote" ]; then
         active_modules=("${modules[@]}")
     else
@@ -305,17 +278,10 @@ installer_main() {
             highest_installed="$old_v"
         fi
     done
-    # A retired 15.x/16.x bundle (e.g. stale mirror) must not silently replace 1.x.
-    if mt_retired_bundle_blocked "$bundle_version" "$highest_installed"; then
-        echo "Bundle v$bundle_version belongs to the retired 15.x/16.x line (stale mirror or cache?)." >&2
-        echo "Installed is v$highest_installed. Refusing; refresh the source or set MT_ALLOW_RETIRED=1." >&2
-        return 1
-    fi
     conf_installed="$highest_installed"
     # An unreadable installed version is treated as unknown unless the bundle is
     # strictly newer than every readable installed version.
     if [ "$unknown_installed" == 1 ] && { [ -z "$conf_installed" ] || ! mt_is_newer_version "$bundle_version" "$conf_installed"; }; then conf_installed=unknown; fi
-    mt_confirm_downgrade "$conf_installed" "$bundle_version" 'Full MTunnel Bundle' || return $?
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
     files+=("$source_dir/core/common.sh" "$root/usr/lib/mtunnel/common.sh"

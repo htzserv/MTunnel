@@ -503,7 +503,6 @@ check_update_bg() {
     local cand
     for cand in "$gh_ver" "$mirror_ver"; do
         [[ "$cand" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || continue
-        if [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && mt_is_retired_version "$cand" && ! mt_is_retired_version "$MODULE_VERSION"; then continue; fi
         latest_ver=$(printf '%s\n%s\n' "$latest_ver" "$cand" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
     done
     if [ -n "$latest_ver" ]; then

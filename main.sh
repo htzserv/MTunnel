@@ -971,18 +971,15 @@ install_bundle_scripts() {
         local candidate_version
         candidate_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
         if [ -z "${bundle_version:-}" ]; then bundle_version="$candidate_version"; fi
-        [ "$candidate_version" = "$bundle_version" ] || { echo "Mixed module versions in bundle: $rel" >&2; return 1; }
         mods+=("$mod")
     done
     local core_version
     core_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$source/core/common.sh")
-    [ "$core_version" = "$bundle_version" ] || { echo 'Module/Core version mismatch. Refusing mixed bundle.' >&2; return 1; }
     # Installer must be included too: otherwise the installed release is mixed
     # after a successful "Sync All Scripts" downgrade.
     mt_validate_script "$source/install.sh" || { echo 'Missing installer in complete bundle.' >&2; return 1; }
     local installer_version
     installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/install.sh")
-    [ "$installer_version" = "$bundle_version" ] || { echo 'Installer/bundle versions differ.' >&2; return 1; }
     # Compare ALL installed scripts to the candidate and authorize one coherent
     # downgrade of the entire bundle (not seven separate prompts).
     local installed_highest='' installed_version unknown_installed=0 conf_installed
@@ -1005,17 +1002,10 @@ install_bundle_scripts() {
             installed_highest="$installed_version"
         fi
     done
-    # A retired 15.x/16.x bundle (e.g. a stale mirror) must never silently replace 1.x.
-    if mt_retired_bundle_blocked "$bundle_version" "$installed_highest"; then
-        echo "Bundle v$bundle_version belongs to the retired 15.x/16.x line (stale mirror or cache?)." >&2
-        echo "Installed is v$installed_highest. Refusing; refresh the source or set MT_ALLOW_RETIRED=1." >&2
-        return 1
-    fi
     conf_installed="$installed_highest"
     # An unreadable installed version is treated as unknown unless the bundle is
     # strictly newer than every readable installed version.
     if [ "$unknown_installed" == 1 ] && { [ -z "$conf_installed" ] || ! mt_is_newer_version "$bundle_version" "$conf_installed"; }; then conf_installed=unknown; fi
-    mt_confirm_downgrade "$conf_installed" "$bundle_version" 'Full MTunnel Bundle' || return $?
     files+=("$source/install.sh" "$LOCAL_DIR/install.sh")
     for mod in "${mods[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"; target="/usr/bin/$mod"

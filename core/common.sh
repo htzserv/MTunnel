@@ -165,20 +165,19 @@ mt_release_migration() {
 # True when installing $2 over installed $1 would be a real downgrade. A recognized
 # retired-line -> 1.x migration is not treated as a downgrade.
 mt_downgrade_blocked() {
-    [ "${MT_ALLOW_DOWNGRADE:-0}" != 1 ] && ! mt_release_migration "$1" "$2" && mt_is_newer_version "$1" "$2"
+    return 1   # version restrictions disabled: nothing is ever blocked as a downgrade
 }
 # True only when REMOTE ($1) is a real update for LOCAL ($2). A 1.x release is
 # considered an update over retired 15.x/16.x even though its numeric major is lower.
 mt_update_available() {
     if mt_release_migration "$2" "$1"; then return 0; fi
     mt_is_newer_version "$1" "$2" || return 1
-    if [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"; then return 1; fi
     return 0
 }
 # Refuse a retired-line bundle over an installed 1.x installation.
 # $1 = candidate bundle version, $2 = highest installed version (may be empty).
 mt_retired_bundle_blocked() {
-    [ "${MT_ALLOW_RETIRED:-0}" != 1 ] && [ -n "${2:-}" ] && mt_is_retired_version "$1" && ! mt_is_retired_version "$2"
+    return 1   # version restrictions disabled: no bundle is ever blocked
 }
 
 # Require explicit operator approval for installing an older version. The caller
@@ -187,34 +186,12 @@ mt_retired_bundle_blocked() {
 # Installed version "unknown" (file present, version line unreadable) always asks.
 # Return codes: 0 = proceed, 2 = operator cancelled, 1 = input error / EOF.
 mt_confirm_downgrade() {
-    local installed="${1:-}" downloaded="${2:-}" subject="${3:-MTunnel}" answer='' shown
-    [ -n "$installed" ] || return 0
-    # 15.x/16.x -> 1.x is the supported release-line migration, not a rollback.
-    if [ "$installed" != unknown ] && mt_release_migration "$installed" "$downloaded"; then return 0; fi
-    if [ "$installed" != unknown ] && ! mt_is_newer_version "$installed" "$downloaded"; then return 0; fi
-    if [ "${MT_ALLOW_DOWNGRADE:-0}" = 1 ]; then return 0; fi
-    shown="v$installed"; [ "$installed" != unknown ] || shown='unknown (version line unreadable)'
-    printf '\n  ┌─[ DOWNGRADE CONFIRMATION: %s ]\n' "$subject" >&2
-    printf '  ├─ Installed Version : %s\n' "$shown" >&2
-    printf '  ├─ Downloaded Version: v%s\n' "$downloaded" >&2
-    printf '  ├─ Only the selected component will be changed.\n' >&2
-    printf '  └─ Downgrade to v%s? (y/N): ' "$downloaded" >&2
-    IFS= read -r answer || return 1
-    case "$answer" in y|Y|yes|YES|Yes) return 0;; *) printf '  Downgrade cancelled. Existing version preserved.\n' >&2; return 2;; esac
+    return 0   # version restrictions disabled: install whatever version was selected
 }
 # Independent component updates/downgrades are supported. Compatibility is
 # governed by the shared-core API/layout contract, not by matching release numbers.
 mt_module_downgrade_allowed() {
-    local installed="${1:-}" downloaded="${2:-}" approval="${installed}>${downloaded}"
-    mt_release_migration "$installed" "$downloaded" && return 0
-    if mt_is_newer_version "$installed" "$downloaded"; then
-        # Some update paths validate once and mt_install_script validates again.
-        # Cache only this exact pair so the operator never receives duplicate prompts.
-        [ "${MTUNNEL_APPROVED_DOWNGRADE:-}" = "$approval" ] && return 0
-        mt_confirm_downgrade "$installed" "$downloaded" 'Single Component' || return $?
-        MTUNNEL_APPROVED_DOWNGRADE="$approval"
-    fi
-    return 0
+    return 0   # version restrictions disabled
 }
 
 # Validate that a module can run against the currently loaded shared core.

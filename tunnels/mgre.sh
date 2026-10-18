@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.1.4"
+MODULE_VERSION="1.1.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -27,11 +27,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
-                if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
-                return 1
-            fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -40,9 +36,12 @@ mt_load_common() {
     return 1
 }
 mt_load_common || exit 1
+if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null || ! declare -F mt_build_fwd_rules >/dev/null; then
+    echo 'MTunnel: the installed shared core (common.sh) is older than this module (needs 1.1.6 or newer).' >&2
+    echo 'Update the whole bundle from the main menu (Sync) or run: bash install.sh --local .' >&2
+    exit 1
+fi
 unset -f mt_load_common
-MT_PORT_INTERACTIVE=0
-if [[ "${1:-}" != --* ]] && [ -t 0 ]; then MT_PORT_INTERACTIVE=1; fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
@@ -157,44 +156,7 @@ ipt_delete_tagged() {
 # Cross-tool subnet collision check (MGRE + MXLAN + live routes)
 # subnet_in_use supplied by core/common.sh
 
-get_ssh_ports() {
-    local p
-    p=$(ss -tlnpH 2>/dev/null | grep -w 'sshd' | awk '{print $4}' | sed 's/.*://' | sort -u | tr '\n' ' ')
-    echo "${p:-22}"
-}
 
-# Clean a port list (supports ranges a:b). For TCP it refuses to hijack the SSH port.
-sanitize_ports() {
-    local raw="$1" proto="$2" out="" item a b s skip
-    local ssh_ports; ssh_ports=$(get_ssh_ports)
-    raw=$(printf '%s' "$raw" | tr -d '[:space:]')
-    [ -z "$raw" ] && { echo ''; return 0; }
-    [[ "$raw" =~ ^[0-9]+(:[0-9]+)?(,[0-9]+(:[0-9]+)?)*$ ]] || { echo -e "  ${Y}● Invalid port list; use only ports/ranges separated by commas.${NC}" >&2; return 1; }
-    local IFS=','
-    for item in $raw; do
-        [ -z "$item" ] && continue
-        if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
-            a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
-            { [ "$a" -lt 1 ] || [ "$b" -gt 65535 ] || [ "$a" -ge "$b" ]; } && { echo -e "  ${Y}● Invalid range: $item${NC}" >&2; return 1; }
-            item="${a}:${b}"
-        else
-            a=$((10#$item)); b=$a
-            { [ "$a" -lt 1 ] || [ "$a" -gt 65535 ]; } && { echo -e "  ${Y}● Invalid port: $item${NC}" >&2; return 1; }
-            item="$a"
-        fi
-        skip=0
-        if [ "$proto" == "tcp" ]; then
-            IFS=' '
-            for s in $ssh_ports; do
-                if [ "$s" -ge "$a" ] && [ "$s" -le "$b" ]; then skip=1; fi
-            done
-            IFS=','
-            [ "$skip" -eq 1 ] && { echo -e "  ${R}● Refused '$item': it contains this server's SSH port (lock-out protection).${NC}" >&2; return 1; }
-        fi
-        out+="${item},"
-    done
-    echo "${out%,}"
-}
 
 # Derive vIP pair targets exactly like the original engine (keeps peer compatibility)
 vip_targets() {
@@ -212,51 +174,7 @@ vip_targets() {
     done
 }
 
-# NAT / Load-Balancer builder. DNAT only hits traffic addressed to THIS host and never traffic coming from the tunnel itself.
-rollback_fwd_tag() {
-    local tag="$1"
-    mt_delete_tagged_rules iptables nat PREROUTING "$tag" >/dev/null 2>&1 || true
-    mt_delete_tagged_rules iptables nat POSTROUTING "$tag" >/dev/null 2>&1 || true
-    mt_delete_tagged_rules iptables filter FORWARD "$tag" >/dev/null 2>&1 || true
-}
 
-build_fwd_rules() {
-    local tag="$1" tif="$2" tcp="$3" udp="$4" lb="$5" deadf="$6"; shift 6
-    local -a targets=("$@") live=()
-    local t proto list p idx n rem dst
-    [ "${#targets[@]}" -gt 0 ] || return 1
-    for t in "${targets[@]}"; do mt_valid_ipv4 "$t" || return 1; done
-    if [[ "$lb" == "1" ]]; then
-        for t in "${targets[@]}"; do
-            if [ -s "$deadf" ] && grep -qxF "$t" "$deadf"; then continue; fi
-            live+=("$t")
-        done
-        [ ${#live[@]} -eq 0 ] && live=("${targets[0]}")
-    else
-        live=("${targets[0]}")
-    fi
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-    n=${#live[@]}
-    for proto in tcp udp; do
-        list="$tcp"; [ "$proto" == "udp" ] && list="$udp"
-        [ -z "$list" ] && continue
-        local -a PARR=()
-        IFS=',' read -ra PARR <<< "$list"
-        for p in "${PARR[@]}"; do
-            p=$(echo "$p" | tr -dc '0-9:'); [ -z "$p" ] && continue
-            for ((idx=0; idx<n; idx++)); do
-                dst="${live[$idx]}"; rem=$((n - idx))
-                if [ "$rem" -gt 1 ]; then
-                    iptables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m statistic --mode nth --every "$rem" --packet 0 -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || { rollback_fwd_tag "$tag"; return 1; }
-                else
-                    iptables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || { rollback_fwd_tag "$tag"; return 1; }
-                fi
-                iptables -w 5 -t nat -A POSTROUTING -o "$tif" -p "$proto" -m "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j MASQUERADE 2>/dev/null || { rollback_fwd_tag "$tag"; return 1; }
-                iptables -w 5 -t filter -A FORWARD -o "$tif" -p "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j ACCEPT 2>/dev/null || { rollback_fwd_tag "$tag"; return 1; }
-            done
-        done
-    done
-}
 # ---- IPsec (ESP transport) encryption, keys derived from the Master Token on both peers ----
 xfrm_state_file() { echo "$SECURE_TMP/.mgre_xfrm_$1"; }
 
@@ -681,10 +599,50 @@ get_iface_uptime() {
     else printf "%dm" "$m"; fi
 }
 
+mgre_header_rows() {
+    # Rows for THIS module only (GRE / IPIP tunnels), max 3 drawn. Also counts active/total.
+    local conf T_NAME TYPE REMOTE_PUB REMOTE_V4 REMOTE_PUB6 TUN_PROTO MAX_IPS FWD_TCP FWD_UDP
+    local ce p loss up fwd peer vip st n=0
+    MT_HDR_ROWS=''; HDR_TOTAL=0; HDR_ACTIVE=0
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        T_NAME=''; TYPE=''; REMOTE_PUB=''; REMOTE_V4=''; REMOTE_PUB6=''; TUN_PROTO='ipv4'; MAX_IPS='0'; FWD_TCP=''; FWD_UDP=''
+        source "$conf" 2>/dev/null
+        [ -n "$T_NAME" ] || continue
+        HDR_TOTAL=$((HDR_TOTAL+1))
+        up=$(get_iface_uptime "$T_NAME"); st=1
+        if [ "$up" = DOWN ]; then st=0; else HDR_ACTIVE=$((HDR_ACTIVE+1)); fi
+        [ "$n" -lt 3 ] || continue
+        n=$((n+1))
+        peer="$REMOTE_PUB"
+        if mgre_proto_is_v6 "$TUN_PROTO"; then
+            if is_ipv4 "$REMOTE_V4"; then peer="$REMOTE_V4"; else peer="${REMOTE_PUB6:-$REMOTE_PUB}"; fi
+        fi
+        [ -n "$peer" ] || peer="---"
+        vip="OFF"; [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null && vip="+${MAX_IPS}"
+        p="---"; loss="---"
+        if [ -f "$SECURE_TMP/.mgre_stats_cache" ]; then
+            ce=$(awk -F'|' -v n="$T_NAME" '$1==n {print; exit}' "$SECURE_TMP/.mgre_stats_cache" 2>/dev/null)
+            [ -z "$ce" ] || { p=$(cut -d'|' -f2 <<< "$ce"); loss=$(cut -d'|' -f3 <<< "$ce"); }
+        fi
+        fwd="OFF"
+        if [ "$TYPE" == "1" ]; then
+            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd="T+U"
+            elif [ -n "$FWD_TCP" ]; then fwd="T:${FWD_TCP:0:6}"
+            elif [ -n "$FWD_UDP" ]; then fwd="U:${FWD_UDP:0:6}"; fi
+        else fwd="GW"; fi
+        if [ "$TYPE" == "1" ] && mt_fwd_conflict_flag "$T_NAME"; then fwd="${fwd}⚠"; fi
+        MT_HDR_ROWS+="${st}|$(get_pure_tun_name "$T_NAME")|$(mgre_proto_tag "$TUN_PROTO")|${peer}|${vip}|${p}|${loss}|${up}|${fwd}"$'\n'
+    done
+}
+
 draw_mgre_header() {
-    local rows
-    rows=$(mt_interface_header_rows gre)
-    mt_module_header "MGRE Core v${MODULE_VERSION}" "$rows" GRE
+    local act_col="$DIM"
+    mgre_header_rows
+    if [ "$HDR_TOTAL" -gt 0 ]; then
+        if [ "$HDR_ACTIVE" -eq "$HDR_TOTAL" ]; then act_col="$G"; elif [ "$HDR_ACTIVE" -gt 0 ]; then act_col="$Y"; else act_col="$R"; fi
+    fi
+    mt_hdr_draw "MGRE Core v${MODULE_VERSION}" "Active|${HDR_ACTIVE}/${HDR_TOTAL}|${act_col}"
 }
 self_update_module() {
     local src_opt custom_url dl_url tmp_file confirm
@@ -761,36 +719,7 @@ self_update_module() {
     exec "$INSTALL_PATH" "$@"
 }
 
-merge_ports() {
-    local current="$1"; local add="$2"
-    local -a result=(); local IFS=','
-    local -a cur_arr=($current); local -a add_arr=($add)
-    local p e found out=""
-    for p in "${cur_arr[@]}"; do [ -n "$p" ] && result+=("$p"); done
-    for p in "${add_arr[@]}"; do
-        [ -z "$p" ] && continue
-        found=0
-        for e in "${result[@]}"; do [ "$e" == "$p" ] && found=1 && break; done
-        [ "$found" -eq 0 ] && result+=("$p")
-    done
-    for p in "${result[@]}"; do out+="${p},"; done
-    echo "${out%,}"
-}
 
-remove_ports() {
-    local current="$1"; local rem="$2"
-    [ -z "$rem" ] && { echo "$current"; return; }
-    local IFS=','
-    local -a cur_arr=($current); local -a rem_arr=($rem)
-    local out="" p r skip
-    for p in "${cur_arr[@]}"; do
-        [ -z "$p" ] && continue
-        skip=0
-        for r in "${rem_arr[@]}"; do [ "$p" == "$r" ] && skip=1 && break; done
-        [ "$skip" -eq 0 ] && out+="${p},"
-    done
-    echo "${out%,}"
-}
 
 mgre_apply_fail_cleanup() {
     local name="$1"
@@ -806,9 +735,6 @@ apply_tunnel() {
     local TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" CORE_V6="" TUN_PROTO="ipv4" LOCAL_IP6="" REMOTE_IP6="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0"
     mt_validate_tunnel_conf "$conf" gre || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
-    if [ "$TYPE" = 1 ] && [ "$TUN_PROTO" != ipip6to6 ]; then
-        mt_guard_ports "$FWD_TCP" tcp "MGRE_FWD_$T_NAME" && mt_guard_ports "$FWD_UDP" udp "MGRE_FWD_$T_NAME" || return 1
-    fi
     [ -z "$T_NAME" ] && return
     mgre_endpoints; mgre_core_ips
 
@@ -892,11 +818,9 @@ apply_tunnel() {
     if ! mgre_apply_fwd "$conf"; then
         clean_fwd_rules "$T_NAME"
         echo "Warning: forwarding could not be applied for $T_NAME; tunnel remains up." >&2
-        return 1
     fi
     if ! rebuild_guard; then
         echo "Warning: firewall guard refresh failed for $T_NAME; tunnel remains up." >&2
-        return 1
     fi
 }
 
@@ -958,6 +882,7 @@ manage_port_forwarding() {
     while true; do
         FWD_TARGETS=''; LB_MODE=0; source "$target_conf" 2>/dev/null
         mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return; }
+        mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_$T_NAME"
         draw_mgre_header
         echo -e "\n  ${DIM}┌─[ PORT FORWARDING MANAGER: ${W}${T_NAME}${DIM} ]${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
@@ -970,6 +895,9 @@ manage_port_forwarding() {
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Selected IPs)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Select Target IP(s) (Single / Multiple / All)${NC}"
+        local cf_note=''
+        if mt_fwd_conflict_flag "$T_NAME"; then cf_note=" ${R}⚠ $(wc -w < "$(mt_fwd_conflict_file "$T_NAME")" 2>/dev/null) conflicting port(s)${NC}"; fi
+        echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Fix conflicts (ports held by other services)${NC}${cf_note}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
@@ -978,16 +906,18 @@ manage_port_forwarding() {
             1)
                 echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,9090 or 10000:10100) [Enter to skip]: ${NC}"; read -r add_tcp
                 echo -ne "  ${C}●${NC} ${W}Add UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r add_udp
-                add_tcp=$(sanitize_ports "$add_tcp" tcp) || continue
-                add_udp=$(sanitize_ports "$add_udp" udp) || continue
-                m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp")
-                m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
-                mt_guard_ports "$m_tcp" tcp "MGRE_FWD_$T_NAME" && mt_guard_ports "$m_udp" udp "MGRE_FWD_$T_NAME" || continue
+                add_tcp=$(mt_sanitize_ports "$add_tcp" tcp)
+                add_udp=$(mt_sanitize_ports "$add_udp" udp)
+                # Port-conflict guard: who already holds these ports? close it / skip / cancel
+                mt_port_guard nat "$add_tcp" "$add_udp" "" "MGRE_FWD_${T_NAME}" "GRE ${T_NAME}" || { sleep 1.5; continue; }
+                add_tcp="$MT_PORT_TCP"; add_udp="$MT_PORT_UDP"
+                m_tcp=$(mt_merge_ports "$FWD_TCP" "$add_tcp")
+                m_udp=$(mt_merge_ports "$FWD_UDP" "$add_udp")
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
-                apply_tunnel "$target_conf" || { echo "Forwarding was not applied; check the error above." >&2; sleep 2; continue; }
+                apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
             2)
@@ -995,40 +925,48 @@ manage_port_forwarding() {
                 echo -ne "  ${C}●${NC} ${W}Remove UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r rm_udp
                 rm_tcp=$(echo "$rm_tcp" | tr -dc '0-9,:')
                 rm_udp=$(echo "$rm_udp" | tr -dc '0-9,:')
-                m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp")
-                m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
-                mt_guard_ports "$m_tcp" tcp "MGRE_FWD_$T_NAME" && mt_guard_ports "$m_udp" udp "MGRE_FWD_$T_NAME" || continue
+                m_tcp=$(mt_remove_ports "$FWD_TCP" "$rm_tcp")
+                m_udp=$(mt_remove_ports "$FWD_UDP" "$rm_udp")
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
-                apply_tunnel "$target_conf" || { echo "Forwarding was not applied; check the error above." >&2; sleep 2; continue; }
+                apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
             3)
                 echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read -r new_tcp
                 echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read -r new_udp
-                new_tcp=$(sanitize_ports "$new_tcp" tcp) || continue
-                new_udp=$(sanitize_ports "$new_udp" udp) || continue
-                mt_guard_ports "$new_tcp" tcp "MGRE_FWD_$T_NAME" && mt_guard_ports "$new_udp" udp "MGRE_FWD_$T_NAME" || continue
+                new_tcp=$(mt_sanitize_ports "$new_tcp" tcp)
+                new_udp=$(mt_sanitize_ports "$new_udp" udp)
+                mt_port_guard nat "$new_tcp" "$new_udp" "" "MGRE_FWD_${T_NAME}" "GRE ${T_NAME}" || { sleep 1.5; continue; }
+                new_tcp="$MT_PORT_TCP"; new_udp="$MT_PORT_UDP"
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$new_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
-                apply_tunnel "$target_conf" || { echo "Forwarding was not applied; check the error above." >&2; sleep 2; continue; }
+                apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8
                 ;;
             4)
                 if [ "$LB_MODE" == 1 ]; then
                     set_conf_var "$target_conf" LB_MODE 0 || continue
-                    mgre_apply_fwd "$target_conf" || { echo "Forwarding apply failed." >&2; continue; }
+                    mgre_apply_fwd "$target_conf"
                     echo -e "  ${G}● Load Balancer disabled; using the first selected IP.${NC}"
                 elif mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then
-                    mgre_apply_fwd "$target_conf" || { echo "Forwarding apply failed." >&2; continue; }
+                    mgre_apply_fwd "$target_conf"
                 fi
                 sleep 1.5
                 ;;
             5)
                 if mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then mgre_apply_fwd "$target_conf"; fi
+                ;;
+            6)
+                mt_port_guard nat "$FWD_TCP" "$FWD_UDP" "" "MGRE_FWD_${T_NAME}" "GRE ${T_NAME}" || { sleep 1.5; continue; }
+                set_conf_var "$target_conf" FWD_TCP "$MT_PORT_TCP" && set_conf_var "$target_conf" FWD_UDP "$MT_PORT_UDP" || continue
+                FWD_TCP="$MT_PORT_TCP"; FWD_UDP="$MT_PORT_UDP"
+                apply_tunnel "$target_conf"
+                mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_$T_NAME"
+                echo -e "  ${G}● Conflicts resolved. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
             0) break ;;
         esac
@@ -1345,21 +1283,19 @@ mgre_apply_fwd() {
     local TYPE="" T_NAME="" TUN_ID="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
     mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
-    if [ "$TYPE" = 1 ] && [ "$TUN_PROTO" != ipip6to6 ]; then
-        mt_guard_ports "$FWD_TCP" tcp "MGRE_FWD_$T_NAME" && mt_guard_ports "$FWD_UDP" udp "MGRE_FWD_$T_NAME" || return 1
-    fi
     mgre_fill_legacy_core || { echo "Invalid legacy core subnet in $conf" >&2; return 1; }
+    clean_fwd_rules "$T_NAME"
     [ "$TYPE" == "1" ] || return 0
     [ "$TUN_PROTO" == "ipip6to6" ] && return 0
-    if [ -n "$FWD_TCP" ]; then FWD_TCP=$(sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
-    if [ -n "$FWD_UDP" ]; then FWD_UDP=$(sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
-    [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && { clean_fwd_rules "$T_NAME"; return 0; }
+    if [ -n "$FWD_TCP" ]; then FWD_TCP=$(mt_sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
+    if [ -n "$FWD_UDP" ]; then FWD_UDP=$(mt_sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
+    [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
     local pool
     pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || { echo "No selected forwarding targets remain for $T_NAME. Select Target IP(s) again." >&2; return 1; }
     local -a targets=()
     mapfile -t targets <<< "$pool"
-    clean_fwd_rules "$T_NAME"
-    build_fwd_rules "MGRE_FWD_$T_NAME" "$T_NAME" "$FWD_TCP" "$FWD_UDP" "$LB_MODE" "$SECURE_TMP/.mgre_lbdead_${T_NAME}" "${targets[@]}"
+    mt_build_fwd_rules "MGRE_FWD_$T_NAME" "$T_NAME" "$FWD_TCP" "$FWD_UDP" "$LB_MODE" "$SECURE_TMP/.mgre_lbdead_${T_NAME}" "${targets[@]}" || return 1
+    mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_${T_NAME}"
 }
 
 teardown_tunnel() {
@@ -1426,6 +1362,7 @@ mgre_watchdog() {
         mgre_fill_legacy_core || { wd_log "$(basename "$conf"): invalid legacy core subnet"; continue; }
         [ -z "$T_NAME" ] && continue
         mgre_core_ips
+        if [ "$TYPE" == "1" ] && [ "$TUN_PROTO" != "ipip6to6" ]; then mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_${T_NAME}" wd_log; fi
         if [ ! -d "/sys/class/net/$T_NAME" ]; then
             wd_log "$T_NAME: interface missing, re-applying"; apply_tunnel "$conf"; continue
         fi
@@ -1488,7 +1425,7 @@ menu_encrypt() {
     [[ "${ans,,}" == "y" ]] || return
     local nv="1"; [ "$ENCRYPT" == "1" ] && nv="0"
     set_conf_var "$SELECTED_CONF" ENCRYPT "$nv"
-    apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; return 1; }
+    apply_tunnel "$SELECTED_CONF"
     if [ "$nv" == "1" ] && [ ! -f "$(xfrm_state_file "$T_NAME")" ]; then
         echo -e "  ${R}✖ Kernel rejected IPsec setup (missing xfrm/esp modules or local IP not on host). Reverted.${NC}"
         set_conf_var "$SELECTED_CONF" ENCRYPT 0; apply_tunnel "$SELECTED_CONF"; sleep 2.5; return
@@ -2034,7 +1971,8 @@ while true; do
              echo "TYPE=$s_type"; echo "LOCAL_PUB=$local_ip"; echo "REMOTE_PUB=$r_ip"; echo "LOCAL_PUB6=$local_ip6"; echo "REMOTE_PUB6=$r_ip6"; echo "REMOTE_V4=$r_v4"; echo "MAX_IPS=$MT_NEW_VIP_COUNT"; echo "SYNC_KEY=$tun_secret"; echo "TUN_SECRET=$tun_secret"; echo "T_NAME=$t_name"; echo "TUN_ID=$tun_id"; echo "CORE_SUBNET=$core_sub"; echo "CORE_V6=$core_v6"; echo "TUN_PROTO=$tun_proto"; echo "LOCAL_IP6=$local_ip6_inner"; echo "REMOTE_IP6=$remote_ip6_inner"; echo "FWD_TCP="; echo "FWD_UDP="; echo "LB_MODE=0"; echo "CUSTOM_MTU=$cust_mtu"; echo "ENCRYPT=0";
            } > "$conf_path"
            chmod 600 "$conf_path"
-           apply_tunnel "$conf_path" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+           apply_tunnel "$conf_path"
+
            if ip link show "$t_name" >/dev/null 2>&1; then
                setup_service
                mt_ask_bbr_on_create
@@ -2073,7 +2011,7 @@ while true; do
                echo -e "  ${DIM}● Sync Key automatically linked to Master Token.${NC}"
                sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$SELECTED_CONF"
                sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$SELECTED_CONF"
-               apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+               apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
            elif [[ "$vip_action" == "2" ]]; then
                if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
@@ -2081,7 +2019,7 @@ while true; do
                if [[ "$confirm_vip" == "y" ]]; then 
                    sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$SELECTED_CONF"
                    sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$SELECTED_CONF"
-                   apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+                   apply_tunnel "$SELECTED_CONF"
                    echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5
                fi
            fi ;;
@@ -2125,7 +2063,7 @@ while true; do
                [ -n "$new_local" ] && set_conf_var "$SELECTED_CONF" LOCAL_PUB "$new_local"
                [ -n "$new_remote" ] && set_conf_var "$SELECTED_CONF" REMOTE_PUB "$new_remote"
            fi
-           apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+           apply_tunnel "$SELECTED_CONF"
            echo -e "  ${G}● Public endpoints updated and applied.${NC}"; sleep 1.5 ;;
 
         9)
@@ -2153,7 +2091,7 @@ while true; do
                sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$SELECTED_CONF"
                sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$new_tok/" "$SELECTED_CONF"
                [ "$TUN_PROTO" == "ipip6to6" ] && set_conf_var "$SELECTED_CONF" CORE_V6 "$(mgre_gen_core_v6 "$new_tok")"
-               apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+               apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● Token updated. Key: ${new_tun_id}, Subnet: ${new_core_sub}.x${NC}"; sleep 1.8
            fi ;;
 
@@ -2167,7 +2105,7 @@ while true; do
            if [ -n "$new_sub" ] && subnet_in_use "$new_sub" "$SELECTED_CONF"; then echo -e "  ${R}✖ ${new_sub}.x is already in use.${NC}"; sleep 2; continue; fi
            if [ -n "$new_sub" ]; then
                sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$SELECTED_CONF"
-               apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+               apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● Subnet base updated to ${new_sub}.x${NC}"; sleep 1.5
            fi ;;
 
@@ -2193,7 +2131,7 @@ while true; do
                sed -i "s/^T_NAME=.*/T_NAME=$new_t_name/" "$SELECTED_CONF"
                mv "$SELECTED_CONF" "$CONF_DIR/${new_t_name}.conf"
                SELECTED_CONF="$CONF_DIR/${new_t_name}.conf"
-               apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+               apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● Tunnel renamed to: ${new_t_name}${NC}"; sleep 1.5
            fi ;;
 
@@ -2218,7 +2156,7 @@ while true; do
            if [ -z "$new_mtu" ]; then
                ( umask 077; grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp" && echo "CUSTOM_MTU=" >> "${SELECTED_CONF}.tmp" ) || continue
                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
-               apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+               apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - 40)).${NC}"; sleep 1.8
            elif [ "$new_mtu" -ge "$min_mtu" ] && [ "$new_mtu" -le "$max_mtu" ] 2>/dev/null; then
                ( umask 077; grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp" && echo "CUSTOM_MTU=$new_mtu" >> "${SELECTED_CONF}.tmp" ) || continue
@@ -2231,7 +2169,8 @@ while true; do
                # (MSS rule is rebuilt by apply_tunnel below)
                
                # 3. Synchronize full profile
-               apply_tunnel "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
+               apply_tunnel "$SELECTED_CONF"
+
                # Check confirmed kernel value
                confirm_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
                echo -e "  ${G}✔ MTU successfully locked to ${new_mtu} (Kernel Confirmed: ${confirm_mtu:-$new_mtu} | MSS: $((new_mtu - 40))).${NC}"; sleep 2

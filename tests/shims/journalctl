@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+cat "$MT_FIX/journal.txt" 2>/dev/null

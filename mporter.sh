@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="1.1.4"
+MODULE_VERSION="1.1.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -44,11 +44,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
-                if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
-                return 1
-            fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -58,8 +54,6 @@ mt_load_common() {
 }
 mt_load_common || exit 1
 unset -f mt_load_common
-MT_PORT_INTERACTIVE=0
-if [[ "${1:-}" != --* ]] && [ -t 0 ]; then MT_PORT_INTERACTIVE=1; fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
@@ -693,7 +687,7 @@ discover_peer_ips() {
     done | awk 'NF && !seen[$0]++'
 }
 
-port_listening() { mt_port_busy "$1" tcp; }
+port_listening() { ss -ltn 2>/dev/null | awk 'NR>1 {print $4}' | grep -qE "[:.]$1\$"; }
 
 # Prints which engine/process owns local port $1 (empty = free)
 port_owner() {
@@ -704,7 +698,12 @@ port_owner() {
         [ -f "$R_CONF" ] && jq -e --arg p "$p" '[.endpoints[]? | select((.listen|split(":")|last) == $p)] | length > 0' "$R_CONF" >/dev/null 2>&1 && { echo "Realm"; return 0; }
     fi
     grep -qE -- "-A PREROUTING .*--dport $p .*MPORTER_NAT_" "$IPT_CONF" 2>/dev/null && { echo "KernelNAT"; return 0; }
-    port_listening "$p" && { echo "OS/System"; return 0; }
+    if port_listening "$p"; then
+        # name the real holder via the shared core scanner (falls back to the old label)
+        local who=''
+        declare -F mt_port_holder_label >/dev/null && who=$(mt_port_holder_label tcp "$p" 2>/dev/null)
+        echo "${who:-OS/System}"; return 0
+    fi
     return 1
 }
 
@@ -1293,8 +1292,7 @@ install_core_engines() {
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
         # Congestion control remains an explicit choice in System / BBR.
         # Never delete dpkg locks: wait for them instead (DPkg::Lock::Timeout).
-        local missing=()
-    command -v ss >/dev/null 2>&1 || missing+=("iproute2") tool
+        local missing=() tool
         for tool in jq gzip iptables tar ip; do command -v "$tool" >/dev/null 2>&1 || missing+=("$tool"); done
         if [ "${#missing[@]}" = 0 ] && { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; }; then exit 0; fi
         DEBIAN_FRONTEND=noninteractive dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
@@ -1545,9 +1543,18 @@ get_stats() {
 }
 
 draw_header() {
-    get_stats
-    mt_module_header "MPorter Core v${MODULE_VERSION}" "@none" PORTER
-    echo ""
+    get_stats; clear; echo ""
+    local raw_text=" MPorter v${MODULE_VERSION} │ IP: ${STATS_SERVER_IP} │ HAP:${STATS_RAW_HAP} RLM:${STATS_RAW_RLM} GST:${STATS_RAW_GST} IPT:${STATS_RAW_IPT} │ IPs: ${STATS_RAW_IP} │ Pts: ${STATS_TOTAL_PORTS} "
+    local pad_len=$(( 106 - ${#raw_text} )); (( pad_len < 0 )) && pad_len=0
+    local padding; padding=$(printf '%*s' "$pad_len" "")
+
+    echo -e "  ${B}╭──────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${B}│${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${B}│${NC} ${DIM}IP:${NC} ${W}${STATS_SERVER_IP}${NC} ${B}│${NC} ${DIM}HAP:${NC} ${STATS_HAP_STAT} ${DIM}RLM:${NC} ${STATS_RLM_STAT} ${DIM}GST:${NC} ${STATS_GST_STAT} ${DIM}IPT:${NC} ${STATS_IPT_STAT} ${B}│${NC} ${DIM}IPs:${NC} ${STATS_IP_STATUS} ${B}│${NC} ${DIM}Pts:${NC} ${G}${STATS_TOTAL_PORTS}${NC}${padding}${B}│${NC}"
+    if [ -n "${STATS_SERVER_IP6:-}" ]; then
+        local raw6=" IPv6: ${STATS_SERVER_IP6} │ IPv6 targets: HAP/GST/RLM/IPT " pad6
+        pad6=$(( 106 - ${#raw6} )); (( pad6 < 0 )) && pad6=0
+        echo -e "  ${B}│${NC} ${DIM}IPv6:${NC} ${W}${STATS_SERVER_IP6}${NC} ${B}│${NC} ${DIM}IPv6 targets:${NC} ${G}HAP/GST/RLM/IPT${NC}$(printf '%*s' "$pad6" "")${B}│${NC}"
+    fi
     echo -e "  ${B}├──────────────┬──────────┬────────────────────────────┬──────────────────────┬────────────────────────────┤${NC}"
     printf "  ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "TYPE" "TARGET NETWORK IPs" "ENGINES" "DISTRIBUTION"
     echo -e "  ${B}├──────────────┼──────────┼────────────────────────────┼──────────────────────┼────────────────────────────┤${NC}"
@@ -1726,14 +1733,6 @@ smart_map() {
         rp="$p"
         [ -z "$bh_meta" ] || rp=$(mp_bh_target_port "$bh_meta" "$p") || return
         owner=$(port_owner "$p")
-        if [ "$owner" = OS/System ]; then
-            mt_guard_ports "$p" tcp || { rm -f "$work"; return 1; }
-            owner=''
-        elif [ -n "$owner" ]; then
-            mt_port_card "$p" tcp "Configured owner: $owner" 'Remove its current mapping before selecting a different engine.'
-        else
-            mt_guard_ports "$p" tcp || { rm -f "$work"; return 1; }
-        fi
         if [ -n "$owner" ]; then printf "  ${B}│${NC} ${R}%-12s${NC} ${B}│${NC} ${DIM}%-7s${NC} ${B}│${NC} ${DIM}%-42s${NC} ${B}│${NC}\n" "$p" "-" "Skipped ($owner)"; continue; fi
         case "$fwd_engine" in
             1) local listen="*:$p"
@@ -1908,13 +1907,7 @@ smart_loadbalance() {
     for p in $clean_ports; do
         owner=$(port_owner "$p")
         if [ "$owner" = "HAProxy" ]; then replaced+=("$p")
-        elif [ "$owner" = OS/System ] || [ -z "$owner" ]; then
-            mt_guard_ports "$p" tcp || return 1
-        elif [ -n "$owner" ]; then
-            mt_port_card "$p" tcp "Configured owner: $owner" 'Remove its existing mapping first.'
-            continue
-        fi
-        mt_guard_ports "$p" tcp haproxy.service || return 1
+        elif [ -n "$owner" ]; then echo -e "  ${Y}⚠${NC} Port $p is already used by ${owner}; skipped."; continue; fi
         final_ports+=("$p")
     done
     [ ${#final_ports[@]} -gt 0 ] || { echo -e "  ${R}● No usable ports left.${NC}"; sleep 2; return; }

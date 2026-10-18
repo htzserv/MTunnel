@@ -2,7 +2,7 @@
 # --- MTunnel MRathole | Reverse Tunnel Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.1.4"
+MODULE_VERSION="1.1.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -21,11 +21,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
-                if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
-                return 1
-            fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -34,9 +30,12 @@ mt_load_common() {
     return 1
 }
 mt_load_common || exit 1
+if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null || ! declare -F mt_unit_live_peer >/dev/null; then
+    echo 'MTunnel: the installed shared core (common.sh) is older than this module (needs 1.1.6 or newer).' >&2
+    echo 'Update the whole bundle from the main menu (Sync) or run: bash install.sh --local .' >&2
+    exit 1
+fi
 unset -f mt_load_common
-MT_PORT_INTERACTIVE=0
-if [[ "${1:-}" != --* ]] && [ -t 0 ]; then MT_PORT_INTERACTIVE=1; fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
@@ -72,7 +71,6 @@ rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
 ensure_dependencies() {
     local missing=()
-    command -v ss >/dev/null 2>&1 || missing+=("iproute2")
     command -v crontab >/dev/null 2>&1 || missing+=("cron")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
     if [ ${#missing[@]} -gt 0 ]; then
@@ -93,7 +91,6 @@ is_valid_host() {
 }
 
 validate_forward_ports() {
-    local MT_PORT_OWNER="mrathole@${t_name:-}.service"
     if ! mt_validate_port_list "$1" "$2" "$3" "${4:-}"; then
         echo 'Invalid, duplicate, or busy forwarded port.' >&2; return 1
     fi
@@ -596,15 +593,6 @@ zero_rat_counters() {
     done
 }
 
-rat_guard_values() {
-    local name="$1" role="$2" link="$3" tcp="$4" udp="$5"
-    [ "$role" = 1 ] || return 0
-    mt_list_has_port "$tcp" "$link" && { echo 'Link port overlaps TCP forwarding.' >&2; return 1; }
-    mt_guard_ports "$link" tcp "mrathole@$name.service" &&
-    mt_guard_ports "$tcp" tcp "mrathole@$name.service" &&
-    mt_guard_ports "$udp" udp "mrathole@$name.service"
-}
-
 generate_toml() {
     local name="$1"
     local dir="$CONF_DIR/$name"
@@ -620,7 +608,6 @@ generate_toml() {
     [ "$TYPE" != 2 ] || mt_valid_host "$REMOTE_IP" || return 1
     validate_forward_ports "$TCP_PORTS" 0 tcp && validate_forward_ports "$UDP_PORTS" 0 udp || return 1
     [[ "$TOKEN" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
-    rat_guard_values "$name" "$TYPE" "$LINK_PORT" "$TCP_PORTS" "$UDP_PORTS" || return 1
     local final_toml="$toml"
     toml=$(mktemp "$dir/config.XXXXXX") || return 1
     > "$toml"
@@ -704,43 +691,9 @@ rat_endpoint_host() {
     host="${host#::ffff:}"; printf '%s' "$host"
 }
 
-rat_unit_peer_ip() {
-    local name="$1" port="${2:-}" expected="${3:-}" unit="mrathole@${name}" pid line lep pep p host
-    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
-    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    while IFS= read -r line; do
-        [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]] || continue
-        lep=$(awk '{print $3}' <<< "$line"); pep=$(awk '{print $4}' <<< "$line")
-        [ -n "$pep" ] || continue
-        if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then p="${lep##*:}"; [ "$p" = "$port" ] || continue; fi
-        host=$(rat_endpoint_host "$pep")
-        if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
-            [ "$host" = "$expected" ] || continue
-        fi
-        printf '%s' "$host"; return 0
-    done < <(ss -Htnp state established 2>/dev/null)
-    return 1
-}
+rat_unit_peer_ip() { mt_unit_live_peer "mrathole@${1}" "${2:-}" "${3:-}"; }
 
-rat_unit_tcp_rtt() {
-    local name="$1" target="$2" unit="mrathole@${name}" pid line rtt hit=0
-    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
-    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    while IFS= read -r line; do
-        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
-            if [[ "$line" == *"$target"* ]]; then
-                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-                hit=1; continue
-            fi
-            hit=0
-        elif [ "$hit" = 1 ]; then
-            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-            [[ "$line" =~ ^[[:space:]] ]] || hit=0
-        fi
-    done < <(ss -Htinp 2>/dev/null)
-    [ -n "$rtt" ] || return 1
-    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
-}
+rat_unit_tcp_rtt() { mt_unit_tcp_rtt "mrathole@${1}" "$2"; }
 
 get_tunnel_status() {
     local t_name="$1" known_active="${2:-0}" meta="$CONF_DIR/$t_name/meta.conf"
@@ -849,33 +802,6 @@ collect_header_rows() {
     mv -f "$tmp" "$HDR_ROWS_FILE" 2>/dev/null
 }
 hdr_rows_count() { [ -s "$HDR_ROWS_FILE" ] && wc -l < "$HDR_ROWS_FILE" || echo 0; }
-hdr_print_rows() {
-    local mtime now
-    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( now - mtime )) -gt 15 ]; then collect_header_rows fast; fi
-    HDR_DRAWN_ROWS=0
-    [ -s "$HDR_ROWS_FILE" ] || return 0
-    local border; printf -v border '%*s' 124 ''; border="${border// /─}"
-    printf "  ${B}├${border}┤${NC}\n"
-    local st name peer ping loss up fwd icon icol tag nt lcol fcol n=0 maxn
-    while IFS='|' read -r st name peer ping loss up fwd; do
-        [ -z "$name" ] && continue
-        ((n++)); [ "$n" -gt 3 ] && break
-        name="${name#rat_}"
-        tag="[RAT]"; maxn=$(( 20 - ${#tag} - 1 ))
-        nt="${name:0:$maxn} ${tag}"
-        if [ "$st" = 1 ]; then icon="●"; icol="${G}"; else icon="○"; icol="${R}"; fi
-        lcol="${DIM}"
-        if [[ "$loss" =~ ^[0-9]+$ ]]; then
-            if [ "$loss" -eq 0 ]; then lcol="${G}"; elif [ "$loss" -lt 30 ]; then lcol="${Y}"; else lcol="${R}"; fi
-            loss="${loss}%"
-        fi
-        fcol="${DIM}"; [ "$fwd" != "OFF" ] && [ "$fwd" != "---" ] && fcol="${C}"
-        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${Y}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
-            "$icol" "$icon" "$NC" "$nt" "${peer:----}" "${ping:----}" "$lcol" "${loss:----}" "$NC" "${up:----}" "$fcol" "${fwd:----}" "$NC"
-    done < "$HDR_ROWS_FILE"
-    HDR_DRAWN_ROWS=$(( n > 3 ? 3 : n ))
-}
 refresh_header_live() {
     if [ "$(hdr_rows_count)" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
     printf '\033[?25l\0337\033[1;1H'
@@ -891,11 +817,132 @@ hdr_stats_loop() {
 }
 
 draw_header() {
-    local mtime now rows=''
-    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ] || [ $((now-mtime)) -gt 15 ]; then collect_header_rows fast; fi
-    [ ! -f "$HDR_ROWS_FILE" ] || rows=$(cat "$HDR_ROWS_FILE")
-    mt_module_header "MRathole Core v${MODULE_VERSION}" "$rows" RAT
+    local total_t=0; local active_t=0; local online_t=0; local waiting_t=0; local reconnecting_t=0
+    local t_names=() units=()
+    for d in "$CONF_DIR"/*; do
+        if [ -d "$d" ]; then
+            local t_name=$(basename "$d")
+            t_names+=("$t_name"); units+=("mrathole@$t_name")
+        fi
+    done
+    total_t=${#t_names[@]}
+    if [ "$total_t" -gt 0 ]; then
+        local states=() i=0
+        while IFS= read -r st_line; do states+=("$st_line"); done < <(systemctl is-active "${units[@]}" 2>/dev/null)
+        for t_name in "${t_names[@]}"; do
+            if [ "${states[$i]}" == "active" ]; then
+                ((active_t++))
+                local st=$(get_tunnel_status "$t_name" "1")
+                case "$st" in
+                    CONNECTED) ((online_t++));;
+                    WAITING) ((waiting_t++));;
+                    RECONNECTING) ((reconnecting_t++));;
+                esac
+            fi
+            ((i++))
+        done
+    fi
+    
+    local core_color="${R}"; local core_raw="Not Installed"
+    if is_rathole_core_valid; then
+        core_color="${G}"; core_raw="Installed"
+    fi
+    
+    local act_color="${DIM}"; local act_text="0/0"
+    if [ "$total_t" -gt 0 ]; then
+        act_text="${active_t}/${total_t}"
+        if [ "$active_t" -eq "$total_t" ]; then act_color="${G}"
+        elif [ "$active_t" -gt 0 ]; then act_color="${Y}"
+        else act_color="${R}"; fi
+    fi
+
+    local stat_color="${R}"; local stat_icon="○"; local stat_text="STOPPED"
+    if [ "$active_t" -gt 0 ]; then
+        if [ "$online_t" -eq "$active_t" ]; then 
+            stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"
+        elif [ "$online_t" -gt 0 ]; then 
+            stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL"
+        elif [ "$reconnecting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="CONNECTING"
+        elif [ "$waiting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="WAITING"
+        else
+            stat_color="${Y}"; stat_icon="◎"; stat_text="STARTING"
+        fi
+    fi
+
+    local peer_ip="" peer_name=""
+    local tmp_port=""
+    for d in "$CONF_DIR"/*; do
+        if [ -d "$d" ] && [ -f "$d/meta.conf" ]; then
+            local tmp_type=$(grep "^TYPE=" "$d/meta.conf" | cut -d'=' -f2)
+            local tmp_remote=$(grep "^REMOTE_IP=" "$d/meta.conf" | cut -d'=' -f2)
+            tmp_port=$(grep "^LINK_PORT=" "$d/meta.conf" | cut -d'=' -f2)
+            
+            if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
+                peer_ip="$tmp_remote"
+                peer_name=$(basename "$d")
+                break
+            elif [ "$tmp_type" == "1" ]; then
+                local tmp_name=$(basename "$d")
+                peer_ip=$(rat_unit_peer_ip "$tmp_name" "$tmp_port" 2>/dev/null || true)
+                if [ -n "$peer_ip" ]; then peer_name="$tmp_name"; break; fi
+            fi
+        fi
+    done
+
+    local g_color="${DIM}"; local g_text="N/A"
+    if [ -n "$peer_ip" ]; then
+        local cache_key="${peer_name:-peer}"; cache_key="${cache_key//[^A-Za-z0-9_.-]/_}"
+        local ping_cache="$SECURE_TMP/.mrathole_ping_${cache_key}"
+        local ping_lock="$SECURE_TMP/.mrathole_ping_${cache_key}.lock"
+        local now=$(date +%s)
+        local cache_ts=0; [ -f "$ping_cache" ] && cache_ts=$(stat -c %Y "$ping_cache" 2>/dev/null || echo 0)
+        local cache_age=$(( now - cache_ts ))
+
+        if [ -f "$ping_cache" ] && [ "$cache_age" -lt 15 ]; then
+            local p_val=$(cat "$ping_cache" 2>/dev/null)
+            if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
+                local p_int=$(echo "$p_val" | tr -dc '0-9')
+                [ -z "$p_int" ] && p_int=0
+                if [ "$p_int" -lt 90 ]; then g_color="${G}"
+                elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
+                else g_color="${R}"
+                fi
+                g_text="${p_val}"
+            else
+                g_color="${R}"; g_text="Timeout"
+            fi
+        else
+            g_color="${DIM}"; g_text="Calculating..."
+        fi
+
+        local lock_ts=0; [ -f "$ping_lock" ] && lock_ts=$(stat -c %Y "$ping_lock" 2>/dev/null || echo 0)
+        local lock_age=$(( now - lock_ts ))
+        if { [ ! -f "$ping_cache" ] || [ "$cache_age" -ge 15 ]; } && { [ ! -f "$ping_lock" ] || [ "$lock_age" -gt 5 ]; }; then
+            touch "$ping_lock"
+            (
+                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port" "$peer_name")
+                echo "$bg_val" > "$ping_cache"
+                rm -f "$ping_lock"
+                if [ -f "$SECURE_TMP/.mrathole_in_menu" ]; then
+                    kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+                fi
+            ) &
+        fi
+    else
+        g_color="${DIM}"; g_text="Waiting"
+    fi
+
+    # Unified dashboard header (same look as the main screen) -- THIS module's tunnels only.
+    local _now _mtime
+    _now=$(date +%s); _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
+    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( _now - _mtime )) -gt 15 ]; then collect_header_rows fast; fi
+    mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "RAT" ""
+    HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
+    mt_hdr_draw "MRathole Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \
+        "Core|${core_raw}|${core_color}" "Status|${stat_icon} ${stat_text}|${stat_color}" \
+        "Peer Ping|${g_text}|${g_color}" "Tunnels|${total_t}|${W}"
 }
 
 show_tunnel_registry() {
@@ -950,6 +997,9 @@ show_tunnel_registry() {
         local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
         local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+        if [ "$st" != "CONNECTED" ]; then
+            mt_reason_row "$(mt_link_why "mrathole@${t_name}" "$([ "$TYPE" == "1" ] && echo 1 || echo 0)" "$([ "$TYPE" == "1" ] && echo "$LINK_PORT")" "$([ "$TYPE" != "1" ] && echo "$REMOTE_IP")")"
+        fi
 
         local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: TCP (Rathole Native)"
         local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
@@ -1307,7 +1357,7 @@ mt_link_deploy_locked() {
     if [ "$MT_KIND" = backhaul ]; then name="bh_${name#bh_}"; conf="$CONF_DIR/$name.meta"
     else conf="$CONF_DIR/$name/meta.conf"; fi
     [ ! -e "$conf" ] && { [ "$MT_KIND" != rathole ] || [ ! -e "$CONF_DIR/$name" ]; } || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
-    if [ "$role" = 1 ] && ! mt_guard_ports "$port" tcp; then return 1; fi
+    if [ "$role" = 1 ] && mt_port_busy "$port"; then echo 'Link port is already in use.' >&2; return 1; fi
     if [ "$MT_KIND" = backhaul ]; then
         validate_bh_ports "${MT_LINK_DATA[PORTS]}" "$role" || return 1
         settings=$(mktemp "$SECURE_TMP/peer-backhaul.XXXXXX") || return 1
@@ -1464,7 +1514,7 @@ while true; do
                    continue
                fi
 
-               if [ "$s_type" = 1 ] && ! mt_guard_ports "$t_port" tcp; then
+               if ss -tuln 2>/dev/null | grep -qE ":${t_port}\s"; then
                    echo -e "  ${R}Error: Port ${t_port} is already in use by another service!${NC}"
                    continue
                fi
@@ -1479,19 +1529,18 @@ while true; do
            while true; do
                echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Blank if none]: ${NC}"; read tcp_p
                tcp_p=$(echo "$tcp_p" | tr -d '\r ')
+               if [ "$s_type" = 1 ] && [ -n "$tcp_p" ]; then mt_port_guard bind "$tcp_p" "" "" "" "Rathole ${t_name}" || continue; tcp_p="$MT_PORT_TCP"; fi
                validate_forward_ports "$tcp_p" "$s_type" "tcp" && break
            done
 
            while true; do
                echo -ne "  ${C}●${NC} ${W}UDP Ports to Forward (e.g. 53) [Blank if none]: ${NC}"; read udp_p
                udp_p=$(echo "$udp_p" | tr -d '\r ')
+               if [ "$s_type" = 1 ] && [ -n "$udp_p" ]; then mt_port_guard bind "" "$udp_p" "" "" "Rathole ${t_name}" || continue; udp_p="$MT_PORT_UDP"; fi
                validate_forward_ports "$udp_p" "$s_type" "udp" && break
            done
            
            mkdir -p "$CONF_DIR/$t_name"
-           rat_guard_values "$t_name" "$TYPE" "$LINK_PORT" "$TCP_PORTS" "$UDP_PORTS" || continue
-           rat_edit_saved=$(mktemp -d "$SECURE_TMP/rat-edit.XXXXXX") || continue
-           cp -p "$CONF_DIR/$t_name/meta.conf" "$rat_edit_saved/meta" && cp -p "$CONF_DIR/$t_name/config.toml" "$rat_edit_saved/config" || { rm -rf "$rat_edit_saved"; continue; }
            cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
 TYPE=$s_type
 BIND_HOST=$bind_host
@@ -1576,6 +1625,7 @@ EOF
                    if [ -z "$n_tcp" ]; then
                        echo -e "  ${Y}● No changes made.${NC}"; break
                    fi
+                   if [ "$TYPE" = 1 ]; then mt_port_guard bind "$n_tcp" "" "mrathole@${t_name}.service" "" "Rathole ${t_name}" || continue; n_tcp="$MT_PORT_TCP"; fi
                    validate_forward_ports "$n_tcp" "$TYPE" "tcp" "$TCP_PORTS" && { TCP_PORTS="$n_tcp"; break; }
                done
                [ -z "$n_tcp" ] && continue
@@ -1588,6 +1638,7 @@ EOF
                    if [ -z "$n_udp" ]; then
                        echo -e "  ${Y}● No changes made.${NC}"; break
                    fi
+                   if [ "$TYPE" = 1 ]; then mt_port_guard bind "" "$n_udp" "mrathole@${t_name}.service" "" "Rathole ${t_name}" || continue; n_udp="$MT_PORT_UDP"; fi
                    validate_forward_ports "$n_udp" "$TYPE" "udp" "$UDP_PORTS" && { UDP_PORTS="$n_udp"; break; }
                done
                [ -z "$n_udp" ] && continue
@@ -1611,7 +1662,7 @@ EOF
                    if ! mt_valid_port "$n_port"; then
                        echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"; continue
                    fi
-                   if [ "$TYPE" = 1 ] && ! mt_guard_ports "$n_port" tcp "mrathole@$t_name.service"; then
+                   if [ "$n_port" != "$LINK_PORT" ] && ss -tuln 2>/dev/null | grep -qE ":${n_port}\s"; then
                        echo -e "  ${R}Error: Port ${n_port} is already in use!${NC}"; continue
                    fi
                    LINK_PORT="$n_port"
@@ -1669,17 +1720,13 @@ UDP_PORTS=$UDP_PORTS
 EOF
 
            chmod 600 "$CONF_DIR/$t_name/meta.conf"
-           if generate_toml "$t_name" && systemctl restart "mrathole@$t_name" && mt_workspace_service_ready "mrathole@$t_name"; then
+           generate_toml "$t_name" || continue
+           systemctl restart mrathole@$t_name
+           if systemctl is-active --quiet mrathole@$t_name; then
                echo -e "  ${G}✔ Tunnel updated and service restarted successfully.${NC}"; sleep 1.5
            else
-               if mt_install_files 600 "$rat_edit_saved/meta" "$CONF_DIR/$t_name/meta.conf" "$rat_edit_saved/config" "$CONF_DIR/$t_name/config.toml" && systemctl restart "mrathole@$t_name"; then
-                   echo 'Update failed; previous configuration restored.' >&2
-               else
-                   echo "Restore failed; previous files are in $rat_edit_saved" >&2; sleep 2; continue
-               fi
-               echo -e "  ${R}✖ Tunnel update failed. Please check logs!${NC}"; sleep 2
+               echo -e "  ${R}✖ Tunnel failed to start. Please check logs!${NC}"; sleep 2
            fi
-           rm -rf "$rat_edit_saved"
            ;;
 
         10) show_tunnels_info ;;

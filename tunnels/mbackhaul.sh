@@ -2,7 +2,7 @@
 # --- MTunnel MBackhaul | Multiplexer Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.1.4"
+MODULE_VERSION="1.1.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -21,11 +21,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
-                if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
-                return 1
-            fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -34,9 +30,12 @@ mt_load_common() {
     return 1
 }
 mt_load_common || exit 1
+if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null || ! declare -F mt_unit_live_peer >/dev/null; then
+    echo 'MTunnel: the installed shared core (common.sh) is older than this module (needs 1.1.6 or newer).' >&2
+    echo 'Update the whole bundle from the main menu (Sync) or run: bash install.sh --local .' >&2
+    exit 1
+fi
 unset -f mt_load_common
-MT_PORT_INTERACTIVE=0
-if [[ "${1:-}" != --* ]] && [ -t 0 ]; then MT_PORT_INTERACTIVE=1; fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
@@ -72,7 +71,6 @@ rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null
 
 ensure_dependencies() {
     local missing=()
-    command -v ss >/dev/null 2>&1 || missing+=("iproute2")
     command -v crontab >/dev/null 2>&1 || missing+=("cron")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
     command -v iptables >/dev/null 2>&1 || missing+=("iptables")
@@ -94,6 +92,46 @@ fi
 
 is_valid_host() {
     mt_valid_host "$1"
+}
+
+# Port-conflict guard for Backhaul mapping specs ("443=127.0.0.1:443,8000-8010,1.2.3.4:80=9000").
+# $1 spec  $2 udp too? (0/1)  $3 self unit  -> BH_SPEC_OUT (conflicting entries closed/skipped); rc 1 = cancelled
+bh_ports_guard() {
+    local spec="$1" udp="${2:-0}" self="${3:-}" raw lhs rhs port a b tcp_list='' item p rm='' kept
+    local -a items=() pieces=(); BH_SPEC_OUT="$spec"
+    [ -n "$spec" ] || return 0
+    IFS=, read -ra items <<< "$spec"
+    for raw in "${items[@]}"; do
+        raw="${raw// /}"; lhs="${raw%%=*}"
+        if [[ "$lhs" == *:* ]]; then a="${lhs##*:}"; b="$a"
+        elif [[ "$lhs" == *-* ]]; then a="${lhs%-*}"; b="${lhs#*-}"
+        else a="$lhs"; b="$lhs"; fi
+        [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ ]] || continue
+        tcp_list+="${tcp_list:+,}$(mt_range_fmt "$((10#$a))" "$((10#$b))")"
+    done
+    mt_port_guard bind "$tcp_list" "$([ "$udp" = 1 ] && echo "$tcp_list")" "$self" "" "Backhaul" || return 1
+    kept=" $(mt_ports_expand "$MT_PORT_TCP") "
+    local orig; orig=$(mt_ports_expand "$tcp_list")
+    for p in $orig; do [[ "$kept" == *" $p "* ]] || rm+="$p "; done
+    [ -n "$rm" ] || return 0
+    local out=''
+    for raw in "${items[@]}"; do
+        raw="${raw// /}"; lhs="${raw%%=*}"; rhs=''; [[ "$raw" == *=* ]] && rhs="=${raw#*=}"
+        if [[ "$lhs" == *:* ]]; then
+            [[ " $rm " == *" ${lhs##*:} "* ]] && continue
+            out+="${out:+,}$raw"
+        elif [[ "$lhs" == *-* ]]; then
+            local sub; sub=$(mt_ports_subtract "$(mt_range_fmt "${lhs%-*}" "${lhs#*-}")" "$rm")
+            local piece
+            IFS=, read -ra pieces <<< "$sub"
+            for piece in "${pieces[@]}"; do [ -n "$piece" ] && out+="${out:+,}${piece/:/-}${rhs}"; done
+        else
+            [[ " $rm " == *" $((10#$lhs)) "* ]] && continue
+            out+="${out:+,}$raw"
+        fi
+    done
+    BH_SPEC_OUT="$out"
+    return 0
 }
 
 validate_bh_ports() {
@@ -131,7 +169,9 @@ validate_bh_ports() {
                     mt_valid_port "$old_s" && mt_valid_port "$old_e" && ((port>=10#$old_s && port<=10#$old_e)) && owned_port=1
                 done
             fi
-
+            if [ "$check" == 1 ] && [ "$owned_port" == 0 ] && mt_port_busy "$port"; then
+                echo "Port $port is already in use." >&2; return 1
+            fi
         done
     done
     return 0
@@ -1091,43 +1131,9 @@ bh_endpoint_host() {
     host="${host#::ffff:}"; printf '%s' "$host"
 }
 
-bh_unit_peer_ip() {
-    local name="$1" port="${2:-}" expected="${3:-}" unit="mbackhaul@${name}" pid line lep pep p host
-    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
-    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    while IFS= read -r line; do
-        [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]] || continue
-        lep=$(awk '{print $3}' <<< "$line"); pep=$(awk '{print $4}' <<< "$line")
-        [ -n "$pep" ] || continue
-        if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then p="${lep##*:}"; [ "$p" = "$port" ] || continue; fi
-        host=$(bh_endpoint_host "$pep")
-        if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
-            [ "$host" = "$expected" ] || continue
-        fi
-        printf '%s' "$host"; return 0
-    done < <(ss -Htnp state established 2>/dev/null)
-    return 1
-}
+bh_unit_peer_ip() { mt_unit_live_peer "mbackhaul@${1}" "${2:-}" "${3:-}"; }
 
-bh_unit_tcp_rtt() {
-    local name="$1" target="$2" unit="mbackhaul@${name}" pid line rtt hit=0
-    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
-    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    while IFS= read -r line; do
-        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
-            if [[ "$line" == *"$target"* ]]; then
-                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-                hit=1; continue
-            fi
-            hit=0
-        elif [ "$hit" = 1 ]; then
-            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-            [[ "$line" =~ ^[[:space:]] ]] || hit=0
-        fi
-    done < <(ss -Htinp 2>/dev/null)
-    [ -n "$rtt" ] || return 1
-    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
-}
+bh_unit_tcp_rtt() { mt_unit_tcp_rtt "mbackhaul@${1}" "$2"; }
 
 check_bh_connection() {
     local t_name="$1" known_active="${2:-0}" meta="$CONF_DIR/${t_name}.meta"
@@ -1137,8 +1143,13 @@ check_bh_connection() {
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
     if [ "$TRANSPORT" = udp ]; then
-        local rx tx; rx=$(get_bh_rx "$t_name"); tx=$(get_bh_tx "$t_name")
-        if (( ${rx:-0} + ${tx:-0} > 0 )); then echo "ONLINE"
+        local rx tx tot f now last_tot=0 last_chg=0; rx=$(get_bh_rx "$t_name"); tx=$(get_bh_tx "$t_name")
+        tot=$(( ${rx:-0} + ${tx:-0} )); f="$SECURE_TMP/.mbh_udp_${t_name}"; now=$(date +%s)
+        [ -f "$f" ] && read -r last_tot last_chg < "$f"
+        if [ "$tot" != "$last_tot" ]; then last_chg=$now; [ -f "$f" ] || last_chg=0; fi
+        [[ "$last_chg" =~ ^[0-9]+$ ]] || last_chg=0
+        echo "$tot $last_chg" > "$f" 2>/dev/null
+        if (( tot > 0 && now - last_chg <= 60 )); then echo "ONLINE"
         elif [ "$ROLE" = "1" ]; then echo "WAITING"
         else echo "CONNECTING"; fi
         return
@@ -1257,21 +1268,6 @@ bh_write_config_locked() {
     fi
     if [ "$transport" = udp ]; then enable_udp=true
     elif [ "$transport" != tcp ]; then enable_udp=false; fi
-    if [ "$role" = 1 ]; then
-        local guard_owner="mbackhaul@$name.service,$(bh_forward_chain "$name")" guard_list='' link_proto=tcp
-        [ "$transport" != udp ] || link_proto=udp
-        mt_guard_ports "$port" "$link_proto" "$guard_owner" || return 1
-        while IFS='|' read -r public host rhs; do
-            [ "$public" != "$port" ] || { echo 'Link port overlaps forwarded ingress.' >&2; return 1; }
-            guard_list+="${public},"
-        done < <(bh_expanded_ports "$ports_str" "$bind_host")
-        guard_list="${guard_list%,}"
-        # MPorter mode deliberately reserves public ports for that separate frontend.
-        if [ "$forwarder" != mporter ]; then
-            mt_guard_ports "$guard_list" "$link_proto" "$guard_owner" || return 1
-            [ "$enable_udp" != true ] || [ "$link_proto" = udp ] || mt_guard_ports "$guard_list" udp "$guard_owner" || return 1
-        fi
-    fi
     local other pair private public host rhs
     local -A requested=(); local -a pairs=()
     if [ "$role" = 1 ]; then
@@ -1485,33 +1481,6 @@ collect_header_rows() {
     mv -f "$tmp" "$HDR_ROWS_FILE" 2>/dev/null
 }
 hdr_rows_count() { [ -s "$HDR_ROWS_FILE" ] && wc -l < "$HDR_ROWS_FILE" || echo 0; }
-hdr_print_rows() {
-    local mtime now
-    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( now - mtime )) -gt 15 ]; then collect_header_rows fast; fi
-    HDR_DRAWN_ROWS=0
-    [ -s "$HDR_ROWS_FILE" ] || return 0
-    local border; printf -v border '%*s' 124 ''; border="${border// /─}"
-    printf "  ${B}├${border}┤${NC}\n"
-    local st name peer ping loss up fwd icon icol tag nt lcol fcol n=0 maxn
-    while IFS='|' read -r st name peer ping loss up fwd; do
-        [ -z "$name" ] && continue
-        ((n++)); [ "$n" -gt 3 ] && break
-        name="${name#bh_}"
-        tag="[BH]"; maxn=$(( 20 - ${#tag} - 1 ))
-        nt="${name:0:$maxn} ${tag}"
-        if [ "$st" = 1 ]; then icon="●"; icol="${G}"; else icon="○"; icol="${R}"; fi
-        lcol="${DIM}"
-        if [[ "$loss" =~ ^[0-9]+$ ]]; then
-            if [ "$loss" -eq 0 ]; then lcol="${G}"; elif [ "$loss" -lt 30 ]; then lcol="${Y}"; else lcol="${R}"; fi
-            loss="${loss}%"
-        fi
-        fcol="${DIM}"; [ "$fwd" != "OFF" ] && [ "$fwd" != "---" ] && fcol="${C}"
-        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${Y}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
-            "$icol" "$icon" "$NC" "$nt" "${peer:----}" "${ping:----}" "$lcol" "${loss:----}" "$NC" "${up:----}" "$fcol" "${fwd:----}" "$NC"
-    done < "$HDR_ROWS_FILE"
-    HDR_DRAWN_ROWS=$(( n > 3 ? 3 : n ))
-}
 refresh_header_live() {
     if [ "$(hdr_rows_count)" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
     printf '\033[?25l\0337\033[1;1H'
@@ -1527,11 +1496,132 @@ hdr_stats_loop() {
 }
 
 draw_header() {
-    local mtime now rows=''
-    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ] || [ $((now-mtime)) -gt 15 ]; then collect_header_rows fast; fi
-    [ ! -f "$HDR_ROWS_FILE" ] || rows=$(cat "$HDR_ROWS_FILE")
-    mt_module_header "MBackhaul Core v${MODULE_VERSION}" "$rows" BH
+    local total_t=0; local active_t=0; local online_t=0; local waiting_t=0; local connecting_t=0
+    local t_names=() units=()
+    for conf in "$CONF_DIR"/*.meta; do
+        if [ -f "$conf" ]; then
+            local t_name=$(basename "$conf" .meta)
+            t_names+=("$t_name"); units+=("mbackhaul@$t_name")
+        fi
+    done
+    total_t=${#t_names[@]}
+    if [ "$total_t" -gt 0 ]; then
+        local states=() i=0
+        while IFS= read -r st_line; do states+=("$st_line"); done < <(systemctl is-active "${units[@]}" 2>/dev/null)
+        for t_name in "${t_names[@]}"; do
+            if [ "${states[$i]}" == "active" ]; then
+                ((active_t++))
+                local st=$(check_bh_connection "$t_name" "1")
+                case "$st" in
+                    ONLINE) ((online_t++));;
+                    WAITING) ((waiting_t++));;
+                    CONNECTING) ((connecting_t++));;
+                esac
+            fi
+            ((i++))
+        done
+    fi
+
+    local core_color="${R}"; local core_raw="Not Installed"
+    if is_bh_core_valid; then
+        core_color="${G}"; core_raw="Installed"
+    fi
+    
+    local act_color="${DIM}"; local act_text="0/0"
+    if [ "$total_t" -gt 0 ]; then
+        act_text="${active_t}/${total_t}"
+        if [ "$active_t" -eq "$total_t" ]; then act_color="${G}"
+        elif [ "$active_t" -gt 0 ]; then act_color="${Y}"
+        else act_color="${R}"; fi
+    fi
+
+    local stat_color="${R}"; local stat_icon="○"; local stat_text="STOPPED"
+    if [ "$active_t" -gt 0 ]; then
+        if [ "$online_t" -eq "$active_t" ]; then 
+            stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"
+        elif [ "$online_t" -gt 0 ]; then 
+            stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL"
+        elif [ "$connecting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="CONNECTING"
+        elif [ "$waiting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="WAITING"
+        else
+            stat_color="${Y}"; stat_icon="◎"; stat_text="STARTING"
+        fi
+    fi
+
+    local peer_ip="" peer_name=""
+    local tmp_port=""
+    for conf in "$CONF_DIR"/*.meta; do
+        if [ -f "$conf" ]; then
+            local tmp_role=$(grep "^ROLE=" "$conf" | cut -d'=' -f2)
+            local tmp_remote=$(grep "^REMOTE_IP=" "$conf" | cut -d'=' -f2)
+            tmp_port=$(grep "^TUN_PORT=" "$conf" | cut -d'=' -f2)
+            
+            if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
+                peer_ip="$tmp_remote"
+                peer_name=$(basename "$conf" .meta)
+                break
+            elif [ "$tmp_role" == "1" ]; then
+                local tmp_name=$(basename "$conf" .meta)
+                peer_ip=$(bh_unit_peer_ip "$tmp_name" "$tmp_port" 2>/dev/null || true)
+                if [ -n "$peer_ip" ]; then peer_name="$tmp_name"; break; fi
+            fi
+        fi
+    done
+
+    local g_color="${DIM}"; local g_text="N/A"
+    if [ -n "$peer_ip" ]; then
+        local cache_key="${peer_name:-peer}"; cache_key="${cache_key//[^A-Za-z0-9_.-]/_}"
+        local ping_cache="$SECURE_TMP/.mbackhaul_ping_${cache_key}"
+        local ping_lock="$SECURE_TMP/.mbackhaul_ping_${cache_key}.lock"
+        local now=$(date +%s)
+        local cache_ts=0; [ -f "$ping_cache" ] && cache_ts=$(stat -c %Y "$ping_cache" 2>/dev/null || echo 0)
+        local cache_age=$(( now - cache_ts ))
+
+        if [ -f "$ping_cache" ] && [ "$cache_age" -lt 15 ]; then
+            local p_val=$(cat "$ping_cache" 2>/dev/null)
+            if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
+                local p_int=$(echo "$p_val" | tr -dc '0-9')
+                [ -z "$p_int" ] && p_int=0
+                if [ "$p_int" -lt 90 ]; then g_color="${G}"
+                elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
+                else g_color="${R}"
+                fi
+                g_text="${p_val}"
+            else
+                g_color="${R}"; g_text="Timeout"
+            fi
+        else
+            g_color="${DIM}"; g_text="Calculating..."
+        fi
+
+        local lock_ts=0; [ -f "$ping_lock" ] && lock_ts=$(stat -c %Y "$ping_lock" 2>/dev/null || echo 0)
+        local lock_age=$(( now - lock_ts ))
+        if { [ ! -f "$ping_cache" ] || [ "$cache_age" -ge 15 ]; } && { [ ! -f "$ping_lock" ] || [ "$lock_age" -gt 5 ]; }; then
+            touch "$ping_lock"
+            (
+                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port" "$peer_name")
+                echo "$bg_val" > "$ping_cache"
+                rm -f "$ping_lock"
+                if [ -f "$SECURE_TMP/.mbackhaul_in_menu" ]; then
+                    kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+                fi
+            ) &
+        fi
+    else
+        g_color="${DIM}"; g_text="Waiting"
+    fi
+
+    # Unified dashboard header (same look as the main screen) -- THIS module's tunnels only.
+    local _now _mtime
+    _now=$(date +%s); _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
+    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( _now - _mtime )) -gt 15 ]; then collect_header_rows fast; fi
+    mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "BH" "bh_"
+    HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
+    mt_hdr_draw "MBackhaul Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \
+        "Core|${core_raw}|${core_color}" "Status|${stat_icon} ${stat_text}|${stat_color}" \
+        "Peer Ping|${g_text}|${g_color}" "Tunnels|${total_t}|${W}"
 }
 
 show_tunnel_registry() {
@@ -1594,6 +1684,9 @@ show_tunnel_registry() {
         local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
         local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
         echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+        if [ "$st" != "ONLINE" ]; then
+            mt_reason_row "$(mt_link_why "mbackhaul@${t_name}" "$([ "$ROLE" == "1" ] && echo 1 || echo 0)" "$([ "$ROLE" == "1" ] && echo "$TUN_PORT")" "$([ "$ROLE" != "1" ] && echo "$REMOTE_IP")" "$([ "$TRANSPORT" = udp ] && echo 1 || echo 0)")"
+        fi
 
         local l3="Auth Token   : ${TOKEN}"
         local raw_r3="Protocol: ${TRANSPORT^^}"
@@ -1971,7 +2064,7 @@ mt_link_deploy_locked() {
     if [ "$MT_KIND" = backhaul ]; then name="bh_${name#bh_}"; conf="$CONF_DIR/$name.meta"
     else conf="$CONF_DIR/$name/meta.conf"; fi
     [ ! -e "$conf" ] && { [ "$MT_KIND" != rathole ] || [ ! -e "$CONF_DIR/$name" ]; } || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
-    if [ "$role" = 1 ] && ! mt_guard_ports "$port" "${MT_LINK_DATA[TRANSPORT]:-tcp}"; then return 1; fi
+    if [ "$role" = 1 ] && mt_port_busy "$port"; then echo 'Link port is already in use.' >&2; return 1; fi
     if [ "$MT_KIND" = backhaul ]; then
         validate_bh_ports "${MT_LINK_DATA[PORTS]}" "$role" || return 1
         settings=$(mktemp "$SECURE_TMP/peer-backhaul.XXXXXX") || return 1
@@ -2129,7 +2222,7 @@ while true; do
                    continue
                fi
 
-               if [ "$s_type" = 1 ] && ! mt_guard_ports "$t_port" "${tr_val:-tcp}"; then
+               if ss -tuln 2>/dev/null | grep -qE ":${t_port}\s"; then
                    echo -e "  ${R}Error: Port ${t_port} is already in use by another service!${NC}"
                    continue
                fi
@@ -2166,6 +2259,7 @@ while true; do
                while true; do
                    echo -ne "  ${C}●${NC} ${W}Forward Ports (e.g. 443=127.0.0.1:443): ${NC}"; read fwd_ports
                    fwd_ports=$(echo "$fwd_ports" | tr -d '\r')
+                   if [ -n "$fwd_ports" ]; then bh_ports_guard "$fwd_ports" "$([ "$u_udp" = true ] && echo 1 || echo 0)" "" || continue; fwd_ports="$BH_SPEC_OUT"; fi
                    validate_bh_ports "$fwd_ports" "1" && break
                done
            fi
@@ -2252,6 +2346,8 @@ while true; do
                        echo -ne "  ${C}●${NC} ${W}New Port Mappings (e.g. 443=127.0.0.1:443) [Current: ${PORTS:-None}]: ${NC}"; read n_ports
                        n_ports=$(echo "$n_ports" | tr -d '\r')
                        if [ -z "$n_ports" ]; then break; fi
+                       bh_ports_guard "$n_ports" "$([ "$ENABLE_UDP" = true ] || [ "$TRANSPORT" = udp ] && echo 1 || echo 0)" "mbackhaul@${t_name}.service" || continue; n_ports="$BH_SPEC_OUT"
+                       [ -n "$n_ports" ] || { echo -e "  ${Y}● No usable ports left.${NC}"; continue; }
                        validate_bh_ports "$n_ports" "1" "$PORTS" && { PORTS="$n_ports"; break; }
                    done
                    bh_choose_forwarder "${FORWARDER:-backhaul}" || continue
@@ -2290,7 +2386,7 @@ while true; do
                    if ! mt_valid_port "$n_tun_port"; then
                        echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"; continue
                    fi
-                   if [ "$ROLE" = 1 ] && ! mt_guard_ports "$n_tun_port" "${TRANSPORT:-tcp}" "mbackhaul@$t_name.service,$(bh_forward_chain "$t_name")"; then
+                   if [ "$n_tun_port" != "$TUN_PORT" ] && ss -tuln 2>/dev/null | grep -qE ":${n_tun_port}\s"; then
                        echo -e "  ${R}Error: Port ${n_tun_port} is already in use!${NC}"; continue
                    fi
                    clean_bh_counters "$t_name"

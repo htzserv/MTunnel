@@ -2,7 +2,7 @@
 # --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.1.4"
+MODULE_VERSION="1.1.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -21,11 +21,7 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
-                if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
-                return 1
-            fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -34,9 +30,12 @@ mt_load_common() {
     return 1
 }
 mt_load_common || exit 1
+if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null || ! declare -F mt_unit_tcp_rtt >/dev/null; then
+    echo 'MTunnel: the installed shared core (common.sh) is older than this module (needs 1.1.6 or newer).' >&2
+    echo 'Update the whole bundle from the main menu (Sync) or run: bash install.sh --local .' >&2
+    exit 1
+fi
 unset -f mt_load_common
-MT_PORT_INTERACTIVE=0
-if [[ "${1:-}" != --* ]] && [ -t 0 ]; then MT_PORT_INTERACTIVE=1; fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
@@ -456,19 +455,11 @@ paqet_port_available() {
     return 0
 }
 
-paqet_guard_config() {
-    local name="$1" meta="$CONF_DIR/$1.meta" role port ports
-    role=$(mt_read_kv "$meta" ROLE); port=$(mt_read_kv "$meta" TUN_PORT); ports=$(mt_read_kv "$meta" TCP_PORTS)
-    if [ "$role" = 1 ]; then mt_guard_ports "$port" tcp "mpaqet@$name.service"
-    else mt_guard_ports "$ports" tcp "mpaqet@$name.service"; fi
-}
-
 validate_paqet_ports() {
     local list="$1" skip="${2:-}" owned='' p; local -a parts=()
     [ -z "$skip" ] || owned=$(sed -n 's/^TCP_PORTS=//p' "$CONF_DIR/$skip.meta" 2>/dev/null)
-    local MT_PORT_OWNER="mpaqet@${skip:-${t_name:-}}.service"
     [ -n "$list" ] && mt_validate_port_list "$list" 1 tcp "$owned" || return 1
-    mapfile -t parts < <(mt_expand_port_list "$list")
+    IFS=, read -ra parts <<< "$list"
     for p in "${parts[@]}"; do paqet_port_available "$p" "$skip" || return 1; done
 }
 
@@ -975,25 +966,7 @@ check_paqet_connection() {
     echo "$cur $now $verdict" > "$sf"; echo "$verdict"
 }
 
-pq_unit_tcp_rtt() {
-    local name="$1" target="$2" unit="mpaqet@${name}" pid line rtt hit=0
-    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
-    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    while IFS= read -r line; do
-        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
-            if [[ "$line" == *"$target"* ]]; then
-                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-                hit=1; continue
-            fi
-            hit=0
-        elif [ "$hit" = 1 ]; then
-            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-            [[ "$line" =~ ^[[:space:]] ]] || hit=0
-        fi
-    done < <(ss -Htinp 2>/dev/null)
-    [ -n "$rtt" ] || return 1
-    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
-}
+pq_unit_tcp_rtt() { mt_unit_tcp_rtt "mpaqet@${1}" "$2"; }
 
 get_peer_ping() {
     local target_ip port t_name ping_res ping_val tcp_rtt start_ts end_ts t_rtt
@@ -1092,33 +1065,6 @@ collect_header_rows() {
     mv -f "$tmp" "$HDR_ROWS_FILE" 2>/dev/null
 }
 hdr_rows_count() { [ -s "$HDR_ROWS_FILE" ] && wc -l < "$HDR_ROWS_FILE" || echo 0; }
-hdr_print_rows() {
-    local mtime now
-    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( now - mtime )) -gt 15 ]; then collect_header_rows fast; fi
-    HDR_DRAWN_ROWS=0
-    [ -s "$HDR_ROWS_FILE" ] || return 0
-    local border; printf -v border '%*s' 124 ''; border="${border// /─}"
-    printf "  ${B}├${border}┤${NC}\n"
-    local st name peer ping loss up fwd icon icol tag nt lcol fcol n=0 maxn
-    while IFS='|' read -r st name peer ping loss up fwd; do
-        [ -z "$name" ] && continue
-        ((n++)); [ "$n" -gt 3 ] && break
-        name="${name#pq_}"
-        tag="[PAQET]"; maxn=$(( 20 - ${#tag} - 1 ))
-        nt="${name:0:$maxn} ${tag}"
-        if [ "$st" = 1 ]; then icon="●"; icol="${G}"; else icon="○"; icol="${R}"; fi
-        lcol="${DIM}"
-        if [[ "$loss" =~ ^[0-9]+$ ]]; then
-            if [ "$loss" -eq 0 ]; then lcol="${G}"; elif [ "$loss" -lt 30 ]; then lcol="${Y}"; else lcol="${R}"; fi
-            loss="${loss}%"
-        fi
-        fcol="${DIM}"; [ "$fwd" != "OFF" ] && [ "$fwd" != "---" ] && fcol="${C}"
-        printf "  ${B}│${NC} %b%s%b ${W}%-20.20s${NC} ${B}│${NC} ${Y}Peer:${NC} ${Y}%-24.24s${NC} ${B}│${NC} ${DIM}Ping:${NC} ${Y}%-8.8s${NC} ${B}│${NC} ${DIM}Loss:${NC} %b%-5.5s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-11.11s%b ${B}│${NC}\n" \
-            "$icol" "$icon" "$NC" "$nt" "${peer:----}" "${ping:----}" "$lcol" "${loss:----}" "$NC" "${up:----}" "$fcol" "${fwd:----}" "$NC"
-    done < "$HDR_ROWS_FILE"
-    HDR_DRAWN_ROWS=$(( n > 3 ? 3 : n ))
-}
 refresh_header_live() {
     if [ "$(hdr_rows_count)" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
     printf '\033[?25l\0337\033[1;1H'
@@ -1134,11 +1080,142 @@ hdr_stats_loop() {
 }
 
 draw_header() {
-    local mtime now rows=''
-    now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ] || [ $((now-mtime)) -gt 15 ]; then collect_header_rows fast; fi
-    [ ! -f "$HDR_ROWS_FILE" ] || rows=$(cat "$HDR_ROWS_FILE")
-    mt_module_header "MPaqet Core v${MODULE_VERSION}" "$rows" PAQET
+    local total_tunnels=0; local online_tunnels=0; local active_t=0; local mtu_err_t=0; local err_t=0; local waiting_t=0; local connecting_t=0
+    local t_names=() units=()
+    for conf in "$CONF_DIR"/*.meta; do
+        if [ -f "$conf" ]; then
+            local t_name=$(basename "$conf" .meta)
+            t_names+=("$t_name"); units+=("mpaqet@$t_name")
+        fi
+    done
+    total_tunnels=${#t_names[@]}
+    if [ "$total_tunnels" -gt 0 ]; then
+        local states=() i=0
+        while IFS= read -r st_line; do states+=("$st_line"); done < <(systemctl is-active "${units[@]}" 2>/dev/null)
+        for t_name in "${t_names[@]}"; do
+            if [ "${states[$i]}" == "active" ]; then
+                ((active_t++))
+                local st=$(check_paqet_connection "$t_name" "1")
+                case "$st" in
+                    ONLINE) ((online_tunnels++));;
+                    WAITING) ((waiting_t++));;
+                    CONNECTING) ((connecting_t++));;
+                    MTU-ERR) ((mtu_err_t++));;
+                    ERRORS) ((err_t++));;
+                esac
+            fi
+            ((i++))
+        done
+    fi
+    
+    local core_color="${R}"; local core_raw="Not Installed"
+    if is_paqet_core_valid; then
+        core_color="${G}"; core_raw="Installed"
+    fi
+
+    local act_color="${DIM}"; local act_text="0/0"
+    if [ "$total_tunnels" -gt 0 ]; then
+        act_text="${active_t}/${total_tunnels}"
+        if [ "$active_t" -eq "$total_tunnels" ]; then act_color="${G}"
+        elif [ "$active_t" -gt 0 ]; then act_color="${Y}"
+        else act_color="${R}"; fi
+    fi
+
+    local stat_color="${R}"; local stat_icon="○"; local stat_text="STOPPED"
+    if [ "$active_t" -gt 0 ]; then
+        if [ "$mtu_err_t" -gt 0 ]; then
+            stat_color="${R}"; stat_icon="✖"; stat_text="MTU ERROR"
+        elif [ "$err_t" -gt 0 ]; then
+            stat_color="${R}"; stat_icon="✖"; stat_text="ERRORS"
+        elif [ "$online_tunnels" -eq "$active_t" ]; then 
+            stat_color="${G}"; stat_icon="●"; stat_text="CONNECTED"
+        elif [ "$online_tunnels" -gt 0 ]; then 
+            stat_color="${Y}"; stat_icon="◐"; stat_text="PARTIAL"
+        elif [ "$connecting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="CONNECTING"
+        elif [ "$waiting_t" -gt 0 ]; then
+            stat_color="${Y}"; stat_icon="◎"; stat_text="WAITING"
+        else
+            stat_color="${Y}"; stat_icon="◎"; stat_text="STARTING"
+        fi
+    fi
+
+    local peer_ip="" peer_name=""
+    local tmp_port=""
+    for conf in "$CONF_DIR"/*.meta; do
+        if [ -f "$conf" ]; then
+            local tmp_role=$(grep "^ROLE=" "$conf" | cut -d'=' -f2)
+            local tmp_remote=$(grep "^REMOTE_IP=" "$conf" | cut -d'=' -f2)
+            tmp_port=$(grep "^TUN_PORT=" "$conf" | cut -d'=' -f2)
+            
+            if [ -n "$tmp_remote" ] && [ "$tmp_remote" != "0.0.0.0" ]; then
+                peer_ip="$tmp_remote"
+                peer_name=$(basename "$conf" .meta)
+                break
+            elif [ "$tmp_role" == "1" ]; then
+                local tmp_name=$(basename "$conf" .meta)
+                local srv_peer=$(get_server_peer_ip "$tmp_name")
+                if [ -n "$srv_peer" ]; then
+                    peer_ip="$srv_peer"; peer_name="$tmp_name"
+                    break
+                fi
+            fi
+        fi
+    done
+
+    local g_color="${DIM}"; local g_text="N/A"
+    if [ -n "$peer_ip" ]; then
+        local cache_key="${peer_name:-peer}"; cache_key="${cache_key//[^A-Za-z0-9_.-]/_}"
+        local ping_cache="$SECURE_TMP/.mpaqet_ping_${cache_key}"
+        local ping_lock="$SECURE_TMP/.mpaqet_ping_${cache_key}.lock"
+        local now=$(date +%s)
+        local cache_ts=0; [ -f "$ping_cache" ] && cache_ts=$(stat -c %Y "$ping_cache" 2>/dev/null || echo 0)
+        local cache_age=$(( now - cache_ts ))
+
+        if [ -f "$ping_cache" ] && [ "$cache_age" -lt 15 ]; then
+            local p_val=$(cat "$ping_cache" 2>/dev/null)
+            if [[ "$p_val" != "Timeout" && "$p_val" != "N/A" ]]; then
+                local p_int=$(echo "$p_val" | tr -dc '0-9')
+                if [ -z "$p_int" ]; then p_int=0; fi
+                if [ "$p_int" -lt 90 ]; then g_color="${G}"
+                elif [ "$p_int" -lt 160 ]; then g_color="${Y}"
+                else g_color="${R}"
+                fi
+                g_text="${p_val}"
+            else
+                g_color="${R}"; g_text="Timeout"
+            fi
+        else
+            g_color="${DIM}"; g_text="Calculating..."
+        fi
+
+        local lock_ts=0; [ -f "$ping_lock" ] && lock_ts=$(stat -c %Y "$ping_lock" 2>/dev/null || echo 0)
+        local lock_age=$(( now - lock_ts ))
+        if { [ ! -f "$ping_cache" ] || [ "$cache_age" -ge 15 ]; } && { [ ! -f "$ping_lock" ] || [ "$lock_age" -gt 5 ]; }; then
+            touch "$ping_lock"
+            (
+                bg_val=$(get_peer_ping "$peer_ip" "$tmp_port" "$peer_name")
+                echo "$bg_val" > "$ping_cache"
+                rm -f "$ping_lock"
+                if [ -f "$SECURE_TMP/.mpaqet_in_menu" ]; then
+                    kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+                fi
+            ) &
+        fi
+    else
+        g_color="${DIM}"; g_text="Waiting"
+        [ "$online_tunnels" -gt 0 ] && g_text="N/A"
+    fi
+
+    # Unified dashboard header (same look as the main screen) -- THIS module's tunnels only.
+    local _now _mtime
+    _now=$(date +%s); _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
+    if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( _now - _mtime )) -gt 15 ]; then collect_header_rows fast; fi
+    mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "PAQET" "pq_"
+    HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
+    mt_hdr_draw "MPaqet Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \
+        "Core|${core_raw}|${core_color}" "Status|${stat_icon} ${stat_text}|${stat_color}" \
+        "Peer Ping|${g_text}|${g_color}" "Tunnels|${total_tunnels}|${W}"
 }
 
 setup_systemd_service() {
@@ -1585,7 +1662,7 @@ mt_link_deploy_locked() {
     local name="pq_${MT_LINK_DATA[NAME]#pq_}" role="${MT_LINK_DATA[ROLE]}" port="${MT_LINK_DATA[LINK_PORT]}" host="${MT_LINK_DATA[HOST]}" key="${MT_LINK_DATA[TOKEN]}" block="${MT_LINK_DATA[BLOCK]}" target p variable yaml meta tmp unit
     yaml="$CONF_DIR/$name.yaml"; meta="$CONF_DIR/$name.meta"; unit="mpaqet@$name"
     [ ! -e "$yaml" ] && [ ! -e "$meta" ] || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
-    [ "$role" != 1 ] || { mt_guard_ports "$port" tcp && paqet_port_available "$port"; } || return 1
+    [ "$role" != 1 ] || { ! mt_port_busy "$port" && paqet_port_available "$port"; } || return 1
     if [ "$role" = 2 ]; then
         validate_paqet_ports "${MT_LINK_DATA[TCP_PORTS]}" || return 1
         mt_list_has_port "${MT_LINK_DATA[TCP_PORTS]}" "$port" && { echo 'A forwarded port matches the link port.' >&2; return 1; }
@@ -1629,7 +1706,7 @@ mt_link_deploy_locked() {
         for p in "${MT_PQ_PORTS[@]}"; do setup_paqet_counters "$name" "$p"; done
         setup_paqet_probe "$name" "$PQ_ROUTE_TARGET" "$port"
     fi
-    if ! paqet_guard_config "$name" || ! systemctl restart "$unit" || ! mt_workspace_service_ready "$unit"; then
+    if ! systemctl restart "$unit" || ! mt_workspace_service_ready "$unit"; then
         journalctl -u "$unit" -n 8 --no-pager >&2; systemctl stop "$unit"; clean_paqet_counters "$name"; rm -f "$yaml" "$meta"; return 1
     fi
     systemctl enable "$unit" >/dev/null 2>&1
@@ -1746,7 +1823,7 @@ while true; do
                    echo -e "  ${R}✖ Invalid port!${NC}"
                    continue
                fi
-               if ! mt_guard_ports "$t_port" tcp || ! paqet_port_available "$t_port"; then
+               if mt_port_busy "$t_port" || ! paqet_port_available "$t_port"; then
                    echo -e "  ${R}Error: Port ${t_port} is already in use by another service!${NC}"
                    continue
                fi
@@ -1802,7 +1879,6 @@ EOF
            
            setup_paqet_counters "$t_name" "$t_port"
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
-           paqet_guard_config "$t_name" || continue
            systemctl restart "mpaqet@${t_name}"
            
            sleep 1.5
@@ -1863,6 +1939,7 @@ EOF
            while true; do
                echo -ne "  ${C}● Forward Ports (e.g. 443,8080): ${NC}"; read fwd_ports
                fwd_ports=${fwd_ports//$'\r'/}
+               if [ -n "$fwd_ports" ]; then mt_port_guard bind "$fwd_ports" "" "" "" "Paqet" || continue; fwd_ports="$MT_PORT_TCP"; fi
                if ! validate_paqet_ports "$fwd_ports"; then
                    echo -e "  ${R}Error: Specify valid, unique, available forwarded ports (1-65535)!${NC}"
                else
@@ -1884,7 +1961,7 @@ log:
   level: "info"
 forward:
 EOF
-           mapfile -t P_ARR < <(mt_expand_port_list "$fwd_ports")
+           IFS=',' read -ra P_ARR <<< "$fwd_ports"
            meta_ports=""
            for p_raw in "${P_ARR[@]}"; do
                p_clean=$(echo "$p_raw" | tr -dc '0-9')
@@ -1935,7 +2012,6 @@ EOF
            chmod 600 "$CONF_DIR/${t_name}.meta"
 
            systemctl enable "mpaqet@${t_name}" >/dev/null 2>&1
-           paqet_guard_config "$t_name" || continue
            systemctl restart "mpaqet@${t_name}"
            
            sleep 1.5
@@ -2079,6 +2155,8 @@ EOF
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
                fi
 
+               mt_port_guard bind "$n_ports" "" "mpaqet@${old_tname}.service" "" "Paqet ${old_tname}" || { sleep 1; continue; }
+               n_ports="$MT_PORT_TCP"
                validate_paqet_ports "$n_ports" "$old_tname" || { echo 'Invalid or conflicting port list.' >&2; sleep 1; continue; }
                if [ -n "$t_tun_port" ] && echo ",$n_ports," | grep -q ",$t_tun_port,"; then
                    echo -e "  ${R}✖ Loop Error: Forward port cannot match Tunnel port ($t_tun_port)!${NC}"
@@ -2090,7 +2168,7 @@ EOF
                
                {
                    sed -n '1,/^forward:/p' "$sel_cfg"
-                   mapfile -t P_ARR < <(mt_expand_port_list "$n_ports")
+                   IFS=',' read -ra P_ARR <<< "$n_ports"
                    for p_raw in "${P_ARR[@]}"; do
                        p_clean=$(echo "$p_raw" | tr -dc '0-9')
                        if mt_valid_port "$p_clean"; then
@@ -2170,7 +2248,6 @@ EOF
                fi
            fi
 
-           paqet_guard_config "$old_tname" || continue
            systemctl restart "mpaqet@${old_tname}" 2>/dev/null
            sleep 1.5
            if systemctl is-active --quiet "mpaqet@${old_tname}"; then
@@ -2192,4 +2269,3 @@ EOF
         0) break ;;
     esac
 done
-

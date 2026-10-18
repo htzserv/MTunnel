@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Test shim: logs every call; `-t nat -S PREROUTING` replays nat.txt; IPT_FAIL_AT=n makes call n fail.
+echo "$*" >> "$MT_FIX/ipt.log"
+n=$(wc -l < "$MT_FIX/ipt.log")
+if [ -n "${IPT_FAIL_AT:-}" ] && [ "$n" -eq "$IPT_FAIL_AT" ]; then exit 1; fi
+case "$*" in *"-S PREROUTING"*) cat "$MT_FIX/nat.txt" 2>/dev/null ;; esac
+exit 0

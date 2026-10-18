@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Test shim: https://mirror.test/m/<path> is served from $MT_FIX/srv/<path>; missing -> HTTP error.
+out=''; url=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -o) out="$2"; shift 2;;
+        --proto|--proto-redir|--connect-timeout|--max-time|--retry) shift 2;;
+        -*) shift;;
+        *) url="$1"; shift;;
+    esac
+done
+p="${url#https://mirror.test/m/}"; p="${p%%\?*}"
+[ -f "$MT_FIX/srv/$p" ] || exit 22
+cp "$MT_FIX/srv/$p" "$out"

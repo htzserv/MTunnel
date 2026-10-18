@@ -241,13 +241,9 @@ installer_main() {
         if ! mt_download "$remote/install.sh" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
             echo 'Cannot prepare installer: install.sh. Installed scripts preserved.' >&2; return 1
         fi
-        # VERSION is optional for legacy mirrors, but if present it must agree with the staged core.
-        if mt_download "$remote/VERSION" "$work/scripts/VERSION" 2>/dev/null; then
-            local marker staged_core
-            marker=$(head -c 32 "$work/scripts/VERSION" | tr -d '\r\n ')
-            staged_core=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$work/scripts/core/common.sh")
-            [ "$marker" = "$staged_core" ] || { echo "Source VERSION is v$marker but core is v$staged_core; refusing partial mirror/cache." >&2; return 1; }
-        fi
+        # The remote VERSION file is only an update marker and may lag behind the files.
+        # Bundle consistency is enforced below by comparing the staged core, every module
+        # and install.sh, so a stale VERSION marker must never block an install.
         source_dir="$work/scripts"
     fi
         [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }

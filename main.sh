@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.1.0 ---
+# --- MTunnel Master Core | Central Dashboard v1.1.2 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.1.0"
+MODULE_VERSION="1.1.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -733,37 +733,24 @@ draw_header_lines_only() {
     fi
 
     # Wide dashboard: base width 117 (original main layout). Any extra terminal width
-    # (up to 140 columns total) is donated to the Peer cell and the last cells of rows 1-2.
-    local total=$((term_cols - 4)) extra peer_w v4_str v6_str top_raw top_a top_b
+    # (up to 150 columns total) is donated to the Peer cell and the last cells of rows 1-2.
+    local total=$((term_cols - 4)) extra peer_w v6_addr
     (( total < 117 )) && total=117
-    (( total > 140 )) && total=140
+    (( total > 150 )) && total=150
     extra=$((total - 117)); peer_w=$((16 + extra))
+    v6_addr=$(get_local_ipv6)
+    if [ -n "$v6_addr" ]; then v6_col="${M}"; v6_icon="●"; v6_text="$v6_addr"
+    else v6_col="${DIM}"; v6_icon="○"; v6_text="OFF"; fi
     printf -v border '%*s' "$total" ''
     border="${border// /─}"
 
-    v4_str="$s_ip"
-    v6_str=$(get_local_ipv6)
-    if [ -n "$v4_str" ] && [ "$v4_str" != "Unknown" ]; then
-        top_a="${C}◆${NC} ${DIM}IPv4${NC}  ${G}${v4_str}${NC}"
-    else
-        top_a="${DIM}◆ IPv4  not available${NC}"
-    fi
-    if [ -n "$v6_str" ]; then
-        top_b="${M}◆${NC} ${DIM}IPv6${NC}  ${Y}${v6_str}${NC}"
-    else
-        top_b="${DIM}◆ IPv6  not available${NC}"
-    fi
-
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
-    # Row 0 (thin): server IPv4 | IPv6
-    mt_main_frame_row "$(mt_main_header_cell 31 "$top_a")${B}│${NC}$(mt_main_header_cell $((total-32)) "$top_b")" "$total"
-    printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
     # Row 1: 31 | 25 | 21 | 37(+extra) = 117(+extra) columns (Web cell removed)
-    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-16.16s${NC} ${B}│${NC} ${DIM}Porter:${NC} %b%s%b %-9.9s ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-9.9s ${DIM}IPv6:${NC} %b%s%b %-*.*s ${B}│${NC}\033[K\n" \
+    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${B}│${NC} ${DIM}Porter:${NC} %b%s%b %-9.9s ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${B}│${NC}\033[K\n" \
         "MDesign Master Core v${MODULE_VERSION}" "$s_ip" \
         "$porter_col" "$porter_icon" "$NC" "$porter_text" \
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
-        "$v6_col" "$v6_icon" "$NC" "$((10+extra))" "$((10+extra))" "$v6_text"
+        "$v6_col" "$((16+extra))" "$((16+extra))" "$v6_text" "$NC"
     printf "  ${B}├${border}┤${NC}\033[K\n"
     # Row 2: 31 | 25 | 21 | 37(+extra)
     printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-12.12s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
@@ -1639,19 +1626,24 @@ render_main_menu() {
     draw_main_header
     printf '\n'
     printf '  %b┌─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$DIM" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
     printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
     printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
     printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
     printf '  %b├─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
+    printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ TOOLS & BENCHMARK UTILITIES ]%b\n' "$DIM" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
     printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b9%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
     printf '  %b├─%b %b10%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
-    printf '  %b├─[ SESSION CONTROL ]%b\n' "$DIM" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 show_local_install() {

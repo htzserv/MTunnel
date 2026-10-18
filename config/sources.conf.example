@@ -1,5 +1,0 @@
-# MTunnel 1.2.0 source configuration
-# Copy to /etc/mtunnel/sources.conf and edit only the URL values.
-# HTTPS is required.
-MTUNNEL_GITHUB_BASE=https://raw.githubusercontent.com/htzserv/MTunnel/main
-MTUNNEL_MIRROR_BASE=https://c107328.parspack.net/c107328/MTunnel

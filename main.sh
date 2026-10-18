@@ -46,7 +46,7 @@ declare -A MOD_MAP=(
     ["mrathole"]="tunnels/mrathole.sh"
     ["mbackhaul"]="tunnels/mbackhaul.sh"
     ["mpaqet"]="tunnels/mpaqet.sh"
-    ["mdoctor"]="tools/mdoctor.sh"
+    ["mdoctor"]="mdoctor.sh"
 )
 ALL_MODULES=("main" "mporter" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor")
 # Every shell component can also be updated independently from GitHub/mirror,
@@ -59,7 +59,7 @@ declare -A COMPONENT_MAP=(
     ["mrathole"]="tunnels/mrathole.sh"
     ["mbackhaul"]="tunnels/mbackhaul.sh"
     ["mpaqet"]="tunnels/mpaqet.sh"
-    ["mdoctor"]="tools/mdoctor.sh"
+    ["mdoctor"]="mdoctor.sh"
     ["common"]="core/common.sh"
     ["install"]="install.sh"
 )
@@ -612,191 +612,7 @@ mt_main_menu_option() {
 }
 
 draw_header_lines_only() {
-    local s_ip=$(get_local_ip)
-    s_ip="${s_ip:0:16}"
-
-    local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
-
-    local porter_col="${DIM}" porter_icon="○" porter_text="OFF"
-    if systemctl is-active --quiet mporter.service 2>/dev/null || \
-       systemctl is-active --quiet haproxy 2>/dev/null || \
-       systemctl is-active --quiet gost 2>/dev/null || \
-       systemctl is-active --quiet mporter-iptables 2>/dev/null; then
-        porter_col="${G}"; porter_icon="●"; porter_text="ON"
-    fi
-
-    local bbr_col="${DIM}" bbr_icon="○" bbr_text="OFF"
-    [ "$bbr_cc" == "bbr" ] && { bbr_col="${G}"; bbr_icon="●"; bbr_text="ON"; }
-
-    local cpu_pct=0 cpu_cores=1 r_used="0G" r_total="0G" r_pct=0 rx_speed="0 B/s" tx_speed="0 B/s" v6_status="OFF"
-    if [ -f "$SECURE_TMP/.main_sys_stats" ]; then
-        IFS='|' read -r cpu_pct cpu_cores r_used r_total r_pct rx_speed tx_speed v6_status < "$SECURE_TMP/.main_sys_stats"
-    fi
-
-    local cpu_col="${G}"
-    [ "$cpu_pct" -gt 60 ] 2>/dev/null && cpu_col="${Y}"
-    [ "$cpu_pct" -gt 85 ] 2>/dev/null && cpu_col="${R}"
-    local cpu_str="${cpu_pct}%"
-
-    local core_label="${cpu_cores} Cores"
-    [ "$cpu_cores" -eq 1 ] 2>/dev/null && core_label="1 Core"
-
-    local ram_col="${G}"
-    [ "$r_pct" -gt 70 ] 2>/dev/null && ram_col="${Y}"
-    [ "$r_pct" -gt 88 ] 2>/dev/null && ram_col="${R}"
-    local ram_str="${r_used}/${r_total} [${r_pct}%]"
-
-    local rx_col="${DIM}"
-    [[ "$rx_speed" != "0 B/s" && -n "$rx_speed" ]] && rx_col="${G}"
-
-    local tx_col="${DIM}"
-    [[ "$tx_speed" != "0 B/s" && -n "$tx_speed" ]] && tx_col="${Y}"
-
-    local v6_col="${DIM}" v6_icon="○" v6_text="OFF"
-    if [ "$v6_status" == "ON" ]; then
-        v6_col="${G}"; v6_icon="●"; v6_text="ON"
-    fi
-
-    local term_cols boxw content_w compact_line border
-    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-120}")
-    if [ "$term_cols" -lt 72 ]; then
-        local tun_count=0
-        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 66 ] && boxw=66
-        content_w=$((boxw - 2))
-        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
-        [ -f "$SECURE_TMP/.main_tun_stats" ] && tun_count=$(awk -F'|' 'NF>2{n++} END{print n+0}' "$SECURE_TMP/.main_tun_stats" 2>/dev/null)
-        printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
-        compact_line="MDesign v${MODULE_VERSION} | ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="Tunnels ${tun_count} | Porter ${porter_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        printf "  ${B}╰${border}╯${NC}\033[K\n"
-        return 0
-    fi
-    if [ "$term_cols" -lt 124 ]; then
-        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
-        content_w=$((boxw - 2))
-        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
-        printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
-        compact_line="MDesign v${MODULE_VERSION} | Local: ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="Porter ${porter_text} | RX ${rx_speed} | TX ${tx_speed}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        printf "  ${B}├${border}┤${NC}\033[K\n"
-        local cshown=0
-        if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
-            while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
-                [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
-                local compact_loss="${t_loss:----}"; [[ "$t_loss" =~ ^[0-9]+$ ]] && compact_loss="${t_loss}%"
-                compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${compact_loss}"
-                printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-            done < "$SECURE_TMP/.main_tun_stats"
-        fi
-        if [ "$cshown" -eq 0 ]; then
-            compact_line='No active tunnels configured.'
-            printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        fi
-        printf "  ${B}╰${border}╯${NC}\033[K\n"
-        return 0
-    fi
-
-    # Wide dashboard (responsive): the frame is sized from what has to be shown.
-    #   - never narrower than 117 columns (original layout), never wider than the terminal / 150
-    #   - grows only as far as needed for the server IPv6 and the longest tunnel Peer
-    #   - when the server has no IPv6 the IPv6 cell shrinks and so does the whole header
-    local total extra peer_w v6_addr v6_need peer_need need_total w6 w4 v6_field
-    v6_addr=$(get_local_ipv6)
-    if [ -n "$v6_addr" ]; then v6_col="${M}"; v6_text="$v6_addr"; v6_need=$(( ${#v6_addr} + 10 ))
-    else v6_col="${DIM}"; v6_text="OFF"; v6_need=21; fi
-    (( v6_need < 21 )) && v6_need=21
-    peer_need=16
-    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
-        peer_need=$(awk -F'|' 'NF>2 && n<3 {n++; l=length($3); if(l>m)m=l} END{print (m<16?16:m)}' "$SECURE_TMP/.main_tun_stats" 2>/dev/null)
-        [[ "$peer_need" =~ ^[0-9]+$ ]] || peer_need=16
-    fi
-    need_total=$(( 31 + 25 + v6_need + 29 + 3 ))
-    (( need_total < 117 )) && need_total=117
-    (( 117 + peer_need - 16 > need_total )) && need_total=$(( 117 + peer_need - 16 ))
-    total=$(( term_cols - 4 ))
-    (( total > 150 )) && total=150
-    (( total > need_total )) && total=$need_total
-    (( total < 117 )) && total=117
-    extra=$(( total - 117 )); peer_w=$(( 16 + extra ))
-    w6=$v6_need
-    (( w6 > total - 31 - 25 - 29 - 3 )) && w6=$(( total - 31 - 25 - 29 - 3 ))
-    w4=$(( total - 31 - 25 - w6 - 3 ))
-    v6_field=$(( w6 - 10 ))
-    printf -v border '%*s' "$total" ''
-    border="${border// /─}"
-
-    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
-    # Row 1: title 31 | IPv4 25 | IPv6 w6 | BBR + Porter w4
-    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${B}│${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${B}│${NC}\033[K\n" \
-        "MDesign Master Core v${MODULE_VERSION}" "$s_ip" \
-        "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
-        "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
-        "$porter_col" "$porter_icon" "$NC" "$((w4-24))" "$((w4-24))" "$porter_text"
-    printf "  ${B}├${border}┤${NC}\033[K\n"
-    # Row 2: CPU 31 | RAM 25 | Net ▼ w6 | Net ▲ w4
-    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
-        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
-        "$ram_col" "$ram_str" "$NC" \
-        "$rx_col" "$((w6-9))" "$((w6-9))" "$rx_speed" "$NC" \
-        "$tx_col" "$((w4-9))" "$((w4-9))" "$tx_speed" "$NC"
-    printf "  ${B}├${border}┤${NC}\033[K\n"
-
-    local shown=0
-    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
-        while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
-            [ -z "$t_proto" ] && continue
-            ((shown++))
-            [ "$shown" -gt 3 ] && break
-
-            local pure_name=$(echo "$t_name" | tr -d ' ')
-            [ ${#pure_name} -gt 8 ] && pure_name="${pure_name:0:8}"
-            local name_tag="${pure_name} [${t_proto}]"
-            [ ${#name_tag} -gt 17 ] && name_tag="${name_tag:0:17}"
-
-            [ ${#t_remote} -gt "$peer_w" ] && t_remote="${t_remote:0:$peer_w}"
-
-            local if_uptime=$(get_iface_uptime_pure "$t_dev")
-            local stat_icon="●"; local stat_col="${G}"
-            if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-            [ ${#if_uptime} -gt 10 ] && if_uptime="${if_uptime:0:10}"
-
-            local fwd_col="${DIM}"; [ "$t_fwd" != "OFF" ] && fwd_col="${C}"
-            local fwd_str="${t_fwd:0:9}"
-
-            local vip_col="${DIM}"; [ "$t_vip" != "OFF" ] && vip_col="${G}"
-            local vip_stat="${t_vip:0:5}"
-
-            local live_ping="---"
-            if [ -n "$t_ping" ] && [ "$t_ping" != "---" ]; then
-                local num_p="${t_ping%ms}"
-                if [[ "$num_p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-                    live_ping=$(awk -v v="$num_p" 'BEGIN {printf "%.0fms", v}')
-                else
-                    live_ping="$t_ping"
-                fi
-            fi
-            [ ${#live_ping} -gt 5 ] && live_ping="${live_ping:0:5}"
-
-            local loss_col="${DIM}"; local loss_disp="---"
-            if [ "$t_loss" != "---" ] && [ -n "$t_loss" ]; then
-                loss_disp="${t_loss}%"
-                if [ "$t_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
-                elif [ "$t_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
-                else loss_col="${R}"; fi
-            fi
-            [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
-
-            printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-*.*s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${B}│${NC}\033[K\n" \
-                "$stat_col" "$stat_icon" "$NC" "$name_tag" "$peer_w" "$peer_w" "$t_remote" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
-        done < "$SECURE_TMP/.main_tun_stats"
-    fi
-
-    if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}● %-*.*s${NC}  ${B}│${NC}\033[K\n" "$((111+extra))" "$((111+extra))" "No active tunnels or fabrics deployed across the ecosystem."
-    fi
-    printf "  ${B}╰${border}╯${NC}\033[K\n"
+    mt_master_header_draw "$MODULE_VERSION"
 }
 
 draw_main_header() {
@@ -1561,9 +1377,11 @@ updates_summary_badge() {
     [ -s "$UPDATE_FILE" ] || return 0
     local versions count version
     versions=$(awk -F: 'NF>=3 && $3!="" {print $3}' "$UPDATE_FILE" 2>/dev/null | sort -Vu)
-    count=$(printf '%s\n' "$versions" | sed '/^$/d' | wc -l)
+    count=$(printf '%s
+' "$versions" | sed '/^$/d' | wc -l)
     if [ "$count" -eq 1 ] 2>/dev/null; then
-        version=$(printf '%s\n' "$versions" | head -n1)
+        version=$(printf '%s
+' "$versions" | head -n1)
         printf ' %b' "${Y}(Update Available: v${version})${NC}"
     else
         printf ' %b' "${Y}(Updates Available)${NC}"
@@ -1669,7 +1487,24 @@ mtunnel_cli() {
             return $?
             ;;
         --help|-h)
-            cat <<EOF "$cmd" %s\nUse: 'Unknown --*) --doctor --help\n' --local --report --status --sync --sync-mirror --version 0 ;; API/layout Doctor EOF Export GitHub Install/switch MTunnel Official Open PATH Run Show Sync Upgrade Usage: Version [args] [option] a all allowed; and archive are arguments both bundle compatibility configured diagnostic direction downgrade from health is local mirror mtunnel non-interactive option: or pass plus printf report return scan script scripts shared-core still syntax to unrestricted. v$MODULE_VERSION validated. version>&2
+            cat <<EOF
+MTunnel v$MODULE_VERSION
+Usage: mtunnel [option]
+  --doctor [args]   Open MTunnel Doctor or pass Doctor arguments
+  --status          Run non-interactive health scan
+  --report          Export Doctor diagnostic report
+  --sync            Sync all scripts from Official GitHub
+  --sync-mirror     Sync all scripts from configured mirror
+  --local PATH      Install/switch to a local bundle or archive
+  --version         Show MTunnel version
+
+Version direction is unrestricted. Upgrade and downgrade are both allowed;
+script syntax plus shared-core API/layout compatibility are still validated.
+EOF
+            return 0
+            ;;
+        --*)
+            printf 'Unknown option: %s\nUse: mtunnel --help\n' "$cmd" >&2
             return 2
             ;;
         *) return 2;;

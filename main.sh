@@ -687,17 +687,14 @@ draw_header_lines_only() {
                 [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
                 local compact_loss="${t_loss:----}"; [[ "$t_loss" =~ ^[0-9]+$ ]] && compact_loss="${t_loss}%"
                 compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${compact_loss}"
-                printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
-" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+                printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
             done < "$SECURE_TMP/.main_tun_stats"
         fi
         if [ "$cshown" -eq 0 ]; then
             compact_line='No active tunnels configured.'
-            printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
-" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+            printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         fi
-        printf "  ${B}╰${border}╯${NC}[K
-"
+        printf "  ${B}╰${border}╯${NC}\033[K\n"
         return 0
     fi
 
@@ -1564,11 +1561,9 @@ updates_summary_badge() {
     [ -s "$UPDATE_FILE" ] || return 0
     local versions count version
     versions=$(awk -F: 'NF>=3 && $3!="" {print $3}' "$UPDATE_FILE" 2>/dev/null | sort -Vu)
-    count=$(printf '%s
-' "$versions" | sed '/^$/d' | wc -l)
+    count=$(printf '%s\n' "$versions" | sed '/^$/d' | wc -l)
     if [ "$count" -eq 1 ] 2>/dev/null; then
-        version=$(printf '%s
-' "$versions" | head -n1)
+        version=$(printf '%s\n' "$versions" | head -n1)
         printf ' %b' "${Y}(Update Available: v${version})${NC}"
     else
         printf ' %b' "${Y}(Updates Available)${NC}"
@@ -1606,10 +1601,10 @@ render_main_menu() {
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
     printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b9%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
-    printf '  %b├─%b %b9%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
     printf '  %b├─%b %b10%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
     printf '  %b├─%b %b11%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
@@ -1674,24 +1669,7 @@ mtunnel_cli() {
             return $?
             ;;
         --help|-h)
-            cat <<EOF
-MTunnel v$MODULE_VERSION
-Usage: mtunnel [option]
-  --doctor [args]   Open MTunnel Doctor or pass Doctor arguments
-  --status          Run non-interactive health scan
-  --report          Export Doctor diagnostic report
-  --sync            Sync all scripts from Official GitHub
-  --sync-mirror     Sync all scripts from configured mirror
-  --local PATH      Install/switch to a local bundle or archive
-  --version         Show MTunnel version
-
-Version direction is unrestricted. Upgrade and downgrade are both allowed;
-script syntax plus shared-core API/layout compatibility are still validated.
-EOF
-            return 0
-            ;;
-        --*)
-            printf 'Unknown option: %s\nUse: mtunnel --help\n' "$cmd" >&2
+            cat <<EOF "$cmd" %s\nUse: 'Unknown --*) --doctor --help\n' --local --report --status --sync --sync-mirror --version 0 ;; API/layout Doctor EOF Export GitHub Install/switch MTunnel Official Open PATH Run Show Sync Upgrade Usage: Version [args] [option] a all allowed; and archive are arguments both bundle compatibility configured diagnostic direction downgrade from health is local mirror mtunnel non-interactive option: or pass plus printf report return scan script scripts shared-core still syntax to unrestricted. v$MODULE_VERSION validated. version>&2
             return 2
             ;;
         *) return 2;;

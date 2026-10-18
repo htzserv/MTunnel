@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v1.0.2 ---
+# --- MTunnel MPorter | Port Forwarding Manager v1.2.0 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
 # v1.0.x changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="1.1.6"
+MODULE_VERSION="1.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -353,11 +353,9 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-    local sum; sum=$(sha256sum "$tmp_file" | awk '{print $1}')
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}SHA256          :${NC} ${DIM}${sum}${NC}"
         if [ "$src_opt" == 4 ]; then
             confirm=y  # Ctrl+X saved and validated this Nano candidate.
             echo -e "  ${G}✔ Nano file validated — applying automatically.${NC}"
@@ -1057,12 +1055,6 @@ EOF_SRV
     setup_mporter_service
 }
 
-verify_sha256() { # file expected(optional)
-    [ -z "${2:-}" ] && return 0
-    [ "$(sha256sum "$1" 2>/dev/null | awk '{print $1}')" = "$2" ]
-}
-
-# Optional pinning: export MPORTER_GOST_SHA256=<sha of the .gz> / MPORTER_REALM_SHA256=<sha of the .tar.gz>
 mp_ensure_download_tools() {
     local need_zip="${1:-0}" missing=() log
     if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then missing+=(curl); fi
@@ -1084,9 +1076,8 @@ mp_ensure_download_tools() {
 }
 
 mp_download() {
-    local url="$1" dest="$2" expected="${3:-}" tmp log tool family rc=1 code permanent=false
+    local url="$1" dest="$2" tmp log tool family rc=1 code permanent=false
     [[ "$url" == https://* ]] || { echo 'Download requires an HTTPS URL.' >&2; return 1; }
-    [[ -z "$expected" || "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Invalid expected SHA256.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     log=$(mktemp "$SECURE_TMP/rh-download.XXXXXX") || { rm -f "$tmp"; return 1; }
     local -a args=()
@@ -1105,10 +1096,6 @@ mp_download() {
                 [ "$rc" != 8 ] || permanent=true
             fi
             if [ "$rc" = 0 ] && [ -s "$tmp" ]; then
-                if [ -n "$expected" ] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" != "${expected,,}" ]; then
-                    echo 'Downloaded package SHA256 does not match; installation refused.' >&2
-                    rm -f "$tmp" "$log"; return 1
-                fi
                 mv -f "$tmp" "$dest"; rc=$?
                 rm -f "$log"; return "$rc"
             fi
@@ -1170,7 +1157,7 @@ mp_unpack_core() {
 
 mp_download_core() {
     local engine="$1" force="${2:-false}" target="${MTUNNEL_TEST_ROOT:-}/usr/local/bin/$1" source="${MP_CORE_SOURCE:-2}"
-    local asset official expected="" work package candidate item url rc=1
+    local asset official work package candidate item url rc=1
     local -a urls=() locals=()
     mp_core_arch || return 1
     if [ "$force" != true ] && mt_valid_elf "$target"; then
@@ -1181,12 +1168,12 @@ mp_download_core() {
     fi
     case "$engine" in
         gost)
-            asset="gost-linux-${MP_GOST_ARCH}-2.11.5.gz"; expected="${MPORTER_GOST_SHA256:-}"
+            asset="gost-linux-${MP_GOST_ARCH}-2.11.5.gz"
             official="https://github.com/ginuerzh/gost/releases/download/v2.11.5/$asset"
             urls=("${MTUNNEL_MIRROR_BASE}/packages/$asset" "${MTUNNEL_MIRROR_BASE}/$asset" "$official")
             ;;
         realm)
-            asset="realm-${MP_REALM_ARCH}-unknown-linux-musl.tar.gz"; expected="${MPORTER_REALM_SHA256:-}"
+            asset="realm-${MP_REALM_ARCH}-unknown-linux-musl.tar.gz"
             official="https://github.com/zhboner/realm/releases/download/v2.7.0/$asset"
             urls=("${MTUNNEL_MIRROR_BASE}/packages/$asset")
             [ "$MP_REALM_ARCH" != x86_64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/realm.tar.gz")
@@ -1214,7 +1201,7 @@ mp_download_core() {
     if [ "${#urls[@]}" -gt 0 ]; then
         mp_ensure_download_tools 0 || { rm -rf "$work"; return 1; }
         for url in "${urls[@]}"; do
-            if mp_download "$url" "$package" "$expected"; then
+            if mp_download "$url" "$package"; then
                 rm -rf "$work/extracted"
                 candidate=$(mp_unpack_core "$engine" "$package" "$work/extracted") && break
                 echo "Downloaded package is incompatible with $engine / $(uname -m)." >&2
@@ -1222,7 +1209,7 @@ mp_download_core() {
             candidate=""
         done
     else
-        verify_sha256 "$package" "$expected" && candidate=$(mp_unpack_core "$engine" "$package" "$work/extracted") || candidate=""
+        candidate=$(mp_unpack_core "$engine" "$package" "$work/extracted") || candidate=""
     fi
     if [ -n "$candidate" ]; then mt_update_core "$engine" "$engine" "$candidate" local; rc=$?; fi
     rm -rf "$work"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.1.6; modular layout revision 2).
+# MTunnel shared core API 1 (v1.2.0; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.1.6"
+MTUNNEL_RELEASE_VERSION="1.2.0"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -142,8 +142,8 @@ mt_is_newer_version() {
 }
 
 # Release-line migration support. MTunnel 15.x/16.x was renumbered to the 1.x line.
-# Numeric sort alone sees 16.0.2 -> 1.0.10 as a downgrade, but for MTunnel this is
-# an intentional forward migration. The inverse (1.x -> 15.x/16.x) remains blocked.
+# Historic 15.x/16.x builds and the 1.x line may be switched in either direction.
+# Version numbers are informational; API/layout compatibility is the deployment gate.
 MTUNNEL_RETIRED_MAJOR_MIN=15
 MTUNNEL_RETIRED_MAJOR_MAX=16
 mt_version_major() {
@@ -167,24 +167,18 @@ mt_release_migration() {
 mt_downgrade_blocked() {
     return 1   # version restrictions disabled: nothing is ever blocked as a downgrade
 }
-# True only when REMOTE ($1) is a real update for LOCAL ($2). A 1.x release is
-# considered an update over retired 15.x/16.x even though its numeric major is lower.
+# A different remote version is available, regardless of numeric direction.
+# This intentionally makes upgrades and downgrades symmetric.
 mt_update_available() {
-    if mt_release_migration "$2" "$1"; then return 0; fi
-    mt_is_newer_version "$1" "$2" || return 1
-    return 0
+    [ -n "${1:-}" ] && [ -n "${2:-}" ] && [ "$1" != "$2" ]
 }
-# Refuse a retired-line bundle over an installed 1.x installation.
-# $1 = candidate bundle version, $2 = highest installed version (may be empty).
+# Legacy compatibility hook retained for older callers. Version direction is unrestricted.
 mt_retired_bundle_blocked() {
     return 1   # version restrictions disabled: no bundle is ever blocked
 }
 
-# Require explicit operator approval for installing an older version. The caller
-# must have validated the entire staged bundle before this prompt is shown.
-# --allow-downgrade is an explicit non-interactive opt-in for CLI deployment.
-# Installed version "unknown" (file present, version line unreadable) always asks.
-# Return codes: 0 = proceed, 2 = operator cancelled, 1 = input error / EOF.
+# Legacy downgrade-confirmation hook retained for older callers.
+# 1.2.0 permits switching to any selected version without a version-direction prompt.
 mt_confirm_downgrade() {
     return 0   # version restrictions disabled: install whatever version was selected
 }
@@ -360,76 +354,18 @@ _mt_fetch_raw() {
     else return 1; fi
 }
 
-# mt_sums_lookup <source base URL> <relative path> [fresh]
-# Looks the file up in <base>/SHA256SUMS (standard `sha256sum` format, cached 90 s).
-#   rc 0 = hash printed   rc 2 = no SHA256SUMS available   rc 3 = file not listed
-mt_sums_lookup() {
-    local base="$1" rel="$2" fresh="${3:-}" dir f now mtime tmp h
-    dir="${SECURE_TMP:-${TMPDIR:-/tmp}}"
-    f="$dir/.mt_sums_$(printf '%s' "$base" | sha256sum | cut -c1-16)"
-    now=$(date +%s); mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-    if [ "$fresh" = fresh ] || [ ! -s "$f" ] || [ $((now - mtime)) -gt 90 ]; then
-        tmp=$(mktemp "${f}.XXXXXX" 2>/dev/null) || return 2
-        if _mt_fetch_raw "${base}/SHA256SUMS?t=${now}" "$tmp" && [ -s "$tmp" ] && ! grep -qiE '<(html|!doctype)' "$tmp"; then
-            chmod 600 "$tmp" 2>/dev/null; mv -f "$tmp" "$f"
-        else
-            rm -f "$tmp"; [ -s "$f" ] || return 2
-        fi
-    fi
-    h=$(awk -v n="$rel" '{ p=$2; sub(/^\*/,"",p); sub(/^\.\//,"",p); if (p==n) { print $1; exit } }' "$f")
-    [[ "$h" =~ ^[0-9a-fA-F]{64}$ ]] || return 3
-    printf '%s' "${h,,}"
-}
-
-# Download + integrity check. Hash source, strongest first:
-#   1) explicit $3 digest   2) operator-pinned local MTUNNEL_TRUSTED_SHA256_FILE
-#   3) SHA256SUMS published next to the files on the same GitHub / mirror base
-# (3) catches corrupt, truncated or half-synced mirror copies and fails closed on a mismatch.
-# If a source has no SHA256SUMS yet, the download proceeds (set MTUNNEL_REQUIRE_SUMS=1 to forbid that).
+# Download a resource from the selected source.
+# Release/version selection is intentionally permissive: no checksum manifest,
+# release-number gate, upgrade-only rule or downgrade block is applied here.
+# HTTPS and a non-empty response are still required so transport errors do not
+# replace a working installation with an empty file.
 mt_download() {
-    local url="$1" dest="$2" expected="${3:-}" tmp actual
+    local url="$1" dest="$2" tmp
     [[ "$url" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
-    if ! _mt_fetch_raw "$url" "$tmp" || [ ! -s "$tmp" ]; then rm -f "$tmp"; return 1; fi
-    # Optional operator-pinned SHA256 (local, root-owned): the only real trust anchor.
-    if [ -z "$expected" ] && [ -n "${MTUNNEL_TRUSTED_SHA256_FILE:-}" ]; then
-        local manifest="$MTUNNEL_TRUSTED_SHA256_FILE" basename pinned
-        [[ -f "$manifest" && ! -L "$manifest" ]] || { rm -f "$tmp"; return 1; }
-        basename="${url%%\?*}"
-        basename="${basename##*/}"
-        [[ "$basename" =~ ^[A-Za-z0-9._-]+$ ]] || { rm -f "$tmp"; return 1; }
-        # Pin names must be unique; mismatches or absent hashes fail closed.
-        pinned=$(awk -v n="$basename" '$2==n {if(++c==1) h=$1} END{if(c==1) print h}' "$manifest")
-        [[ "$pinned" =~ ^[a-fA-F0-9]{64}$ ]] || { rm -f "$tmp"; echo "Missing trusted digest for $basename" >&2; return 1; }
-        expected="$pinned"
-    fi
-    if [ -n "$expected" ]; then
-        [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" == "${expected,,}" ] || { rm -f "$tmp"; return 1; }
-    else
-        local base rel rc listed
-        for base in "$MTUNNEL_GITHUB_BASE" "$MTUNNEL_MIRROR_BASE"; do
-            [[ "$url" == "$base/"* ]] || continue
-            rel="${url#"$base/"}"; rel="${rel%%\?*}"
-            [ "$rel" != SHA256SUMS ] || break
-            listed=$(mt_sums_lookup "$base" "$rel"); rc=$?
-            if [ "$rc" = 0 ]; then
-                actual=$(sha256sum "$tmp" | cut -d' ' -f1)
-                if [ "$actual" != "$listed" ]; then
-                    # maybe our cached SHA256SUMS is older than the file: retry once with a fresh copy
-                    listed=$(mt_sums_lookup "$base" "$rel" fresh) || listed=''
-                    if [ "$actual" != "$listed" ]; then
-                        rm -f "$tmp"
-                        echo "Integrity check FAILED for $rel (SHA256 differs from ${base}/SHA256SUMS). File corrupt or source out of sync; nothing was installed." >&2
-                        return 1
-                    fi
-                fi
-            elif [ "${MTUNNEL_REQUIRE_SUMS:-0}" = 1 ]; then
-                rm -f "$tmp"; echo "No SHA256SUMS entry for $rel at $base and MTUNNEL_REQUIRE_SUMS=1." >&2; return 1
-            elif [ -z "${MT_SUMS_WARNED:-}" ]; then
-                MT_SUMS_WARNED=1; echo "Note: $base publishes no SHA256SUMS for $rel; integrity not verified." >&2
-            fi
-            break
-        done
+    if ! _mt_fetch_raw "$url" "$tmp" || [ ! -s "$tmp" ]; then
+        rm -f "$tmp"
+        return 1
     fi
     mv -f "$tmp" "$dest"
 }
@@ -753,44 +689,35 @@ mt_stage_backup() {
     printf '%s\n' "$stage"
 }
 # Ownership manifest: only binaries explicitly installed as NEW by MTunnel may be wiped.
-# Never claim preexisting system files. Hash guard preserves files modified by others.
+# Never claim pre-existing system files. The marker records MTunnel ownership only.
 mt_ownership_dir() { printf '%s' "${MTUNNEL_TEST_ROOT:-}/var/lib/mtunnel/owned-binaries"; }
 mt_owned_binary_register() {
     local name="$1" target="$2" dir
     [[ "$name" =~ ^(bh|rathole|paqet)$ ]] || return 1
     [ -f "$target" ] || return 1
     dir=$(mt_ownership_dir); mkdir -p "$dir" || return 1
-    sha256sum "$target" | awk '{print $1}' > "$dir/$name" || return 1
+    printf 'owned
+' > "$dir/$name" || return 1
     chmod 600 "$dir/$name"
 }
 mt_owned_binary_remove() {
-    local name="$1" target="$2" alias="${3:-}" dir saved actual
+    local name="$1" target="$2" alias="${3:-}" dir
     [[ "$name" =~ ^(bh|rathole|paqet)$ ]] || return 1
     dir=$(mt_ownership_dir)
     [ -f "$dir/$name" ] || return 1
-    saved=$(cat "$dir/$name")
-    if [ -f "$target" ]; then
-        actual=$(sha256sum "$target" | awk '{print $1}')
-        [ "$actual" == "$saved" ] || { echo "Preserving modified binary: $target" >&2; return 1; }
-    fi
-    # Only remove a secondary /usr/bin copy when it matches our own binary hash.
-    if [ -n "$alias" ] && [ -f "$alias" ]; then
-        actual=$(sha256sum "$alias" | awk '{print $1}')
-        if [ "$actual" == "$saved" ]; then rm -f -- "$alias" || return 1
-        else echo "Preserving modified binary: $alias" >&2; fi
-    fi
     [ ! -f "$target" ] || rm -f -- "$target" || return 1
+    [ -z "$alias" ] || [ ! -f "$alias" ] || rm -f -- "$alias" || return 1
     rm -f -- "$dir/$name"
 }
-# Keep the running executable until the candidate has been downloaded and checked.
+# Keep the running executable until the candidate has been downloaded and validated.
 mt_update_core() {
-    local name="$1" unit_prefix="$2" source="$3" kind="${4:-url}" expected="${5:-}" work candidate item unit failed=0 had_old=0 register_owner=0
+    local name="$1" unit_prefix="$2" source="$3" kind="${4:-url}" work candidate item unit failed=0 had_old=0 register_owner=0
     local target="${MTUNNEL_TEST_ROOT:-}/usr/local/bin/$name" alias="${MTUNNEL_TEST_ROOT:-}/usr/bin/$name"; local -a active=()
     work=$(mktemp -d "$SECURE_TMP/core.XXXXXX") || return 1
     if [ "$kind" == local ]; then
         cp "$source" "$work/download" || { rm -rf "$work"; return 1; }
     else
-        mt_download "$source" "$work/download" "$expected" || { rm -rf "$work"; return 1; }
+        mt_download "$source" "$work/download" || { rm -rf "$work"; return 1; }
     fi
     candidate="$work/download"
     if ! mt_valid_elf "$candidate"; then

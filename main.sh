@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.1.6 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.0 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.1.6"
+MODULE_VERSION="1.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1474,14 +1474,11 @@ install_iperf3_source() {
             echo -ne "  ${C}● Enter HTTPS Direct (.deb) Link: ${NC}"; read -r custom_url
             custom_url=$(echo "$custom_url" | tr -d '\r\n ')
             [[ "$custom_url" == https://* ]] || { echo -e "  ${R}✖ Custom packages require HTTPS.${NC}"; return 1; }
-            echo -ne "  ${C}● Expected SHA256 (64 hex chars): ${NC}"; read -r custom_sha
-            custom_sha=$(echo "$custom_sha" | tr -d '\r\n ' | tr 'A-F' 'a-f')
-            [[ "$custom_sha" =~ ^[0-9a-f]{64}$ ]] || { echo -e "  ${R}✖ A valid SHA256 is required.${NC}"; return 1; }
-            echo -e "\n  ${DIM}● Downloading and verifying custom package...${NC}"
+            echo -e "\n  ${DIM}● Downloading custom package...${NC}"
             local dl_target="$SECURE_TMP/custom_iperf.deb"
             rm -f "$dl_target"
-            if ! mt_download "$custom_url" "$dl_target" "$custom_sha"; then
-                echo -e "  ${R}✖ HTTPS download or SHA256 verification failed.${NC}"; rm -f "$dl_target"; return 1
+            if ! mt_download "$custom_url" "$dl_target"; then
+                echo -e "  ${R}✖ HTTPS download failed.${NC}"; rm -f "$dl_target"; return 1
             fi
             if ! dpkg-deb --info "$dl_target" >/dev/null 2>&1; then
                 echo -e "  ${R}✖ Downloaded file is not a valid Debian package.${NC}"; rm -f "$dl_target"; return 1
@@ -1634,6 +1631,78 @@ show_local_install() {
     else echo -e "\n  ${R}✖ Local install failed. Check the reported error.${NC}\n" >&2; fi
     ota_pause
 }
+mtunnel_cli() {
+    local cmd="${1:-}" src rc=0 local_path
+    case "$cmd" in
+        --version|-V)
+            printf 'MTunnel %s\n' "$MODULE_VERSION"
+            return 0
+            ;;
+        --doctor)
+            shift
+            ensure_module mdoctor || return 1
+            exec /usr/bin/mdoctor "$@"
+            ;;
+        --status)
+            ensure_module mdoctor || return 1
+            exec /usr/bin/mdoctor --status
+            ;;
+        --report)
+            ensure_module mdoctor || return 1
+            exec /usr/bin/mdoctor --report
+            ;;
+        --sync|--sync-github)
+            src="$REPO_SCRIPTS"
+            printf 'MTunnel %s: syncing all scripts from Official GitHub...\n' "$MODULE_VERSION"
+            sync_script_bundle "$src" 0 || rc=$?
+            [ "$rc" -eq 0 ] && : > "$UPDATE_FILE"
+            [ "$rc" -eq 0 ] && printf 'Sync completed successfully.\n' || printf 'Sync failed; previous scripts were preserved.\n' >&2
+            return "$rc"
+            ;;
+        --sync-mirror)
+            src="$MIRROR_SCRIPTS"
+            printf 'MTunnel %s: syncing all scripts from configured mirror...\n' "$MODULE_VERSION"
+            sync_script_bundle "$src" 0 || rc=$?
+            [ "$rc" -eq 0 ] && : > "$UPDATE_FILE"
+            [ "$rc" -eq 0 ] && printf 'Sync completed successfully.\n' || printf 'Sync failed; previous scripts were preserved.\n' >&2
+            return "$rc"
+            ;;
+        --local)
+            [ "$#" -ge 2 ] || { echo 'Usage: mtunnel --local PATH' >&2; return 2; }
+            local_path="$2"
+            offline_local_deploy "$local_path" 0
+            return $?
+            ;;
+        --help|-h)
+            cat <<EOF
+MTunnel v$MODULE_VERSION
+Usage: mtunnel [option]
+  --doctor [args]   Open MTunnel Doctor or pass Doctor arguments
+  --status          Run non-interactive health scan
+  --report          Export Doctor diagnostic report
+  --sync            Sync all scripts from Official GitHub
+  --sync-mirror     Sync all scripts from configured mirror
+  --local PATH      Install/switch to a local bundle or archive
+  --version         Show MTunnel version
+
+Version direction is unrestricted. Upgrade and downgrade are both allowed;
+script syntax plus shared-core API/layout compatibility are still validated.
+EOF
+            return 0
+            ;;
+        --*)
+            printf 'Unknown option: %s\nUse: mtunnel --help\n' "$cmd" >&2
+            return 2
+            ;;
+        *) return 2;;
+    esac
+}
+
+if [[ "${1:-}" == --* || "${1:-}" == -V ]]; then
+    mtunnel_cli "$@"
+    exit $?
+fi
+
 while true; do
     render_main_menu
     read_with_refresh "  ${C}CORE ❯❯ ${NC}" opt render_main_menu || break

@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Doctor | System Diagnostics v1.1.6 ---
-# [Features: Full Health Scan | Network/IPv6 | Firewall/Ports | Core Integrity | Safe Repair | Export Report]
-MODULE_VERSION="1.1.6"
+# --- MTunnel Doctor | System Diagnostics v1.2.0 ---
+# [Features: Full Health Scan | Network/IPv6 | Firewall/Ports | Core & Script Health | Safe Repair | Export Report]
+MODULE_VERSION="1.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -240,7 +240,7 @@ doc_scan_firewall() {
 
 doc_scan_mtunnel() {
     local corev core_file=/usr/lib/mtunnel/common.sh bin corepath
-    doc_group 'MTUNNEL CORE INTEGRITY'
+    doc_group 'MTUNNEL CORE & SCRIPT HEALTH'
     if [ -f "$core_file" ] && bash -n "$core_file" >/dev/null 2>&1 && grep -q '^MTUNNEL_CORE_API=1$' "$core_file"; then
         corev=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$core_file" | head -n1)
         doc_row PASS 'Shared Core' "v${corev:-unknown} / API 1"
@@ -457,7 +457,7 @@ render_doctor_menu() {
     printf '  %b├─%b %b1%b %b❯%b %bRun Full Health Scan%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %b2%b %b❯%b %bNetwork & IPv6 Diagnostics%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
     printf '  %b├─%b %b3%b %b❯%b %bFirewall & Port Diagnostics%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC"
-    printf '  %b├─%b %b4%b %b❯%b %bTunnel Engines & Core Integrity%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+    printf '  %b├─%b %b4%b %b❯%b %bTunnel Engines & Core & Script Health%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
     printf '  %b├─%b %b5%b %b❯%b %bSystem Services & Failed Units%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
     printf '  %b├─%b %b6%b %b❯%b %bSafe Repair Actions%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %b7%b %b❯%b %bExport Diagnostic Report%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$W" "$NC"
@@ -466,8 +466,20 @@ render_doctor_menu() {
     printf '  %b└─%b %b0%b %b❯%b %bReturn to Dashboard%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 
-if [ "${1:-}" = '--report' ]; then DOC_NONINTERACTIVE=1; doc_export_report; exit $?; fi
-if [ "${1:-}" = '--scan' ]; then doc_full_scan plain; exit $?; fi
+case "${1:-}" in
+    --report) DOC_NONINTERACTIVE=1; doc_export_report; exit $?;;
+    --scan|--status) doc_full_scan plain; exit $?;;
+    --version|-V) printf 'MTunnel Doctor %s\n' "$MODULE_VERSION"; exit 0;;
+    --help|-h)
+        cat <<EOF
+MTunnel Doctor v$MODULE_VERSION
+Usage: mdoctor [--scan|--status|--report|--version]
+  --scan, --status   Run a non-interactive full health scan
+  --report           Export a diagnostic report and print its path
+  --version          Show Doctor version
+EOF
+        exit 0;;
+esac
 
 while true; do
     render_doctor_menu

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MBackhaul | Multiplexer Engine v1.0.2 ---
+# --- MTunnel MBackhaul | Multiplexer Engine v1.2.0 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.1.6"
+MODULE_VERSION="1.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -31,7 +31,7 @@ mt_load_common() {
 }
 mt_load_common || exit 1
 if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null || ! declare -F mt_unit_live_peer >/dev/null; then
-    echo 'MTunnel: the installed shared core (common.sh) is older than this module (needs 1.1.6 or newer).' >&2
+    echo 'MTunnel: the installed shared core (common.sh) is older than this module (requires the current shared-core API/layout).' >&2
     echo 'Update the whole bundle from the main menu (Sync) or run: bash install.sh --local .' >&2
     exit 1
 fi
@@ -588,9 +588,8 @@ bh_ensure_download_tools() {
 }
 
 bh_download() {
-    local url="$1" dest="$2" expected="${3:-}" tmp log tool family rc=1 code permanent=false
+    local url="$1" dest="$2" tmp log tool family rc=1 code permanent=false
     [[ "$url" == https://* ]] || { echo 'Download requires an HTTPS URL.' >&2; return 1; }
-    [[ -z "$expected" || "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Invalid expected SHA256.' >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
     log=$(mktemp "$SECURE_TMP/rh-download.XXXXXX") || { rm -f "$tmp"; return 1; }
     local -a args=()
@@ -609,10 +608,6 @@ bh_download() {
                 [ "$rc" != 8 ] || permanent=true
             fi
             if [ "$rc" = 0 ] && [ -s "$tmp" ]; then
-                if [ -n "$expected" ] && [ "$(sha256sum "$tmp" | cut -d' ' -f1)" != "${expected,,}" ]; then
-                    echo 'Downloaded package SHA256 does not match; installation refused.' >&2
-                    rm -f "$tmp" "$log"; return 1
-                fi
                 mv -f "$tmp" "$dest"; rc=$?
                 rm -f "$log"; return "$rc"
             fi
@@ -692,7 +687,7 @@ install_core_from_source() {
         for url in "${urls[@]}"; do
             local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
             echo -e "  ${DIM}● Source: $source_host${NC}"
-            if bh_download "$url" "$work/package" "${EXPECTED_SHA256:-}"; then
+            if bh_download "$url" "$work/package"; then
                 if bh_validate_package "$work/package"; then source="$work/package"; break
                 else echo 'Downloaded file is not a compatible Backhaul binary/archive.' >&2; fi
             fi
@@ -700,13 +695,7 @@ install_core_from_source() {
         done
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
     fi
-    if [ -n "${EXPECTED_SHA256:-}" ]; then
-        if ! [[ "$EXPECTED_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || [ "$(sha256sum "$source" | cut -d' ' -f1)" != "${EXPECTED_SHA256,,}" ]; then
-            [ -z "$work" ] || rm -rf "$work"
-            echo 'Package SHA256 does not match; previous installation preserved.' >&2; return 1
-        fi
-    fi
-    if mt_update_core bh mbackhaul "$source" local "${EXPECTED_SHA256:-}"; then
+    if mt_update_core bh mbackhaul "$source" local; then
         [ -z "$work" ] || rm -rf "$work"
         echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"

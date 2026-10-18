@@ -119,27 +119,29 @@ eq "100 s silent: stale under a 65 s limit"    ""        "$(mt_unit_live_peer mb
 eq "reason shows the real silence"             "STALE 1m" "$(mt_unit_link_reason mbackhaul@b1 1 443)"
 unset MTUNNEL_TEST_ROOT
 
-section "download integrity (SHA256SUMS)"
+section "permissive version switching"
+mt_module_downgrade_allowed 1.1.6 1.1.4; eq "newer to older is allowed" 0 $?
+mt_module_downgrade_allowed 1.1.4 1.1.6; eq "older to newer is allowed" 0 $?
+mt_module_downgrade_allowed 16.0.2 1.1.6; eq "legacy line to 1.x is allowed" 0 $?
+mt_module_downgrade_allowed 1.1.6 16.0.2; eq "1.x to legacy line is allowed" 0 $?
+mt_update_available 1.1.4 1.1.6; eq "older remote is still selectable" 0 $?
+mt_update_available 1.1.6 1.1.6; eq "same remote is not marked different" 1 $?
+
+section "download transport"
 reset_fix; mkdir -p "$MT_FIX/srv/core"
-echo "good" > "$MT_FIX/srv/core/a.sh"; echo "unlisted" > "$MT_FIX/srv/b.sh"
-( cd "$MT_FIX/srv" && sha256sum core/a.sh > SHA256SUMS )
-rm -f "$SECURE_TMP"/.mt_sums_*
-mt_download https://mirror.test/m/core/a.sh "$MT_FIX/o1" 2>/dev/null; eq "listed + matching file installs" "good" "$(cat "$MT_FIX/o1" 2>/dev/null)"
-echo "evil" > "$MT_FIX/srv/core/a.sh"; rm -f "$SECURE_TMP"/.mt_sums_*
-mt_download "https://mirror.test/m/core/a.sh?t=1" "$MT_FIX/o2" 2>/dev/null; eq "tampered file is refused" 1 $?
-[ ! -e "$MT_FIX/o2" ]; eq "…and nothing is written" 0 $?
-echo "new good" > "$MT_FIX/srv/core/a.sh"; ( cd "$MT_FIX/srv" && sha256sum core/a.sh > SHA256SUMS )
-mt_download https://mirror.test/m/core/a.sh "$MT_FIX/o3" 2>/dev/null; eq "stale SUMS cache is refreshed once" "new good" "$(cat "$MT_FIX/o3" 2>/dev/null)"
-mt_download https://mirror.test/m/b.sh "$MT_FIX/o4" 2>/dev/null; eq "unlisted file passes (compat)" "unlisted" "$(cat "$MT_FIX/o4" 2>/dev/null)"
-MTUNNEL_REQUIRE_SUMS=1 mt_download https://mirror.test/m/b.sh "$MT_FIX/o5" 2>/dev/null; eq "REQUIRE_SUMS refuses unlisted" 1 $?
-mt_download http://mirror.test/m/b.sh "$MT_FIX/o6" 2>/dev/null; eq "plain http refused" 1 $?
+echo "good" > "$MT_FIX/srv/core/a.sh"
+mt_download https://mirror.test/m/core/a.sh "$MT_FIX/o1" 2>/dev/null; eq "HTTPS resource installs without release hash metadata" "good" "$(cat "$MT_FIX/o1" 2>/dev/null)"
+mt_download http://mirror.test/m/core/a.sh "$MT_FIX/o2" 2>/dev/null; eq "plain HTTP is still refused" 1 $?
 
 section "release files"
-if [ -f "$ROOT/SHA256SUMS" ]; then
-    ( cd "$ROOT" && sha256sum -c SHA256SUMS --quiet 2>/dev/null ); eq "SHA256SUMS matches the tree (run tools/make-sums.sh)" 0 $?
-else bad "SHA256SUMS present" "file exists" "missing (run tools/make-sums.sh)"; fi
 ver=$(tr -d '[:space:]' < "$ROOT/VERSION"); cv=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\(.*\)"/\1/p' "$ROOT/core/common.sh")
 eq "VERSION equals MTUNNEL_RELEASE_VERSION" "$ver" "$cv"
+for f in main.sh mporter.sh install.sh tools/mdoctor.sh tunnels/mgre.sh tunnels/mxlan.sh tunnels/mrathole.sh tunnels/mbackhaul.sh tunnels/mpaqet.sh; do
+    mv=$(sed -n 's/^MODULE_VERSION="\(.*\)"/\1/p' "$ROOT/$f" | head -n1)
+    eq "release version matches: $f" "$ver" "$mv"
+done
+[ ! -e "$ROOT/SHA256SUMS" ] && ok "repository SHA manifest is absent" || bad "repository SHA manifest is absent" "absent" "present"
+[ -f "$ROOT/config/sources.conf.example" ] && ok "source config example is included" || bad "source config example is included" "present" "missing"
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

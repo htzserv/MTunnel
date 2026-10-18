@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v1.0.2 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v1.2.0 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.1.6"
+MODULE_VERSION="1.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -31,7 +31,7 @@ mt_load_common() {
 }
 mt_load_common || exit 1
 if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null || ! declare -F mt_unit_tcp_rtt >/dev/null; then
-    echo 'MTunnel: the installed shared core (common.sh) is older than this module (needs 1.1.6 or newer).' >&2
+    echo 'MTunnel: the installed shared core (common.sh) is older than this module (requires the current shared-core API/layout).' >&2
     echo 'Update the whole bundle from the main menu (Sync) or run: bash install.sh --local .' >&2
     exit 1
 fi
@@ -303,7 +303,7 @@ install_core_from_source() {
         *) return 0;;
     esac
     echo -e "  ${DIM}● Preparing MPaqet Core...${NC}"
-    if mt_update_core "paqet" "mpaqet" "$dl_url" "$kind" "${EXPECTED_SHA256:-}"; then
+    if mt_update_core "paqet" "mpaqet" "$dl_url" "$kind"; then
         echo -e "  ${G}✔ MPaqet Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else

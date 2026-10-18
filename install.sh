@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.1.6"
+MODULE_VERSION="1.2.0"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -170,18 +170,19 @@ installer_main() {
             --online) remote="$DEFAULT_REMOTE"; source_dir=''; shift;;
             --allow-downgrade) export MT_ALLOW_DOWNGRADE=1; shift;;
             --help|-h)
-                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--allow-downgrade] [--no-launch]'
+                echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
                 echo '  --online             Force online install from the official GitHub source.'
-                echo '  --allow-downgrade    Permit installing an older module over a newer installed one.'
+                echo '  --allow-downgrade    Compatibility alias; downgrades are always permitted in 1.2.0.'
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'
                 echo ''
-                echo 'Local downgrade example:'
-                echo '  sudo MT_ALLOW_DOWNGRADE=1 bash install.sh'
+                echo 'Version switching is unrestricted: upgrade or downgrade directly from any compatible bundle.'
+                echo 'Local install example:'
+                echo '  sudo bash install.sh --local .'
                 echo 'Online one-line example:'
-                echo "  curl -fsSL $MTUNNEL_GITHUB_BASE/install.sh | sudo bash -s -- --online --allow-downgrade"
+                echo "  curl -fsSL $MTUNNEL_GITHUB_BASE/install.sh | sudo bash -s -- --online"
                 return 0;;
             *) echo "Unknown option: $1" >&2; return 1;;
         esac

@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.0.10 ---
+# --- MTunnel Master Core | Central Dashboard v1.1.0 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.0.10"
+MODULE_VERSION="1.1.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -498,6 +498,11 @@ get_local_ip() {
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
     echo "${ip:-Unknown}"
 }
+get_local_ipv6() {
+    local v6
+    v6=$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/ && !/deprecated/ {sub(/\/.*/,"",$2); print $2; exit}')
+    echo "${v6:-}"
+}
 get_iface_uptime_pure() {
     local dev="$1"
     if [[ "$dev" == bh_* || "$dev" == rat_* || "$dev" == pq_* ]]; then
@@ -727,64 +732,101 @@ draw_header_lines_only() {
         return 0
     fi
 
-    # Use all safe terminal width for the wide dashboard (up to 150 columns).
-    # At 124 columns this is already 120, giving Peer substantially more room;
-    # wider terminals donate all additional width to the Peer cell.
-    local MT_MAIN_HEADER_WIDTH=$((term_cols - 4))
-    (( MT_MAIN_HEADER_WIDTH < 120 )) && MT_MAIN_HEADER_WIDTH=120
-    (( MT_MAIN_HEADER_WIDTH > 150 )) && MT_MAIN_HEADER_WIDTH=150
-    local border
-    printf -v border '%*s' "$MT_MAIN_HEADER_WIDTH" ''
+    # Wide dashboard: base width 117 (original main layout). Any extra terminal width
+    # (up to 140 columns total) is donated to the Peer cell and the last cells of rows 1-2.
+    local total=$((term_cols - 4)) extra peer_w v4_str v6_str top_raw top_a top_b
+    (( total < 117 )) && total=117
+    (( total > 140 )) && total=140
+    extra=$((total - 117)); peer_w=$((16 + extra))
+    printf -v border '%*s' "$total" ''
     border="${border// /─}"
+
+    v4_str="$s_ip"
+    v6_str=$(get_local_ipv6)
+    if [ -n "$v4_str" ] && [ "$v4_str" != "Unknown" ]; then
+        top_a="${C}◆${NC} ${DIM}IPv4${NC}  ${G}${v4_str}${NC}"
+    else
+        top_a="${DIM}◆ IPv4  not available${NC}"
+    fi
+    if [ -n "$v6_str" ]; then
+        top_b="${M}◆${NC} ${DIM}IPv6${NC}  ${Y}${v6_str}${NC}"
+    else
+        top_b="${DIM}◆ IPv6  not available${NC}"
+    fi
+
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
-    mt_main_header_row4 \
-        "${W}MDesign Master Core v${MODULE_VERSION}${NC}" \
-        "${DIM}Local:${NC} ${W}${s_ip}${NC}" \
-        "${DIM}Porter:${NC} ${porter_col}${porter_icon} ${porter_text}${NC}" \
-        "${DIM}BBR:${NC} ${bbr_col}${bbr_icon} ${bbr_text}${NC}  ${DIM}IPv6:${NC} ${v6_col}${v6_icon} ${v6_text}${NC}"
+    # Row 0 (thin): server IPv4 | IPv6
+    mt_main_frame_row "$(mt_main_header_cell 31 "$top_a")${B}│${NC}$(mt_main_header_cell $((total-32)) "$top_b")" "$total"
     printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
-    mt_main_header_row4 \
-        "${DIM}CPU:${NC} ${cpu_col}${cpu_str}${NC}  ${DIM}Cores:${NC} ${W}${core_label}${NC}" \
-        "${DIM}RAM:${NC} ${ram_col}${ram_str}${NC}" \
-        "${DIM}Net ▼:${NC} ${rx_col}${rx_speed}${NC}" \
-        "${DIM}Net ▲:${NC} ${tx_col}${tx_speed}${NC}"
-    printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
+    # Row 1: 31 | 25 | 21 | 37(+extra) = 117(+extra) columns (Web cell removed)
+    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-16.16s${NC} ${B}│${NC} ${DIM}Porter:${NC} %b%s%b %-9.9s ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-9.9s ${DIM}IPv6:${NC} %b%s%b %-*.*s ${B}│${NC}\033[K\n" \
+        "MDesign Master Core v${MODULE_VERSION}" "$s_ip" \
+        "$porter_col" "$porter_icon" "$NC" "$porter_text" \
+        "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
+        "$v6_col" "$v6_icon" "$NC" "$((10+extra))" "$((10+extra))" "$v6_text"
+    printf "  ${B}├${border}┤${NC}\033[K\n"
+    # Row 2: 31 | 25 | 21 | 37(+extra)
+    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-12.12s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
+        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
+        "$ram_col" "$ram_str" "$NC" \
+        "$rx_col" "$rx_speed" "$NC" \
+        "$tx_col" "$((28+extra))" "$((28+extra))" "$tx_speed" "$NC"
+    printf "  ${B}├${border}┤${NC}\033[K\n"
+
     local shown=0
-    if [[ -f "$SECURE_TMP/.main_tun_stats" ]]; then
+    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
         while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
-            [[ -n "$t_proto" ]] || continue
-            ((shown+=1))
-            ((shown<=3)) || break
-            local uptime status_color="${G}" status_icon='●' loss_color="${DIM}" loss_text="${t_loss:----}"
-            uptime=$(get_iface_uptime_pure "$t_dev")
-            if [[ "$uptime" == DOWN ]]; then status_icon='○'; status_color="$R"; fi
-            if [[ "$t_loss" =~ ^[0-9]+$ ]]; then
-                if (( t_loss == 0 )); then loss_color="$G"
-                elif (( t_loss < 30 )); then loss_color="$Y"
-                else loss_color="$R"; fi
-                loss_text="${t_loss}%"
+            [ -z "$t_proto" ] && continue
+            ((shown++))
+            [ "$shown" -gt 3 ] && break
+
+            local pure_name=$(echo "$t_name" | tr -d ' ')
+            [ ${#pure_name} -gt 8 ] && pure_name="${pure_name:0:8}"
+            local name_tag="${pure_name} [${t_proto}]"
+            [ ${#name_tag} -gt 17 ] && name_tag="${name_tag:0:17}"
+
+            [ ${#t_remote} -gt "$peer_w" ] && t_remote="${t_remote:0:$peer_w}"
+
+            local if_uptime=$(get_iface_uptime_pure "$t_dev")
+            local stat_icon="●"; local stat_col="${G}"
+            if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
+            [ ${#if_uptime} -gt 10 ] && if_uptime="${if_uptime:0:10}"
+
+            local fwd_col="${DIM}"; [ "$t_fwd" != "OFF" ] && fwd_col="${C}"
+            local fwd_str="${t_fwd:0:9}"
+
+            local vip_col="${DIM}"; [ "$t_vip" != "OFF" ] && vip_col="${G}"
+            local vip_stat="${t_vip:0:5}"
+
+            local live_ping="---"
+            if [ -n "$t_ping" ] && [ "$t_ping" != "---" ]; then
+                local num_p="${t_ping%ms}"
+                if [[ "$num_p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+                    live_ping=$(awk -v v="$num_p" 'BEGIN {printf "%.0fms", v}')
+                else
+                    live_ping="$t_ping"
+                fi
             fi
-            local vip_color="$G" fwd_color="$C"
-            case "${t_vip^^}" in OFF|NONE|0|-) vip_color="$DIM";; esac
-            case "${t_fwd^^}" in OFF|NONE|0|-) fwd_color="$DIM";; esac
-            local peer_remote="$t_remote" display_name="$t_name" display_proto="$t_proto"
-            peer_remote=$(printf '%s' "$peer_remote" | sed -E $'s/\033\[[0-9;]*[A-Za-z]//g')
-            display_name=$(printf '%s' "$display_name" | sed -E $'s/\033\[[0-9;]*[A-Za-z]//g')
-            display_proto=$(printf '%s' "$display_proto" | sed -E $'s/\033\[[0-9;]*[A-Za-z]//g')
-            mt_main_header_row7 \
-                "${status_color}${status_icon}${NC} ${W}${display_name} [${display_proto}]${NC}" \
-                "${Y}Peer:${NC} ${Y}${peer_remote}${NC}" \
-                "${DIM}vIP:${NC} ${vip_color}${t_vip}${NC}" \
-                "${DIM}Ping:${NC} ${Y}${t_ping:----}${NC}" \
-                "${DIM}Loss:${NC} ${loss_color}${loss_text}${NC}" \
-                "${DIM}Up:${NC} ${W}${uptime}${NC}" \
-                "${DIM}F:${NC}${fwd_color}${t_fwd}${NC}"
+            [ ${#live_ping} -gt 5 ] && live_ping="${live_ping:0:5}"
+
+            local loss_col="${DIM}"; local loss_disp="---"
+            if [ "$t_loss" != "---" ] && [ -n "$t_loss" ]; then
+                loss_disp="${t_loss}%"
+                if [ "$t_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
+                elif [ "$t_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
+                else loss_col="${R}"; fi
+            fi
+            [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
+
+            printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-*.*s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${B}│${NC}\033[K\n" \
+                "$stat_col" "$stat_icon" "$NC" "$name_tag" "$peer_w" "$peer_w" "$t_remote" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
-    if (( shown == 0 )); then
-        mt_main_frame_row " ${DIM}● No active tunnels or fabrics deployed across the ecosystem.${NC}" 117
+
+    if [ "$shown" -eq 0 ]; then
+        printf "  ${B}│${NC}  ${DIM}● %-*.*s${NC}  ${B}│${NC}\033[K\n" "$((111+extra))" "$((111+extra))" "No active tunnels or fabrics deployed across the ecosystem."
     fi
-    printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
+    printf "  ${B}╰${border}╯${NC}\033[K\n"
 }
 
 draw_main_header() {

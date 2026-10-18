@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.1.3"
+MODULE_VERSION="1.1.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -29,7 +29,7 @@ mt_load_common() {
             source "$candidate" || return 1
             if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
                 if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.3 bundle.' >&2
+                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
                 return 1
             fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2

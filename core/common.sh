@@ -4,7 +4,7 @@
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.1.3"
+MTUNNEL_RELEASE_VERSION="1.1.4"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -1713,7 +1713,9 @@ mt_ui_row() {
     if ((${#plain}>width-2)); then
         # Narrow terminals: wrap without dropping an IPv6 suffix or ANSI bytes.
         while [ -n "$plain" ]; do
-            printf '  %b│%b %-*s %b│%b\033[K\n' "$B" "$NC" "$((width-2))" "${plain:0:width-2}" "$B" "$NC"
+            local part="${plain:0:width-2}" padding
+            padding=$((width-2-${#part}))
+            printf '  %b│%b %s%*s %b│%b\033[K\n' "$B" "$NC" "$part" "$padding" '' "$B" "$NC"
             plain="${plain:width-2}"
         done
     else
@@ -1728,24 +1730,27 @@ mt_ui_cell() {
 }
 mt_module_header() {
     local title="$1" rows="$2" tag="$3" ip4 ip6 cols width border cc porter=OFF
-    local cpu=0 cores used total ram rx tx v6
+    local cpu=0 cores used total ram=0 rx tx v6
     ip4=$(get_local_ip); ip6=$(get_local_ipv6); ip6="${ip6:-OFF}"
     cols=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-132}")
     [[ "$cols" =~ ^[0-9]+$ ]] || cols=132
-    width=$((cols-6)); ((width>150)) && width=150; ((width<26)) && width=26
-    printf -v border '%*s' "$width" ''; border="${border// /─}"
-    cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null); cc="${cc:----}"
-    if systemctl is-active --quiet mporter.service 2>/dev/null; then porter=ON; fi
+    cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+    local bbr=OFF bbr_icon=○ porter_icon=○
+    [ "$cc" != bbr ] || { bbr=ON; bbr_icon=●; }
+    if systemctl is-active --quiet mporter.service 2>/dev/null ||
+       systemctl is-active --quiet haproxy 2>/dev/null ||
+       systemctl is-active --quiet gost 2>/dev/null ||
+       systemctl is-active --quiet mporter-iptables 2>/dev/null; then porter=ON; porter_icon=●; fi
     cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null); cores="${cores:-1}"
     used=$(awk '/MemTotal:/{t=$2}/MemAvailable:/{a=$2}END{printf "%.1f/%.1fG",(t-a)/1048576,t/1048576}' /proc/meminfo)
-    cpu='---'; rx='---'; tx='---'
+    ram=$(awk '/MemTotal:/{t=$2}/MemAvailable:/{a=$2}END{if(t>0)printf "%.0f",100*(t-a)/t;else print 0}' /proc/meminfo)
+    cpu='0%'; rx='0 B/s'; tx='0 B/s'
     local stats_age now_stats
     now_stats=$(date +%s); stats_age=$(stat -c %Y "$SECURE_TMP/.main_sys_stats" 2>/dev/null || echo 0)
     if [ -f "$SECURE_TMP/.main_sys_stats" ] && ((now_stats-stats_age<15)); then
         IFS='|' read -r cpu cores used total ram rx tx v6 < "$SECURE_TMP/.main_sys_stats"
-        used="$used/$total [$ram%]"; cpu="${cpu}%"
+        used="$used/$total [${ram}%]"; cpu="${cpu}%"
     else
-        # Module dashboards work without first opening the main dashboard.
         local u n s idle wait irq soft steal rest ticks idle_ticks delta busy
         local old_ticks old_idle old_rx old_tx old_time nrx ntx elapsed delta_file delta_tmp
         delta_file="$SECURE_TMP/.module_sys_delta"
@@ -1767,44 +1772,101 @@ mt_module_header() {
             printf '%s|%s|%s|%s|%s\n' "$ticks" "$idle_ticks" "$nrx" "$ntx" "$now_stats" > "$delta_tmp"
             mv -f "$delta_tmp" "$delta_file"
         fi
+        used="$used [${ram}%]"
     fi
+    local cpu_color="$G" ram_color="$G" loss_color core_label="${cores} Cores"
+    local rx_color="$DIM" tx_color="$DIM" ipv6_color="$M" vip_color fwd_color
+    [ "$rx" = '0 B/s' ] || rx_color="$G"
+    [ "$tx" = '0 B/s' ] || tx_color="$Y"
+    [ "$ip6" != OFF ] || ipv6_color="$DIM"
+    [[ "${cpu%\%}" =~ ^[0-9]+$ ]] && (( ${cpu%\%}>60 )) && cpu_color="$Y"
+    [[ "${cpu%\%}" =~ ^[0-9]+$ ]] && (( ${cpu%\%}>85 )) && cpu_color="$R"
+    [[ "$ram" =~ ^[0-9]+$ ]] && ((ram>70)) && ram_color="$Y"
+    [[ "$ram" =~ ^[0-9]+$ ]] && ((ram>88)) && ram_color="$R"
+    [ "$cores" != 1 ] || core_label='1 Core'
+    # Exactly the main dashboard's column proportions; do not stretch a
+    # one-tunnel header to terminal width. IPv6 expands only the needed cells.
+    local w1=29 w2=23 w6 w4 peerw maxpeer=16 st name peer ping loss up fwd vip row_tag n=0
+    while IFS='|' read -r st name peer ping loss up fwd vip row_tag; do
+        [ -n "$name" ] || continue
+        n=$((n+1)); ((n<=3)) || break
+        ((${#peer}>maxpeer)) && maxpeer=${#peer}
+    done <<< "$rows"
+    w6=$(( ${#ip6}+10 )); ((w6<21)) && w6=21
+    width=$((31+25+w6+29+3)); ((width<117)) && width=117
+    ((117+maxpeer-16<=width)) || width=$((117+maxpeer-16))
+    ((width<=150)) || width=150
+    if ((cols>=124)); then
+        ((width<=cols-4)) || width=$((cols-4))
+        # Preserve a full 39-character IPv6 by borrowing from title/IPv4 cells
+        # before choosing the compact rendering on a smaller terminal.
+        if ((w6>width-31-25-29-3)); then w1=24; w2=21; fi
+        w4=$((width-w1-w2-w6-9))
+    else
+        width=$((cols-6)); ((width<26)) && width=26; w4=0
+    fi
+    peerw=$((width-101))
+    printf -v border '%*s' "$width" ''; border="${border// /─}"
+    local join=" ${B}│${NC} " wide=0
+    ((cols>=124 && w4>=25 && peerw>=maxpeer)) && wide=1
     [ -n "${HEADER_LIVE:-}" ] || clear
     printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
-    if ((width>=120 && ${#title}+${#ip4}+${#ip6}+25<=width)); then
-        mt_ui_row "$width" "${W}${title}${NC} ${B}│${NC} ${DIM}IPv4:${NC} ${M}${ip4}${NC} ${B}│${NC} ${DIM}IPv6:${NC} ${M}${ip6}${NC}"
-        mt_ui_row "$width" "${DIM}CPU:${NC} ${G}${cpu}${NC} (${cores} Cores) ${B}│${NC} ${DIM}RAM:${NC} ${G}${used}${NC} ${B}│${NC} ${DIM}Net ▼:${NC} ${G}${rx}${NC} ${DIM}▲:${NC} ${Y}${tx}${NC} ${B}│${NC} BBR: ${cc}  Porter: ${porter}"
+    # Row 1: title / IPv4 / IPv6 / BBR + Porter. Labels are DIM, addresses M.
+    local status="${DIM}BBR:${NC} ${DIM}${bbr_icon}${NC} ${G}${bbr}${NC}  ${DIM}Porter:${NC} ${DIM}${porter_icon}${NC} ${G}${porter}${NC}"
+    if [ "$wide" = 1 ]; then
+        mt_ui_row "$width" "$(mt_ui_cell "$w1" "${W}${title}${NC}")${join}$(mt_ui_cell "$w2" "${C}◆${NC} ${DIM}IPv4${NC}  ${M}${ip4}${NC}")${join}$(mt_ui_cell "$((w6-2))" "${M}◆${NC} ${DIM}IPv6${NC}  ${ipv6_color}${ip6}${NC}")${join}$(mt_ui_cell "$w4" "$status")"
     else
-        mt_ui_row "$width" "${W}${title}${NC} ${B}│${NC} ${DIM}IPv4:${NC} ${M}${ip4}${NC}"
-        mt_ui_row "$width" "${DIM}IPv6:${NC} ${M}${ip6}${NC}"
-        mt_ui_row "$width" "CPU ${cpu} / ${cores} Cores | RAM ${used} | BBR ${cc} | Porter ${porter}"
+        mt_ui_row "$width" "${W}${title}${NC} | ${DIM}IPv4:${NC} ${M}${ip4}${NC} | ${DIM}IPv6:${NC} ${ipv6_color}${ip6}${NC} | ${status}"
+    fi
+    printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
+    # Row 2: CPU + Cores / RAM / receive / send, identical to main.
+    if [ "$wide" = 1 ]; then
+        mt_ui_row "$width" "$(mt_ui_cell "$w1" "${DIM}CPU:${NC} ${cpu_color}${cpu}${NC}   ${DIM}Cores:${NC} ${W}${core_label}${NC}")${join}$(mt_ui_cell "$w2" "${DIM}RAM:${NC} ${ram_color}${used}${NC}")${join}$(mt_ui_cell "$((w6-2))" "${DIM}Net ▼:${NC} ${rx_color}${rx}${NC}")${join}$(mt_ui_cell "$w4" "${DIM}Net ▲:${NC} ${tx_color}${tx}${NC}")"
+    else
+        mt_ui_row "$width" "${DIM}CPU:${NC} ${cpu_color}${cpu}${NC}  ${DIM}Cores:${NC} ${W}${core_label}${NC} | ${DIM}RAM:${NC} ${ram_color}${used}${NC} | ${DIM}Net ▼:${NC} ${rx_color}${rx}${NC} | ${DIM}Net ▲:${NC} ${tx_color}${tx}${NC}"
     fi
     if [ "$rows" = '@none' ]; then
         printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"; return 0
     fi
     printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
-    local st name peer ping loss up fwd icon color line shown=0 peerw maxpeer=15
-    while IFS='|' read -r st name peer ping loss up fwd; do
+    # Row 3 (one row per tunnel): status/name / Peer / vIP / Ping / Loss / Up / FWD.
+    local shown=0 color icon name_tag line
+    while IFS='|' read -r st name peer ping loss up fwd vip row_tag; do
         [ -n "$name" ] || continue
-        ((${#peer}>maxpeer)) && maxpeer=${#peer}
-    done <<< "$rows"
-    while IFS='|' read -r st name peer ping loss up fwd; do
-        [ -n "$name" ] || continue
-        shown=$((shown+1)); [ "$shown" -le 3 ] || break
+        shown=$((shown+1)); ((shown<=3)) || break
         color="$R"; icon=○; [ "$st" != 1 ] || { color="$G"; icon=●; }
-        [[ ! "$loss" =~ ^[0-9]+$ ]] || loss="${loss}%"
-        # Keep names readable; preserve the COMPLETE peer IPv6 on every size.
-        peerw=$((width-95)); ((peerw<15)) && peerw=15
-        if ((width>=120 && ${#peer}<=peerw && ${#name}<=24)); then
-            line="${color}${icon}${NC} $(mt_ui_cell 24 "${W}${name} [${tag}]${NC}") ${B}│${NC} $(mt_ui_cell "$((peerw+6))" "${Y}Peer: ${peer}${NC}") ${B}│${NC} $(mt_ui_cell 12 "Ping: ${Y}${ping:----}${NC}") ${B}│${NC} $(mt_ui_cell 10 "Loss: ${loss:----}") ${B}│${NC} $(mt_ui_cell 15 "Up: ${up:----}") ${B}│${NC} FWD: ${C}${fwd:-OFF}${NC}"
-            mt_ui_row "$width" "$line"
-        else
-            mt_ui_row "$width" "${color}${icon}${NC} ${W}${name} [${tag}]${NC} ${Y}Peer: ${peer:----}${NC}"
-            mt_ui_row "$width" "Ping: ${ping:----} | Loss: ${loss:----} | Up: ${up:----} | FWD: ${fwd:-OFF}"
+        row_tag="${row_tag:-$tag}"; vip="${vip:-OFF}"
+        case "$row_tag" in BH) name="${name#bh_}";; PAQET) name="${name#pq_}";; esac
+        name_tag="${name} [${row_tag}]"
+        vip_color="$DIM"; [ "$vip" = OFF ] || vip_color="$G"
+        fwd_color="$DIM"; [ "$fwd" = OFF ] || fwd_color="$C"
+        loss_color="$DIM"
+        if [[ "$loss" =~ ^[0-9]+$ ]]; then
+            loss_color="$G"; ((loss<30)) || loss_color="$R"; ((loss==0||loss>=30)) || loss_color="$Y"
+            loss="${loss}%"
         fi
+        if [ "$wide" = 1 ] && ((${#name_tag}<=17)); then
+            line="$(mt_ui_cell 19 "${color}${icon}${NC} ${W}${name_tag}${NC}")${join}$(mt_ui_cell "$((peerw+6))" "${DIM}Peer:${NC} ${M}${peer:----}${NC}")${join}$(mt_ui_cell 9 "${DIM}vIP:${NC}${vip_color}${vip}${NC}")${join}$(mt_ui_cell 10 "${DIM}Ping:${NC}${Y}${ping:----}${NC}")${join}$(mt_ui_cell 9 "${DIM}Loss:${NC}${loss_color}${loss:----}${NC}")${join}$(mt_ui_cell 14 "${DIM}Up:${NC} ${W}${up:----}${NC}")${join}$(mt_ui_cell 14 "${DIM}FWD:${NC} ${fwd_color}${fwd:-OFF}${NC}")"
+        else
+            line="${color}${icon}${NC} ${W}${name_tag}${NC} | ${DIM}Peer:${NC} ${M}${peer:----}${NC} | ${DIM}vIP:${NC}${vip} | ${DIM}Ping:${NC}${Y}${ping:----}${NC} | ${DIM}Loss:${NC}${loss_color}${loss:----}${NC} | ${DIM}Up:${NC} ${W}${up:----}${NC} | ${DIM}FWD:${NC} ${fwd_color}${fwd:-OFF}${NC}"
+        fi
+        mt_ui_row "$width" "$line"
     done <<< "$rows"
     [ "$shown" -gt 0 ] || mt_ui_row "$width" "${DIM}No ${tag} tunnels configured.${NC}"
     printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
     HDR_DRAWN_ROWS=$((shown>3?3:shown))
+}
+mt_main_dashboard_header() {
+    local rows='' proto name peer vip ping loss dev fwd up st
+    if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
+        while IFS='|' read -r proto name peer vip ping loss dev fwd; do
+            [ -n "$proto" ] || continue
+            up=$(get_iface_uptime_pure "$dev"); st=1; [ "$up" != DOWN ] || st=0
+            rows+="${st}|${name}|${peer}|${ping}|${loss}|${up}|${fwd}|${vip}|${proto}"$'\n'
+        done < "$SECURE_TMP/.main_tun_stats"
+    fi
+    local HEADER_LIVE=1
+    mt_module_header "MDesign Master Core v${MODULE_VERSION}" "$rows" ALL
 }
 mt_interface_header_rows() (
     # Subshell: reading a header must not overwrite the current editor's config.

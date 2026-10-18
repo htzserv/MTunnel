@@ -2,7 +2,7 @@
 # --- MTunnel MRathole | Reverse Tunnel Engine v1.0.2 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.1.3"
+MODULE_VERSION="1.1.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -23,7 +23,7 @@ mt_load_common() {
             source "$candidate" || return 1
             if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
                 if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
-                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.3 bundle.' >&2
+                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.4 bundle.' >&2
                 return 1
             fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
@@ -895,7 +895,7 @@ draw_header() {
     now=$(date +%s); mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
     if [ ! -f "$HDR_ROWS_FILE" ] || [ $((now-mtime)) -gt 15 ]; then collect_header_rows fast; fi
     [ ! -f "$HDR_ROWS_FILE" ] || rows=$(cat "$HDR_ROWS_FILE")
-    mt_module_header "mrathole Core v${MODULE_VERSION}" "$rows" RAT
+    mt_module_header "MRathole Core v${MODULE_VERSION}" "$rows" RAT
 }
 
 show_tunnel_registry() {

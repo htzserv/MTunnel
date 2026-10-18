@@ -4,7 +4,7 @@
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.1.2"
+MTUNNEL_RELEASE_VERSION="1.1.3"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults by copying config/sources.conf.example to
 # /etc/mtunnel/sources.conf, or by exporting MTUNNEL_GITHUB_BASE and
@@ -273,9 +273,10 @@ mt_validate_port_list() {
         fi
         for ((p=a; p<=b; p++)); do
             [ -z "${seen[$p]:-}" ] || return 1; seen[$p]=1
-            if [ "$check" == 1 ] && ! mt_list_has_port "$owned" "$p" && mt_port_busy "$p" "$proto"; then return 1; fi
+            
         done
     done
+    if [ "$check" = 1 ]; then mt_guard_ports "$list" "$proto" "${MT_PORT_OWNER:-}"; fi
 }
 mt_validate_script() {
     local file="$1" version
@@ -1501,3 +1502,340 @@ mt_workspace_auto_backup() {
 }
 
 # END MTUNNEL CROSS-ENGINE HELPERS
+
+# Shared ingress guard. An owner is an EXACT systemd unit, NAT tag, or chain;
+# comma-separated owners are allowed for a service with its own NAT frontend.
+mt_owner_matches() { [[ ",$2," == *",$1,"* ]]; }
+mt_pid_unit() {
+    local path part
+    [ -r "/proc/$1/cgroup" ] || return 1
+    while IFS=: read -r _ _ path; do
+        local -a parts=(); IFS=/ read -ra parts <<< "$path"
+        for part in "${parts[@]}"; do [[ "$part" == *.service ]] && { printf '%s\n' "$part"; return; }; done
+    done < "/proc/$1/cgroup"
+    return 1
+}
+mt_socket_snapshot() {
+    # Both protocols force the Netid column: local endpoint is always field 5.
+    command -v ss >/dev/null 2>&1 || { echo 'Port guard: ss is required (install iproute2).' >&2; return 1; }
+    ss -Hlnptu 2>/dev/null
+}
+mt_nat_snapshot() {
+    local bin data
+    for bin in iptables-save ip6tables-save; do
+        command -v "$bin" >/dev/null 2>&1 || continue
+        data=$("$bin" -t nat 2>/dev/null) || { echo "Port guard: cannot inspect $bin NAT rules." >&2; return 1; }
+        # Only ingress-reachable DNAT/REDIRECT rules, including custom chains.
+        awk -v bin="$bin" '
+          $1=="-A" {r[++n]=$0; from[n]=$2; for(i=3;i<NF;i++) if($i=="-j" || $i=="-g") dest[n]=$(i+1)}
+          END {reach["PREROUTING"]=1;reach["OUTPUT"]=1;
+            for(k=0;k<=n;k++){changed=0;for(i=1;i<=n;i++)if(reach[from[i]]&&!reach[dest[i]]){reach[dest[i]]=1;changed=1}if(!changed)break}
+            for(i=1;i<=n;i++)if(reach[from[i]]&&(dest[i]=="DNAT"||dest[i]=="REDIRECT"))print bin "|" r[i]
+          }' <<< "$data"
+    done
+}
+mt_nat_conflicts() {
+    local port="$1" proto="$2" owners="$3"
+    awk -F'|' -v p="$port" -v proto="$proto" -v owners=",$owners," '
+      function own(s){return s!="" && index(owners,"," s ",")>0}
+      function matches(s, a,n,j,b,m) {
+        n=split(s,a,","); for(j=1;j<=n;j++){m=split(a[j],b,":");if(m==1&&b[1]+0==p)return 1;if(m==2&&p>=b[1]+0&&p<=b[2]+0)return 1}return 0
+      }
+      {rule=$2; n=split(rule,t," "); rp="";ports="";tag="";neg=0;
+        for(i=3;i<=n;i++){
+          if(t[i]=="-p")rp=t[i+1];
+          if(t[i]=="--dport"||t[i]=="--dports"){ports=t[i+1];if(t[i-1]=="!")neg=1}
+          if(t[i]=="--comment"){tag=t[i+1];gsub(/"/,"",tag)}
+        }
+        if(own(t[2])||own(tag))next;
+        if((rp==""||rp==proto||proto=="both"||proto=="any") && (ports=="" || (neg?!matches(ports):matches(ports)))) print $0
+      }' <<< "$MT_GUARD_NAT"
+}
+mt_raw_reservations() {
+    # Paqet uses packet capture and may never appear in ss. Reserve its raw
+    # server port even while its process is stopped; deleting that tunnel frees it.
+    local port="$1" proto="$2" owners="$3" meta name role link
+    [[ "$proto" != udp ]] || return 0
+    for meta in "${MTUNNEL_TEST_ROOT:-}/etc/paqet/"*.meta; do
+        [ -f "$meta" ] || continue
+        name=$(basename "$meta" .meta)
+        mt_owner_matches "mpaqet@$name.service" "$owners" && continue
+        role=$(mt_read_kv "$meta" ROLE); link=$(mt_read_kv "$meta" TUN_PORT)
+        [ "$role" != 1 ] || [ "$link" != "$port" ] || printf 'Paqet raw listener: %s (%s)\n' "$name" "$meta"
+    done
+}
+mt_port_card() {
+    printf '\n  %b┌─[ PORT CONFLICT ]%b\n' "${R:-}" "${NC:-}" >&2
+    printf '  %b│%b Port     : %s / %s\n' "${DIM:-}" "${NC:-}" "$1" "$2" >&2
+    shift 2
+    while [ "$#" -gt 0 ]; do printf '  %b├─%b %s\n' "${DIM:-}" "${NC:-}" "$1" >&2; shift; done
+}
+mt_foreign_socket_lines() {
+    local port="$1" proto="$2" owners="$3" line pid unit users foreign
+    local -a lines=()
+    mapfile -t lines < <(awk -v p="$port" -v proto="$proto" '
+      ($1==proto||proto=="both"||proto=="any"){s=$5;sub(/^.*:/,"",s);if(s+0==p)print}' <<< "$MT_GUARD_SOCKETS")
+    for line in "${lines[@]}"; do
+        [ -n "$line" ] || continue
+        users=$(grep -oE 'pid=[0-9]+' <<< "$line" | cut -d= -f2 | sort -u)
+        foreign=0; [ -n "$users" ] || foreign=1
+        while read -r pid; do
+            [ -n "$pid" ] || continue
+            unit=$(mt_pid_unit "$pid" || true)
+            if [ -z "$unit" ] || ! mt_owner_matches "$unit" "$owners"; then foreign=1; break; fi
+        done <<< "$users"
+        [ "$foreign" = 0 ] || printf '%s\n' "$line"
+    done
+}
+mt_guard_one() {
+    local port="$1" proto="$2" owners="$3" lines line users pid unit comm answer attempt n
+    local -a pids=() units=() names=(); local -A seen=()
+    lines=$(awk -v p="$port" -v proto="$proto" '
+      ($1==proto||proto=="both"||proto=="any") {s=$5;sub(/^.*:/,"",s);if(s+0==p)print}' <<< "$MT_GUARD_SOCKETS")
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        users=$(grep -oE 'pid=[0-9]+' <<< "$line" | cut -d= -f2 | sort -u)
+        if [ -z "$users" ]; then
+            mt_port_card "$port" "$proto" "Listener: $line" 'PID unavailable; release this listener manually. No change applied.'
+            return 1
+        fi
+        while read -r pid; do
+            [ -z "${seen[$pid]:-}" ] || continue; seen[$pid]=1
+            unit=$(mt_pid_unit "$pid" || true)
+            [ -z "$unit" ] || ! mt_owner_matches "$unit" "$owners" || continue
+            comm=$(cat "/proc/$pid/comm" 2>/dev/null); comm="${comm:-unknown}"
+            pids+=("$pid"); units+=("$unit"); names+=("$comm")
+        done <<< "$users"
+    done <<< "$lines"
+    local nat raw
+    nat=$(mt_nat_conflicts "$port" "$proto" "$owners")
+    raw=$(mt_raw_reservations "$port" "$proto" "$owners")
+    if [ -n "$nat$raw" ]; then
+        mt_port_card "$port" "$proto" "Forwarding owner: ${raw:-$nat}" \
+          'This port belongs to a forwarding rule/reservation, not a closable listener.' \
+          'Remove its existing mapping in the owning tunnel first. No change applied.'
+        return 1
+    fi
+    [ ${#pids[@]} -gt 0 ] || return 0
+    mt_port_card "$port" "$proto"
+    for n in "${!pids[@]}"; do
+        printf '  %b├─%b Process  : %s\n  %b│%b PID      : %s\n  %b│%b Service  : %s\n' \
+          "${DIM:-}" "${NC:-}" "${names[$n]}" "${DIM:-}" "${NC:-}" "${pids[$n]}" "${DIM:-}" "${NC:-}" "${units[$n]:-unmanaged process}" >&2
+        # Never stop PID 1, this shell, its ancestors, or remote access services.
+        pid="${pids[$n]}"; comm="${names[$n]}"; unit="${units[$n]}"
+        local ancestor=$$ protected=0
+        while [[ "$ancestor" =~ ^[0-9]+$ ]] && ((ancestor>1)); do
+            [ "$ancestor" != "$pid" ] || protected=1
+            ancestor=$(awk '/^PPid:/{print $2}' "/proc/$ancestor/status" 2>/dev/null)
+        done
+        case "$comm:$unit" in *sshd*|*ssh.service*|*ssh.socket*|*dropbear*) protected=1;; esac
+        if [ "$pid" -le 1 ] || [ "$protected" = 1 ]; then
+            echo '  └─ Protected remote-access/system process. Choose another port.' >&2; return 1
+        fi
+    done
+    # A background restore/cron must fail instead of taking input from a pipe
+    # or stopping another process. Interactive menus provide this flag.
+    if [ "${MT_PORT_INTERACTIVE:-0}" != 1 ] || [ ! -t 0 ]; then
+        echo '  └─ Port busy. Open the interactive menu to resolve it.' >&2; return 1
+    fi
+    echo '  │ Stopping a service also stops its other ports; it stays stopped.' >&2
+    printf '  %b└─%b Stop the process/service(s) above, then apply/restart this tunnel? [y/N] ❯❯ ' "${C:-}" "${NC:-}" >&2
+    IFS= read -r answer || return 1
+    [[ "${answer,,}" == y || "${answer,,}" == yes ]] || { echo '  ● Cancelled; conflicting process kept running.' >&2; return 1; }
+    for n in "${!pids[@]}"; do
+        pid="${pids[$n]}"; unit="${units[$n]}"
+        # Revalidate identity immediately before signalling, not just PID number.
+        [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = "${names[$n]}" ] || continue
+        [ "$(mt_pid_unit "$pid" || true)" = "$unit" ] || { echo 'Process owner changed; retry.' >&2; return 1; }
+        if [ -n "$unit" ]; then
+            systemctl stop "$unit" || return 1
+            echo "  ● Stopped $unit (kept stopped; its other listeners also stop)." >&2
+        else
+            kill -TERM "$pid" || return 1
+        fi
+    done
+    # Re-read sockets; a socket-activated service or a supervisor may respawn.
+    for attempt in {1..10}; do
+        MT_GUARD_SOCKETS=$(mt_socket_snapshot) || return 1
+        lines=$(mt_foreign_socket_lines "$port" "$proto" "$owners")
+        [ -z "$lines" ] && return 0
+        sleep .2
+    done
+    echo "  ● Port $port is still occupied or was reopened. Apply cancelled." >&2
+    return 1
+}
+mt_guard_ports() {
+    local list="$1" proto="${2:-both}" owners="${3:-}" p candidates raw meta role link
+    local MT_GUARD_SOCKETS MT_GUARD_NAT
+    case "$proto" in tcp|udp|both|any) ;; *) proto=tcp;; esac
+    [ -n "$list" ] || return 0
+    mt_validate_port_list "$list" 0 "$proto" || { echo "Invalid port list: $list" >&2; return 1; }
+    MT_GUARD_SOCKETS=$(mt_socket_snapshot) || return 1
+    MT_GUARD_NAT=$(mt_nat_snapshot) || return 1
+    # Intersect ranges with occupied endpoints in one pass. A free 1:65535
+    # range is not 65,535 ss/iptables/proc scans.
+    candidates=$({
+        printf '%s\n' "$MT_GUARD_SOCKETS" | awk -v list="$list" -v proto="$proto" '
+          BEGIN{n=split(list,a,",");for(i=1;i<=n;i++){split(a[i],b,":");lo[i]=b[1]+0;hi[i]=(b[2]==""?lo[i]:b[2]+0)}}
+          ($1==proto||proto=="both"||proto=="any"){p=$5;sub(/^.*:/,"",p);for(i=1;i<=n;i++)if(p+0>=lo[i]&&p+0<=hi[i]){print p+0;break}}'
+        printf '%s\n' "$MT_GUARD_NAT" | awk -F'|' -v list="$list" -v proto="$proto" '
+          function emit(l,h, i,p){for(i=1;i<=n;i++){p=(l>lo[i]?l:lo[i]);if(p<=h&&p<=hi[i])print p}}
+          BEGIN{n=split(list,a,",");for(i=1;i<=n;i++){split(a[i],b,":");lo[i]=b[1]+0;hi[i]=(b[2]==""?lo[i]:b[2]+0)}}
+          NF>1{m=split($2,t," ");rp="";ports="";neg=0;
+            for(j=3;j<=m;j++){if(t[j]=="-p")rp=t[j+1];if(t[j]=="--dport"||t[j]=="--dports"){ports=t[j+1];if(t[j-1]=="!")neg=1}}
+            if(rp!=""&&rp!=proto&&proto!="both"&&proto!="any")next;
+            if(ports==""||neg){for(i=1;i<=n;i++){print lo[i];if(hi[i]!=lo[i])print hi[i]}next}
+            k=split(ports,r,",");for(j=1;j<=k;j++){split(r[j],b,":");emit(b[1]+0,(b[2]==""?b[1]+0:b[2]+0))}
+          }'
+        if [ "$proto" != udp ]; then
+            for meta in "${MTUNNEL_TEST_ROOT:-}/etc/paqet/"*.meta; do
+                [ -f "$meta" ] || continue
+                role=$(mt_read_kv "$meta" ROLE); link=$(mt_read_kv "$meta" TUN_PORT)
+                [ "$role" != 1 ] || ! mt_list_has_port "$list" "$link" || echo "$link"
+            done
+        fi
+    } | sort -nu)
+    local -a busy_ports=()
+    mapfile -t busy_ports <<< "$candidates"
+    for p in "${busy_ports[@]}"; do
+        [ -z "$p" ] || mt_guard_one "$p" "$proto" "$owners" || return 1
+    done
+    return 0
+}
+
+# Shared module dashboard: same blue frame / purple IP / yellow Peer palette
+# as the main dashboard. Each caller supplies ONLY its own module rows.
+mt_ui_plain() { printf '%b' "$1" | sed -E $'s/\033\\[[0-9;]*m//g'; }
+mt_ui_row() {
+    local width="$1" raw="$2" plain rendered pad
+    local LC_CTYPE=C.UTF-8
+    rendered=$(printf '%b' "$raw"); plain=$(mt_ui_plain "$raw")
+    if ((${#plain}>width-2)); then
+        # Narrow terminals: wrap without dropping an IPv6 suffix or ANSI bytes.
+        while [ -n "$plain" ]; do
+            printf '  %b│%b %-*s %b│%b\033[K\n' "$B" "$NC" "$((width-2))" "${plain:0:width-2}" "$B" "$NC"
+            plain="${plain:width-2}"
+        done
+    else
+        pad=$((width-2-${#plain}))
+        printf '  %b│%b %s%*s %b│%b\033[K\n' "$B" "$NC" "$rendered" "$pad" '' "$B" "$NC"
+    fi
+}
+mt_ui_cell() {
+    local w="$1" raw="$2" plain pad; local LC_CTYPE=C.UTF-8
+    plain=$(mt_ui_plain "$raw"); pad=$((w-${#plain})); ((pad<0)) && pad=0
+    printf '%b%*s' "$raw" "$pad" ''
+}
+mt_module_header() {
+    local title="$1" rows="$2" tag="$3" ip4 ip6 cols width border cc porter=OFF
+    local cpu=0 cores used total ram rx tx v6
+    ip4=$(get_local_ip); ip6=$(get_local_ipv6); ip6="${ip6:-OFF}"
+    cols=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-132}")
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=132
+    width=$((cols-6)); ((width>150)) && width=150; ((width<26)) && width=26
+    printf -v border '%*s' "$width" ''; border="${border// /─}"
+    cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null); cc="${cc:----}"
+    if systemctl is-active --quiet mporter.service 2>/dev/null; then porter=ON; fi
+    cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null); cores="${cores:-1}"
+    used=$(awk '/MemTotal:/{t=$2}/MemAvailable:/{a=$2}END{printf "%.1f/%.1fG",(t-a)/1048576,t/1048576}' /proc/meminfo)
+    cpu='---'; rx='---'; tx='---'
+    local stats_age now_stats
+    now_stats=$(date +%s); stats_age=$(stat -c %Y "$SECURE_TMP/.main_sys_stats" 2>/dev/null || echo 0)
+    if [ -f "$SECURE_TMP/.main_sys_stats" ] && ((now_stats-stats_age<15)); then
+        IFS='|' read -r cpu cores used total ram rx tx v6 < "$SECURE_TMP/.main_sys_stats"
+        used="$used/$total [$ram%]"; cpu="${cpu}%"
+    else
+        # Module dashboards work without first opening the main dashboard.
+        local u n s idle wait irq soft steal rest ticks idle_ticks delta busy
+        local old_ticks old_idle old_rx old_tx old_time nrx ntx elapsed delta_file delta_tmp
+        delta_file="$SECURE_TMP/.module_sys_delta"
+        read -r rest u n s idle wait irq soft steal rest < /proc/stat
+        ticks=$((u+n+s+idle+wait+irq+soft+steal)); idle_ticks=$((idle+wait))
+        IFS='|' read -r nrx ntx < <(awk -F'[: ]+' 'NR>2 && $2!="lo"{r+=$3;t+=$11}END{printf "%.0f|%.0f\n",r,t}' /proc/net/dev)
+        if [ -r "$delta_file" ]; then
+            IFS='|' read -r old_ticks old_idle old_rx old_tx old_time < "$delta_file"
+            if [[ "$old_ticks|$old_idle|$old_rx|$old_tx|$old_time" =~ ^[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+\|[0-9]+$ ]]; then
+                delta=$((ticks-old_ticks)); busy=$((delta-idle_ticks+old_idle)); elapsed=$((now_stats-old_time))
+                ((delta<=0||busy<0)) || cpu="$((100*busy/delta))%"
+                if ((elapsed>0 && nrx>=old_rx && ntx>=old_tx)); then
+                    rx="$(((nrx-old_rx)/elapsed/1024)) KB/s"; tx="$(((ntx-old_tx)/elapsed/1024)) KB/s"
+                fi
+            fi
+        fi
+        delta_tmp=$(mktemp "$SECURE_TMP/.module_sys_delta.XXXXXX" 2>/dev/null)
+        if [ -n "$delta_tmp" ]; then
+            printf '%s|%s|%s|%s|%s\n' "$ticks" "$idle_ticks" "$nrx" "$ntx" "$now_stats" > "$delta_tmp"
+            mv -f "$delta_tmp" "$delta_file"
+        fi
+    fi
+    [ -n "${HEADER_LIVE:-}" ] || clear
+    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
+    if ((width>=120 && ${#title}+${#ip4}+${#ip6}+25<=width)); then
+        mt_ui_row "$width" "${W}${title}${NC} ${B}│${NC} ${DIM}IPv4:${NC} ${M}${ip4}${NC} ${B}│${NC} ${DIM}IPv6:${NC} ${M}${ip6}${NC}"
+        mt_ui_row "$width" "${DIM}CPU:${NC} ${G}${cpu}${NC} (${cores} Cores) ${B}│${NC} ${DIM}RAM:${NC} ${G}${used}${NC} ${B}│${NC} ${DIM}Net ▼:${NC} ${G}${rx}${NC} ${DIM}▲:${NC} ${Y}${tx}${NC} ${B}│${NC} BBR: ${cc}  Porter: ${porter}"
+    else
+        mt_ui_row "$width" "${W}${title}${NC} ${B}│${NC} ${DIM}IPv4:${NC} ${M}${ip4}${NC}"
+        mt_ui_row "$width" "${DIM}IPv6:${NC} ${M}${ip6}${NC}"
+        mt_ui_row "$width" "CPU ${cpu} / ${cores} Cores | RAM ${used} | BBR ${cc} | Porter ${porter}"
+    fi
+    if [ "$rows" = '@none' ]; then
+        printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"; return 0
+    fi
+    printf '  %b├%s┤%b\033[K\n' "$B" "$border" "$NC"
+    local st name peer ping loss up fwd icon color line shown=0 peerw maxpeer=15
+    while IFS='|' read -r st name peer ping loss up fwd; do
+        [ -n "$name" ] || continue
+        ((${#peer}>maxpeer)) && maxpeer=${#peer}
+    done <<< "$rows"
+    while IFS='|' read -r st name peer ping loss up fwd; do
+        [ -n "$name" ] || continue
+        shown=$((shown+1)); [ "$shown" -le 3 ] || break
+        color="$R"; icon=○; [ "$st" != 1 ] || { color="$G"; icon=●; }
+        [[ ! "$loss" =~ ^[0-9]+$ ]] || loss="${loss}%"
+        # Keep names readable; preserve the COMPLETE peer IPv6 on every size.
+        peerw=$((width-95)); ((peerw<15)) && peerw=15
+        if ((width>=120 && ${#peer}<=peerw && ${#name}<=24)); then
+            line="${color}${icon}${NC} $(mt_ui_cell 24 "${W}${name} [${tag}]${NC}") ${B}│${NC} $(mt_ui_cell "$((peerw+6))" "${Y}Peer: ${peer}${NC}") ${B}│${NC} $(mt_ui_cell 12 "Ping: ${Y}${ping:----}${NC}") ${B}│${NC} $(mt_ui_cell 10 "Loss: ${loss:----}") ${B}│${NC} $(mt_ui_cell 15 "Up: ${up:----}") ${B}│${NC} FWD: ${C}${fwd:-OFF}${NC}"
+            mt_ui_row "$width" "$line"
+        else
+            mt_ui_row "$width" "${color}${icon}${NC} ${W}${name} [${tag}]${NC} ${Y}Peer: ${peer:----}${NC}"
+            mt_ui_row "$width" "Ping: ${ping:----} | Loss: ${loss:----} | Up: ${up:----} | FWD: ${fwd:-OFF}"
+        fi
+    done <<< "$rows"
+    [ "$shown" -gt 0 ] || mt_ui_row "$width" "${DIM}No ${tag} tunnels configured.${NC}"
+    printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
+    HDR_DRAWN_ROWS=$((shown>3?3:shown))
+}
+mt_interface_header_rows() (
+    # Subshell: reading a header must not overwrite the current editor's config.
+    local kind="$1" conf name iface peer proto cache entry ping loss up st fwd
+    for conf in "$CONF_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        T_NAME=''; VX_NAME=''; BR_NAME=''; REMOTE_PUB=''; REMOTE_PUB6=''; REMOTE_IP6=''; REMOTE_V4=''; TUN_PROTO=ipv4; FAB_PROTO=ipv4; FWD_TCP=''; FWD_UDP=''
+        source "$conf" 2>/dev/null
+        if [ "$kind" = gre ]; then
+            name="$T_NAME"; iface="$T_NAME"; proto="$TUN_PROTO"; cache="$SECURE_TMP/.mgre_stats_cache"
+            peer="$REMOTE_PUB"; mgre_proto_is_v6 "$proto" && peer="${REMOTE_PUB6:-${REMOTE_IP6:-$REMOTE_PUB}}"
+        else
+            name="$VX_NAME"; iface="$BR_NAME"; proto="$FAB_PROTO"; cache="$SECURE_TMP/.mxlan_stats_cache"
+            peer="$REMOTE_PUB"; [ "$proto" != ipv6 ] || peer="$REMOTE_PUB6"
+        fi
+        [ -n "$name" ] || continue
+        ping='---'; loss='---'; st=0; up=DOWN
+        if ip link show "$iface" >/dev/null 2>&1 && [ "$(cat "/sys/class/net/$iface/operstate" 2>/dev/null)" != down ]; then st=1; up=$(get_iface_uptime "$iface"); fi
+        entry=$(awk -F'|' -v n="$name" '$1==n{print;exit}' "$cache" 2>/dev/null)
+        [ -z "$entry" ] || IFS='|' read -r _ ping loss _ <<< "$entry"
+        fwd=OFF; [ -z "$FWD_TCP$FWD_UDP" ] || fwd=ACT
+        printf '%s|%s|%s|%s|%s|%s|%s\n' "$st" "$name" "${peer:----}" "$ping" "$loss" "$up" "$fwd"
+    done | head -n 3
+)
+
+mt_expand_port_list() {
+    local list="$1" item a b p; local -a parts=()
+    mt_validate_port_list "$list" 0 || return 1
+    IFS=, read -ra parts <<< "$list"
+    for item in "${parts[@]}"; do
+        a="${item%:*}"; b="${item#*:}"
+        for ((p=10#$a;p<=10#$b;p++)); do printf '%s\n' "$p"; done
+    done
+}

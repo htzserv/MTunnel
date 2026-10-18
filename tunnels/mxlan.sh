@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.1.2"
+MODULE_VERSION="1.1.3"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -27,7 +27,11 @@ mt_load_common() {
         if [[ -f "$candidate" && -r "$candidate" ]]; then
             # A bad or incompatible shared core must fail loudly, not fall back.
             source "$candidate" || return 1
-            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then return 0; fi
+            if [[ "${MTUNNEL_CORE_API:-}" == "${MTUNNEL_REQUIRED_CORE_API:-1}" && "${MTUNNEL_LAYOUT_REV:-}" == "${MTUNNEL_REQUIRED_LAYOUT_REV:-2}" ]]; then
+                if declare -F mt_guard_ports >/dev/null && declare -F mt_module_header >/dev/null; then return 0; fi
+                echo 'MTunnel: shared core is older than this module. Install the complete 1.1.3 bundle.' >&2
+                return 1
+            fi
             printf 'MTunnel: incompatible shared core: %s\n' "$candidate" >&2
             return 1
         fi
@@ -37,6 +41,8 @@ mt_load_common() {
 }
 mt_load_common || exit 1
 unset -f mt_load_common
+MT_PORT_INTERACTIVE=0
+if [[ "${1:-}" != --* ]] && [ -t 0 ]; then MT_PORT_INTERACTIVE=1; fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
@@ -184,7 +190,7 @@ sanitize_ports() {
                 if [ "$s" -ge "$a" ] && [ "$s" -le "$b" ]; then skip=1; fi
             done
             IFS=','
-            [ "$skip" -eq 1 ] && { echo -e "  ${R}● Refused '$item': it contains this server's SSH port (lock-out protection).${NC}" >&2; continue; }
+            [ "$skip" -eq 1 ] && { echo -e "  ${R}● Refused '$item': it contains this server's SSH port (lock-out protection).${NC}" >&2; return 1; }
         fi
         out+="${item},"
     done
@@ -605,148 +611,9 @@ get_iface_uptime() {
 }
 
 draw_mxlan_header() {
-    local s_ip active_fabrics=0 conf
-    s_ip=$(get_local_ip)
-    s_ip="${s_ip:0:25}"
-    for conf in "$CONF_DIR"/*.conf; do
-        [ ! -f "$conf" ] && continue
-        VX_NAME=""; source "$conf" 2>/dev/null
-        if ip link show "$VX_NAME" >/dev/null 2>&1 && [ "$(cat "/sys/class/net/$VX_NAME/operstate" 2>/dev/null)" != "down" ]; then
-            ((active_fabrics++))
-        fi
-    done
-
-    [ -z "$HEADER_LIVE" ] && clear
-    echo ""
-    local border term_cols
-    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-132}")
-    if [ "$term_cols" -lt 130 ]; then
-        local boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 80 ] && boxw=80
-        local cw=$((boxw - 2)) line shown_c=0 peer up
-        printf -v border '%*s' "$cw" ''; border="${border// /─}"
-        echo -e "  ${B}╭${border}╮${NC}"
-        line="MXLAN v${MODULE_VERSION} | Local: ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"
-        line="Active Fabrics: ${active_fabrics}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"
-        if [ "$term_cols" -ge 82 ]; then
-            echo -e "  ${B}├${border}┤${NC}"
-            for conf in "$CONF_DIR"/*.conf; do
-                [ -f "$conf" ] || continue
-                VX_NAME=''; REMOTE_PUB=''; REMOTE_V4=''; FAB_PROTO='ipv4'; source "$conf" 2>/dev/null; [ -n "$VX_NAME" ] || continue
-                ((shown_c++)); [ "$shown_c" -gt 2 ] && break
-                peer="$REMOTE_PUB"; [[ "$FAB_PROTO" != ipv4 ]] && [ -n "$REMOTE_V4" ] && peer="$REMOTE_V4"
-                [ -n "$peer" ] || peer='---'; up=$(get_iface_uptime "$VX_NAME")
-                line="$(get_pure_vx_name "$VX_NAME") [$(mx_proto_tag "$FAB_PROTO")] | ${peer} | Up ${up}"
-                printf "  ${B}│${NC} %-*.*s ${B}│${NC}\n" "$((cw-2))" "$((cw-2))" "$line"
-            done
-        fi
-        echo -e "  ${B}╰${border}╯${NC}"
-        return 0
-    fi
-    local BOXW=125 extra tw
-    extra=$(( BOXW - 117 )); tw=$(( 24 + extra ))
-    printf -v border '%*s' "$BOXW" ''
-    border="${border// /─}"
-
-    echo -e "  ${B}╭${border}╮${NC}"
-    printf "  ${B}│${NC} ${W}%-34.34s${NC} ${B}│${NC} ${DIM}Local:${NC} ${W}%-25.25s${NC} ${B}│${NC} ${DIM}Active Fabrics:${NC} ${M}%-3.3s${NC}%-${tw}.${tw}s ${B}│${NC}\n" \
-        "MXLAN Core v${MODULE_VERSION}" "$s_ip" "$active_fabrics" ""
-    echo -e "  ${B}├${border}┤${NC}"
-
-    local shown=0
-    local TYPE REMOTE_PUB VX_NAME BR_NAME CORE_SUBNET VNI_ID FWD_TCP FWD_UDP MAX_IPS TUN_SECRET pure_name vip_stat vip_col
-    local FAB_PROTO LOCAL_PUB LOCAL_PUB6 REMOTE_PUB6 REMOTE_V4 local_txt peer_txt tag_txt proto_tag
-    local live_ping live_loss cached_entry loss_disp loss_col fwd_str if_uptime stat_icon stat_col fwd_col sec_disp
-    local len_name len_rem pad_peer sp_peer
-    for conf in "$CONF_DIR"/*.conf; do
-        [ -f "$conf" ] || continue
-        TYPE=""; REMOTE_PUB=""; VX_NAME=""; BR_NAME=""; CORE_SUBNET=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; TUN_SECRET=""; FAB_PROTO="ipv4"; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; REMOTE_V4=""; source "$conf" 2>/dev/null
-        [ -z "$VX_NAME" ] && continue
-        ((shown++))
-        [ "$shown" -gt 3 ] && break
-
-        pure_name=$(get_pure_vx_name "$VX_NAME")
-        pure_name="${pure_name:0:10}"
-        proto_tag=$(mx_proto_tag "$FAB_PROTO")
-        if mx_is_v6; then
-            # IPv6 underlay: show the peer's IPv4 (same look as IPv4 fabrics); tag only if no IPv4 was stored
-            if is_ipv4 "$REMOTE_V4"; then peer_txt="${REMOTE_V4:0:18}"; else peer_txt="---"; fi
-        else peer_txt="${REMOTE_PUB:0:18}"; fi
-
-        len_name=${#pure_name}
-        tag_txt="[${proto_tag}]"
-        # Local IPv4: the tunnel's own IPv4 endpoint, or this host's primary IPv4 for IPv6-underlay tunnels
-        local_txt="${LOCAL_PUB:0:15}"
-        [ -z "$local_txt" ] && local_txt="${s_ip:0:15}"
-        [ -z "$local_txt" ] && local_txt="---"
-        [ -z "$peer_txt" ] && peer_txt="---"
-        # row = name ➔ local ➔ remote [TYPE]; the second arrow and spaces count as 5 columns
-        len_rem=$(( ${#local_txt} + 3 + ${#peer_txt} + 1 + ${#tag_txt} ))
-        pad_peer=$(( 38 + extra - (len_name + len_rem) ))
-        if [ "$pad_peer" -lt 0 ]; then
-            # too wide: shorten the name (never below 3 chars), then clamp
-            len_name=$(( len_name + pad_peer )); [ "$len_name" -lt 3 ] && len_name=3
-            pure_name="${pure_name:0:len_name}"
-            pad_peer=$(( 38 + extra - (len_name + len_rem) )); [ "$pad_peer" -lt 0 ] && pad_peer=0
-        fi
-        sp_peer=$(printf '%*s' "$pad_peer" "")
-
-        vip_stat="OFF"; vip_col="${DIM}"
-        if [ -n "$MAX_IPS" ] && [ "$MAX_IPS" -gt 0 ] 2>/dev/null; then
-            vip_stat="+${MAX_IPS}"
-            vip_col="${G}"
-        fi
-        vip_stat="${vip_stat:0:5}"
-
-        live_ping="---"; live_loss=""
-        if [ -f "$SECURE_TMP/.mxlan_stats_cache" ]; then
-            cached_entry=$(awk -F'|' -v n="$VX_NAME" '$1==n {print; exit}' "$SECURE_TMP/.mxlan_stats_cache" 2>/dev/null)
-            if [ -n "$cached_entry" ]; then
-                live_ping=$(echo "$cached_entry" | cut -d'|' -f2)
-                live_loss=$(echo "$cached_entry" | cut -d'|' -f3)
-            fi
-        fi
-        live_ping="${live_ping:0:4}"
-
-        loss_disp="---"; loss_col="${DIM}"
-        if [ "$live_loss" != "---" ] && [ -n "$live_loss" ]; then
-            loss_disp="${live_loss}%"
-            if [ "$live_loss" -eq 0 ] 2>/dev/null; then loss_col="${G}"
-            elif [ "$live_loss" -lt 30 ] 2>/dev/null; then loss_col="${Y}"
-            else loss_col="${R}"; fi
-        fi
-        loss_disp="${loss_disp:0:4}"
-
-        fwd_str="OFF"
-        if [ "$TYPE" == "1" ]; then
-            if [ -n "$FWD_TCP" ] && [ -n "$FWD_UDP" ]; then fwd_str="T+U"
-            elif [ -n "$FWD_TCP" ]; then fwd_str="T:${FWD_TCP:0:2}"
-            elif [ -n "$FWD_UDP" ]; then fwd_str="U:${FWD_UDP:0:2}"
-            fi
-        else
-            fwd_str="GW"
-        fi
-        fwd_str="${fwd_str:0:5}"
-
-        if_uptime=$(get_iface_uptime "$VX_NAME")
-        stat_icon="●"; stat_col="${G}"
-        if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
-        if_uptime="${if_uptime:0:6}"
-
-        fwd_col="${DIM}"; [ "$fwd_str" != "OFF" ] && fwd_col="${C}"
-
-        sec_disp="${TUN_SECRET:0:5}"
-        [ -z "$sec_disp" ] && sec_disp="---"
-        sec_disp="${sec_disp:0:5}"
-
-        printf "  ${B}│${NC} %b%s%b ${W}%s${NC} ${DIM}➔${NC} ${Y}%s${NC} ${DIM}➔${NC} ${Y}%s${NC} ${C}%s${NC}%s ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-4.4s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC}${W}%-6.6s${NC} ${B}│${NC} ${DIM}FWD:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Sec:${NC}${M}%-5.5s${NC} ${B}│${NC}\n" \
-            "$stat_col" "$stat_icon" "$NC" "$pure_name" "$local_txt" "$peer_txt" "$tag_txt" "$sp_peer" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC" "$sec_disp"
-
-    done
-
-    if [ "$shown" -eq 0 ]; then
-        printf "  ${B}│${NC}  ${DIM}● %-$((111+extra)).$((111+extra))s${NC}  ${B}│${NC}\n" "No active fabrics configured on this host."
-    fi
-    echo -e "  ${B}╰${border}╯${NC}"
+    local rows
+    rows=$(mt_interface_header_rows vxlan)
+    mt_module_header "MXLAN Core v${MODULE_VERSION}" "$rows" VXLAN
 }
 self_update_module() {
     local src_opt custom_url dl_url tmp_file confirm
@@ -922,6 +789,9 @@ apply_fabric() {
     local TYPE="" LOCAL_PUB="" REMOTE_PUB="" MAX_IPS="0" SYNC_KEY="" TUN_SECRET="" T_NAME="" TUN_ID="" CORE_SUBNET="" TUN_PROTO="ipv4" VNI_ID="" BR_NAME="" VX_NAME="" FWD_TCP="" FWD_UDP="" LB_MODE="0" CUSTOM_MTU="" ENCRYPT="0" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4"
     mt_validate_tunnel_conf "$conf" vxlan || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
+    if [ "$TYPE" = 1 ]; then
+        mt_guard_ports "$FWD_TCP" tcp "MXLAN_FWD_$VX_NAME" && mt_guard_ports "$FWD_UDP" udp "MXLAN_FWD_$VX_NAME" || return 1
+    fi
     [ -z "$VX_NAME" ] || [ -z "$BR_NAME" ] && return
     local MX_VX_PREEXIST=0 MX_BR_PREEXIST=0 MX_VX_CREATED=0 MX_BR_CREATED=0
     local MX_OLD_LAYOUT="" MX_OLD_VX_MTU="" MX_OLD_BR_MTU="" MX_OLD_CORE=""
@@ -1019,9 +889,11 @@ apply_fabric() {
     if ! mxlan_apply_fwd "$conf"; then
         clean_fwd_rules "$VX_NAME"
         echo "Warning: forwarding could not be applied for $VX_NAME; fabric remains up." >&2
+        return 1
     fi
     if ! rebuild_guard; then
         echo "Warning: firewall guard refresh failed for $VX_NAME; fabric remains up." >&2
+        return 1
     fi
 }
 
@@ -1088,15 +960,16 @@ manage_port_forwarding() {
             1)
                 echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,9090 or 10000:10100) [Enter to skip]: ${NC}"; read -r add_tcp
                 echo -ne "  ${C}●${NC} ${W}Add UDP Ports (e.g. 53,7000) [Enter to skip]: ${NC}"; read -r add_udp
-                add_tcp=$(sanitize_ports "$add_tcp" tcp)
-                add_udp=$(sanitize_ports "$add_udp" udp)
+                add_tcp=$(sanitize_ports "$add_tcp" tcp) || continue
+                add_udp=$(sanitize_ports "$add_udp" udp) || continue
                 m_tcp=$(merge_ports "$FWD_TCP" "$add_tcp")
                 m_udp=$(merge_ports "$FWD_UDP" "$add_udp")
+                mt_guard_ports "$m_tcp" tcp "MXLAN_FWD_$VX_NAME" && mt_guard_ports "$m_udp" udp "MXLAN_FWD_$VX_NAME" || continue
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
-                apply_fabric "$target_conf"
+                apply_fabric "$target_conf" || { echo "Forwarding was not applied; check the error above." >&2; sleep 2; continue; }
                 echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
             2)
@@ -1106,31 +979,33 @@ manage_port_forwarding() {
                 rm_udp=$(echo "$rm_udp" | tr -dc '0-9,:')
                 m_tcp=$(remove_ports "$FWD_TCP" "$rm_tcp")
                 m_udp=$(remove_ports "$FWD_UDP" "$rm_udp")
+                mt_guard_ports "$m_tcp" tcp "MXLAN_FWD_$VX_NAME" && mt_guard_ports "$m_udp" udp "MXLAN_FWD_$VX_NAME" || continue
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
-                apply_fabric "$target_conf"
+                apply_fabric "$target_conf" || { echo "Forwarding was not applied; check the error above." >&2; sleep 2; continue; }
                 echo -e "  ${G}● Ports removed. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
             3)
                 echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${FWD_TCP:-None}${W}): ${NC}"; read -r new_tcp
                 echo -ne "  ${C}●${NC} ${W}New UDP Ports (Current: ${C}${FWD_UDP:-None}${W}): ${NC}"; read -r new_udp
-                new_tcp=$(sanitize_ports "$new_tcp" tcp)
-                new_udp=$(sanitize_ports "$new_udp" udp)
+                new_tcp=$(sanitize_ports "$new_tcp" tcp) || continue
+                new_udp=$(sanitize_ports "$new_udp" udp) || continue
+                mt_guard_ports "$new_tcp" tcp "MXLAN_FWD_$VX_NAME" && mt_guard_ports "$new_udp" udp "MXLAN_FWD_$VX_NAME" || continue
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$new_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
                 if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
-                apply_fabric "$target_conf"
+                apply_fabric "$target_conf" || { echo "Forwarding was not applied; check the error above." >&2; sleep 2; continue; }
                 echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8
                 ;;
             4)
                 if [ "$LB_MODE" == 1 ]; then
                     set_conf_var "$target_conf" LB_MODE 0 || continue
-                    mxlan_apply_fwd "$target_conf"
+                    mxlan_apply_fwd "$target_conf" || { echo "Forwarding apply failed." >&2; continue; }
                     echo -e "  ${G}● Load Balancer disabled; using the first selected IP.${NC}"
                 elif mt_choose_fwd_targets "$target_conf" "$(mx_core_sub).2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then
-                    mxlan_apply_fwd "$target_conf"
+                    mxlan_apply_fwd "$target_conf" || { echo "Forwarding apply failed." >&2; continue; }
                 fi
                 sleep 1.5
                 ;;
@@ -1346,16 +1221,19 @@ mxlan_apply_fwd() {
     local TYPE="" VX_NAME="" CORE_SUBNET="" VNI_ID="" BR_NAME="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" FWD_TARGETS=''
     mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     source "$conf" 2>/dev/null
-    clean_fwd_rules "$VX_NAME"
+    if [ "$TYPE" = 1 ]; then
+        mt_guard_ports "$FWD_TCP" tcp "MXLAN_FWD_$VX_NAME" && mt_guard_ports "$FWD_UDP" udp "MXLAN_FWD_$VX_NAME" || return 1
+    fi
     [ "$TYPE" == "1" ] || return 0
     if [ -n "$FWD_TCP" ]; then FWD_TCP=$(sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$VX_NAME"; return 1; }; fi
     if [ -n "$FWD_UDP" ]; then FWD_UDP=$(sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$VX_NAME"; return 1; }; fi
-    [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
+    [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && { clean_fwd_rules "$VX_NAME"; return 0; }
     local pool core_sub
     core_sub=$(mx_core_sub) || return 1
     pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "${core_sub}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || { echo "No selected forwarding targets remain for $VX_NAME. Select Target IP(s) again." >&2; return 1; }
     local -a targets=()
     mapfile -t targets <<< "$pool"
+    clean_fwd_rules "$VX_NAME"
     build_fwd_rules "MXLAN_FWD_$VX_NAME" "$BR_NAME" "$FWD_TCP" "$FWD_UDP" "$LB_MODE" "$SECURE_TMP/.mxlan_lbdead_${VX_NAME}" "${targets[@]}"
 }
 
@@ -1473,7 +1351,7 @@ menu_encrypt() {
     [[ "${ans,,}" == "y" ]] || return
     local nv="1"; [ "$ENCRYPT" == "1" ] && nv="0"
     set_conf_var "$SELECTED_CONF" ENCRYPT "$nv"
-    apply_fabric "$SELECTED_CONF"
+    apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; return 1; }
     if [ "$nv" == "1" ] && [ ! -f "$(xfrm_state_file "$VX_NAME")" ]; then
         echo -e "  ${R}✖ Kernel rejected IPsec setup (missing xfrm/esp modules or local IP not on host). Reverted.${NC}"
         set_conf_var "$SELECTED_CONF" ENCRYPT 0; apply_fabric "$SELECTED_CONF"; sleep 2.5; return
@@ -2028,8 +1906,7 @@ while true; do
            conf_path="$CONF_DIR/${vx_name}.conf"
            echo -e "TYPE=$s_type\nFAB_PROTO=$fab_proto\nLOCAL_PUB=$local_ip\nREMOTE_PUB=$r_ip\nLOCAL_PUB6=$local_ip6\nREMOTE_PUB6=$r_ip6\nREMOTE_V4=$r_v4\nMAX_IPS=$MT_NEW_VIP_COUNT\nSYNC_KEY=$tun_secret\nTUN_SECRET=$tun_secret\nVX_NAME=$vx_name\nBR_NAME=$br_name\nVNI_ID=$vni_id\nCORE_SUBNET=$core_sub\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0\nCUSTOM_MTU=$cust_mtu" > "$conf_path"
            chmod 600 "$conf_path"
-           apply_fabric "$conf_path"
-
+           apply_fabric "$conf_path" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
            if ip link show "$vx_name" >/dev/null 2>&1; then
                setup_service
                mt_ask_bbr_on_create
@@ -2050,7 +1927,7 @@ while true; do
                        if [ -n "$fwd_tcp" ] || [ -n "$fwd_udp" ]; then
                            mt_choose_fwd_targets "$conf_path" "${core_sub}.2" "$(mt_config_value SYNC_KEY "$conf_path")" "$(mt_config_value MAX_IPS "$conf_path")" "$s_type" || true
                        fi
-                       apply_fabric "$conf_path"
+                       apply_fabric "$conf_path" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
                        echo -e "  ${G}● Port Forwarding applied successfully.${NC}"
                    fi
                fi
@@ -2104,14 +1981,14 @@ while true; do
                echo -e "  ${DIM}● Sync Key automatically linked to Master Token.${NC}"
                sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$SELECTED_CONF"
                sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$SELECTED_CONF"
-               apply_fabric "$SELECTED_CONF"
+               apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
                echo -e "  ${G}● Virtual IPs synchronized successfully.${NC}"; sleep 1.5
            elif [[ "$vip_action" == "2" ]]; then
                if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
                echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${VX_NAME}]? (y/n): ${NC}"; read -r confirm_vip
                if [[ "$confirm_vip" == "y" ]]; then 
                    sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$SELECTED_CONF"
-                   apply_fabric "$SELECTED_CONF"
+                   apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
                    echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5
                fi
            fi ;;
@@ -2158,7 +2035,7 @@ while true; do
                [ -n "$new_lip" ] && set_conf_var "$SELECTED_CONF" LOCAL_PUB "$new_lip"
                [ -n "$new_rip" ] && set_conf_var "$SELECTED_CONF" REMOTE_PUB "$new_rip"
            fi
-           apply_fabric "$SELECTED_CONF"
+           apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
            echo -e "  ${G}● Public IPs updated and applied.${NC}"; sleep 1.5 ;;
 
         9)
@@ -2187,7 +2064,7 @@ while true; do
                sed -i "s/^VNI_ID=.*/VNI_ID=$new_vni/" "$SELECTED_CONF"
                sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$SELECTED_CONF"
                sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$new_tok/" "$SELECTED_CONF"
-               apply_fabric "$SELECTED_CONF"
+               apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
                echo -e "  ${G}● Token updated. VNI: ${new_vni}, Subnet: ${new_core_sub}.x${NC}"; sleep 1.8
            fi ;;
 
@@ -2201,7 +2078,7 @@ while true; do
            if [ -n "$new_sub" ] && subnet_in_use "$new_sub" "$SELECTED_CONF"; then echo -e "  ${R}✖ ${new_sub}.x is already in use.${NC}"; sleep 2; continue; fi
            if [ -n "$new_sub" ]; then
                sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$SELECTED_CONF"
-               apply_fabric "$SELECTED_CONF"
+               apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
                echo -e "  ${G}● Subnet base updated to ${new_sub}.x${NC}"; sleep 1.5
            fi ;;
 
@@ -2226,7 +2103,7 @@ while true; do
                sed -i "s/^BR_NAME=.*/BR_NAME=$new_br_name/" "$SELECTED_CONF"
                mv "$SELECTED_CONF" "$CONF_DIR/${new_vx_name}.conf"
                SELECTED_CONF="$CONF_DIR/${new_vx_name}.conf"
-               apply_fabric "$SELECTED_CONF"
+               apply_fabric "$SELECTED_CONF" || { echo "Apply failed; see the error above." >&2; sleep 2; continue; }
                echo -e "  ${G}● Fabric successfully renamed to: ${new_vx_name}${NC}"; sleep 1.5
            fi ;;
 

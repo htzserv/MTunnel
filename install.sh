@@ -59,10 +59,23 @@ mt_installer_load_common() {
         [[ "$rc" == 0 && -s "$tmp" ]] || { echo 'Unable to fetch the shared MTunnel core.' >&2; rm -f "$tmp"; return 1; }
         candidate="$tmp"
     fi
-    bash -n "$candidate" 2>/dev/null || return 1
+    if ! bash -n "$candidate" 2>/dev/null; then
+        [[ -z "${MT_INSTALLER_BOOTSTRAP_TEMP:-}" ]] || rm -f "$MT_INSTALLER_BOOTSTRAP_TEMP"
+        unset MT_INSTALLER_BOOTSTRAP_TEMP
+        return 1
+    fi
     # shellcheck source=core/common.sh
-    source "$candidate" || return 1
-    [[ "${MTUNNEL_CORE_API:-}" == 1 && "${MTUNNEL_LAYOUT_REV:-}" == 2 ]] || { echo "Incompatible shared core: $candidate" >&2; return 1; }
+    if ! source "$candidate"; then
+        [[ -z "${MT_INSTALLER_BOOTSTRAP_TEMP:-}" ]] || rm -f "$MT_INSTALLER_BOOTSTRAP_TEMP"
+        unset MT_INSTALLER_BOOTSTRAP_TEMP
+        return 1
+    fi
+    if [[ "${MTUNNEL_CORE_API:-}" != 1 || "${MTUNNEL_LAYOUT_REV:-}" != 2 ]]; then
+        echo "Incompatible shared core: $candidate" >&2
+        [[ -z "${MT_INSTALLER_BOOTSTRAP_TEMP:-}" ]] || rm -f "$MT_INSTALLER_BOOTSTRAP_TEMP"
+        unset MT_INSTALLER_BOOTSTRAP_TEMP
+        return 1
+    fi
     [[ -z "${MT_INSTALLER_BOOTSTRAP_TEMP:-}" ]] || rm -f "$MT_INSTALLER_BOOTSTRAP_TEMP"
     unset MT_INSTALLER_BOOTSTRAP_TEMP
 }
@@ -154,7 +167,7 @@ draw_installer_header() {
 
 mt_validate_shared_core() {
     local file="$1"
-    [ -s "$file" ] && bash -n "$file" 2>/dev/null && grep -q '^MTUNNEL_CORE_API=1$' "$file" && grep -q '^MTUNNEL_LAYOUT_REV=2$' "$file"
+    [ -s "$file" ] && bash -n "$file" 2>/dev/null && grep -q '^MTUNNEL_CORE_API=1$' "$file" && grep -q '^MTUNNEL_LAYOUT_REV=2$' "$file" && grep -q '^MTUNNEL_RELEASE_VERSION="[0-9][0-9.]*"$' "$file"
 }
 # Retire components that were folded into core/common.sh (or removed on purpose).
 # Nothing is deleted before a copy is stored under /root/mtunnel/backup, and any
@@ -278,6 +291,7 @@ installer_main() {
     # accepted. The only gate is the shared-core API/layout contract (validated above
     # and re-checked by every module at start-up).
     mt_validate_script "$source_dir/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; return 1; }
+    head -n 5 "$source_dir/install.sh" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect install.sh in complete bundle.' >&2; return 1; }
     if [ -n "$remote" ]; then
         active_modules=("${modules[@]}")
     else
@@ -285,6 +299,8 @@ installer_main() {
         for item in "${modules[@]}"; do
             path="${item#*:}"
             mt_validate_script "$source_dir/$path" || { echo "Missing module: $path. Existing installation preserved." >&2; return 1; }
+            mt_validate_module_role "$source_dir/$path" "$path" || { echo "Wrong module role: $path. Existing installation preserved." >&2; return 1; }
+            mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Existing installation preserved." >&2; return 1; }
         done
         active_modules=("${modules[@]}")
     fi
@@ -296,6 +312,8 @@ installer_main() {
         name="${item%%:*}"; path="${item#*:}"; target="$root/usr/bin/$name"
         [ "$name" != main ] || target="$root/usr/bin/mtunnel"
         mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
+        mt_validate_module_role "$source_dir/$path" "$path" || { echo "Wrong module role: $path. Installed scripts preserved." >&2; return 1; }
+        mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Installed scripts preserved." >&2; return 1; }
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
         if [ -z "$remote" ]; then
             current=$((current+1))
@@ -340,6 +358,11 @@ installer_main() {
             [ -z "$target" ] || systemctl restart "$target" || return 1
         done < <(systemctl list-units --type=service --state=active --no-legend --plain 'mrathole@*.service' 'mbackhaul@*.service' 'mpaqet@*.service' 'gost.service' 'haproxy.service' 2>/dev/null | awk '{print $1}')
     fi
-    if [ "$launch" == 1 ]; then sleep 1.5; exec "$root/usr/bin/mtunnel"; fi
+    if [ "$launch" == 1 ]; then
+        sleep 1.5
+        rm -rf -- "$INSTALLER_WORK"
+        trap - EXIT
+        exec "$root/usr/bin/mtunnel"
+    fi
 }
 installer_main "$@"

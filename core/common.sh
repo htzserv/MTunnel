@@ -490,24 +490,70 @@ mt_valid_elf() {
     return 1
 }
 mt_extract_archive() {
-    local archive="$1" dest="$2" list entry
+    local archive="$1" dest="$2" list entry magic tar_magic
+    [ -f "$archive" ] && [ -d "$dest" ] || return 1
     list=$(mktemp "$dest/.entries.XXXXXX") || return 1
-    if tar -tzf "$archive" > "$list" 2>/dev/null; then
+    magic=$(od -An -tx1 -N4 "$archive" 2>/dev/null | tr -d ' \n')
+    tar_magic=$(od -An -c -j257 -N5 "$archive" 2>/dev/null | tr -d ' \n')
+
+    # Detect the container by magic, not by "try tar first". GNU gzip can decode
+    # a single-entry ZIP and make tar report success with an empty file list,
+    # which previously caused ZIP installs to succeed without extracting anything.
+    if [[ "$magic" == 504b0304 || "$magic" == 504b0506 || "$magic" == 504b0708 ]]; then
+        command -v unzip >/dev/null 2>&1 || {
+            echo 'ZIP archive detected but unzip is not installed.' >&2
+            rm -f "$list"; return 1;
+        }
+        unzip -Z1 "$archive" > "$list" 2>/dev/null || { rm -f "$list"; return 1; }
+        [ -s "$list" ] || { rm -f "$list"; return 1; }
         while IFS= read -r entry; do
-            case "/$entry/" in *'/../'*|*'/./../'*|//*|*'\\'*) rm -f "$list"; return 1;; esac
-        done < "$list"
-        # Reject symlinks, hard links and devices before extraction.
-        if tar -tvzf "$archive" | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit !bad}'; then rm -f "$list"; return 1; fi
-        rm -f "$list"
-        tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$dest"
-    elif command -v unzip >/dev/null 2>&1 && unzip -Z1 "$archive" > "$list" 2>/dev/null; then
-        while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
             case "/$entry/" in *'/../'*|//*|*'\\'*|*':'*) rm -f "$list"; return 1;; esac
         done < "$list"
-        if unzip -Z -l "$archive" | awk '$1 ~ /^[lbcps]/ {bad=1} END {exit !bad}'; then rm -f "$list"; return 1; fi
-        rm -f "$list"; unzip -q "$archive" -d "$dest"
-    else rm -f "$list"; return 1; fi
+        # Reject symlinks, devices and other special members before extraction.
+        if unzip -Z -l "$archive" 2>/dev/null | awk '$1 ~ /^[lbcps]/ {bad=1} END {exit !bad}'; then
+            rm -f "$list"; return 1
+        fi
+        rm -f "$list"
+        unzip -q "$archive" -d "$dest" || return 1
+        return 0
+    fi
+
+    if [[ "$magic" == 1f8b* ]]; then
+        tar -tzf "$archive" > "$list" 2>/dev/null || { rm -f "$list"; return 1; }
+        [ -s "$list" ] || { rm -f "$list"; return 1; }
+        while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            case "/$entry/" in *'/../'*|*'/./../'*|//*|*'\\'*) rm -f "$list"; return 1;; esac
+        done < "$list"
+        if tar -tvzf "$archive" 2>/dev/null | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit !bad}'; then
+            rm -f "$list"; return 1
+        fi
+        rm -f "$list"
+        tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$dest" || return 1
+        return 0
+    fi
+
+    # Plain POSIX/GNU tar (ustar magic at offset 257).
+    if [[ "$tar_magic" == ustar ]]; then
+        tar -tf "$archive" > "$list" 2>/dev/null || { rm -f "$list"; return 1; }
+        [ -s "$list" ] || { rm -f "$list"; return 1; }
+        while IFS= read -r entry; do
+            [ -n "$entry" ] || continue
+            case "/$entry/" in *'/../'*|*'/./../'*|//*|*'\\'*) rm -f "$list"; return 1;; esac
+        done < "$list"
+        if tar -tvf "$archive" 2>/dev/null | awk 'substr($0,1,1)!="-" && substr($0,1,1)!="d" {bad=1} END {exit !bad}'; then
+            rm -f "$list"; return 1
+        fi
+        rm -f "$list"
+        tar --no-same-owner --no-same-permissions -xf "$archive" -C "$dest" || return 1
+        return 0
+    fi
+
+    rm -f "$list"
+    return 1
 }
+
 mt_counter_sum() {
     awk -v tag="$2" '{for(i=1;i<=NF;i++) if($i==tag){sum+=$2;break}} END {printf "%.0f\n",sum}' <<< "$1"
 }

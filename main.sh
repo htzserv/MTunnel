@@ -785,6 +785,8 @@ install_bundle_scripts() {
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"
         mt_validate_script "$candidate" || { echo "Incomplete MTunnel bundle: $rel" >&2; return 1; }
+        mt_validate_module_role "$candidate" "$rel" || { echo "Wrong module role in bundle: $rel" >&2; return 1; }
+        mt_validate_module_core_contract "$candidate" || { echo "Incompatible module/core contract in bundle: $rel" >&2; return 1; }
         local candidate_version
         candidate_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
         if [ -z "${bundle_version:-}" ]; then bundle_version="$candidate_version"; fi
@@ -795,6 +797,7 @@ install_bundle_scripts() {
     # Installer must be included too: otherwise the installed release is mixed
     # after a successful "Sync All Scripts" downgrade.
     mt_validate_script "$source/install.sh" || { echo 'Missing installer in complete bundle.' >&2; return 1; }
+    head -n 5 "$source/install.sh" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect install.sh in complete bundle.' >&2; return 1; }
     local installer_version
     installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/install.sh")
     # Compare ALL installed scripts to the candidate and authorize one coherent
@@ -882,23 +885,64 @@ sync_script_bundle() {
     rm -rf "$stage"
     return "$rc"
 }
+mt_local_source_has_packages() {
+    local dir="$1" f
+    [ -d "$dir" ] || return 1
+    for f in bh backhaul rathole paqet gost haproxy; do [ -f "$dir/$f" ] && return 0; done
+    compgen -G "$dir/*.deb" >/dev/null 2>&1
+}
+mt_bundle_root_is_complete() {
+    local d="$1" mod rel
+    [ -d "$d" ] || return 1
+    [ -f "$d/main.sh" ] && [ -f "$d/install.sh" ] && [ -f "$d/core/common.sh" ] || return 1
+    for mod in "${ALL_MODULES[@]}"; do rel="${MOD_MAP[$mod]}"; [ -f "$d/$rel" ] || return 1; done
+    return 0
+}
+mt_find_bundle_root() {
+    local source="$1" f d found=''
+    if mt_bundle_root_is_complete "$source"; then printf '%s\n' "$source"; return 0; fi
+    while IFS= read -r -d '' f; do
+        d="${f%/main.sh}"
+        mt_bundle_root_is_complete "$d" || continue
+        if [ -n "$found" ] && [ "$(readlink -f "$found" 2>/dev/null)" != "$(readlink -f "$d" 2>/dev/null)" ]; then
+            echo 'Multiple complete MTunnel bundles were found. Select the exact bundle directory.' >&2
+            return 2
+        fi
+        found="$d"
+    done < <(find "$source" -maxdepth 5 -type f -name main.sh -print0 2>/dev/null)
+    [ -n "$found" ] || return 1
+    printf '%s\n' "$found"
+}
 offline_local_deploy() {
-    local source="$1" stage='' bundle rc=0
+    local source="$1" stage='' bundle='' rc=0 find_rc=0
     [ -n "$source" ] || source="$PWD"
     if [ -f "$source" ]; then
         stage=$(mktemp -d "$SECURE_TMP/offline.XXXXXX") || return 1
-        mt_extract_archive "$source" "$stage" || { rm -rf "$stage"; return 1; }
+        if ! mt_extract_archive "$source" "$stage"; then
+            echo 'Local file is not a supported/safe ZIP, TAR.GZ, or TAR archive.' >&2
+            rm -rf "$stage"; return 1
+        fi
         source="$stage"
     fi
-    [ -d "$source" ] || return 1
-    bundle=$(find "$source" -maxdepth 3 -type f -name main.sh -printf '%h\n' | head -n 1)
+    [ -d "$source" ] || { [ -z "$stage" ] || rm -rf "$stage"; echo 'Local source path does not exist or is not a directory.' >&2; return 1; }
+
+    bundle=$(mt_find_bundle_root "$source") || find_rc=$?
+    if [ "$find_rc" == 2 ]; then [ -z "$stage" ] || rm -rf "$stage"; return 1; fi
     if [ -n "$bundle" ]; then
         install_bundle_scripts "$bundle" "${2:-0}" || { rc=$?; [ -z "$stage" ] || rm -rf "$stage"; return "$rc"; }
-        [ ! -d "$bundle/packages" ] || deploy_binaries_from_dir "$bundle/packages" || rc=1
-    else deploy_binaries_from_dir "$source" || rc=1; fi
+        if [ -d "$bundle/packages" ] && mt_local_source_has_packages "$bundle/packages"; then
+            deploy_binaries_from_dir "$bundle/packages" || rc=1
+        fi
+    elif mt_local_source_has_packages "$source"; then
+        deploy_binaries_from_dir "$source" || rc=1
+    else
+        echo 'No complete MTunnel bundle or recognized installable packages were found in the selected source.' >&2
+        rc=1
+    fi
     [ -z "$stage" ] || rm -rf "$stage"
     return "$rc"
 }
+
 fetch_package_group() {
     local base="$1" kind="$2" item file rc=0
     local -a items=()
@@ -1051,8 +1095,14 @@ capture_manual_component() {
     nano -t -- "$output" || return 1
     [ -s "$output" ] || { echo 'Nothing saved; existing component preserved.' >&2; return 1; }
     sed -i 's/\r$//' "$output" || return 1
-    if [[ "$(head -n1 "$output")" == \`\`\`bash || "$(head -n1 "$output")" == \`\`\`sh ]]; then sed -i '1d; ${/^```$/d;}' "$output" || return 1; fi
     sed -i '1s/^\xEF\xBB\xBF//' "$output" || return 1
+    while [ -s "$output" ] && head -n1 "$output" | grep -qE '^[[:space:]]*$'; do sed -i '1d' "$output" || return 1; done
+    local first_compact
+    first_compact=$(head -n1 "$output" | tr -d '[:space:]')
+    if [[ "$first_compact" == '```bash' || "$first_compact" == '```sh' || "$first_compact" == '```' ]]; then
+        sed -i '1d' "$output" || return 1
+        sed -i '${/^[[:space:]]*```[[:space:]]*$/d;}' "$output" || return 1
+    fi
     validate_component_candidate "$component" "$output"
 }
 
@@ -1155,7 +1205,8 @@ show_ota_update_hub() {
                 file="$work/input"
                 draw_main_header
                 echo -e "\n  ${DIM}┌─[ INSTALL FROM LINK ]${NC}\n"
-                echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read -r url
+                echo -ne "  ${C}●${NC} ${W}Enter Direct HTTPS (.sh / .zip / .tar.gz) URL: ${NC}"; read -r url
+                url="${url//[$'\r\n\t ']/}"
                 [ -n "$url" ] || { rm -rf "$work"; continue; }
                 mt_download "$url" "$file" &
                 pid=$!

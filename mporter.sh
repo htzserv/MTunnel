@@ -96,7 +96,7 @@ WATCHDOG_SCRIPT="/usr/local/bin/mporter-watchdog.sh"
 APT_OPTS=(-o Acquire::ForceIPv4=true -o DPkg::Lock::Timeout=180 -y -q)
 
 MP_HEADLESS=false
-case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-apply|--backhaul-in-use) MP_HEADLESS=true ;; esac
+case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-apply|--backhaul-in-use|--wipe-mappings) MP_HEADLESS=true ;; esac
 
 if [ "$(id -u)" -ne 0 ] && [ "${MPORTER_LIB:-0}" != "1" ]; then echo "MPorter must be run as root."; exit 1; fi
 
@@ -2471,6 +2471,18 @@ case "${1:-}" in
     --health-scan) health_scan; exit 0 ;;
     --boot-apply)  ensure_ipv4_forwarding || exit $?; mss_reapply_all; exit $? ;;
     --state-sync)  state_reconcile; rc=$?; state_sync_interface_metadata; exit $rc ;;
+    --wipe-mappings)
+        # Remove every forwarding/mapping (haproxy, gost, realm, iptables, obfs, state); engines and this script stay.
+        if [ -f "$H_CONF" ]; then wm_t=$(mp_tmp hap); hap_base_config > "$wm_t"; hap_commit "$wm_t" >/dev/null || hap_base_config > "$H_CONF"; fi
+        [ -f "$G_CONF" ] && echo '{"Debug": false, "ServeNodes": []}' > "$G_CONF"
+        [ -f "$R_CONF" ] && echo '{"network": {"no_tcp_delay": true}, "endpoints": []}' > "$R_CONF"
+        [ -d "$IPT_DIR" ] && : > "$IPT_CONF"
+        rm -f "$OBFS_DIR/nat.sh" "$OBFS_DIR/gost.sh"
+        ipt_flush_tag nat PREROUTING MPORTER_NAT_; ipt_flush_tag nat OUTPUT MPORTER_NAT_; ipt_flush_tag nat POSTROUTING MPORTER_NAT_; ipt_flush_tag filter FORWARD MPORTER_NAT_
+        ipt_flush_tag mangle OUTPUT MPORTER_MSS_; ipt_flush_tag mangle FORWARD MPORTER_MSS_
+        rm -f "$STATE_FILE"; state_init >/dev/null 2>&1
+        restart_all_engines || { echo 'Mappings wiped, but an engine did not restart cleanly (check haproxy / gost / realm).' >&2; exit 1; }
+        exit 0 ;;
     --purge-ip)
         valid_ip "${2:-}" || { echo "usage: mporter --purge-ip <IPv4|IPv6>"; exit 1; }
         purge_ip_core "$2" || exit $?

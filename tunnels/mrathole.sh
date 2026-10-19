@@ -1171,6 +1171,24 @@ if [ "${1:-}" == --counters ]; then
     mt_setup_counter_pair RAT "$2" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
     exit $?
 fi
+if [ "${1:-}" == --delete-all ]; then
+    # Delete every Rathole tunnel (units, counters, cron, configs) but keep this script and the rathole core.
+    for dir in "$CONF_DIR"/*; do
+        [ -d "$dir" ] || continue
+        systemctl disable --now "mrathole@$(basename "$dir")" >/dev/null 2>&1
+        clean_rat_counters "$(basename "$dir")"
+    done
+    systemctl stop 'mrathole@*' >/dev/null 2>&1; systemctl disable 'mrathole@*' >/dev/null 2>&1
+    if command -v crontab >/dev/null 2>&1; then
+        cron_tmp="$SECURE_TMP/crontab.$$"
+        crontab -l 2>/dev/null | grep -v "mrathole@" > "$cron_tmp"
+        crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+    fi
+    rm -f /etc/systemd/system/multi-user.target.wants/mrathole@*.service "$SERVICE_TPL"
+    systemctl daemon-reload >/dev/null 2>&1
+    [ -d "$CONF_DIR" ] && find "$CONF_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
+    exit 0
+fi
 if [ "${1:-}" == --apply ]; then
     for dir in "$CONF_DIR"/*; do [ -d "$dir" ] && generate_toml "$(basename "$dir")"; done
     exit 0

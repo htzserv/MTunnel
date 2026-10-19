@@ -1091,6 +1091,34 @@ bh_activate_config() {
 case "${1:-}" in
     --apply-forwarder) bh_apply_forwarder "${2:-}"; exit $?;;
     --clear-forwarder) bh_clear_forwarder "${2:-}"; exit $?;;
+    --delete-all)
+        # Delete every Backhaul tunnel (units, forwarders, counters, cron, configs) but keep this script and the bh core.
+        bh_rc=0
+        for meta in "$CONF_DIR"/*.meta; do
+            [ -f "$meta" ] || continue
+            bh_n=$(basename "$meta" .meta)
+            systemctl disable --now "mbackhaul@$bh_n" >/dev/null 2>&1
+            if bh_delete_forwarder "$bh_n"; then rm -f "$CONF_DIR/$bh_n.meta" "$CONF_DIR/$bh_n.toml"; else bh_rc=1; fi
+        done
+        systemctl stop 'mbackhaul@*' mbackhaul-apply.service >/dev/null 2>&1
+        systemctl disable 'mbackhaul@*' mbackhaul-apply.service >/dev/null 2>&1
+        for bin in iptables ip6tables; do
+            command -v "$bin" >/dev/null 2>&1 || continue
+            for chain in INPUT OUTPUT; do
+                for direction in RX TX; do mt_delete_tagged_rules "$bin" mangle "$chain" "MBH_${direction}_" prefix; done
+            done
+        done
+        if command -v crontab >/dev/null 2>&1; then
+            cron_tmp="$SECURE_TMP/crontab.$$"
+            crontab -l 2>/dev/null | grep -v "mbackhaul@" > "$cron_tmp"
+            crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+        fi
+        rm -f /etc/systemd/system/multi-user.target.wants/mbackhaul@*.service /etc/systemd/system/mbackhaul@.service /etc/systemd/system/mbackhaul-apply.service
+        systemctl daemon-reload >/dev/null 2>&1
+        if [ "$bh_rc" -eq 0 ]; then
+            find "$CONF_DIR" "$CERT_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} + 2>/dev/null
+        fi
+        exit "$bh_rc" ;;
 esac
 
 if [[ "$1" == "--apply" ]]; then

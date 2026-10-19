@@ -1417,6 +1417,16 @@ menu_backup_restore() {
 
 case "$1" in
     --teardown-all) for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done; exit 0 ;;
+    --delete-all)
+        # Delete every VXLAN fabric (interfaces, firewall rules, configs, service) but keep this script.
+        systemctl stop mxlan.service >/dev/null 2>&1; systemctl disable mxlan.service >/dev/null 2>&1
+        for conf in "$CONF_DIR"/*.conf; do [ -f "$conf" ] && teardown_fabric "$conf"; done
+        watchdog_disable
+        rm -f "$GUARD_FLAG"; rebuild_guard
+        rm -f "$SERVICE_FILE"; systemctl daemon-reload >/dev/null 2>&1
+        [ -d "$CONF_DIR" ] && find "$CONF_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
+        rm -f "$WD_LOG"
+        exit 0 ;;
     --apply)    apply_all_fabrics; exit $? ;;
     --apply-one) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]+$ ]] && [ -f "$CONF_DIR/$2.conf" ] || exit 1; apply_fabric "$CONF_DIR/$2.conf"; exit $? ;;
     --watchdog) mxlan_watchdog; exit 0 ;;

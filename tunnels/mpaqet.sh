@@ -534,6 +534,24 @@ setup_paqet_probe() {
     return 0
 }
 
+if [[ "${1:-}" == "--delete-all" ]]; then
+    # Delete every Paqet tunnel (units, firewall counters, configs) but keep this script and the paqet core.
+    for conf in "$CONF_DIR"/*.yaml; do
+        [ -f "$conf" ] || continue
+        systemctl disable --now "mpaqet@$(basename "$conf" .yaml)" >/dev/null 2>&1
+    done
+    systemctl stop 'mpaqet@*' mpaqet-apply.service >/dev/null 2>&1
+    systemctl disable 'mpaqet@*' mpaqet-apply.service >/dev/null 2>&1
+    for chain in INPUT OUTPUT PREROUTING; do
+        mt_delete_tagged_rules iptables mangle "$chain" "MPAQET_" substring 2>/dev/null || true
+        mt_delete_tagged_rules iptables raw "$chain" "MPAQET_" substring 2>/dev/null || true
+    done
+    rm -f /etc/systemd/system/multi-user.target.wants/mpaqet@*.service /etc/systemd/system/mpaqet@.service /etc/systemd/system/mpaqet-apply.service
+    systemctl daemon-reload >/dev/null 2>&1
+    [ -d "$CONF_DIR" ] && find "$CONF_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
+    rm -f "$SECURE_TMP"/.mpaqet_link_* "$SECURE_TMP"/.mpaqet_peer_* 2>/dev/null
+    exit 0
+fi
 if [[ "$1" == "--apply" ]]; then
     for conf in "$CONF_DIR"/*.meta; do
         [ -f "$conf" ] || continue

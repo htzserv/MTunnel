@@ -1463,9 +1463,78 @@ render_main_menu() {
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b11%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
-    printf '  %b├─%b %b12%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b12%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
+    printf '  %b├─%b %b13%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+}
+# Delete every tunnel and forwarding of every type, but keep all scripts, cores and packages.
+delete_all_tunnels_keep_files() {
+    local confirm step bin flag label path out rc failed=0 deleted=0 cron_tmp tbin table chain
+    local -a steps=(
+        "mporter|--wipe-mappings|MPorter forwardings"
+        "mbackhaul|--delete-all|Backhaul tunnels"
+        "mrathole|--delete-all|Rathole tunnels"
+        "mpaqet|--delete-all|Paqet tunnels"
+        "mgre|--delete-all|GRE / GRE6 / IPIP tunnels"
+        "mxlan|--delete-all|VXLAN fabrics"
+    )
+    draw_main_header
+    echo -e "\n  ${Y}╭────────────────────────────────────────────────────────────╮${NC}"
+    printf '  %b│%b %b%-58s%b %b│%b\n' "$Y" "$NC" "$W" "Delete ALL Tunnels & Forwardings (Files Stay)" "$NC" "$Y" "$NC"
+    echo -e "  ${Y}╰────────────────────────────────────────────────────────────╯${NC}\n"
+    echo -e "  ${R}Will be deleted:${NC}"
+    echo -e "  ${DIM}●${NC} All GRE / GRE6 / IPIP / VXLAN tunnels and their interfaces"
+    echo -e "  ${DIM}●${NC} All Rathole, Backhaul and Paqet tunnels and their services"
+    echo -e "  ${DIM}●${NC} All MPorter forwardings and every MTunnel firewall rule"
+    echo -e "\n  ${G}Will be kept:${NC}"
+    echo -e "  ${DIM}●${NC} All scripts and modules (mtunnel, mgre, mporter, ...)"
+    echo -e "  ${DIM}●${NC} Tunnel cores and packages (bh, rathole, paqet, gost, haproxy)\n"
+    echo -ne "  ${R}Type DELETE-TUNNELS to continue: ${NC}"; read -r confirm
+    confirm="${confirm//[$' \r\n']/}"
+    if [[ "$confirm" != "DELETE-TUNNELS" ]]; then
+        echo -e "\n  ${Y}● Cancelled. Nothing was changed.${NC}"; sleep 1.5; return 0
+    fi
+    echo
+    for step in "${steps[@]}"; do
+        IFS='|' read -r bin flag label <<< "$step"
+        path="/usr/bin/$bin"
+        if [ ! -x "$path" ]; then
+            echo -e "  ${DIM}○ ${label}: ${bin} not installed, skipped${NC}"; continue
+        fi
+        if ! grep -q -- "$flag" "$path" 2>/dev/null; then
+            echo -e "  ${R}✖ ${label}: installed ${bin} is too old for this action. Update it, then retry.${NC}"; failed=1; continue
+        fi
+        if out=$(timeout 180 "$path" "$flag" </dev/null 2>&1); then
+            echo -e "  ${G}✔${NC} ${label} deleted"; deleted=$((deleted+1))
+        else
+            rc=$?
+            echo -e "  ${R}✖ ${label}: failed (exit ${rc})${NC}"; failed=1
+            [ -z "$out" ] || printf '%s\n' "$out" | tail -n 2 | sed 's/^/      /'
+        fi
+    done
+    # Final sweep: leftover tagged firewall rules and per-tunnel cron lines.
+    for tbin in iptables ip6tables; do
+        command -v "$tbin" >/dev/null 2>&1 || continue
+        for table in filter nat mangle raw; do
+            for chain in INPUT OUTPUT FORWARD PREROUTING POSTROUTING; do
+                for tag in MGRE_ MXLAN_ MPORTER_ MBH_ RAT_ MPAQET_ OBFS_CNT_; do mt_delete_tagged_rules "$tbin" "$table" "$chain" "$tag" prefix; done
+            done
+        done
+    done
+    if command -v crontab >/dev/null 2>&1; then
+        cron_tmp=$(mktemp "$SECURE_TMP/deltun-cron.XXXXXX")
+        crontab -l 2>/dev/null | awk '!/mbackhaul@|mrathole@|mpaqet@/' > "$cron_tmp"
+        crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+    fi
+    systemctl daemon-reload 2>/dev/null || true
+    echo
+    if [ "$failed" -eq 0 ]; then
+        echo -e "  ${G}✔ All tunnels and forwardings were deleted. Scripts, cores and packages were not touched.${NC}\n"
+    else
+        echo -e "  ${Y}● Finished with problems (see above). Scripts, cores and packages were not touched.${NC}\n"
+    fi
+    ota_pause
 }
 show_local_install() {
     local local_input
@@ -1578,7 +1647,8 @@ while true; do
         10) run_mod "mdoctor" ;;
         0) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
         11) show_ota_update_hub ;;
-        12)
+        12) delete_all_tunnels_keep_files ;;
+        13)
             draw_main_header
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"

@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MBackhaul | Multiplexer Engine v1.2.5 ---
+# --- MTunnel MBackhaul | Multiplexer Engine v1.2.6 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.2.5"
+MODULE_VERSION="1.2.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -236,26 +236,31 @@ read_with_refresh() {
 }
 
 fetch_remote_version() {
-    local url="$1" payload=''
+    local url="$1" payload version=""
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$url" 2>/dev/null) || return 1
+        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$url" 2>/dev/null) || return 1
-    else return 1; fi
-    printf '%s
-' "$payload" | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2
+        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+    else
+        return 1
+    fi
+    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([^" ]*\)".*/\1/p' | head -n 1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || return 1
+    printf '%s\n' "$version"
 }
+# Keeps the last known good value when a source is unreachable (no "Unknown" overwrite).
 check_update_bg() {
-    local cb="?t=$(date +%s)" gh mirror combined
-    gh=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/tunnels/mbackhaul.sh${cb}" 2>/dev/null || true)
-    mirror=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/tunnels/mbackhaul.sh${cb}" 2>/dev/null || true)
-    printf '%s
-' "${gh:-Unknown}" > "$SECURE_TMP/.mbackhaul_remote_ver_github"
-    printf '%s
-' "${mirror:-Unknown}" > "$SECURE_TMP/.mbackhaul_remote_ver_mirror"
-    combined="$gh"; [ -n "$combined" ] || combined="$mirror"
-    printf '%s
-' "${combined:-Unknown}" > "$SECURE_TMP/.mbackhaul_remote_ver"
+    local cb="?t=$(date +%s)" gh_ver="" mirror_ver="" latest_ver="" cand
+    gh_ver=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/tunnels/mbackhaul.sh${cb}")
+    mirror_ver=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/tunnels/mbackhaul.sh${cb}")
+    [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mbackhaul_remote_ver_github"
+    [ -n "$mirror_ver" ] && printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.mbackhaul_remote_ver_mirror"
+    for cand in "$gh_ver" "$mirror_ver"; do
+        [[ "$cand" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || continue
+        latest_ver=$(printf '%s\n%s\n' "$latest_ver" "$cand" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    done
+    [ -n "$latest_ver" ] && printf '%s\n' "$latest_ver" > "$SECURE_TMP/.mbackhaul_remote_ver"
+    return 0
 }
 
 update_watcher_loop() {
@@ -295,7 +300,7 @@ self_update_module() {
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X Auto Apply)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
@@ -325,12 +330,7 @@ self_update_module() {
         echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        if [ "$src_opt" == 4 ]; then
-            confirm=y  # Ctrl+X saved and validated this Nano candidate.
-            echo -e "  ${G}✔ Nano file validated — applying automatically.${NC}"
-        else
-            echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
-        fi
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
         
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -339,7 +339,7 @@ self_update_module() {
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
     [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH" "$@"
+    exec "$INSTALL_PATH"
 }
 
 get_local_ip() {

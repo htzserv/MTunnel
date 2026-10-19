@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.5 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.6 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.5"
+MODULE_VERSION="1.2.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -902,7 +902,11 @@ offline_local_deploy() {
 fetch_package_group() {
     local base="$1" kind="$2" item file rc=0
     local -a items=()
-    if [ "$kind" == cores ]; then items=(bh rathole paqet gost haproxy); else items=("${ALL_PACKAGES[@]}"); fi
+    case "$kind" in
+        cores) items=(bh rathole paqet gost haproxy);;
+        deps)  for item in "${ALL_PACKAGES[@]}"; do [[ "$item" == *.deb ]] && items+=("$item"); done;;
+        *)     items=("${ALL_PACKAGES[@]}");;
+    esac
     local stage; stage=$(mktemp -d "$SECURE_TMP/packages.XXXXXX") || return 1
     for item in "${items[@]}"; do
         file="$stage/$item"
@@ -930,39 +934,28 @@ render_ota_menu() {
     draw_main_header
     echo -e "\n  ${DIM}┌─[ Update & Local Install ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SCRIPT CORE ENGINE UPDATES ]${NC}"
+    echo -e "  ${DIM}├─[ DOWNLOAD FROM OFFICIAL GITHUB ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Sync All Scripts from Official GitHub (Up/Down)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Sync All Scripts from Iranian Mirror (Up/Down)${NC}"
-    local main_sub_badge="$(updates_summary_badge)"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Repair Dashboard & All Shared Modules (Official)${NC}${main_sub_badge}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Download Main Script${NC}$(module_update_badge main)"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Download Prerequisites${NC} ${DIM}(DEB Packages)${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ BINARY CORES ONLY (BH, RAT, PAQET, GOST, HAPROXY) ]${NC}"
+    echo -e "  ${DIM}├─[ DOWNLOAD FROM IRANIAN MIRROR ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Fetch Binary Cores from Official GitHub${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Fetch Binary Cores from Iranian Mirror${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Download Main Script${NC}$(module_update_badge main)"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Download Prerequisites${NC} ${DIM}(DEB Packages)${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ FULL PREREQUISITES & DEB PACKAGES ]${NC}"
+    echo -e "  ${DIM}├─[ OFFLINE & MANUAL INSTALL ]${NC}"
     echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Fetch All Packages & Prerequisites from GitHub${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Fetch All Packages & Prerequisites from Iranian Mirror${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MANUAL & OVERRIDE METHODS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${Y}Custom Personal Link (.sh Script or ZIP)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Manual Code Paste (Nano / Ctrl+X Auto Apply)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ LOCAL INSTALL ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${M}Offline Local Install (Directory / ZIP / Archive)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ INDIVIDUAL COMPONENT UPDATE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${C}Update One File from Official GitHub${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${G}Update One File from Iranian Mirror${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${M}Offline Install${NC} ${DIM}(Directory / ZIP / Archive)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC}${DIM}❯${NC} ${Y}Install from Link${NC} ${DIM}(Direct .sh / .zip URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC}${DIM}❯${NC} ${Y}Install via Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├────────────────────────────${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Dashboard${NC}\n"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit to Dashboard${NC}\n"
 }
 draw_item_progress() {
     local n="$1" total="$2" label="$3" version="$4" state="${5:-ok}" width=30
@@ -1072,107 +1065,126 @@ reload_dashboard() {
     [ -z "${STATS_PID:-}" ] || kill "$STATS_PID" 2>/dev/null || true
     exec "$MTUNNEL_PATH"
 }
+# Download ONE component (used for the main script) from the chosen source, confirm, install, reload.
+ota_update_one_file() {
+    local module="$1" base="$2" source_name="$3" rel work file target current_v new_ver confirm
+    rel="${COMPONENT_MAP[$module]}"
+    work=$(mktemp -d "$SECURE_TMP/onefile.XXXXXX") || return 1
+    file="$work/input"
+    draw_main_header
+    echo -e "\n  ${DIM}┌─[ DOWNLOAD ${module^^} SCRIPT FROM ${source_name} ]${NC}\n"
+    if ! mt_download "$base/$rel?t=$(date +%s)" "$file"; then
+        echo -e "  ${R}✖ Download failed. Existing script preserved.${NC}"
+        rm -rf "$work"; return 1
+    fi
+    if ! validate_component_candidate "$module" "$file"; then
+        echo -e "  ${R}✖ Downloaded file is invalid or incompatible. Existing script preserved.${NC}"
+        rm -rf "$work"; return 1
+    fi
+    target=$(component_primary_target "$module")
+    current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
+    new_ver=$(component_version_from_file "$module" "$file")
+    echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}Remote Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Apply this script? (y/n): ${NC}"; read -r confirm
+    if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
+        if install_component_candidate "$module" "$file"; then
+            echo -e "\n  ${G}✔ ${rel} (v${new_ver:-Unknown}) updated successfully.${NC}\n"
+            rm -rf "$work"; reload_dashboard
+        else
+            echo -e "\n  ${R}✖ Update failed. Previous script preserved.${NC}\n"
+            rm -rf "$work"; return 1
+        fi
+    else
+        echo -e "\n  ${Y}● Update cancelled by user.${NC}\n"
+    fi
+    rm -rf "$work"
+}
 show_ota_update_hub() {
-    local option base work url file module rel target confirm new_ver current_v kind source_name sync_rc
+    local option base_scripts base_packages source_name act work file module rel target confirm new_ver current_v sync_rc url pid
     while true; do
         render_ota_menu
         read_with_refresh "  ${C}OTA-HUB ❯❯ ${NC}" option render_ota_menu || return 0
         option="${option//[$' \r']/}"
         case "$option" in
             0|'') return 0;;
-            1|2)
-                draw_main_header
-                base="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
-                if [ "$option" == 2 ]; then base="$MIRROR_SCRIPTS"; source_name='IRANIAN MIRROR'; fi
-                echo -e "\n  ${DIM}┌─[ SYNCING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
-                sync_script_bundle "$base" 1 && sync_rc=0 || sync_rc=$?
-                if [ "$sync_rc" == 0 ]; then
-                    : > "$UPDATE_FILE"
-                    echo -e "\n\n  ${G}● Script sync finished. Press Enter to reload core...${NC}\n"
-                    read -r confirm
-                    reload_dashboard
-                elif [ "$sync_rc" == 2 ]; then
-                    echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing scripts preserved.${NC}\n"
+            1|2|3|4|5|6|7|8)
+                if [ "$option" -le 4 ]; then
+                    base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS/packages"; source_name='OFFICIAL GITHUB'
                 else
-                    echo -e "\n  ${R}✖ Script update failed. Previous scripts preserved.${NC}\n" >&2
-                fi;;
-            3)
-                draw_main_header
-                echo -e "\n  ${DIM}┌─[ REPAIRING FULL MODULAR BUNDLE ]${NC}\n"
-                # Modular dashboard and core must be updated as one compatible pair.
-                sync_script_bundle "$REPO_SCRIPTS" 0 && sync_rc=0 || sync_rc=$?
-                if [ "$sync_rc" == 0 ]; then
-                    new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$LOCAL_DIR/main.sh")
-                    draw_item_progress 1 1 main "$new_ver"
-                    echo -e "\n\n  ${G}● Modular bundle successfully updated! Reloading...${NC}\n"
-                    reload_dashboard
-                elif [ "$sync_rc" == 2 ]; then
-                    echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing installation preserved.${NC}\n"
-                else
-                    draw_item_progress 1 1 main '' failed
-                    echo -e "\n  ${R}✖ Bundle repair failed. Previous installation preserved.${NC}\n" >&2
-                fi;;
-            4|5|6|7)
-                draw_main_header
-                base="$REPO_SCRIPTS/packages"; source_name='OFFICIAL GITHUB'
-                if [[ "$option" == 5 || "$option" == 7 ]]; then base="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'; fi
-                kind=cores
-                if [[ "$option" == 6 || "$option" == 7 ]]; then
-                    kind=all
-                    echo -e "\n  ${DIM}┌─[ FETCHING ALL PREREQUISITES & PACKAGES FROM ${source_name} ]${NC}\n"
-                else
-                    echo -e "\n  ${DIM}┌─[ FETCHING BINARY CORES FROM ${source_name} ]${NC}\n"
+                    base_scripts="$MIRROR_SCRIPTS"; base_packages="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'
                 fi
-                if fetch_package_group "$base" "$kind" 1; then
-                    echo -e "\n\n  ${G}● Package operation completed successfully.${NC}\n"
-                else
-                    echo -e "\n  ${R}✖ Package operation failed. Check the reported error.${NC}\n" >&2
-                fi;;
-            8|9)
-                work=$(mktemp -d "$SECURE_TMP/manual.XXXXXX") || return 1
-                file="$work/input"
-                if [ "$option" == 8 ]; then
-                    draw_main_header
-                    echo -e "\n  ${DIM}┌─[ CUSTOM DIRECT LINK DEPLOYMENT ]${NC}\n"
-                    echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read -r url
-                    [ -n "$url" ] || { rm -rf "$work"; continue; }
-                    mt_download "$url" "$file" &
-                    local pid=$!
-                    draw_progress_bar "$pid" 'Downloading Custom Resource'
-                    if ! wait "$pid"; then
-                        echo -e "\n  ${R}✖ Download failed! Check URL.${NC}\n" >&2
-                        rm -rf "$work"; ota_pause; continue
-                    fi
-                    mkdir "$work/extracted"
-                    if mt_extract_archive "$file" "$work/extracted" 2>/dev/null; then
-                        offline_local_deploy "$work/extracted" 1 && sync_rc=0 || sync_rc=$?
+                act=$(( (option - 1) % 4 ))
+                case "$act" in
+                    0)  # Download scripts (whole bundle: shared core + every module + installer)
+                        draw_main_header
+                        echo -e "\n  ${DIM}┌─[ DOWNLOADING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
+                        sync_script_bundle "$base_scripts" 1 && sync_rc=0 || sync_rc=$?
                         if [ "$sync_rc" == 0 ]; then
-                            echo -e "\n  ${G}✔ Archive extracted and modules deployed successfully!${NC}\n"
-                            rm -rf "$work"; reload_dashboard
+                            : > "$UPDATE_FILE"
+                            echo -e "\n\n  ${G}● Scripts downloaded and installed. Press Enter to reload core...${NC}\n"
+                            read -r confirm
+                            reload_dashboard
                         elif [ "$sync_rc" == 2 ]; then
-                            echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing installation preserved.${NC}\n"
+                            echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing scripts preserved.${NC}\n"
                         else
-                            echo -e "\n  ${R}✖ Bundle deployment failed.${NC}\n" >&2
-                        fi
-                        rm -rf "$work"; ota_pause; continue
+                            echo -e "\n  ${R}✖ Script download failed. Previous scripts preserved.${NC}\n" >&2
+                        fi;;
+                    1)  # Download the main script only
+                        ota_update_one_file main "$base_scripts" "$source_name" || true;;
+                    2)  # Download engines (binary cores)
+                        draw_main_header
+                        echo -e "\n  ${DIM}┌─[ DOWNLOADING ENGINES FROM ${source_name} (BH, RATHOLE, PAQET, GOST, HAPROXY) ]${NC}\n"
+                        if fetch_package_group "$base_packages" cores 1; then
+                            echo -e "\n\n  ${G}● Engines downloaded and installed successfully.${NC}\n"
+                        else
+                            echo -e "\n  ${R}✖ Engine download failed. Check the reported error.${NC}\n" >&2
+                        fi;;
+                    3)  # Download prerequisites (DEB packages)
+                        draw_main_header
+                        echo -e "\n  ${DIM}┌─[ DOWNLOADING PREREQUISITES FROM ${source_name} (DEB PACKAGES) ]${NC}\n"
+                        if fetch_package_group "$base_packages" deps 1; then
+                            echo -e "\n\n  ${G}● Prerequisites downloaded successfully.${NC}\n"
+                        else
+                            echo -e "\n  ${R}✖ Prerequisite download failed. Check the reported error.${NC}\n" >&2
+                        fi;;
+                esac;;
+            9) show_local_install; continue;;
+            10)  # Install from a direct link (single .sh component or a full .zip bundle)
+                work=$(mktemp -d "$SECURE_TMP/link.XXXXXX") || return 1
+                file="$work/input"
+                draw_main_header
+                echo -e "\n  ${DIM}┌─[ INSTALL FROM LINK ]${NC}\n"
+                echo -ne "  ${C}●${NC} ${W}Enter Direct (.sh or .zip) URL: ${NC}"; read -r url
+                [ -n "$url" ] || { rm -rf "$work"; continue; }
+                mt_download "$url" "$file" &
+                pid=$!
+                draw_progress_bar "$pid" 'Downloading Custom Resource'
+                if ! wait "$pid"; then
+                    echo -e "\n  ${R}✖ Download failed! Check URL.${NC}\n" >&2
+                    rm -rf "$work"; ota_pause; continue
+                fi
+                mkdir "$work/extracted"
+                if mt_extract_archive "$file" "$work/extracted" 2>/dev/null; then
+                    offline_local_deploy "$work/extracted" 1 && sync_rc=0 || sync_rc=$?
+                    if [ "$sync_rc" == 0 ]; then
+                        echo -e "\n  ${G}✔ Archive extracted and modules deployed successfully!${NC}\n"
+                        rm -rf "$work"; reload_dashboard
+                    elif [ "$sync_rc" == 2 ]; then
+                        echo -e "\n  ${Y}● Downgrade cancelled by operator. Existing installation preserved.${NC}\n"
+                    else
+                        echo -e "\n  ${R}✖ Bundle deployment failed.${NC}\n" >&2
                     fi
-                    if ! choose_module; then
-                        echo -e "\n  ${R}✖ Component selection cancelled.${NC}\n"
-                        rm -rf "$work"; ota_pause; continue
-                    fi
-                    module="$CHOSEN_MODULE"
-                    if ! validate_component_candidate "$module" "$file"; then
-                        echo -e "\n  ${R}✖ Invalid or incompatible component file.${NC}\n"
-                        rm -rf "$work"; ota_pause; continue
-                    fi
-                else
-                    if ! choose_module EDITOR; then rm -rf "$work"; continue; fi
-                    module="$CHOSEN_MODULE"
-                    : > "$file"
-                    if ! capture_manual_component "$file" "$module"; then
-                        echo -e "\n  ${R}✖ Manual paste failed or cancelled. Previous component preserved.${NC}\n"
-                        rm -rf "$work"; ota_pause; continue
-                    fi
+                    rm -rf "$work"; ota_pause; continue
+                fi
+                if ! choose_module; then
+                    echo -e "\n  ${R}✖ Component selection cancelled.${NC}\n"
+                    rm -rf "$work"; ota_pause; continue
+                fi
+                module="$CHOSEN_MODULE"
+                if ! validate_component_candidate "$module" "$file"; then
+                    echo -e "\n  ${R}✖ Invalid or incompatible component file.${NC}\n"
+                    rm -rf "$work"; ota_pause; continue
                 fi
                 rel="${COMPONENT_MAP[$module]}"; target=$(component_primary_target "$module")
                 new_ver=$(component_version_from_file "$module" "$file")
@@ -1183,12 +1195,7 @@ show_ota_update_hub() {
                 echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
                 echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
                 echo -e "  ${DIM}│${NC}"
-                if [ "$option" == 9 ]; then
-                    confirm=y
-                    echo -e "  ${G}✔ Nano file validated — applying selected component automatically.${NC}"
-                else
-                    echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
-                fi
+                echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
                 if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
                     if install_component_candidate "$module" "$file"; then
                         echo -e "\n  ${G}✔ Component ${module} (v${new_ver:-Unknown}) successfully applied!${NC}\n"
@@ -1198,41 +1205,39 @@ show_ota_update_hub() {
                         echo -e "\n  ${R}✖ Component install failed. Previous file preserved.${NC}\n" >&2
                     fi
                 else
-                    echo -e "\n  ${Y}● Manual update cancelled by user.${NC}\n"
+                    echo -e "\n  ${Y}● Link update cancelled by user.${NC}\n"
                 fi
                 rm -rf "$work";;
-            10) show_local_install; continue;;
-            11|12)
-                base="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
-                [ "$option" == 12 ] && { base="$MIRROR_SCRIPTS"; source_name='IRANIAN MIRROR'; }
-                if ! choose_module UPDATE; then continue; fi
-                module="$CHOSEN_MODULE"; rel="${COMPONENT_MAP[$module]}"
-                work=$(mktemp -d "$SECURE_TMP/onefile.XXXXXX") || return 1
+            11)  # Install via code paste
+                work=$(mktemp -d "$SECURE_TMP/manual.XXXXXX") || return 1
                 file="$work/input"
-                draw_main_header
-                echo -e "\n  ${DIM}┌─[ INDIVIDUAL UPDATE: ${module} FROM ${source_name} ]${NC}\n"
-                if ! mt_download "$base/$rel?t=$(date +%s)" "$file"; then
-                    echo -e "  ${R}✖ Download failed. Existing component preserved.${NC}"
+                if ! choose_module EDITOR; then rm -rf "$work"; continue; fi
+                module="$CHOSEN_MODULE"
+                : > "$file"
+                if ! capture_manual_component "$file" "$module"; then
+                    echo -e "\n  ${R}✖ Manual paste failed or cancelled. Previous component preserved.${NC}\n"
                     rm -rf "$work"; ota_pause; continue
                 fi
-                if ! validate_component_candidate "$module" "$file"; then
-                    echo -e "  ${R}✖ Downloaded file is invalid or incompatible. Existing component preserved.${NC}"
-                    rm -rf "$work"; ota_pause; continue
-                fi
-                target=$(component_primary_target "$module")
-                current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
+                rel="${COMPONENT_MAP[$module]}"; target=$(component_primary_target "$module")
                 new_ver=$(component_version_from_file "$module" "$file")
+                current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
+                draw_main_header
+                echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${DIM}│${NC}"
+                echo -e "  ${DIM}├─${NC} ${W}Target Component:${NC} ${C}${module}${NC} ${DIM}(${rel})${NC}"
                 echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
-                echo -e "  ${DIM}├─${NC} ${W}Remote Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
-                echo -ne "  ${DIM}└─${NC} ${C}Apply only this file? (y/n): ${NC}"; read -r confirm
+                echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
+                echo -e "  ${DIM}│${NC}"
+                echo -ne "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
                 if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
                     if install_component_candidate "$module" "$file"; then
-                        echo -e "\n  ${G}✔ Only ${rel} was updated successfully.${NC}\n"
+                        echo -e "\n  ${G}✔ Component ${module} (v${new_ver:-Unknown}) successfully applied!${NC}\n"
                         rm -rf "$work"
                         [ "$module" == install ] || reload_dashboard
                     else
-                        echo -e "\n  ${R}✖ Individual update failed. Previous file preserved.${NC}\n"
+                        echo -e "\n  ${R}✖ Component install failed. Previous file preserved.${NC}\n" >&2
                     fi
+                else
+                    echo -e "\n  ${Y}● Code paste update cancelled by user.${NC}\n"
                 fi
                 rm -rf "$work";;
             *) continue;;

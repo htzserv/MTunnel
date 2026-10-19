@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Doctor | System Diagnostics v1.2.5 ---
-# [Features: Full Health Scan | Network/IPv6 | Firewall/Ports | Core & Script Health | Safe Repair | Export Report]
-MODULE_VERSION="1.2.5"
+# --- MTunnel Doctor | System Diagnostics v1.2.6 ---
+# [Features: Full Health Scan | Network/IPv6 | Firewall/Ports | Core & Script Health | Safe Repair | Export Report | OTA Update]
+MODULE_VERSION="1.2.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -43,6 +43,163 @@ DOC_TOTAL=0
 DOC_LAST_SUMMARY="Not scanned"
 DOC_LAST_COLOR="$DIM"
 DOC_PLAIN=0
+
+INSTALL_PATH="/usr/bin/mdoctor"
+MT_REL_PATH="mdoctor.sh"   # repo/mirror path of this module (must match MOD_MAP in main.sh and mt_validate_module_role)
+
+# ---------------- OTA update engine (same behaviour as mgre / mrathole) ----------------
+MAIN_PID=$$
+NEED_REFRESH=false
+trap 'NEED_REFRESH=true' SIGUSR1
+UPDATE_CHECK_INTERVAL=60
+
+read_with_refresh() {
+    local prompt="$1" __resultvar="$2" redraw_func="$3" buffer="" char rc
+    touch "$SECURE_TMP/.mdoctor_in_menu"
+    echo -ne "$prompt"
+    while true; do
+        if [ "$NEED_REFRESH" = true ] && [ -z "$buffer" ] && [ -n "$redraw_func" ]; then
+            NEED_REFRESH=false
+            "$redraw_func"
+            echo -ne "$prompt$buffer"
+        fi
+        IFS= read -rsn1 -t 0.3 char
+        rc=$?
+        if [ $rc -ne 0 ]; then
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then continue; fi
+            rm -f "$SECURE_TMP/.mdoctor_in_menu" 2>/dev/null
+            return "$rc"
+        fi
+        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then echo ""; break; fi
+        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
+            if [ -n "$buffer" ]; then buffer="${buffer%?}"; echo -ne "\b \b"; fi
+            continue
+        fi
+        buffer+="$char"
+        echo -ne "$char"
+    done
+    rm -f "$SECURE_TMP/.mdoctor_in_menu" 2>/dev/null
+    printf -v "$__resultvar" '%s' "$buffer"
+}
+
+fetch_remote_version() {
+    local url="$1" payload version=""
+    if command -v curl >/dev/null 2>&1; then
+        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+    elif command -v wget >/dev/null 2>&1; then
+        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+    else return 1; fi
+    version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([^" ]*\)".*/\1/p' | head -n 1)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || return 1
+    printf '%s\n' "$version"
+}
+
+check_update_bg() {
+    local cb="?t=$(date +%s)" gh_ver="" mirror_ver="" latest_ver="" cand
+    gh_ver=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/${MT_REL_PATH}${cb}")
+    mirror_ver=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/${MT_REL_PATH}${cb}")
+    [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mdoctor_remote_ver_github"
+    [ -n "$mirror_ver" ] && printf '%s\n' "$mirror_ver" > "$SECURE_TMP/.mdoctor_remote_ver_mirror"
+    for cand in "$gh_ver" "$mirror_ver"; do
+        [[ "$cand" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || continue
+        latest_ver=$(printf '%s\n%s\n' "$latest_ver" "$cand" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$' | sort -V | tail -n 1)
+    done
+    [ -n "$latest_ver" ] && printf '%s\n' "$latest_ver" > "$SECURE_TMP/.mdoctor_remote_ver"
+    return 0
+}
+
+update_watcher_loop() {
+    while true; do
+        check_update_bg
+        if [ -f "$SECURE_TMP/.mdoctor_in_menu" ]; then kill -SIGUSR1 "$MAIN_PID" 2>/dev/null; fi
+        sleep "$UPDATE_CHECK_INTERVAL"
+    done
+}
+if [[ "${1:-}" != -* ]]; then
+    update_watcher_loop &
+    WATCHER_PID=$!
+fi
+trap '[ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mdoctor_in_menu" 2>/dev/null' EXIT
+
+doc_update_badge() {
+    local rv file="$SECURE_TMP/.mdoctor_remote_ver"
+    [ -f "$file" ] || return 0
+    rv=$(tr -d '\r\n ' < "$file")
+    [ -n "$rv" ] && [ "$rv" != Unknown ] || return 0
+    declare -F mt_update_available >/dev/null || return 0
+    if mt_update_available "$rv" "$MODULE_VERSION"; then
+        printf '  %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
+    fi
+    return 0
+}
+
+self_update_module() {
+    local src_opt="${1:-}" dl_url tmp_file confirm new_ver
+    local fn
+    for fn in mt_download mt_validate_script mt_install_script mt_capture_manual_script mt_module_downgrade_allowed mt_update_available; do
+        if ! declare -F "$fn" >/dev/null; then
+            echo -e "  ${R}✖ Shared core is too old for OTA ($fn missing). Update the whole bundle first.${NC}"; return 1
+        fi
+    done
+    local remote_v="Unknown"
+    [ -f "$SECURE_TMP/.mdoctor_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mdoctor_remote_ver")
+    local gh_text="${C}Official GitHub Server${NC}"
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_update_available "$remote_v" "$MODULE_VERSION"; then
+        gh_text="${gh_text}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
+    else
+        gh_text="${gh_text}    ${DIM}(v${MODULE_VERSION})${NC}"
+    fi
+
+    if [ -z "$src_opt" ]; then
+        clear; echo -e "\n  ${DIM}┌─[ OTA Update (MDoctor) ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+        echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
+    fi
+
+    [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
+    tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
+    if [ "$src_opt" == 4 ]; then
+        if ! mt_capture_manual_script "$tmp_file"; then
+            rm -f "$tmp_file"
+            echo -e "  ${R}✖ Manual paste failed or was cancelled. Existing script preserved.${NC}"
+            return 1
+        fi
+    else
+        case "$src_opt" in
+            1) dl_url="${MTUNNEL_GITHUB_BASE}/${MT_REL_PATH}";;
+            2) dl_url="${MTUNNEL_MIRROR_BASE}/${MT_REL_PATH}";;
+            3) echo -ne "  ${C}●${NC} ${W}Enter Direct Link: ${NC}"; read -r dl_url;;
+        esac
+        echo -e "\n  ${C}⟳${NC} ${W}Downloading Update...${NC}"
+        if ! mt_download "$dl_url" "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Download failed. Installed module preserved.${NC}"; return 1; fi
+    fi
+    sed -i 's/\r$//' "$tmp_file"
+    if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
+    new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
+    if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
+    echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+    echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
+    if ! mt_install_script "$tmp_file" "$MT_REL_PATH" "$INSTALL_PATH" "$0"; then
+        rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
+    fi
+    rm -f "$tmp_file"
+    echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
+    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
+    exec "$INSTALL_PATH"
+}
+# ---------------- end OTA ----------------
 
 _doc_color() { [ "$DOC_PLAIN" = 1 ] && printf '' || printf '%b' "$1"; }
 _doc_reset() { [ "$DOC_PLAIN" = 1 ] && printf '' || printf '%b' "$NC"; }
@@ -440,6 +597,7 @@ render_doctor_menu() {
     printf '  %b├─%b %b5%b %b❯%b %bSystem Services & Failed Units%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
     printf '  %b├─%b %b6%b %b❯%b %bSafe Repair Actions%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %b7%b %b❯%b %bExport Diagnostic Report%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$W" "$NC"
+    printf '  %b├─%b %b8%b %b❯%b %bOTA Update%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(doc_update_badge)"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bReturn to Dashboard%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
@@ -462,7 +620,7 @@ esac
 
 while true; do
     render_doctor_menu
-    printf '  %bDOCTOR ❯❯ %b' "$C" "$NC"; read -r opt
+    read_with_refresh "  ${C}DOCTOR ❯❯ ${NC}" opt render_doctor_menu || { clear; exit 0; }
     opt="${opt//[$' \r\n\t']/}"
     case "$opt" in
         1) doc_full_scan;;
@@ -472,6 +630,7 @@ while true; do
         5) doc_services_screen;;
         6) doc_safe_repair;;
         7) doc_export_report;;
+        8) self_update_module; doc_pause;;
         0|'') clear; exit 0;;
         *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
     esac

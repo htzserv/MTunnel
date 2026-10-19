@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel LinkTest | Link & Protocol Benchmark v1.2.5 ---
+# --- MTunnel LinkTest | Link & Protocol Benchmark v1.2.6 ---
 # [Features: Full Option-1 Matrix | Native Protocols | BH/RH Dual-Stack Engine Lab | TCP/UDP/ICMP Probes | MTU/Loss]
-MODULE_VERSION="1.2.5"
+MODULE_VERSION="1.2.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -181,7 +181,7 @@ self_update_module() {
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
     [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
-    exec "$INSTALL_PATH" "$@"
+    exec "$INSTALL_PATH"
 }
 
 ping6_compat() {

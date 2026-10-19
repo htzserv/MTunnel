@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.2.5; modular layout revision 2).
+# MTunnel shared core API 1 (v1.2.6; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.2.5"
+MTUNNEL_RELEASE_VERSION="1.2.6"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -375,7 +375,7 @@ mt_capture_manual_script() {
         echo 'Pasted module is not compatible with the installed shared-core API/layout. Previous module preserved.' >&2
         return 1
     }
-    echo 'Nano save successful. Syntax, version and shared-core compatibility verified; applying module automatically...' >&2
+    echo 'Nano save successful. Syntax, version and shared-core compatibility verified. Review the version comparison and confirm to apply.' >&2
     return 0
 }
 

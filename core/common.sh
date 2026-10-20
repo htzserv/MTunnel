@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.2.6; modular layout revision 2).
+# MTunnel shared core API 1 (v1.2.7; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.2.6"
+MTUNNEL_RELEASE_VERSION="1.2.7"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -316,6 +316,88 @@ mt_source_conf() {
 # Open GNU nano on a disposable candidate, then syntax/version-check it.
 # nano -t (--saveonexit) means Ctrl+X saves without asking Y/N + filename.
 # The caller, not this helper, commits a validated candidate transactionally.
+# ---- v1.2.7 shared install helpers -------------------------------------------
+# Append a cache-buster to a script/package URL that has no query string.
+# raw.githubusercontent.com caches by full URL, so a unique query forces a fresh copy.
+mt_cb_url() {
+    local url="${1:-}"
+    [[ "$url" == *\?* ]] && { printf '%s' "$url"; return 0; }
+    printf '%s?t=%s' "$url" "$(date +%s 2>/dev/null || echo 0)"
+}
+# Turn a GitHub "blob" page link into its raw-file link; any other URL is unchanged.
+mt_normalize_download_url() {
+    local url="${1:-}"
+    if [[ "$url" =~ ^https://(www\.)?github\.com/([^/]+)/([^/]+)/blob/(.+)$ ]]; then
+        printf 'https://raw.githubusercontent.com/%s/%s/%s' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+    else
+        printf '%s' "$url"
+    fi
+}
+# Trim whitespace/CR, strip one pair of surrounding quotes, expand a leading ~.
+mt_clean_path() {
+    local p="${1-}"
+    p="${p//$'\r'/}"
+    p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+    if [[ ${#p} -ge 2 ]] && { [[ "${p:0:1}" == "'" && "${p: -1}" == "'" ]] || [[ "${p:0:1}" == '"' && "${p: -1}" == '"' ]]; }; then
+        p="${p:1:${#p}-2}"
+    fi
+    case "$p" in
+        '~') p="${HOME:-/root}";;
+        '~/'*) p="${HOME:-/root}/${p#\~/}";;
+    esac
+    printf '%s' "$p"
+}
+# True when the file starts like a ZIP, gzip or tar archive.
+mt_is_archive_file() {
+    local f="${1:-}" magic
+    [ -f "$f" ] || return 1
+    magic=$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')
+    case "$magic" in 504b0304|504b0506|504b0708|1f8b*) return 0;; esac
+    [ "$(od -An -c -j257 -N5 "$f" 2>/dev/null | tr -d ' \n')" == ustar ]
+}
+# True when a downloaded "script" is really a web page (wrong link, 404 page, GitHub blob page).
+mt_looks_like_html() {
+    local f="${1:-}"
+    [ -f "$f" ] || return 1
+    head -c 1024 "$f" 2>/dev/null | tr 'A-Z' 'a-z' | grep -Eq '<!doctype html|<html|<head|<body'
+}
+# Clean text that was pasted/saved by an editor: CRLF, BOM, leading/trailing blank
+# lines and an optional Markdown code fence (```bash, ```sh, ```shell, ``` ...).
+mt_normalize_pasted_file() {
+    local f="${1:-}" tmp
+    [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 1
+    sed -i 's/\r$//' "$f" || return 1
+    sed -i '1s/^\xEF\xBB\xBF//' "$f" || return 1
+    tmp=$(mktemp "${f}.norm.XXXXXX") || return 1
+    if awk '
+        { lines[++n] = $0 }
+        END {
+            s = 1; e = n
+            while (s <= e && lines[s] ~ /^[ \t]*$/) s++
+            while (e >= s && lines[e] ~ /^[ \t]*$/) e--
+            if (s <= e && lines[s] ~ /^[ \t]*```[A-Za-z0-9_+-]*[ \t]*$/) {
+                s++
+                if (e >= s && lines[e] ~ /^[ \t]*```[ \t]*$/) e--
+                while (s <= e && lines[s] ~ /^[ \t]*$/) s++
+                while (e >= s && lines[e] ~ /^[ \t]*$/) e--
+            }
+            for (i = s; i <= e; i++) print lines[i]
+        }' "$f" > "$tmp"; then
+        cat "$tmp" > "$f"; rm -f "$tmp"
+    else
+        rm -f "$tmp"; return 1
+    fi
+}
+# Open nano for pasting. -I ignores ~/.nanorc (autoindent / tab conversion / hard wrap would
+# corrupt pasted code), -w disables hard-wrapping, -t saves on Ctrl+X without prompting.
+mt_nano_edit() {
+    local file="${1:-}" help; local -a opts=(-t)
+    help=$(nano --help 2>&1 || true)
+    [[ "$help" == *--ignorercfiles* ]] && opts+=(-I)
+    [[ "$help" == *--nowrap* || "$help" == *' -w'* ]] && opts+=(-w)
+    nano "${opts[@]}" -- "$file"
+}
+# ------------------------------------------------------------------------------
 mt_ensure_nano() {
     command -v nano >/dev/null 2>&1 && return 0
     [ "$EUID" -eq 0 ] || {
@@ -352,20 +434,16 @@ mt_capture_manual_script() {
     : > "$output" || return 1
     # Reset screen before opening fullscreen nano. Keep stdout connected to TTY.
     printf '\033[2J\033[H'
-    if ! nano -t -- "$output"; then
+    if ! mt_nano_edit "$output"; then
         echo 'Nano closed with an error; previous module was not changed.' >&2
         return 1
     fi
     if [[ ! -s "$output" ]]; then
         echo 'Nothing saved in Nano; previous module preserved.' >&2; return 1
     fi
-    # Normalize text copied from Windows and optionally enclosed by Markdown.
-    sed -i 's/\r$//' "$output" || return 1
-    if [[ "$(head -n1 "$output")" == \`\`\`bash || "$(head -n1 "$output")" == \`\`\`sh ]]; then
-        sed -i '1d; ${/^```$/d;}' "$output" || return 1
-    fi
-    # Drop an optional BOM on the first line only.
-    sed -i '1s/^\xEF\xBB\xBF//' "$output" || return 1
+    # Normalize text copied from Windows / chat: CRLF, BOM, blank lines, Markdown fence.
+    mt_normalize_pasted_file "$output" || return 1
+    [[ -s "$output" ]] || { echo 'Nothing left after cleaning the pasted text; previous module preserved.' >&2; return 1; }
     if ! mt_validate_script "$output"; then
         echo 'Invalid full Bash module (shebang, syntax or MODULE_VERSION). Previous module preserved.' >&2
         return 1

@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel LinkTest | Link & Protocol Benchmark v1.2.6 ---
+# --- MTunnel LinkTest | Link & Protocol Benchmark v1.2.7 ---
 # [Features: Full Option-1 Matrix | Native Protocols | BH/RH Dual-Stack Engine Lab | TCP/UDP/ICMP Probes | MTU/Loss]
-MODULE_VERSION="1.2.6"
+MODULE_VERSION="1.2.7"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

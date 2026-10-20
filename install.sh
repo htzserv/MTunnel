@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.2.6"
+MODULE_VERSION="1.2.7"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -18,10 +18,10 @@ mt_installer_load_common() {
     for ((arg=0; arg<${#args[@]}; arg++)); do
         case "${args[$arg]}" in
             --local)
-                ((arg+1 < ${#args[@]})) || return 1
+                ((arg+1 < ${#args[@]})) || { echo '--local needs a directory.' >&2; return 1; }
                 source_dir="${args[$((arg+1))]}"; mode=local; ((arg+=1));;
             --remote)
-                ((arg+1 < ${#args[@]})) || return 1
+                ((arg+1 < ${#args[@]})) || { echo '--remote needs an HTTPS base URL.' >&2; return 1; }
                 remote="${args[$((arg+1))]}"; mode=remote; ((arg+=1));;
             --online) remote="$DEFAULT_REMOTE"; mode=remote;;
         esac
@@ -52,9 +52,9 @@ mt_installer_load_common() {
         MT_INSTALLER_BOOTSTRAP_TEMP="$tmp"
         rc=1
         if command -v curl >/dev/null 2>&1; then
-            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "${remote%/}/core/common.sh" && rc=0
+            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "${remote%/}/core/common.sh?t=$(date +%s)" && rc=0
         elif command -v wget >/dev/null 2>&1; then
-            wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "${remote%/}/core/common.sh" && rc=0
+            wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "${remote%/}/core/common.sh?t=$(date +%s)" && rc=0
         fi
         [[ "$rc" == 0 && -s "$tmp" ]] || { echo 'Unable to fetch the shared MTunnel core.' >&2; rm -f "$tmp"; return 1; }
         candidate="$tmp"
@@ -97,6 +97,92 @@ if ! declare -F mt_release_migration >/dev/null; then
     mt_release_migration() { mt_is_retired_version "$1" && mt_is_current_release_line "$2"; }
 fi
 if ! declare -F mt_retired_bundle_blocked >/dev/null; then mt_retired_bundle_blocked() { return 1; }; fi
+# v1.2.7 helpers: defined here only when an older installed shared core (1.2.7) lacks them,
+# so main.sh/install.sh can be updated independently of core/common.sh.
+if ! declare -F mt_normalize_pasted_file >/dev/null 2>&1; then
+# ---- v1.2.7 shared install helpers -------------------------------------------
+# Append a cache-buster to a script/package URL that has no query string.
+# raw.githubusercontent.com caches by full URL, so a unique query forces a fresh copy.
+mt_cb_url() {
+    local url="${1:-}"
+    [[ "$url" == *\?* ]] && { printf '%s' "$url"; return 0; }
+    printf '%s?t=%s' "$url" "$(date +%s 2>/dev/null || echo 0)"
+}
+# Turn a GitHub "blob" page link into its raw-file link; any other URL is unchanged.
+mt_normalize_download_url() {
+    local url="${1:-}"
+    if [[ "$url" =~ ^https://(www\.)?github\.com/([^/]+)/([^/]+)/blob/(.+)$ ]]; then
+        printf 'https://raw.githubusercontent.com/%s/%s/%s' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+    else
+        printf '%s' "$url"
+    fi
+}
+# Trim whitespace/CR, strip one pair of surrounding quotes, expand a leading ~.
+mt_clean_path() {
+    local p="${1-}"
+    p="${p//$'\r'/}"
+    p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+    if [[ ${#p} -ge 2 ]] && { [[ "${p:0:1}" == "'" && "${p: -1}" == "'" ]] || [[ "${p:0:1}" == '"' && "${p: -1}" == '"' ]]; }; then
+        p="${p:1:${#p}-2}"
+    fi
+    case "$p" in
+        '~') p="${HOME:-/root}";;
+        '~/'*) p="${HOME:-/root}/${p#\~/}";;
+    esac
+    printf '%s' "$p"
+}
+# True when the file starts like a ZIP, gzip or tar archive.
+mt_is_archive_file() {
+    local f="${1:-}" magic
+    [ -f "$f" ] || return 1
+    magic=$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')
+    case "$magic" in 504b0304|504b0506|504b0708|1f8b*) return 0;; esac
+    [ "$(od -An -c -j257 -N5 "$f" 2>/dev/null | tr -d ' \n')" == ustar ]
+}
+# True when a downloaded "script" is really a web page (wrong link, 404 page, GitHub blob page).
+mt_looks_like_html() {
+    local f="${1:-}"
+    [ -f "$f" ] || return 1
+    head -c 1024 "$f" 2>/dev/null | tr 'A-Z' 'a-z' | grep -Eq '<!doctype html|<html|<head|<body'
+}
+# Clean text that was pasted/saved by an editor: CRLF, BOM, leading/trailing blank
+# lines and an optional Markdown code fence (```bash, ```sh, ```shell, ``` ...).
+mt_normalize_pasted_file() {
+    local f="${1:-}" tmp
+    [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 1
+    sed -i 's/\r$//' "$f" || return 1
+    sed -i '1s/^\xEF\xBB\xBF//' "$f" || return 1
+    tmp=$(mktemp "${f}.norm.XXXXXX") || return 1
+    if awk '
+        { lines[++n] = $0 }
+        END {
+            s = 1; e = n
+            while (s <= e && lines[s] ~ /^[ \t]*$/) s++
+            while (e >= s && lines[e] ~ /^[ \t]*$/) e--
+            if (s <= e && lines[s] ~ /^[ \t]*```[A-Za-z0-9_+-]*[ \t]*$/) {
+                s++
+                if (e >= s && lines[e] ~ /^[ \t]*```[ \t]*$/) e--
+                while (s <= e && lines[s] ~ /^[ \t]*$/) s++
+                while (e >= s && lines[e] ~ /^[ \t]*$/) e--
+            }
+            for (i = s; i <= e; i++) print lines[i]
+        }' "$f" > "$tmp"; then
+        cat "$tmp" > "$f"; rm -f "$tmp"
+    else
+        rm -f "$tmp"; return 1
+    fi
+}
+# Open nano for pasting. -I ignores ~/.nanorc (autoindent / tab conversion / hard wrap would
+# corrupt pasted code), -w disables hard-wrapping, -t saves on Ctrl+X without prompting.
+mt_nano_edit() {
+    local file="${1:-}" help; local -a opts=(-t)
+    help=$(nano --help 2>&1 || true)
+    [[ "$help" == *--ignorercfiles* ]] && opts+=(-I)
+    [[ "$help" == *--nowrap* || "$help" == *' -w'* ]] && opts+=(-w)
+    nano "${opts[@]}" -- "$file"
+}
+# ------------------------------------------------------------------------------
+fi
 if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { return 0; }; fi
 
 
@@ -216,11 +302,11 @@ installer_main() {
     local current=0 mod_ver
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --local) [ "$#" -ge 2 ] || return 1; source_dir="$2"; remote=''; shift 2;;
-            --root) [ "$#" -ge 2 ] || return 1; root="${2%/}"; launch=0; shift 2;;
+            --local) [ "$#" -ge 2 ] || { echo '--local needs a directory.' >&2; return 1; }; source_dir="$2"; remote=''; shift 2;;
+            --root) [ "$#" -ge 2 ] || { echo '--root needs an absolute directory.' >&2; return 1; }; root="${2%/}"; launch=0; shift 2;;
             --with-cores) with_cores=1; shift;;
             --no-launch) launch=0; shift;;
-            --remote) [ "$#" -ge 2 ] || return 1; remote="${2%/}"; source_dir=''; shift 2;;
+            --remote) [ "$#" -ge 2 ] || { echo '--remote needs an HTTPS base URL.' >&2; return 1; }; remote="${2%/}"; source_dir=''; shift 2;;
             --online) remote="$DEFAULT_REMOTE"; source_dir=''; shift;;
             --allow-downgrade) export MT_ALLOW_DOWNGRADE=1; shift;;
             --help|-h)
@@ -242,7 +328,7 @@ installer_main() {
         esac
     done
     if [ -n "$root" ]; then
-        [[ "$root" == /* && "$root" != / ]] || return 1
+        [[ "$root" == /* && "$root" != / ]] || { echo 'Unsafe --root path (must be an absolute directory other than /).' >&2; return 1; }
         [[ ! "$root" =~ (^|/)\.\.(/|$) && ! "$root" =~ (^|/)\.(/|$) ]] || { echo 'Unsafe --root path.' >&2; return 1; }
         root=$(readlink -m -- "$root") || return 1
         [ "$root" != / ] || return 1
@@ -261,13 +347,13 @@ installer_main() {
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
         remote="${remote%/}"
         mkdir "$work/scripts" "$work/scripts/core" || return 1
-        if ! mt_download "$remote/core/common.sh" "$work/scripts/core/common.sh" || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
+        if ! mt_download "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
             echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
         for item in "${modules[@]}"; do
             path="${item#*:}"
             mkdir -p "$work/scripts/$(dirname "$path")" || return 1
-            if ! mt_download "$remote/$path" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
+            if ! mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
                 echo "Cannot prepare module: $path. Installed scripts preserved." >&2; return 1
             fi
             current=$((current+1)); name="${item%%:*}"
@@ -275,7 +361,7 @@ installer_main() {
             draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
             echo ''
         done
-        if ! mt_download "$remote/install.sh" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
+        if ! mt_download "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
             echo 'Cannot prepare installer: install.sh. Installed scripts preserved.' >&2; return 1
         fi
         # The remote VERSION file is only an update marker and may lag behind the files.
@@ -328,7 +414,7 @@ installer_main() {
             path="packages/$name"
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/packages" || return 1
-                mt_download "$remote/$path" "$work/scripts/$path" || { echo "Could not fetch $path" >&2; return 1; }
+                mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || { echo "Could not fetch $path" >&2; return 1; }
             fi
             mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
             files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")
@@ -362,6 +448,8 @@ installer_main() {
         sleep 1.5
         rm -rf -- "$INSTALLER_WORK"
         trap - EXIT
+        # After "curl ... | bash" stdin is the exhausted pipe: give the dashboard the terminal.
+        if [ ! -t 0 ] && { : </dev/tty; } 2>/dev/null; then exec "$root/usr/bin/mtunnel" </dev/tty; fi
         exec "$root/usr/bin/mtunnel"
     fi
 }

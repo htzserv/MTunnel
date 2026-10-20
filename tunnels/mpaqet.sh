@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v1.2.6 ---
+# --- MTunnel MPaqet | Raw Packet KCP Engine v1.2.7 ---
 # [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
 
-MODULE_VERSION="1.2.6"
+MODULE_VERSION="1.2.7"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

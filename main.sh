@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.6 ---
+# --- MTunnel Master Core | Central Dashboard v1.2.7 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.6"
+MODULE_VERSION="1.2.7"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -29,6 +29,92 @@ mt_load_common() {
 }
 mt_load_common || exit 1
 unset -f mt_load_common
+# v1.2.7 helpers: defined here only when an older installed shared core (1.2.7) lacks them,
+# so main.sh/install.sh can be updated independently of core/common.sh.
+if ! declare -F mt_normalize_pasted_file >/dev/null 2>&1; then
+# ---- v1.2.7 shared install helpers -------------------------------------------
+# Append a cache-buster to a script/package URL that has no query string.
+# raw.githubusercontent.com caches by full URL, so a unique query forces a fresh copy.
+mt_cb_url() {
+    local url="${1:-}"
+    [[ "$url" == *\?* ]] && { printf '%s' "$url"; return 0; }
+    printf '%s?t=%s' "$url" "$(date +%s 2>/dev/null || echo 0)"
+}
+# Turn a GitHub "blob" page link into its raw-file link; any other URL is unchanged.
+mt_normalize_download_url() {
+    local url="${1:-}"
+    if [[ "$url" =~ ^https://(www\.)?github\.com/([^/]+)/([^/]+)/blob/(.+)$ ]]; then
+        printf 'https://raw.githubusercontent.com/%s/%s/%s' "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" "${BASH_REMATCH[4]}"
+    else
+        printf '%s' "$url"
+    fi
+}
+# Trim whitespace/CR, strip one pair of surrounding quotes, expand a leading ~.
+mt_clean_path() {
+    local p="${1-}"
+    p="${p//$'\r'/}"
+    p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+    if [[ ${#p} -ge 2 ]] && { [[ "${p:0:1}" == "'" && "${p: -1}" == "'" ]] || [[ "${p:0:1}" == '"' && "${p: -1}" == '"' ]]; }; then
+        p="${p:1:${#p}-2}"
+    fi
+    case "$p" in
+        '~') p="${HOME:-/root}";;
+        '~/'*) p="${HOME:-/root}/${p#\~/}";;
+    esac
+    printf '%s' "$p"
+}
+# True when the file starts like a ZIP, gzip or tar archive.
+mt_is_archive_file() {
+    local f="${1:-}" magic
+    [ -f "$f" ] || return 1
+    magic=$(od -An -tx1 -N4 "$f" 2>/dev/null | tr -d ' \n')
+    case "$magic" in 504b0304|504b0506|504b0708|1f8b*) return 0;; esac
+    [ "$(od -An -c -j257 -N5 "$f" 2>/dev/null | tr -d ' \n')" == ustar ]
+}
+# True when a downloaded "script" is really a web page (wrong link, 404 page, GitHub blob page).
+mt_looks_like_html() {
+    local f="${1:-}"
+    [ -f "$f" ] || return 1
+    head -c 1024 "$f" 2>/dev/null | tr 'A-Z' 'a-z' | grep -Eq '<!doctype html|<html|<head|<body'
+}
+# Clean text that was pasted/saved by an editor: CRLF, BOM, leading/trailing blank
+# lines and an optional Markdown code fence (```bash, ```sh, ```shell, ``` ...).
+mt_normalize_pasted_file() {
+    local f="${1:-}" tmp
+    [[ -n "$f" && -f "$f" && ! -L "$f" ]] || return 1
+    sed -i 's/\r$//' "$f" || return 1
+    sed -i '1s/^\xEF\xBB\xBF//' "$f" || return 1
+    tmp=$(mktemp "${f}.norm.XXXXXX") || return 1
+    if awk '
+        { lines[++n] = $0 }
+        END {
+            s = 1; e = n
+            while (s <= e && lines[s] ~ /^[ \t]*$/) s++
+            while (e >= s && lines[e] ~ /^[ \t]*$/) e--
+            if (s <= e && lines[s] ~ /^[ \t]*```[A-Za-z0-9_+-]*[ \t]*$/) {
+                s++
+                if (e >= s && lines[e] ~ /^[ \t]*```[ \t]*$/) e--
+                while (s <= e && lines[s] ~ /^[ \t]*$/) s++
+                while (e >= s && lines[e] ~ /^[ \t]*$/) e--
+            }
+            for (i = s; i <= e; i++) print lines[i]
+        }' "$f" > "$tmp"; then
+        cat "$tmp" > "$f"; rm -f "$tmp"
+    else
+        rm -f "$tmp"; return 1
+    fi
+}
+# Open nano for pasting. -I ignores ~/.nanorc (autoindent / tab conversion / hard wrap would
+# corrupt pasted code), -w disables hard-wrapping, -t saves on Ctrl+X without prompting.
+mt_nano_edit() {
+    local file="${1:-}" help; local -a opts=(-t)
+    help=$(nano --help 2>&1 || true)
+    [[ "$help" == *--ignorercfiles* ]] && opts+=(-I)
+    [[ "$help" == *--nowrap* || "$help" == *' -w'* ]] && opts+=(-w)
+    nano "${opts[@]}" -- "$file"
+}
+# ------------------------------------------------------------------------------
+fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 MTUNNEL_PATH="/usr/bin/mtunnel"
@@ -714,7 +800,7 @@ download_file_to_cache() {
     local mod="$1" base_url="$2" rel_path="${MOD_MAP[$1]:-}" tmp
     [ -n "$rel_path" ] || return 1
     tmp=$(mktemp "$SECURE_TMP/module.XXXXXX") || return 1
-    if ! mt_download "$base_url/$rel_path" "$tmp" || ! mt_validate_script "$tmp"; then rm -f "$tmp"; return 1; fi
+    if ! mt_download "$(mt_cb_url "$base_url/$rel_path")" "$tmp" || ! mt_validate_script "$tmp"; then rm -f "$tmp"; return 1; fi
     local installed="/usr/bin/$mod"; [ "$mod" != main ] || installed="$MTUNNEL_PATH"
     local cur new; cur=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$installed" 2>/dev/null); new=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp")
     mt_validate_module_core_contract "$tmp" || { rm -f "$tmp"; return 1; }
@@ -848,7 +934,7 @@ sync_script_bundle() {
     stage=$(mktemp -d "$SECURE_TMP/sync.XXXXXX") || return 1
     # Stage the shared core and all scripts before committing any module.
     mkdir -p "$stage/core"
-    if ! mt_download "$base/core/common.sh" "$stage/core/common.sh" ||
+    if ! mt_download "$(mt_cb_url "$base/core/common.sh")" "$stage/core/common.sh" ||
        ! bash -n "$stage/core/common.sh" 2>/dev/null ||
        ! grep -q '^MTUNNEL_CORE_API=1$' "$stage/core/common.sh" ||
        ! grep -q '^MTUNNEL_LAYOUT_REV=2$' "$stage/core/common.sh"; then
@@ -859,11 +945,11 @@ sync_script_bundle() {
     # block a sync. The staged scripts are still syntax-checked and the shared
     # core API/layout contract is validated above before anything is installed.
     # Fetch VERSION only as optional cached metadata; ignore absence/mismatch.
-    mt_download "$base/VERSION" "$stage/VERSION" 2>/dev/null || true
+    mt_download "$(mt_cb_url "$base/VERSION")" "$stage/VERSION" 2>/dev/null || true
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
-        if ! mt_download "$base/$rel" "$stage/$rel"; then
+        if ! mt_download "$(mt_cb_url "$base/$rel")" "$stage/$rel"; then
             echo "Could not download $rel; existing scripts preserved." >&2
             rc=1; break
         fi
@@ -873,7 +959,7 @@ sync_script_bundle() {
         fi
     done
     if [ "$rc" == 0 ]; then
-        if ! mt_download "$base/install.sh" "$stage/install.sh"; then
+        if ! mt_download "$(mt_cb_url "$base/install.sh")" "$stage/install.sh"; then
             echo 'Could not download install.sh; existing scripts preserved.' >&2
             rc=1
         elif ! mt_validate_script "$stage/install.sh" 2>/dev/null; then
@@ -914,7 +1000,8 @@ mt_find_bundle_root() {
     printf '%s\n' "$found"
 }
 offline_local_deploy() {
-    local source="$1" stage='' bundle='' rc=0 find_rc=0
+    local source stage='' bundle='' rc=0 find_rc=0
+    source=$(mt_clean_path "${1:-}")
     [ -n "$source" ] || source="$PWD"
     if [ -f "$source" ]; then
         stage=$(mktemp -d "$SECURE_TMP/offline.XXXXXX") || return 1
@@ -931,7 +1018,9 @@ offline_local_deploy() {
     if [ -n "$bundle" ]; then
         install_bundle_scripts "$bundle" "${2:-0}" || { rc=$?; [ -z "$stage" ] || rm -rf "$stage"; return "$rc"; }
         if [ -d "$bundle/packages" ] && mt_local_source_has_packages "$bundle/packages"; then
-            deploy_binaries_from_dir "$bundle/packages" || rc=1
+            deploy_binaries_from_dir "$bundle/packages" || {
+                rc=1; echo 'Scripts were installed, but some packages/engines failed to install.' >&2
+            }
         fi
     elif mt_local_source_has_packages "$source"; then
         deploy_binaries_from_dir "$source" || rc=1
@@ -954,7 +1043,7 @@ fetch_package_group() {
     local stage; stage=$(mktemp -d "$SECURE_TMP/packages.XXXXXX") || return 1
     for item in "${items[@]}"; do
         file="$stage/$item"
-        if ! mt_download "$base/$item" "$file"; then rc=1; break; fi
+        if ! mt_download "$(mt_cb_url "$base/$item")" "$file"; then rc=1; break; fi
         case "$item" in *.deb) dpkg-deb --info "$file" >/dev/null || { rc=1; break; };; *) mt_valid_elf "$file" || { rc=1; break; };; esac
     done
     if [ "$rc" == 0 ]; then
@@ -1092,17 +1181,10 @@ capture_manual_component() {
     mt_ensure_nano || return 1
     : > "$output" || return 1
     printf '\033[2J\033[H'
-    nano -t -- "$output" || return 1
+    mt_nano_edit "$output" || return 1
     [ -s "$output" ] || { echo 'Nothing saved; existing component preserved.' >&2; return 1; }
-    sed -i 's/\r$//' "$output" || return 1
-    sed -i '1s/^\xEF\xBB\xBF//' "$output" || return 1
-    while [ -s "$output" ] && head -n1 "$output" | grep -qE '^[[:space:]]*$'; do sed -i '1d' "$output" || return 1; done
-    local first_compact
-    first_compact=$(head -n1 "$output" | tr -d '[:space:]')
-    if [[ "$first_compact" == '```bash' || "$first_compact" == '```sh' || "$first_compact" == '```' ]]; then
-        sed -i '1d' "$output" || return 1
-        sed -i '${/^[[:space:]]*```[[:space:]]*$/d;}' "$output" || return 1
-    fi
+    mt_normalize_pasted_file "$output" || return 1
+    [ -s "$output" ] || { echo 'Nothing left after cleaning the pasted text; existing component preserved.' >&2; return 1; }
     validate_component_candidate "$component" "$output"
 }
 
@@ -1208,6 +1290,8 @@ show_ota_update_hub() {
                 echo -ne "  ${C}●${NC} ${W}Enter Direct HTTPS (.sh / .zip / .tar.gz) URL: ${NC}"; read -r url
                 url="${url//[$'\r\n\t ']/}"
                 [ -n "$url" ] || { rm -rf "$work"; continue; }
+                [[ "$url" == https://* ]] || { echo -e "\n  ${R}✖ Only HTTPS links are supported.${NC}\n" >&2; rm -rf "$work"; ota_pause; continue; }
+                url=$(mt_normalize_download_url "$url")
                 mt_download "$url" "$file" &
                 pid=$!
                 draw_progress_bar "$pid" 'Downloading Custom Resource'
@@ -1215,8 +1299,16 @@ show_ota_update_hub() {
                     echo -e "\n  ${R}✖ Download failed! Check URL.${NC}\n" >&2
                     rm -rf "$work"; ota_pause; continue
                 fi
+                if mt_looks_like_html "$file"; then
+                    echo -e "\n  ${R}✖ The link returned a web page, not a script/archive. Use a direct (raw) file link.${NC}\n" >&2
+                    rm -rf "$work"; ota_pause; continue
+                fi
                 mkdir "$work/extracted"
-                if mt_extract_archive "$file" "$work/extracted" 2>/dev/null; then
+                if mt_is_archive_file "$file"; then
+                    if ! mt_extract_archive "$file" "$work/extracted"; then
+                        echo -e "\n  ${R}✖ Archive could not be extracted (unsupported, unsafe, or unzip missing). Nothing was changed.${NC}\n" >&2
+                        rm -rf "$work"; ota_pause; continue
+                    fi
                     offline_local_deploy "$work/extracted" 1 && sync_rc=0 || sync_rc=$?
                     if [ "$sync_rc" == 0 ]; then
                         echo -e "\n  ${G}✔ Archive extracted and modules deployed successfully!${NC}\n"

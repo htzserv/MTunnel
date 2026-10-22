@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Master Core | Central Dashboard v1.2.7 ---
+# --- MTunnel Master Core | Central Dashboard v1.3.0 ---
 # [Features: Universal Persistent Header | In-Place Live Refresh | Smart Skip-Installed Cache | Dynamic IPv6 Peer Width]
-MODULE_VERSION="1.2.7"
+MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -189,19 +189,13 @@ NEED_REFRESH=false
 NEED_LIVE_HEADER_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 trap 'NEED_LIVE_HEADER_REFRESH=true' SIGUSR2
-UPDATE_CHECK_INTERVAL=30
-STATS_CHECK_INTERVAL=5
-fetch_bundle_version() {
-    # One tiny request for the whole bundle. Empty output means: use per-module fallback.
-    local v='' cb="?t=$(date +%s%N)"
-    if command -v curl >/dev/null 2>&1; then
-        v=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 4 "$REPO_SCRIPTS/VERSION$cb" 2>/dev/null | head -c 32 | tr -d '\r\n ')
-    elif command -v wget >/dev/null 2>&1; then
-        v=$(wget -qO- --header="Cache-Control: no-cache" --timeout=4 "$REPO_SCRIPTS/VERSION$cb" 2>/dev/null | head -c 32 | tr -d '\r\n ')
-    fi
-    [[ "$v" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$v"
-    return 0
-}
+UPDATE_CHECK_INTERVAL=900     # 15 min: low-resource background update cadence
+UPDATE_FIRST_CHECK_DELAY=45   # defer network activity until the UI has settled
+UPDATE_HEAD_BYTES=4095        # MODULE_VERSION sits in the first ~2.2 KB of every component (mporter is the largest offset)
+STATS_CHECK_INTERVAL=15
+# Shared-core fallbacks: a box whose /usr/lib/mtunnel/common.sh predates the socket snapshot keeps working.
+if ! declare -F mt_ss_snapshot_begin >/dev/null 2>&1; then mt_ss_snapshot_begin() { return 1; }; fi
+if ! declare -F mt_ss_snapshot_end >/dev/null 2>&1; then mt_ss_snapshot_end() { return 0; }; fi
 component_local_version_for_watch() {
     local mod="$1" file=''
     case "$mod" in
@@ -219,16 +213,16 @@ component_local_version_for_watch() {
 }
 check_single_module_silent() {
     local mod="$1" rel_path="${COMPONENT_MAP[$1]:-}" out_file="$SECURE_TMP/.chk_${1}"
-    local cur_v='' rem_v='' cb="?t=$(date +%s%N)" payload=''
+    local cur_v='' rem_v='' payload=''
     rm -f "$out_file"
     [ -n "$rel_path" ] || return 0
     cur_v=$(component_local_version_for_watch "$mod"); [ -n "$cur_v" ] || cur_v='0.0.0'
-    # Per-file checks are intentional: independent component versions are supported,
-    # so the bundle VERSION marker must never be reused as a module's remote version.
+    # Per-file checks stay intentional (independent component versions are supported), but only the
+    # head of each file is transferred: a range request instead of downloading the whole script.
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 2 --max-time 5 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null) || payload=''
+        payload=$(curl -fsSL -r "0-${UPDATE_HEAD_BYTES}" --connect-timeout 2 --max-time 5 "$REPO_SCRIPTS/$rel_path" 2>/dev/null) || payload=''
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=5 "$REPO_SCRIPTS/$rel_path$cb" 2>/dev/null) || payload=''
+        payload=$(wget -qO- --header="Range: bytes=0-${UPDATE_HEAD_BYTES}" --timeout=5 "$REPO_SCRIPTS/$rel_path" 2>/dev/null) || payload=''
     fi
     if [ "$mod" == common ]; then
         rem_v=$(printf '%s\n' "$payload" | sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' | head -n1)
@@ -240,12 +234,13 @@ check_single_module_silent() {
     fi
 }
 check_all_updates_round() {
-    local pids=() mod p f
+    local mod f before after
+    before=$(cat "$UPDATE_FILE" 2>/dev/null)
+    # Sequential requests are intentionally used on tiny VPSes: never create 11
+    # simultaneous curl/sed processes just to refresh the update badges.
     for mod in "${UPDATE_COMPONENTS[@]}"; do
-        check_single_module_silent "$mod" &
-        pids+=("$!")
+        check_single_module_silent "$mod"
     done
-    for p in "${pids[@]}"; do wait "$p" 2>/dev/null; done
     : > "$UPDATE_FILE.new"
     for mod in "${UPDATE_COMPONENTS[@]}"; do
         f="$SECURE_TMP/.chk_${mod}"
@@ -253,16 +248,20 @@ check_all_updates_round() {
         rm -f "$f"
     done
     mv -f "$UPDATE_FILE.new" "$UPDATE_FILE" 2>/dev/null
-    kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+    after=$(cat "$UPDATE_FILE" 2>/dev/null)
+    # Repaint the menus only when the set of available updates really changed
+    # (this used to fire every round, clearing and redrawing the screen every 30 s).
+    [ "$before" == "$after" ] || kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
 }
 update_watcher_loop() {
+    sleep "$UPDATE_FIRST_CHECK_DELAY"
     while true; do
         check_all_updates_round
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
-if [[ "${1:-}" != --* ]]; then update_watcher_loop & fi
-WATCHER_PID=$!
+WATCHER_PID=""
+if [[ "${1:-}" != --* ]]; then update_watcher_loop & WATCHER_PID=$!; fi
 format_bytes_speed() {
     local b=$1
     if [ -z "$b" ] || [ "$b" -le 0 ] 2>/dev/null; then echo "0 B/s"; return; fi
@@ -280,57 +279,82 @@ format_bytes_speed() {
         awk -v v="$b" 'BEGIN {printf "%.1f GB/s", v/1073741824}'
     fi
 }
+# Host facts that never change are read once. The per-cycle stats use shell builtins wherever possible
+# (no grep/awk/cat/date forks every 5 s) and the default-route / IPv6 lookups are refreshed once a minute.
+MT_CPU_CORES=""; MT_DEF_DEV=""; MT_DEF_DEV_TS=0; MT_V6_STATUS="OFF"; MT_V6_TS=0
+
+mt_fmt_kb_gib() {  # KiB -> "12.3G" (one decimal, integer maths only)
+    local t=$(( $1 * 10 / 1048576 ))
+    printf '%d.%dG' "$(( t / 10 ))" "$(( t % 10 ))"
+}
+
 collect_system_vitals() {
     local sys_target="$SECURE_TMP/.main_sys_stats.tmp"
-    
-    local cpu_cores=$(nproc 2>/dev/null)
-    [ -z "$cpu_cores" ] && cpu_cores=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
-    [ -z "$cpu_cores" ] && cpu_cores=1
-    local cpu_pct=0
-    if [ -f "$SECURE_TMP/.cpu_last" ]; then
-        read p_idle p_total < "$SECURE_TMP/.cpu_last"
-        read _ u n s i io ir st _ < <(grep '^cpu ' /proc/stat 2>/dev/null)
+    local now_ts="${EPOCHSECONDS:-$(date +%s)}"
+
+    if [ -z "$MT_CPU_CORES" ]; then
+        MT_CPU_CORES=$(nproc 2>/dev/null)
+        [ -z "$MT_CPU_CORES" ] && MT_CPU_CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null)
+        [ -z "$MT_CPU_CORES" ] && MT_CPU_CORES=1
+    fi
+    local cpu_cores=$MT_CPU_CORES
+
+    # CPU: /proc/stat is read directly; its first line is the aggregate "cpu" line.
+    local cpu_pct=5 label u n s i io ir st _rest
+    if read -r label u n s i io ir st _rest < /proc/stat 2>/dev/null; then
         local cur_idle=$(( i + io ))
         local cur_total=$(( u + n + s + i + io + ir + st ))
-        local d_idle=$(( cur_idle - p_idle ))
-        local d_total=$(( cur_total - p_total ))
-        if [ "$d_total" -gt 0 ]; then
-            cpu_pct=$(( (d_total - d_idle) * 100 / d_total ))
-            [ "$cpu_pct" -lt 0 ] && cpu_pct=0
-            [ "$cpu_pct" -gt 100 ] && cpu_pct=100
+        if [ -f "$SECURE_TMP/.cpu_last" ]; then
+            local p_idle p_total d_idle d_total
+            read -r p_idle p_total < "$SECURE_TMP/.cpu_last"
+            d_idle=$(( cur_idle - p_idle ))
+            d_total=$(( cur_total - p_total ))
+            cpu_pct=0
+            if [ "$d_total" -gt 0 ]; then
+                cpu_pct=$(( (d_total - d_idle) * 100 / d_total ))
+                [ "$cpu_pct" -lt 0 ] && cpu_pct=0
+                [ "$cpu_pct" -gt 100 ] && cpu_pct=100
+            fi
         fi
         echo "$cur_idle $cur_total" > "$SECURE_TMP/.cpu_last"
-    else
-        read _ u n s i io ir st _ < <(grep '^cpu ' /proc/stat 2>/dev/null)
-        echo "$(( i + io )) $(( u + n + s + i + io + ir + st ))" > "$SECURE_TMP/.cpu_last"
-        cpu_pct=5
     fi
-    local r_used="0G" r_total="0G" r_pct=0
-    if [ -f /proc/meminfo ]; then
-        local mt=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null)
-        local ma=$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null)
-        [ -z "$ma" ] && ma=$(awk '/MemFree/ {print $2}' /proc/meminfo 2>/dev/null)
-        if [ -n "$mt" ] && [ "$mt" -gt 0 ] 2>/dev/null; then
-            local mu=$(( mt - ma ))
-            r_pct=$(( mu * 100 / mt ))
-            r_used=$(awk -v v="$mu" 'BEGIN {if(v<1048576) printf "%.0fM", v/1024; else printf "%.1fG", v/1048576}')
-            r_total=$(awk -v v="$mt" 'BEGIN {printf "%.1fG", v/1048576}')
-        fi
+
+    # Memory: one pass over /proc/meminfo with the read builtin.
+    local r_used="0G" r_total="0G" r_pct=0 mt='' ma='' mf='' k v _m
+    while read -r k v _m; do
+        case "$k" in
+            MemTotal:) mt=$v;;
+            MemAvailable:) ma=$v;;
+            MemFree:) mf=$v;;
+        esac
+    done < /proc/meminfo 2>/dev/null
+    [ -n "$ma" ] || ma=$mf
+    if [[ "$mt" =~ ^[0-9]+$ ]] && [[ "$ma" =~ ^[0-9]+$ ]] && [ "$mt" -gt 0 ]; then
+        local mu=$(( mt - ma ))
+        r_pct=$(( mu * 100 / mt ))
+        if [ "$mu" -lt 1048576 ]; then r_used="$(( (mu + 512) / 1024 ))M"; else r_used=$(mt_fmt_kb_gib "$mu"); fi
+        r_total=$(mt_fmt_kb_gib "$mt")
     fi
-    local def_dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
-    [ -z "$def_dev" ] && def_dev=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n 1)
-    
+
+    # Default-route device changes rarely: look it up at most once a minute.
+    if [ $(( now_ts - MT_DEF_DEV_TS )) -ge 60 ]; then
+        MT_DEF_DEV=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
+        [ -z "$MT_DEF_DEV" ] && MT_DEF_DEV=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n 1)
+        MT_DEF_DEV_TS=$now_ts
+    fi
+    local def_dev="$MT_DEF_DEV"
+
     local rx_speed="0 B/s" tx_speed="0 B/s"
-    local now_ts=$(date +%s)
-    if [ -n "$def_dev" ] && [ -f "/sys/class/net/$def_dev/statistics/rx_bytes" ]; then
-        local cur_rx=$(cat "/sys/class/net/$def_dev/statistics/rx_bytes" 2>/dev/null)
-        local cur_tx=$(cat "/sys/class/net/$def_dev/statistics/tx_bytes" 2>/dev/null)
+    if [ -n "$def_dev" ] && [ -r "/sys/class/net/$def_dev/statistics/rx_bytes" ]; then
+        local cur_rx cur_tx p_ts p_rx p_tx dt drx dtx
+        read -r cur_rx < "/sys/class/net/$def_dev/statistics/rx_bytes"
+        read -r cur_tx < "/sys/class/net/$def_dev/statistics/tx_bytes"
         if [ -f "$SECURE_TMP/.net_last" ]; then
-            read p_ts p_rx p_tx < "$SECURE_TMP/.net_last"
-            local dt=$(( now_ts - p_ts ))
+            read -r p_ts p_rx p_tx < "$SECURE_TMP/.net_last"
+            dt=$(( now_ts - p_ts ))
             if [ "$dt" -gt 0 ]; then
-                local drx=$(( (cur_rx - p_rx) / dt ))
-                local dtx=$(( (cur_tx - p_tx) / dt ))
+                drx=$(( (cur_rx - p_rx) / dt ))
+                dtx=$(( (cur_tx - p_tx) / dt ))
                 [ "$drx" -lt 0 ] && drx=0
                 [ "$dtx" -lt 0 ] && dtx=0
                 rx_speed=$(format_bytes_speed "$drx")
@@ -339,12 +363,19 @@ collect_system_vitals() {
         fi
         echo "$now_ts $cur_rx $cur_tx" > "$SECURE_TMP/.net_last"
     fi
-    local v6_status="OFF"
-    if ip -6 route show default 2>/dev/null | grep -q default || ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
-        v6_status="ON"
+
+    if [ $(( now_ts - MT_V6_TS )) -ge 60 ]; then
+        MT_V6_STATUS="OFF"
+        if ip -6 route show default 2>/dev/null | grep -q default || ip -6 addr show scope global 2>/dev/null | grep -q inet6; then
+            MT_V6_STATUS="ON"
+        fi
+        MT_V6_TS=$now_ts
     fi
-    echo "${cpu_pct}|${cpu_cores}|${r_used}|${r_total}|${r_pct}|${rx_speed}|${tx_speed}|${v6_status}" > "$sys_target"
+
+    echo "${cpu_pct}|${cpu_cores}|${r_used}|${r_total}|${r_pct}|${rx_speed}|${tx_speed}|${MT_V6_STATUS}" > "$sys_target"
     mv -f "$sys_target" "$SECURE_TMP/.main_sys_stats" 2>/dev/null
+    local _up; read -r _up _ < /proc/uptime 2>/dev/null || _up=0
+    printf '%s\n' "${_up%%.*}" > "$SECURE_TMP/.main_sys_stats_stamp"
 }
 
 mt_endpoint_host() {
@@ -364,13 +395,27 @@ mt_endpoint_host() {
 mt_unit_peer_ip() { mt_unit_live_peer "$1" "${2:-}"; }
 
 
+# Ping results are reused for MT_PING_CACHE_SEC seconds per target. The stats cycle runs every 5 s,
+# and a host that blocks ICMP used to cost up to 3 s of blocking per tunnel on every single cycle.
+MT_PING_CACHE_SEC=15
+MT_PING_COUNT=1   # one probe per refresh (was 2); set to 2 if steadier loss figures are preferred
 mt_ping_stats() {
-    local target="$1" iface="${2:-}" unit="${3:-}" ping_res loss avg='---' tcp_rtt
+    local target="$1" iface="${2:-}" unit="${3:-}" ping_res loss avg='---' tcp_rtt now c_ts c_avg c_loss cfile key
     local -a cmd=(ping)
     mt_valid_host "$target" || { printf '%s|%s' '---' '---'; return 1; }
+    now="${EPOCHSECONDS:-$(date +%s)}"
+    key="${target//[^A-Za-z0-9]/_}_${iface//[^A-Za-z0-9]/_}"
+    cfile="$SECURE_TMP/.ping_${key}"
+    if [ -r "$cfile" ]; then
+        read -r c_ts c_avg c_loss < "$cfile"
+        if [[ "$c_ts" =~ ^[0-9]+$ ]] && [ $(( now - c_ts )) -lt "$MT_PING_CACHE_SEC" ] && [ -n "$c_loss" ]; then
+            printf '%s|%s' "$c_avg" "$c_loss"
+            return 0
+        fi
+    fi
     [[ "$target" == *:* ]] && cmd=(ping -6)
     if [ -n "$iface" ] && ip link show "$iface" >/dev/null 2>&1; then cmd+=(-I "$iface"); fi
-    ping_res=$(timeout 3 "${cmd[@]}" -c 2 -i 0.2 -W 1 "$target" 2>/dev/null || true)
+    ping_res=$(timeout 2 "${cmd[@]}" -c "$MT_PING_COUNT" -i 0.2 -W 1 "$target" 2>/dev/null || true)
     loss=$(printf '%s\n' "$ping_res" | grep -oP '[0-9]+(?=% packet loss)' | head -n1)
     [ -n "$loss" ] || loss=100
     if printf '%s\n' "$ping_res" | grep -q 'min/avg/max'; then
@@ -380,12 +425,18 @@ mt_ping_stats() {
         tcp_rtt=$(mt_unit_tcp_rtt "$unit" "$target" 2>/dev/null || true)
         if [ -n "$tcp_rtt" ]; then avg="$tcp_rtt"; loss='---'; fi
     fi
+    printf '%s %s %s\n' "$now" "$avg" "$loss" > "$cfile.tmp" 2>/dev/null && mv -f "$cfile.tmp" "$cfile" 2>/dev/null
     printf '%s|%s' "$avg" "$loss"
 }
 
 collect_active_tunnels_stats() {
     local tmp_target
     tmp_target=$(mktemp "$SECURE_TMP/.main_tun_stats.XXXXXX") || return 1
+    # Service states and the socket table are fetched once per cycle, not once per tunnel.
+    local -A MT_ACTIVE_UNITS=()
+    local _u
+    while read -r _u; do MT_ACTIVE_UNITS["$_u"]=1; done < <(systemctl list-units --type=service --state=active --no-legend --plain 2>/dev/null | awk '{print $1}')
+    mt_ss_snapshot_begin 2>/dev/null || true
     local count=0
     # Fair selection under the 3-row header cap: pass 1 takes at most one tunnel
     # per protocol (so GRE can never starve Backhaul/Rathole/Paqet); pass 2 fills
@@ -465,7 +516,7 @@ collect_active_tunnels_stats() {
             TRANSPORT=$(mt_read_kv "$conf" TRANSPORT 2>/dev/null || true); [ -n "$TRANSPORT" ] || TRANSPORT=tcp
             [[ "$ROLE" =~ ^[12]$ && "$TRANSPORT" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ ]] && mt_valid_port "$TUN_PORT" || continue
             [ -z "${picked[BH|$t_name]:-}" ] || continue
-            systemctl is-active --quiet "mbackhaul@${t_name}" || continue
+            [ -n "${MT_ACTIVE_UNITS[mbackhaul@${t_name}.service]:-}" ] || continue
             local pure="${t_name#bh_}"
             local peer_ip="$REMOTE_IP"
             if [ "$ROLE" == "1" ]; then
@@ -502,7 +553,7 @@ collect_active_tunnels_stats() {
             UDP_PORTS=$(mt_read_kv "$d/meta.conf" UDP_PORTS 2>/dev/null || true)
             [[ "$TYPE" =~ ^[12]$ ]] && mt_valid_port "$LINK_PORT" || continue
             [ -z "${picked[RAT|$t_name]:-}" ] || continue
-            systemctl is-active --quiet "mrathole@${t_name}" || continue
+            [ -n "${MT_ACTIVE_UNITS[mrathole@${t_name}.service]:-}" ] || continue
             local peer_ip="$REMOTE_IP"
             if [ "$TYPE" == "1" ]; then
                 peer_ip=$(mt_unit_peer_ip "mrathole@${t_name}" "$LINK_PORT" 2>/dev/null || true)
@@ -532,7 +583,7 @@ collect_active_tunnels_stats() {
             REMOTE_IP=$(mt_read_kv "$conf" REMOTE_IP 2>/dev/null || true)
             [[ "$ROLE" =~ ^[12]$ ]] && mt_valid_port "$TUN_PORT" || continue
             [ -z "${picked[PAQET|$t_name]:-}" ] || continue
-            systemctl is-active --quiet "mpaqet@${t_name}" || continue
+            [ -n "${MT_ACTIVE_UNITS[mpaqet@${t_name}.service]:-}" ] || continue
             local pure="${t_name#pq_}"
             local peer_ip="$REMOTE_IP"
             if [ "$ROLE" == "1" ]; then
@@ -553,19 +604,28 @@ collect_active_tunnels_stats() {
         done
     fi
     done
+    mt_ss_snapshot_end 2>/dev/null || true
     mv -f "$tmp_target" "$SECURE_TMP/.main_tun_stats" 2>/dev/null
 }
 stats_watcher_loop() {
+    local prev='' cur=''
     while true; do
         collect_system_vitals
         collect_active_tunnels_stats
-        kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+        # Repaint the live header only when the collected numbers differ from the previous cycle.
+        cur=''
+        [ -r "$SECURE_TMP/.main_sys_stats" ] && cur=$(<"$SECURE_TMP/.main_sys_stats")
+        [ -r "$SECURE_TMP/.main_tun_stats" ] && cur+=$(<"$SECURE_TMP/.main_tun_stats")
+        if [ "$cur" != "$prev" ]; then
+            prev="$cur"
+            kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+        fi
         sleep "$STATS_CHECK_INTERVAL"
     done
 }
-stats_watcher_loop &
-STATS_PID=$!
-trap 'kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null' EXIT
+STATS_PID=""
+if [[ "${1:-}" != --* ]]; then stats_watcher_loop & STATS_PID=$!; fi
+trap 'mt_bg_loops_resume; [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null; [ -z "${STATS_PID:-}" ] || kill "$STATS_PID" 2>/dev/null' EXIT
 get_local_ip() {
     local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
     [ -z "$ip" ] && ip=$(hostname -I | awk '{print $1}')
@@ -725,53 +785,43 @@ draw_main_header() {
 }
 
 refresh_header_live() {
-    tput civis 2>/dev/null || true
-    printf "\033[s"      # Save cursor position (ANSI)
-    printf "\0337"       # Save cursor position (DEC)
-    printf "\033[1;1H"   # Row 1, Col 1
-    draw_header_lines_only
-    printf "\0338"       # Restore cursor position (DEC)
-    printf "\033[u"      # Restore cursor position (ANSI)
-    tput cnorm 2>/dev/null || true
+    mt_live_vitals_update 2>/dev/null || true
+    printf "\033[?25l\0337\033[1;1H"
+    HEADER_LIVE=1 draw_header_lines_only
+    printf "\0338\033[?25h"
 }
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
     local redraw_func="$3"
-    local buffer=""
-    local char rc
+    local buffer="" char rc up now last_live=-1
     echo -ne "$prompt"
     while true; do
         if [ "$NEED_REFRESH" = true ]; then
             NEED_REFRESH=false
-            if [ -n "$redraw_func" ]; then
-                "$redraw_func"
-            fi
+            if [ -n "$redraw_func" ]; then "$redraw_func"; fi
             echo -ne "$prompt$buffer"
         fi
         if [ "$NEED_LIVE_HEADER_REFRESH" = true ]; then
             NEED_LIVE_HEADER_REFRESH=false
             refresh_header_live
         fi
-        IFS= read -rsn1 -t 0.3 char
+        IFS= read -rsn1 -t 0.25 char
         rc=$?
         if [ $rc -ne 0 ]; then
-            { [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; } && continue
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
+                if [ "$now" != "$last_live" ]; then last_live="$now"; refresh_header_live; fi
+                continue
+            fi
             return "$rc"
         fi
-        if [[ -z "$char" ]]; then
-            echo ""
-            break
-        fi
+        if [[ -z "$char" ]]; then echo ""; break; fi
         if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
-            if [ -n "$buffer" ]; then
-                buffer="${buffer%?}"
-                echo -ne "\b \b"
-            fi
+            if [ -n "$buffer" ]; then buffer="${buffer%?}"; echo -ne "\b \b"; fi
             continue
         fi
-        buffer+="$char"
-        echo -ne "$char"
+        buffer+="$char"; echo -ne "$char"
     done
     printf -v "$__resultvar" '%s' "$buffer"
 }
@@ -854,7 +904,82 @@ ensure_module() {
     echo -e "  ${R}✗ ${W}${mod}${R} is not available locally and source download failed.${NC}"
     return 1
 }
-run_mod() { local mod="$1"; ensure_module "$mod" || return 1; "$mod"; }
+# Package-manager locks: the processes holding dpkg / apt locks, then a forced release of them.
+mt_apt_lock_holders() {
+    local p fd tgt
+    for p in /proc/[0-9]*; do
+        for fd in "$p"/fd/*; do
+            tgt=$(readlink "$fd" 2>/dev/null) || continue
+            case "$tgt" in
+                /var/lib/dpkg/lock|/var/lib/dpkg/lock-frontend|/var/lib/apt/lists/lock|/var/cache/apt/archives/lock)
+                    echo "${p#/proc/}"; break;;
+            esac
+        done
+    done | sort -u
+}
+# Forced: stop apt timers and unattended-upgrades, terminate whatever still holds a lock, then repair
+# any half-finished dpkg run. MTunnel's own shell is never touched.
+mt_apt_force_unlock() {
+    systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service >/dev/null 2>&1 || true
+    local i pid
+    for i in 1 2 3; do
+        [ -n "$(mt_apt_lock_holders)" ] || break
+        for pid in $(mt_apt_lock_holders); do [ "$pid" == "$$" ] || kill -TERM "$pid" 2>/dev/null; done
+        sleep 1
+        for pid in $(mt_apt_lock_holders); do [ "$pid" == "$$" ] || kill -KILL "$pid" 2>/dev/null; done
+    done
+    DEBIAN_FRONTEND=noninteractive dpkg --configure -a >/dev/null 2>&1 || true
+}
+# unzip is installed before an install-from-link. Silent when it is already there; otherwise installed
+# behind MTunnel's own progress bar. If apt is unavailable the python3 fallback in the shared core takes over.
+mt_ensure_unzip() {
+    if command -v unzip >/dev/null 2>&1; then
+        echo -e "  ${G}✔ unzip is already installed.${NC}"
+        return 0
+    fi
+    echo -e "  ${Y}● unzip is not installed; preparing archive extraction.${NC}"
+    # On minimal systems, Python's validated zipfile extractor is an equally safe
+    # fallback and avoids touching apt/dpkg locks unnecessarily.
+    if ! command -v apt-get >/dev/null 2>&1; then
+        if command -v python3 >/dev/null 2>&1; then
+            echo -e "  ${C}● Using Python ZIP extraction; no package installation required.${NC}"
+            return 1
+        fi
+        echo -e "  ${R}✖ Neither unzip, apt-get nor python3 is available.${NC}" >&2
+        return 1
+    fi
+    local log="$SECURE_TMP/.unzip_install.log" pid rc=0
+    mt_apt_force_unlock
+    (
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 update -q || exit $?
+        DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y -q unzip
+    ) >"$log" 2>&1 &
+    pid=$!
+    draw_progress_bar "$pid" 'Installing unzip'
+    wait "$pid" 2>/dev/null || rc=$?
+    if command -v unzip >/dev/null 2>&1; then
+        echo -e "\n  ${G}✔ unzip installed successfully.${NC}"
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        echo -e "\n  ${Y}● unzip installation failed; Python extraction will be used instead.${NC}"
+        return 1
+    fi
+    echo -e "\n  ${R}✖ Could not install unzip. Details: ${log}${NC}" >&2
+    return "${rc:-1}"
+}
+# A module runs as a child process. The menu's two background loops are paused while it runs, so they
+# neither poll nor repaint underneath it; they resume as soon as the module exits (or the shell does).
+mt_bg_loops_pause()  { local p; for p in "${WATCHER_PID:-}" "${STATS_PID:-}"; do [ -n "$p" ] && kill -STOP "$p" 2>/dev/null; done; return 0; }
+mt_bg_loops_resume() { local p; for p in "${WATCHER_PID:-}" "${STATS_PID:-}"; do [ -n "$p" ] && kill -CONT "$p" 2>/dev/null; done; return 0; }
+run_mod() {
+    local mod="$1" rc=0
+    ensure_module "$mod" || return 1
+    mt_bg_loops_pause
+    "$mod"; rc=$?
+    mt_bg_loops_resume
+    return "$rc"
+}
 install_bundle_scripts() {
     local source="$1" mod rel candidate target cur new bundle_version=''
     local -a files=() mods=()
@@ -1305,6 +1430,10 @@ show_ota_update_hub() {
                 fi
                 mkdir "$work/extracted"
                 if mt_is_archive_file "$file"; then
+                    # Only prepare unzip after we know this link is an archive; .sh links
+                    # must not trigger apt/dpkg work. Missing unzip is reported and installed
+                    # with the themed progress bar, or the validated Python extractor is used.
+                    mt_ensure_unzip || true
                     if ! mt_extract_archive "$file" "$work/extracted"; then
                         echo -e "\n  ${R}✖ Archive could not be extracted (unsupported, unsafe, or unzip missing). Nothing was changed.${NC}\n" >&2
                         rm -rf "$work"; ota_pause; continue
@@ -1320,6 +1449,7 @@ show_ota_update_hub() {
                     fi
                     rm -rf "$work"; ota_pause; continue
                 fi
+                echo -e "\n  ${C}● Link is not a supported archive; treating it as a single component script.${NC}"
                 if ! choose_module; then
                     echo -e "\n  ${R}✖ Component selection cancelled.${NC}\n"
                     rm -rf "$work"; ota_pause; continue

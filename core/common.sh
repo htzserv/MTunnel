@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.2.7; modular layout revision 2).
+# MTunnel shared core API 1 (v1.3.0; modular layout revision 2).
 # Functions only: safe to source from installers, dashboards and all tunnel engines.
 # Changes must be tested against every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.2.7"
+MTUNNEL_RELEASE_VERSION="1.3.2"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -567,6 +567,36 @@ mt_valid_elf() {
     case "$arch:$machine" in x86_64:62|aarch64:183|arm64:183|armv7l:40|i686:3) return 0;; esac
     return 1
 }
+# mt_zip_extract_python <archive> <dest>
+# Safe ZIP extraction without unzip. Refuses the whole archive if any member is absolute, contains
+# "..", a backslash or ":", or is a symlink / device / fifo / socket. Nothing is written before the check.
+mt_zip_extract_python() {
+    python3 - "$1" "$2" <<'PY'
+import stat, sys, zipfile
+archive, dest = sys.argv[1], sys.argv[2]
+try:
+    zf = zipfile.ZipFile(archive)
+except Exception:
+    sys.exit(1)
+with zf:
+    infos = zf.infolist()
+    if not infos:
+        sys.exit(1)
+    for info in infos:
+        name = info.filename
+        if not name or name.startswith('/') or '\\' in name or ':' in name:
+            sys.exit(1)
+        if any(part == '..' for part in name.split('/')):
+            sys.exit(1)
+        # Type bits only: 0 means "no unix type recorded" (plain file), REG/DIR are fine,
+        # anything else (symlink, device, fifo, socket) is refused.
+        ftype = stat.S_IFMT((info.external_attr >> 16) & 0xFFFF)
+        if ftype not in (0, stat.S_IFREG, stat.S_IFDIR):
+            sys.exit(1)
+    zf.extractall(dest)
+PY
+}
+
 mt_extract_archive() {
     local archive="$1" dest="$2" list entry magic tar_magic
     [ -f "$archive" ] && [ -d "$dest" ] || return 1
@@ -578,6 +608,13 @@ mt_extract_archive() {
     # a single-entry ZIP and make tar report success with an empty file list,
     # which previously caused ZIP installs to succeed without extracting anything.
     if [[ "$magic" == 504b0304 || "$magic" == 504b0506 || "$magic" == 504b0708 ]]; then
+        # unzip is not installed on every server (minimal Ubuntu images lack it). python3's zipfile
+        # module is used instead, with the same path, link and device checks as the unzip branch.
+        if ! command -v unzip >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+            rm -f "$list"
+            mt_zip_extract_python "$archive" "$dest" && return 0
+            return 1
+        fi
         command -v unzip >/dev/null 2>&1 || {
             echo 'ZIP archive detected but unzip is not installed.' >&2
             rm -f "$list"; return 1;
@@ -1186,21 +1223,21 @@ mt_choose_peer_host() {
 mt_header_refresh_now() {
     [ -t 1 ] || return 0
     [ -n "${MT_HEADER:-}" ] || return 0
-    local frame
-    frame=$(HEADER_LIVE=1 "$MT_HEADER" 2>/dev/null) || return 0
-    [ -n "$frame" ] || return 0
-    printf '\0337\033[1;1H%s\0338' "$frame"
+    mt_live_vitals_update 2>/dev/null || true
+    printf '\033[?25l\0337\033[1;1H'
+    HEADER_LIVE=1 "$MT_HEADER" 2>/dev/null || true
+    printf '\0338\033[?25h'
 }
 
 mt_live_readline() {
-    local __var="$1" prompt="$2" buffer="" char rc now last_refresh=0
+    local __var="$1" prompt="$2" buffer="" char rc up now last_refresh=-1
     printf '%b' "$prompt"
     while true; do
         IFS= read -rsn1 -t 0.25 char
         rc=$?
         if [ $rc -ne 0 ]; then
             if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
-                now=$(date +%s)
+                read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
                 if [ "$now" != "$last_refresh" ]; then
                     last_refresh="$now"
                     mt_header_refresh_now
@@ -1225,7 +1262,6 @@ mt_live_readline() {
     done
     printf -v "$__var" '%s' "$buffer"
 }
-
 mt_ask() { # styled prompt + live header refresh while waiting for peer input
     local __var="$1"; shift
     mt_live_readline "$__var" "  ${C}●${NC} ${W}$*${NC} "
@@ -1434,7 +1470,7 @@ mt_peer_copy_prompt() {
             rc=$?
             if [ $rc -eq 0 ]; then break; fi
             if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
-                now=$(date +%s)
+                local _up; read -r _up _ < /proc/uptime 2>/dev/null || _up=0; now="${_up%%.*}"
                 if [ "$now" != "$last_refresh" ]; then last_refresh="$now"; mt_header_refresh_now; fi
                 continue
             fi
@@ -1654,13 +1690,27 @@ mt_workspace_auto_backup() {
 MT_HDR_ROWS=''
 MT_HDR_ROW_COUNT=0
 
-mt_hdr_cols() {
-    local c
-    c=$(tput cols 2>/dev/null) || c=''
-    [[ "$c" =~ ^[0-9]+$ ]] || c=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}')
-    [[ "$c" =~ ^[0-9]+$ ]] || c="${COLUMNS:-120}"
-    printf '%s' "$c"
+mt_hdr_cols_update() {
+    local dir="${SECURE_TMP:-/root/mtunnel/tmp}" c="${MT_HDR_COLS:-}"
+    local f="$dir/.hdr_cols"
+    if [ -n "${HEADER_LIVE:-}" ] && [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -ge 32 ]; then return 0; fi
+    if [ -n "${HEADER_LIVE:-}" ] && [ -r "$f" ]; then
+        read -r c < "$f"
+        if [[ "$c" =~ ^[0-9]+$ ]] && [ "$c" -ge 32 ]; then MT_HDR_COLS="$c"; return 0; fi
+    fi
+    c="${COLUMNS:-}"
+    if ! [[ "$c" =~ ^[0-9]+$ ]] || [ "$c" -lt 32 ]; then
+        c=$(tput cols 2>/dev/null) || c=''
+    fi
+    if ! [[ "$c" =~ ^[0-9]+$ ]] || [ "$c" -lt 32 ]; then
+        c=$({ stty size </dev/tty; } 2>/dev/null | awk '{print $2}')
+    fi
+    [[ "$c" =~ ^[0-9]+$ ]] || c=120
+    [ "$c" -ge 32 ] || c=32
+    MT_HDR_COLS="$c"
+    printf '%s\n' "$c" > "$f" 2>/dev/null || true
 }
+mt_hdr_cols() { mt_hdr_cols_update; printf '%s' "$MT_HDR_COLS"; }
 
 mt_local_ipv4() {
     local ip
@@ -1677,75 +1727,156 @@ mt_local_ipv6() {
     printf '%s' "${ip,,}"
 }
 
-mt_fmt_speed() {
-    local b="$1"
-    if [ -z "$b" ] || [ "$b" -le 0 ] 2>/dev/null; then echo "0 B/s"; return; fi
-    if [ "$b" -lt 1024 ]; then echo "${b} B/s"
+# Pure-bash rate formatter used by the one-second live path (no awk fork).
+mt_fmt_speed_set() {
+    local __out="$1" b="${2:-0}" t rendered
+    [[ "$b" =~ ^[0-9]+$ ]] || b=0
+    if [ "$b" -lt 1024 ]; then printf -v rendered '%d B/s' "$b"
     elif [ "$b" -lt 1048576 ]; then
-        if [ $((b / 1024)) -lt 100 ]; then awk -v v="$b" 'BEGIN {printf "%.1f KB/s", v/1024}'
-        else echo "$((b / 1024)) KB/s"; fi
+        t=$(( b * 10 / 1024 ))
+        if [ "$t" -lt 1000 ]; then printf -v rendered '%d.%d KB/s' "$((t/10))" "$((t%10))"; else printf -v rendered '%d KB/s' "$((b/1024))"; fi
     elif [ "$b" -lt 1073741824 ]; then
-        if [ $((b / 1048576)) -lt 100 ]; then awk -v v="$b" 'BEGIN {printf "%.1f MB/s", v/1048576}'
-        else echo "$((b / 1048576)) MB/s"; fi
-    else awk -v v="$b" 'BEGIN {printf "%.1f GB/s", v/1073741824}'; fi
+        t=$(( b * 10 / 1048576 ))
+        if [ "$t" -lt 1000 ]; then printf -v rendered '%d.%d MB/s' "$((t/10))" "$((t%10))"; else printf -v rendered '%d MB/s' "$((b/1048576))"; fi
+    else
+        t=$(( b * 10 / 1073741824 ))
+        printf -v rendered '%d.%d GB/s' "$((t/10))" "$((t%10))"
+    fi
+    printf -v "$__out" '%s' "$rendered"
+}
+mt_fmt_speed() { local _v; mt_fmt_speed_set _v "${1:-0}"; printf '%s' "$_v"; }
+mt_default_iface_fast() {
+    local iface dest gateway flags rest p op
+    MT_DEFAULT_IFACE=''
+    if [ -r /proc/net/route ]; then
+        while read -r iface dest gateway flags rest; do
+            if [ "$dest" = 00000000 ] && [ "$iface" != lo ] && [ -n "$iface" ]; then MT_DEFAULT_IFACE="$iface"; break; fi
+        done < /proc/net/route
+    fi
+    if [ -z "$MT_DEFAULT_IFACE" ]; then
+        for p in /sys/class/net/*; do
+            [ -e "$p" ] || continue; iface="${p##*/}"; [ "$iface" = lo ] && continue
+            op=''; [ -r "$p/operstate" ] && read -r op < "$p/operstate"
+            if [ "$op" = up ] || [ "$op" = unknown ]; then MT_DEFAULT_IFACE="$iface"; break; fi
+        done
+    fi
 }
 
-# CPU / RAM / network sample, same file + format the main dashboard writes, so
-# the two never disagree. A module only samples itself when the file is stale
-# (module started on its own, without the main dashboard running).
-mt_sys_stats_collect() {
-    local dir="${SECURE_TMP:-/root/mtunnel/tmp}" target
-    mkdir -p "$dir" 2>/dev/null || return 1
-    target="$dir/.main_sys_stats.$$"
-    local cores cpu_pct=0 p_idle p_total u n s i io ir st cur_idle cur_total d_idle d_total
-    cores=$(nproc 2>/dev/null); [ -n "$cores" ] || cores=1
-    read -r _ u n s i io ir st _ < <(grep '^cpu ' /proc/stat 2>/dev/null)
-    cur_idle=$(( ${i:-0} + ${io:-0} )); cur_total=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} + ${ir:-0} + ${st:-0} ))
-    if [ -f "$dir/.cpu_last" ]; then
-        read -r p_idle p_total < "$dir/.cpu_last"
-        d_idle=$(( cur_idle - ${p_idle:-0} )); d_total=$(( cur_total - ${p_total:-0} ))
-        if [ "$d_total" -gt 0 ] 2>/dev/null; then
-            cpu_pct=$(( (d_total - d_idle) * 100 / d_total ))
-            [ "$cpu_pct" -lt 0 ] && cpu_pct=0; [ "$cpu_pct" -gt 100 ] && cpu_pct=100
-        fi
-    else cpu_pct=5; fi
-    echo "$cur_idle $cur_total" > "$dir/.cpu_last"
-    local r_used="0G" r_total="0G" r_pct=0 mt ma mu
-    mt=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null); ma=$(awk '/MemAvailable/ {print $2}' /proc/meminfo 2>/dev/null)
-    [ -n "$ma" ] || ma=$(awk '/MemFree/ {print $2}' /proc/meminfo 2>/dev/null)
-    if [ -n "$mt" ] && [ "$mt" -gt 0 ] 2>/dev/null; then
-        mu=$(( mt - ${ma:-0} )); r_pct=$(( mu * 100 / mt ))
-        r_used=$(awk -v v="$mu" 'BEGIN {if(v<1048576) printf "%.0fM", v/1024; else printf "%.1fG", v/1048576}')
-        r_total=$(awk -v v="$mt" 'BEGIN {printf "%.1fG", v/1048576}')
+# Update only CPU + RX/TX once per kernel uptime second. This path deliberately
+# uses /proc, /sys and shell builtins only: no ping/ss/systemctl/ip/awk/date/stat.
+mt_live_vitals_update() {
+    local dir="${SECURE_TMP:-/root/mtunnel/tmp}"
+    local live="$dir/.main_live_vitals"
+    local up now prev_ts old_cpu old_rx old_tx
+    read -r up _ < /proc/uptime 2>/dev/null || return 1
+    now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || return 1
+    if [ -r "$live" ]; then
+        IFS='|' read -r prev_ts old_cpu old_rx old_tx < "$live"
+        [ "$prev_ts" = "$now" ] && return 0
     fi
-    local dev rx_speed="0 B/s" tx_speed="0 B/s" now_ts cur_rx cur_tx p_ts p_rx p_tx dt drx dtx
-    dev=$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -n 1)
-    [ -n "$dev" ] || dev=$(ip -o -4 route show to default 2>/dev/null | awk '{print $5}' | head -n 1)
-    now_ts=$(date +%s)
-    if [ -n "$dev" ] && [ -r "/sys/class/net/$dev/statistics/rx_bytes" ]; then
-        cur_rx=$(cat "/sys/class/net/$dev/statistics/rx_bytes" 2>/dev/null); cur_tx=$(cat "/sys/class/net/$dev/statistics/tx_bytes" 2>/dev/null)
-        if [ -f "$dir/.net_last" ]; then
-            read -r p_ts p_rx p_tx < "$dir/.net_last"
-            dt=$(( now_ts - ${p_ts:-now_ts} ))
-            if [ "$dt" -gt 0 ]; then
-                drx=$(( (cur_rx - p_rx) / dt )); dtx=$(( (cur_tx - p_tx) / dt ))
-                [ "$drx" -lt 0 ] && drx=0; [ "$dtx" -lt 0 ] && dtx=0
-                rx_speed=$(mt_fmt_speed "$drx"); tx_speed=$(mt_fmt_speed "$dtx")
+
+    local _cpu u n s i io ir sir st rest cur_idle cur_total p_idle p_total d_idle d_total cpu_pct=0
+    if read -r _cpu u n s i io ir sir st rest < /proc/stat 2>/dev/null; then
+        cur_idle=$(( ${i:-0} + ${io:-0} ))
+        cur_total=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} + ${ir:-0} + ${sir:-0} + ${st:-0} ))
+        if [ -r "$dir/.live_cpu_last" ]; then
+            read -r p_idle p_total < "$dir/.live_cpu_last"
+            d_idle=$(( cur_idle - ${p_idle:-0} )); d_total=$(( cur_total - ${p_total:-0} ))
+            if [ "$d_total" -gt 0 ]; then
+                cpu_pct=$(( (d_total - d_idle) * 100 / d_total ))
+                [ "$cpu_pct" -lt 0 ] && cpu_pct=0; [ "$cpu_pct" -gt 100 ] && cpu_pct=100
             fi
         fi
-        echo "$now_ts $cur_rx $cur_tx" > "$dir/.net_last"
+        printf '%s %s\n' "$cur_idle" "$cur_total" > "$dir/.live_cpu_last"
     fi
-    local v6="OFF"
-    if ip -6 route show default 2>/dev/null | grep -q default || ip -6 addr show scope global 2>/dev/null | grep -q inet6; then v6="ON"; fi
-    echo "${cpu_pct}|${cores}|${r_used}|${r_total}|${r_pct}|${rx_speed}|${tx_speed}|${v6}" > "$target" && mv -f "$target" "$dir/.main_sys_stats" 2>/dev/null
+
+    local iface='' cur_rx=0 cur_tx=0 pnet_ts=0 piface='' p_rx=0 p_tx=0 dt drx=0 dtx=0
+    if [ -r "$dir/.live_iface" ]; then read -r iface < "$dir/.live_iface"; fi
+    if [ -z "$iface" ] || [ ! -r "/sys/class/net/$iface/statistics/rx_bytes" ]; then
+        mt_default_iface_fast; iface="$MT_DEFAULT_IFACE"
+        [ -n "$iface" ] && printf '%s\n' "$iface" > "$dir/.live_iface"
+    fi
+    if [ -n "$iface" ] && [ -r "/sys/class/net/$iface/statistics/rx_bytes" ]; then
+        read -r cur_rx < "/sys/class/net/$iface/statistics/rx_bytes"
+        read -r cur_tx < "/sys/class/net/$iface/statistics/tx_bytes"
+        if [ -r "$dir/.live_net_last" ]; then
+            IFS='|' read -r pnet_ts piface p_rx p_tx < "$dir/.live_net_last"
+            dt=$(( now - ${pnet_ts:-now} ))
+            if [ "$piface" = "$iface" ] && [ "$dt" -gt 0 ]; then
+                drx=$(( (cur_rx - ${p_rx:-cur_rx}) / dt )); dtx=$(( (cur_tx - ${p_tx:-cur_tx}) / dt ))
+                [ "$drx" -lt 0 ] && drx=0; [ "$dtx" -lt 0 ] && dtx=0
+            fi
+        fi
+        printf '%s|%s|%s|%s\n' "$now" "$iface" "$cur_rx" "$cur_tx" > "$dir/.live_net_last"
+    fi
+    local rx_fmt tx_fmt
+    mt_fmt_speed_set rx_fmt "$drx"; mt_fmt_speed_set tx_fmt "$dtx"
+    printf '%s|%s|%s|%s\n' "$now" "$cpu_pct" "$rx_fmt" "$tx_fmt" > "$live"
+}
+
+# Static header facts are refreshed on normal screen draws, but live redraws
+# reuse them for up to 60 s so a 1 Hz CPU/net display never spawns systemctl/ip.
+mt_header_static_read() {
+    local force="${1:-}" dir="${SECURE_TMP:-/root/mtunnel/tmp}" up now ts ip4 ip6 bbr porter states state
+    local f="$dir/.header_static"
+    read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
+    if [ "$force" != force ] && [ -r "$f" ]; then
+        IFS='|' read -r ts ip4 ip6 bbr porter < "$f"
+        if [[ "$ts" =~ ^[0-9]+$ ]] && [ $((now-ts)) -lt 60 ]; then
+            MT_STATIC_IP4="$ip4"; MT_STATIC_IP6="$ip6"; MT_STATIC_BBR="$bbr"; MT_STATIC_PORTER="$porter"; return 0
+        fi
+    fi
+    ip4=$(mt_local_ipv4); ip6=$(mt_local_ipv6)
+    bbr=''; [ -r /proc/sys/net/ipv4/tcp_congestion_control ] && read -r bbr < /proc/sys/net/ipv4/tcp_congestion_control
+    porter=OFF
+    states=$(systemctl is-active mporter.service haproxy.service gost.service mporter-iptables.service 2>/dev/null || true)
+    while IFS= read -r state; do [ "$state" = active ] && { porter=ON; break; }; done <<< "$states"
+    MT_STATIC_IP4="${ip4:-Unknown}"; MT_STATIC_IP6="$ip6"; MT_STATIC_BBR="$bbr"; MT_STATIC_PORTER="$porter"
+    printf '%s|%s|%s|%s|%s\n' "$now" "$MT_STATIC_IP4" "$MT_STATIC_IP6" "$MT_STATIC_BBR" "$MT_STATIC_PORTER" > "$f" 2>/dev/null || true
+}
+
+# Slow/base facts (RAM, cores, IPv6 state) refresh every 15 s. CPU and network
+# are overlaid from mt_live_vitals_update, so the visible metrics stay 1 Hz.
+mt_sys_stats_collect() {
+    local dir="${SECURE_TMP:-/root/mtunnel/tmp}"
+    local f="$dir/.main_sys_stats" stamp="$dir/.main_sys_stats_stamp"
+    local up now cores=0 label rest mt='' ma='' mf='' k v _m mu=0 r_pct=0 r_used='0G' r_total='0G' t
+    read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
+    while read -r label rest; do
+        case "$label" in cpu[0-9]*) cores=$((cores+1));; esac
+    done < /proc/stat 2>/dev/null
+    [ "$cores" -gt 0 ] || cores=1
+    while read -r k v _m; do case "$k" in MemTotal:) mt=$v;; MemAvailable:) ma=$v;; MemFree:) mf=$v;; esac; done < /proc/meminfo 2>/dev/null
+    [ -n "$ma" ] || ma=$mf
+    if [[ "$mt" =~ ^[0-9]+$ ]] && [[ "$ma" =~ ^[0-9]+$ ]] && [ "$mt" -gt 0 ]; then
+        mu=$((mt-ma)); r_pct=$((mu*100/mt))
+        if [ "$mu" -lt 1048576 ]; then r_used="$(( (mu+512)/1024 ))M"; else t=$((mu*10/1048576)); r_used="$((t/10)).$((t%10))G"; fi
+        t=$((mt*10/1048576)); r_total="$((t/10)).$((t%10))G"
+    fi
+    mt_header_static_read
+    mt_live_vitals_update
+    local lts=0 cpu=0 rx='0 B/s' tx='0 B/s'
+    [ -r "$dir/.main_live_vitals" ] && IFS='|' read -r lts cpu rx tx < "$dir/.main_live_vitals"
+    local v6=OFF; [ -n "$MT_STATIC_IP6" ] && v6=ON
+    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$cpu" "$cores" "$r_used" "$r_total" "$r_pct" "$rx" "$tx" "$v6" > "$f"
+    printf '%s\n' "$now" > "$stamp"
 }
 
 mt_sys_stats_read() {
-    local f="${SECURE_TMP:-/root/mtunnel/tmp}/.main_sys_stats" now mtime
-    MT_CPU_PCT=0; MT_CPU_CORES=1; MT_RAM_USED="0G"; MT_RAM_TOTAL="0G"; MT_RAM_PCT=0; MT_RX="0 B/s"; MT_TX="0 B/s"; MT_V6_STATE="OFF"
-    now=$(date +%s); mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
-    [ $(( now - mtime )) -le 12 ] || mt_sys_stats_collect 2>/dev/null
-    [ -f "$f" ] && IFS='|' read -r MT_CPU_PCT MT_CPU_CORES MT_RAM_USED MT_RAM_TOTAL MT_RAM_PCT MT_RX MT_TX MT_V6_STATE < "$f"
+    local dir="${SECURE_TMP:-/root/mtunnel/tmp}" up now last=0
+    local f="$dir/.main_sys_stats" stamp="$dir/.main_sys_stats_stamp"
+    MT_CPU_PCT=0; MT_CPU_CORES=1; MT_RAM_USED='0G'; MT_RAM_TOTAL='0G'; MT_RAM_PCT=0; MT_RX='0 B/s'; MT_TX='0 B/s'; MT_V6_STATE=OFF
+    mt_live_vitals_update 2>/dev/null || true
+    read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
+    [ -r "$stamp" ] && read -r last < "$stamp"
+    if [ ! -r "$f" ] || ! [[ "$last" =~ ^[0-9]+$ ]] || [ $((now-last)) -ge 15 ]; then mt_sys_stats_collect 2>/dev/null || true; fi
+    [ -r "$f" ] && IFS='|' read -r MT_CPU_PCT MT_CPU_CORES MT_RAM_USED MT_RAM_TOTAL MT_RAM_PCT MT_RX MT_TX MT_V6_STATE < "$f"
+    local lts lcpu lrx ltx
+    if [ -r "$dir/.main_live_vitals" ]; then
+        IFS='|' read -r lts lcpu lrx ltx < "$dir/.main_live_vitals"
+        [[ "$lcpu" =~ ^[0-9]+$ ]] && MT_CPU_PCT="$lcpu"
+        [ -n "$lrx" ] && MT_RX="$lrx"; [ -n "$ltx" ] && MT_TX="$ltx"
+    fi
     return 0
 }
 
@@ -1771,6 +1902,14 @@ _mt_info_cell() { # content-width label value color  (pads by characters, not by
     (( ${#v} > room )) && v="${v:0:room}"
     printf ' %b%s%b%b%s%*s%b ' "$DIM" "$lead" "$NC" "$c" "$v" "$((room-${#v}))" '' "$NC"
 }
+_mt_info_cell_set() {
+    local __out="$1" w="$2" l="$3" v="$4" c="$5" lead='' room LC_CTYPE=C.UTF-8 rendered
+    [ -z "$l" ] || lead="${l}: "
+    room=$(( w - ${#lead} )); (( room < 0 )) && room=0
+    (( ${#v} > room )) && v="${v:0:room}"
+    printf -v rendered ' %b%s%b%b%s%*s%b ' "$DIM" "$lead" "$NC" "$c" "$v" "$((room-${#v}))" '' "$NC"
+    printf -v "$__out" '%s' "$rendered"
+}
 
 # mt_hdr_draw "<title>" "<label>|<value>|<color>" [info cells "<label>|<value>|<color>" x4]
 #   cell 4 of row 1 = BBR + the given label/value (e.g. "Active|2/3|$G")
@@ -1784,9 +1923,8 @@ mt_hdr_draw() {
     [ -n "$x_col" ] || x_col="$DIM"
 
     local s_ip s_v6 bbr_cc bbr_col="$DIM" bbr_icon="○" bbr_text="OFF"
-    s_ip=$(mt_local_ipv4); s_ip="${s_ip:0:16}"
-    s_v6=$(mt_local_ipv6)
-    bbr_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
+    if [ -n "${HEADER_LIVE:-}" ]; then mt_header_static_read; else mt_header_static_read force; fi
+    s_ip="${MT_STATIC_IP4:0:16}"; s_v6="$MT_STATIC_IP6"; bbr_cc="$MT_STATIC_BBR"
     [ "$bbr_cc" = bbr ] && { bbr_col="$G"; bbr_icon="●"; bbr_text="ON"; }
     mt_sys_stats_read
     local cpu_col="$G" ram_col="$G" rx_col="$DIM" tx_col="$DIM" core_label="${MT_CPU_CORES} Cores"
@@ -1804,7 +1942,7 @@ mt_hdr_draw() {
 
     [ -n "${HEADER_LIVE:-}" ] || clear
     local term_cols boxw content_w border cl
-    term_cols=$(mt_hdr_cols)
+    mt_hdr_cols_update; term_cols="$MT_HDR_COLS"
 
     # ── compact layouts (narrow terminals) ──────────────────────────────
     if [ "$term_cols" -lt 124 ]; then
@@ -1838,7 +1976,8 @@ mt_hdr_draw() {
             for line in "${rows[@]}"; do
                 IFS='|' read -r st name tag peer vip ping loss up fwd <<< "$line"
                 [[ "$loss" =~ ^[0-9]+$ ]] && loss="${loss}%"
-                _mt_hdr_line "$([ "$st" = 1 ] && echo '●' || echo '○') ${name} [${tag}] | ${peer:-"---"} | Ping ${ping:-"---"} | Loss ${loss:-"---"}"
+                local row_icon='○'; [ "$st" = 1 ] && row_icon='●'
+                _mt_hdr_line "${row_icon} ${name} [${tag}] | ${peer:-"---"} | Ping ${ping:-"---"} | Loss ${loss:-"---"}"
             done
         fi
         printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
@@ -1892,7 +2031,12 @@ mt_hdr_draw() {
         local sep="${B}│${NC}" il0 iv0 ic0 il1 iv1 ic1 il2 iv2 ic2 il3 iv3 ic3
         IFS='|' read -r il0 iv0 ic0 <<< "${info[0]:-}"; IFS='|' read -r il1 iv1 ic1 <<< "${info[1]:-}"
         IFS='|' read -r il2 iv2 ic2 <<< "${info[2]:-}"; IFS='|' read -r il3 iv3 ic3 <<< "${info[3]:-}"
-        printf '  %b\033[K\n' "${sep}$(_mt_info_cell 29 "$il0" "$iv0" "${ic0:-$W}")${sep}$(_mt_info_cell 23 "$il1" "$iv1" "${ic1:-$W}")${sep}$(_mt_info_cell $((w6-2)) "$il2" "$iv2" "${ic2:-$W}")${sep}$(_mt_info_cell $((w4-2)) "$il3" "$iv3" "${ic3:-$W}")${sep}"
+        local cell0 cell1 cell2 cell3
+        _mt_info_cell_set cell0 29 "$il0" "$iv0" "${ic0:-$W}"
+        _mt_info_cell_set cell1 23 "$il1" "$iv1" "${ic1:-$W}"
+        _mt_info_cell_set cell2 $((w6-2)) "$il2" "$iv2" "${ic2:-$W}"
+        _mt_info_cell_set cell3 $((w4-2)) "$il3" "$iv3" "${ic3:-$W}"
+        printf '  %b\033[K\n' "${sep}${cell0}${sep}${cell1}${sep}${cell2}${sep}${cell3}${sep}"
     fi
     printf "  ${B}├${border}┤${NC}\033[K\n"
 
@@ -1977,28 +2121,34 @@ mt_master_iface_uptime() {
     elif [ "$h" -gt 0 ]; then printf "%dh %02dm" "$h" "$m"
     else printf "%dm" "$m"; fi
 }
+mt_master_iface_uptime_cached() {
+    local dev="$1" __out="${2:-}" dir="${SECURE_TMP:-/root/mtunnel/tmp}" key cache up now ts val
+    key="${dev//[^A-Za-z0-9_.-]/_}"; cache="$dir/.uptime_${key}"
+    read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
+    if [ -r "$cache" ]; then
+        IFS='|' read -r ts val < "$cache"
+        if [[ "$ts" =~ ^[0-9]+$ ]] && [ $((now-ts)) -lt 15 ]; then
+            if [ -n "$__out" ]; then printf -v "$__out" '%s' "$val"; else printf '%s' "$val"; fi
+            return 0
+        fi
+    fi
+    val=$(mt_master_iface_uptime "$dev")
+    printf '%s|%s\\n' "$now" "$val" > "$cache" 2>/dev/null || true
+    if [ -n "$__out" ]; then printf -v "$__out" '%s' "$val"; else printf '%s' "$val"; fi
+}
 mt_master_header_draw() {
     local master_version="${1:-${MODULE_VERSION:-${MTUNNEL_RELEASE_VERSION:-unknown}}}"
-    local s_ip=$(mt_local_ipv4)
-    s_ip="${s_ip:0:16}"
-
-    local bbr_cc=$(sysctl net.ipv4.tcp_congestion_control 2>/dev/null | awk '{print $3}')
+    if [ -n "${HEADER_LIVE:-}" ]; then mt_header_static_read; else mt_header_static_read force; fi
+    local s_ip="${MT_STATIC_IP4:0:16}" bbr_cc="$MT_STATIC_BBR"
 
     local porter_col="${DIM}" porter_icon="○" porter_text="OFF"
-    if systemctl is-active --quiet mporter.service 2>/dev/null || \
-       systemctl is-active --quiet haproxy 2>/dev/null || \
-       systemctl is-active --quiet gost 2>/dev/null || \
-       systemctl is-active --quiet mporter-iptables 2>/dev/null; then
-        porter_col="${G}"; porter_icon="●"; porter_text="ON"
-    fi
+    if [ "$MT_STATIC_PORTER" = ON ]; then porter_col="${G}"; porter_icon="●"; porter_text="ON"; fi
 
     local bbr_col="${DIM}" bbr_icon="○" bbr_text="OFF"
     [ "$bbr_cc" == "bbr" ] && { bbr_col="${G}"; bbr_icon="●"; bbr_text="ON"; }
 
-    local cpu_pct=0 cpu_cores=1 r_used="0G" r_total="0G" r_pct=0 rx_speed="0 B/s" tx_speed="0 B/s" v6_status="OFF"
-    if [ -f "$SECURE_TMP/.main_sys_stats" ]; then
-        IFS='|' read -r cpu_pct cpu_cores r_used r_total r_pct rx_speed tx_speed v6_status < "$SECURE_TMP/.main_sys_stats"
-    fi
+    mt_sys_stats_read
+    local cpu_pct="$MT_CPU_PCT" cpu_cores="$MT_CPU_CORES" r_used="$MT_RAM_USED" r_total="$MT_RAM_TOTAL" r_pct="$MT_RAM_PCT" rx_speed="$MT_RX" tx_speed="$MT_TX" v6_status="$MT_V6_STATE"
 
     local cpu_col="${G}"
     [ "$cpu_pct" -gt 60 ] 2>/dev/null && cpu_col="${Y}"
@@ -2025,17 +2175,21 @@ mt_master_header_draw() {
     fi
 
     local term_cols boxw content_w compact_line border
-    term_cols=$(tput cols 2>/dev/null || echo "${COLUMNS:-120}")
+    mt_hdr_cols_update; term_cols="$MT_HDR_COLS"
     if [ "$term_cols" -lt 72 ]; then
         local tun_count=0
         boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 66 ] && boxw=66
         content_w=$((boxw - 2))
         printf -v border '%*s' "$content_w" ''; border="${border// /─}"
-        [ -f "$SECURE_TMP/.main_tun_stats" ] && tun_count=$(awk -F'|' 'NF>2{n++} END{print n+0}' "$SECURE_TMP/.main_tun_stats" 2>/dev/null)
+        if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
+            local _a _b _c _d _e _f _g _h
+            while IFS='|' read -r _a _b _c _d _e _f _g _h; do [ -n "$_a" ] && tun_count=$((tun_count+1)); done < "$SECURE_TMP/.main_tun_stats"
+        fi
         printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
         compact_line="MDesign v${master_version} | ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="Tunnels ${tun_count} | Porter ${porter_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="CPU ${cpu_str} | RAM ${ram_str}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="RX ${rx_speed} | TX ${tx_speed}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="BBR ${bbr_text} | IPv6 ${v6_text} | Tunnels ${tun_count} | Porter ${porter_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         printf "  ${B}╰${border}╯${NC}\033[K\n"
         return 0
     fi
@@ -2073,14 +2227,16 @@ mt_master_header_draw() {
     #   - grows only as far as needed for the server IPv6 and the longest tunnel Peer
     #   - when the server has no IPv6 the IPv6 cell shrinks and so does the whole header
     local total extra peer_w v6_addr v6_need peer_need need_total w6 w4 v6_field
-    v6_addr=$(mt_local_ipv6)
+    v6_addr="$MT_STATIC_IP6"
     if [ -n "$v6_addr" ]; then v6_col="${M}"; v6_text="$v6_addr"; v6_need=$(( ${#v6_addr} + 10 ))
     else v6_col="${DIM}"; v6_text="OFF"; v6_need=21; fi
     (( v6_need < 21 )) && v6_need=21
     peer_need=16
     if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
-        peer_need=$(awk -F'|' 'NF>2 && n<3 {n++; l=length($3); if(l>m)m=l} END{print (m<16?16:m)}' "$SECURE_TMP/.main_tun_stats" 2>/dev/null)
-        [[ "$peer_need" =~ ^[0-9]+$ ]] || peer_need=16
+        local _n=0 _tp _tn _tr _tv _tpi _tl _td _tf
+        while IFS='|' read -r _tp _tn _tr _tv _tpi _tl _td _tf; do
+            [ -n "$_tp" ] || continue; _n=$((_n+1)); [ ${#_tr} -gt "$peer_need" ] && peer_need=${#_tr}; [ "$_n" -ge 3 ] && break
+        done < "$SECURE_TMP/.main_tun_stats"
     fi
     need_total=$(( 31 + 25 + v6_need + 29 + 3 ))
     (( need_total < 117 )) && need_total=117
@@ -2120,14 +2276,14 @@ mt_master_header_draw() {
             ((shown++))
             [ "$shown" -gt 3 ] && break
 
-            local pure_name=$(echo "$t_name" | tr -d ' ')
+            local pure_name="${t_name// /}"
             [ ${#pure_name} -gt 8 ] && pure_name="${pure_name:0:8}"
             local name_tag="${pure_name} [${t_proto}]"
             [ ${#name_tag} -gt 17 ] && name_tag="${name_tag:0:17}"
 
             [ ${#t_remote} -gt "$peer_w" ] && t_remote="${t_remote:0:$peer_w}"
 
-            local if_uptime=$(mt_master_iface_uptime "$t_dev")
+            local if_uptime; mt_master_iface_uptime_cached "$t_dev" if_uptime
             local stat_icon="●"; local stat_col="${G}"
             if [ "$if_uptime" == "DOWN" ]; then stat_icon="○"; stat_col="${R}"; fi
             [ ${#if_uptime} -gt 10 ] && if_uptime="${if_uptime:0:10}"
@@ -2142,7 +2298,7 @@ mt_master_header_draw() {
             if [ -n "$t_ping" ] && [ "$t_ping" != "---" ]; then
                 local num_p="${t_ping%ms}"
                 if [[ "$num_p" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-                    live_ping=$(awk -v v="$num_p" 'BEGIN {printf "%.0fms", v}')
+                    live_ping="${num_p%%.*}ms"
                 else
                     live_ping="$t_ping"
                 fi
@@ -2612,6 +2768,33 @@ mt_build_fwd_rules() {
     done
 }
 
+# mt_build_fwd_rules6 <tag> <tif> <tcp> <udp> <ipv6 destination>
+# IPv6 twin of mt_build_fwd_rules for IPIP6->6 tunnels: one IPv6 destination (the far core address),
+# hence no target list and no load balancing. Same comment tag, so the existing clean-up works.
+mt_build_fwd_rules6() {
+    local tag="$1" tif="$2" tcp="$3" udp="$4" dst="$5" proto list p
+    mt_valid_ipv6 "$dst" || return 1
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+    for proto in tcp udp; do
+        list="$tcp"; [ "$proto" == "udp" ] && list="$udp"
+        [ -z "$list" ] && continue
+        local -a PARR=()
+        IFS=',' read -ra PARR <<< "$list"
+        for p in "${PARR[@]}"; do
+            p=$(echo "$p" | tr -dc '0-9:'); [ -z "$p" ] && continue
+            ip6tables -w 5 -t nat -A PREROUTING ! -i "$tif" -m addrtype --dst-type LOCAL -p "$proto" -m "$proto" --dport "$p" -m comment --comment "$tag" -j DNAT --to-destination "$dst" 2>/dev/null || { mt_rollback_fwd_tag6 "$tag"; return 1; }
+            ip6tables -w 5 -t nat -A POSTROUTING -o "$tif" -p "$proto" -m "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j MASQUERADE 2>/dev/null || { mt_rollback_fwd_tag6 "$tag"; return 1; }
+            ip6tables -w 5 -t filter -A FORWARD -o "$tif" -p "$proto" -d "$dst" --dport "$p" -m comment --comment "$tag" -j ACCEPT 2>/dev/null || { mt_rollback_fwd_tag6 "$tag"; return 1; }
+        done
+    done
+}
+mt_rollback_fwd_tag6() {
+    local tag="$1"
+    mt_delete_tagged_rules ip6tables nat PREROUTING "$tag" >/dev/null 2>&1 || true
+    mt_delete_tagged_rules ip6tables nat POSTROUTING "$tag" >/dev/null 2>&1 || true
+    mt_delete_tagged_rules ip6tables filter FORWARD "$tag" >/dev/null 2>&1 || true
+}
+
 # ── Forward-port conflict detection (non-interactive; safe for watchdogs) ──
 # mt_fwd_conflicts <tcp list> <udp list> [self NAT tag]
 # Prints "proto/port" for every forwarded port that is (a) held by a non-loopback
@@ -2701,6 +2884,26 @@ mt_unit_pids() {
     printf '%s' "$pid"
 }
 
+# Per-cycle snapshot of ESTABLISHED sockets. A caller that looks up many tunnels in one refresh opens
+# the snapshot once; every lookup then reads that dump instead of forking `ss` again (on a busy server a
+# single dump can be several MB). Without an open snapshot the helpers behave exactly as before.
+MT_SS_SNAPSHOT=""
+mt_ss_snapshot_begin() {
+    MT_SS_SNAPSHOT=$(mktemp "${SECURE_TMP:-/tmp}/.mt_ss.XXXXXX" 2>/dev/null) || { MT_SS_SNAPSHOT=""; return 1; }
+    ss -Htinp state established > "$MT_SS_SNAPSHOT" 2>/dev/null
+}
+mt_ss_snapshot_end() {
+    [ -n "$MT_SS_SNAPSHOT" ] && rm -f "$MT_SS_SNAPSHOT"
+    MT_SS_SNAPSHOT=""
+}
+_mt_ss_established() {
+    if [ -n "$MT_SS_SNAPSHOT" ] && [ -r "$MT_SS_SNAPSHOT" ]; then
+        cat "$MT_SS_SNAPSHOT"
+    else
+        ss -Htinp state established 2>/dev/null
+    fi
+}
+
 # _mt_unit_sockets <unit> [local_port] [expected_peer_ip]
 # One line "peer_host|lastrcv_ms" per ESTABLISHED socket owned by the unit (any PID of its cgroup).
 # lastrcv_ms is empty when the kernel does not report it.
@@ -2719,7 +2922,7 @@ _mt_unit_sockets() {
             [ "$host" = "$expected" ] || continue
         fi
         printf '%s|%s\n' "$host" "$lr"
-    done < <(ss -Htinp state established 2>/dev/null | awk '
+    done < <(_mt_ss_established | awk '
         function flush() { if (have) print loc "|" peer "|" pids "|" lr; have=0 }
         /^[^ \t]/ { flush(); have=1; loc=$3; peer=$4; lr=""; pids=""; s=$0
             while (match(s,/pid=[0-9]+/)) { pids=pids (pids==""?"":",") substr(s,RSTART+4,RLENGTH-4); s=substr(s,RSTART+RLENGTH) }
@@ -2781,7 +2984,7 @@ mt_unit_tcp_rtt() {
             if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
             [[ "$line" =~ ^[[:space:]] ]] || hit=0
         fi
-    done < <(ss -Htinp 2>/dev/null)
+    done < <(_mt_ss_established)
     [ -n "$rtt" ] || return 1
     awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
 }

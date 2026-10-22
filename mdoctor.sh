@@ -1,7 +1,7 @@
 #!/bin/bash
-# --- MTunnel Doctor | System Diagnostics v1.2.7 ---
+# --- MTunnel Doctor | System Diagnostics v1.3.0 ---
 # [Features: Full Health Scan | Network/IPv6 | Firewall/Ports | Core & Script Health | Safe Repair | Export Report | OTA Update]
-MODULE_VERSION="1.2.7"
+MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -51,10 +51,9 @@ MT_REL_PATH="mdoctor.sh"   # repo/mirror path of this module (must match MOD_MAP
 MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
-UPDATE_CHECK_INTERVAL=60
-
+UPDATE_CHECK_INTERVAL=900
 read_with_refresh() {
-    local prompt="$1" __resultvar="$2" redraw_func="$3" buffer="" char rc
+    local prompt="$1" __resultvar="$2" redraw_func="$3" buffer="" char rc up now last_live=-1
     touch "$SECURE_TMP/.mdoctor_in_menu"
     echo -ne "$prompt"
     while true; do
@@ -66,7 +65,11 @@ read_with_refresh() {
         IFS= read -rsn1 -t 0.3 char
         rc=$?
         if [ $rc -ne 0 ]; then
-            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then continue; fi
+            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
+                if [ "$now" != "$last_live" ]; then last_live="$now"; refresh_doctor_header_live; fi
+                continue
+            fi
             rm -f "$SECURE_TMP/.mdoctor_in_menu" 2>/dev/null
             return "$rc"
         fi
@@ -85,9 +88,9 @@ read_with_refresh() {
 fetch_remote_version() {
     local url="$1" payload version=""
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+        payload=$(curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+        payload=$(wget -qO- --header="Range: bytes=0-4095" --timeout=8 "$url" 2>/dev/null) || return 1
     else return 1; fi
     version=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([^" ]*\)".*/\1/p' | head -n 1)
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || return 1
@@ -95,7 +98,7 @@ fetch_remote_version() {
 }
 
 check_update_bg() {
-    local cb="?t=$(date +%s)" gh_ver="" mirror_ver="" latest_ver="" cand
+    local cb="" gh_ver="" mirror_ver="" latest_ver="" cand
     gh_ver=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/${MT_REL_PATH}${cb}")
     mirror_ver=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/${MT_REL_PATH}${cb}")
     [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mdoctor_remote_ver_github"
@@ -109,9 +112,14 @@ check_update_bg() {
 }
 
 update_watcher_loop() {
+    local before after
     while true; do
+        before=$(cat "$SECURE_TMP/.mdoctor_remote_ver" 2>/dev/null)
         check_update_bg
-        if [ -f "$SECURE_TMP/.mdoctor_in_menu" ]; then kill -SIGUSR1 "$MAIN_PID" 2>/dev/null; fi
+        after=$(cat "$SECURE_TMP/.mdoctor_remote_ver" 2>/dev/null)
+        if [ -f "$SECURE_TMP/.mdoctor_in_menu" ] && [ "$before" != "$after" ]; then
+            kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
@@ -584,6 +592,13 @@ doc_export_report() {
 draw_doctor_header() {
     clear
     mt_master_header_draw "$MODULE_VERSION"
+}
+
+refresh_doctor_header_live() {
+    mt_live_vitals_update 2>/dev/null || true
+    printf '\033[?25l\0337\033[1;1H'
+    HEADER_LIVE=1 mt_master_header_draw "$MODULE_VERSION"
+    printf '\0338\033[?25h'
 }
 
 render_doctor_menu() {

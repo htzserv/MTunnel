@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.2.7 ---
+# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.3.0 ---
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
 # [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.2.7"
+MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -375,28 +375,28 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap '' SIGUSR1   # ignored: a signal must never interrupt typing in any prompt
 
-UPDATE_CHECK_INTERVAL=60
-PING_CHECK_INTERVAL=5
+UPDATE_CHECK_INTERVAL=900
+PING_CHECK_INTERVAL=15
 
 # Live header: repaint ONLY the header box in place (cursor saved/restored, nothing else touched).
 # LIVE_HEADER_FUNC = header function, LIVE_ROWS = number of lines printed above the prompt line.
 LIVE_HEADER_FUNC=""
 LIVE_ROWS=0
-LIVE_HEADER_INTERVAL=2
+LIVE_HEADER_INTERVAL=1
 LIVE_MENU_FUNC=""        # menu renderer: redrawn (typed text kept) when the watcher finds a new remote version
 LIVE_FRAME_FILE=""
 LIVE_VER_FILE="$SECURE_TMP/.mgre_remote_ver"
 
 live_header_tick() {
     [ -n "$LIVE_HEADER_FUNC" ] || return 0
-    local rows frame
-    rows=$(stty size 2>/dev/null | awk '{print $1}'); [ -z "$rows" ] && rows="${LINES:-24}"
-    # page taller than the terminal -> header already scrolled off-screen, never paint over the menu
+    local rows="${LINES:-24}"
+    [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
     [ "$LIVE_ROWS" -ge "$rows" ] && return 0
-    frame=$(HEADER_LIVE=1 "$LIVE_HEADER_FUNC")
-    printf '\e7\e[%dA\r%s\e8' "$LIVE_ROWS" "$frame"
+    mt_live_vitals_update 2>/dev/null || true
+    printf '\e7\e[%dA\r' "$LIVE_ROWS"
+    HEADER_LIVE=1 "$LIVE_HEADER_FUNC"
+    printf '\e8'
 }
-
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -458,9 +458,9 @@ read_with_refresh() {
 fetch_remote_version() {
     local url="$1" payload version=""
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+        payload=$(curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+        payload=$(wget -qO- --header="Range: bytes=0-4095" --timeout=8 "$url" 2>/dev/null) || return 1
     else
         return 1
     fi
@@ -470,7 +470,7 @@ fetch_remote_version() {
 }
 
 check_update_bg() {
-    local cb="?t=$(date +%s)"
+    local cb=""
     local raw_url="${MTUNNEL_GITHUB_BASE}/tunnels/mgre.sh${cb}"
     local mirror_url="${MTUNNEL_MIRROR_BASE}/tunnels/mgre.sh${cb}"
     local gh_ver="" mirror_ver=""
@@ -493,6 +493,7 @@ check_update_bg() {
 
 
 update_watcher_loop() {
+    sleep 60
     while true; do
         check_update_bg
         sleep "$UPDATE_CHECK_INTERVAL"
@@ -637,8 +638,22 @@ mgre_header_rows() {
 }
 
 draw_mgre_header() {
-    local act_col="$DIM"
-    mgre_header_rows
+    local act_col="$DIM" cache="$SECURE_TMP/.mgre_header_state" up now ts=0 line
+    local cached=0 rows=''
+    read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
+    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$cache" ]; then
+        local first=1
+        while IFS= read -r line; do
+            if [ "$first" -eq 1 ]; then IFS='|' read -r ts HDR_TOTAL HDR_ACTIVE <<< "$line"; first=0
+            else rows+="$line"$'\n'; fi
+        done < "$cache"
+        if [[ "$ts" =~ ^[0-9]+$ ]] && [ $((now-ts)) -lt 15 ]; then MT_HDR_ROWS="$rows"; cached=1; fi
+    fi
+    if [ "$cached" -eq 0 ]; then
+        mgre_header_rows
+        printf '%s|%s|%s\n' "$now" "$HDR_TOTAL" "$HDR_ACTIVE" > "$cache"
+        printf '%s' "$MT_HDR_ROWS" >> "$cache"
+    fi
     if [ "$HDR_TOTAL" -gt 0 ]; then
         if [ "$HDR_ACTIVE" -eq "$HDR_TOTAL" ]; then act_col="$G"; elif [ "$HDR_ACTIVE" -gt 0 ]; then act_col="$Y"; else act_col="$R"; fi
     fi
@@ -868,10 +883,6 @@ manage_port_forwarding() {
         sleep 2
         return
     fi
-    if [ "$TUN_PROTO" == ipip6to6 ]; then
-        echo -e "\n  ${Y}● This forwarder uses IPv4 destinations; IPIP6→6 carries IPv6 payload.${NC}"
-        sleep 2; return
-    fi
 
     local pf_opt add_tcp add_udp m_tcp m_udp rm_tcp rm_udp new_tcp new_udp new_lb
     while true; do
@@ -883,13 +894,13 @@ manage_port_forwarding() {
         echo -e "  ${DIM}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
         echo -e "  ${DIM}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")"
-        echo -e "  ${DIM}│${NC} ${DIM}Target IPs:${NC} ${W}$(mt_fwd_target_summary "$FWD_TARGETS" "$LB_MODE")${NC}"
+        echo -e "  ${DIM}│${NC} ${DIM}Target IPs:${NC} ${W}$(mgre_target_label "$FWD_TARGETS" "$LB_MODE")${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Specific Ports${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Selected IPs)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Select Target IP(s) (Single / Multiple / All)${NC}"
+        [ "$TUN_PROTO" == ipip6to6 ] || echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Toggle Load Balancer (Selected IPs)${NC}"
+        [ "$TUN_PROTO" == ipip6to6 ] || echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Select Target IP(s) (Single / Multiple / All)${NC}"
         local cf_note=''
         if mt_fwd_conflict_flag "$T_NAME"; then cf_note=" ${R}⚠ $(wc -w < "$(mt_fwd_conflict_file "$T_NAME")" 2>/dev/null) conflicting port(s)${NC}"; fi
         echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Fix conflicts (ports held by other services)${NC}${cf_note}"
@@ -911,7 +922,7 @@ manage_port_forwarding() {
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$m_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$m_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
-                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
+                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mgre_choose_fwd "$target_conf" || true; fi
                 apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports added. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"; sleep 1.8
                 ;;
@@ -938,7 +949,7 @@ manage_port_forwarding() {
                 ( umask 077; grep -v "^FWD_TCP=" "$target_conf" | grep -v "^FWD_UDP=" > "${target_conf}.tmp" && echo "FWD_TCP=$new_tcp" >> "${target_conf}.tmp" && echo "FWD_UDP=$new_udp" >> "${target_conf}.tmp" ) || continue
                 mv "${target_conf}.tmp" "$target_conf" && chmod 600 "$target_conf"
                 FWD_TCP="$new_tcp"; FWD_UDP="$new_udp"
-                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE" || true; fi
+                if [ -z "$FWD_TARGETS" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then mgre_choose_fwd "$target_conf" || true; fi
                 apply_tunnel "$target_conf"
                 echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8
                 ;;
@@ -947,13 +958,13 @@ manage_port_forwarding() {
                     set_conf_var "$target_conf" LB_MODE 0 || continue
                     mgre_apply_fwd "$target_conf"
                     echo -e "  ${G}● Load Balancer disabled; using the first selected IP.${NC}"
-                elif mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then
+                elif mgre_choose_fwd "$target_conf"; then
                     mgre_apply_fwd "$target_conf"
                 fi
                 sleep 1.5
                 ;;
             5)
-                if mt_choose_fwd_targets "$target_conf" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"; then mgre_apply_fwd "$target_conf"; fi
+                if mgre_choose_fwd "$target_conf"; then mgre_apply_fwd "$target_conf"; fi
                 ;;
             6)
                 mt_port_guard nat "$FWD_TCP" "$FWD_UDP" "" "MGRE_FWD_${T_NAME}" "GRE ${T_NAME}" || { sleep 1.5; continue; }
@@ -1111,8 +1122,9 @@ show_tunnel_details() {
             echo -e "  ${B}│${NC} ${DIM}Core Subnet  :${NC} ${G}${CORE_SUBNET}.x${NC} ${DIM}(${lip} -> ${tip})${NC}${sp4} ${B}│${NC}"
         fi
 
-        if [ "$TYPE" == "1" ] && [ "$TUN_PROTO" != "ipip6to6" ]; then
+        if [ "$TYPE" == "1" ]; then
             lb_txt=$(mt_fwd_target_summary "$FWD_TARGETS" "$LB_MODE")
+            [ "$TUN_PROTO" == ipip6to6 ] && lb_txt="IPv6 peer"
             fwd_disp="${FWD_TCP:-None}"; [ ${#fwd_disp} -gt 25 ] && fwd_disp="${fwd_disp:0:22}..."
             l5="NAT FWD TCP  : ${fwd_disp}"; r5="Load Balancer: ${lb_txt}"
             pad5=$(( 90 - ${#l5} - ${#r5} )); [ "$pad5" -lt 0 ] && pad5=0; sp5=$(printf '%*s' "$pad5" "")
@@ -1255,6 +1267,9 @@ clean_fwd_rules() {
     ipt_delete_tagged nat PREROUTING "MGRE_FWD_${t}"
     ipt_delete_tagged nat POSTROUTING "MGRE_FWD_${t}"
     ipt_delete_tagged filter FORWARD "MGRE_FWD_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged nat PREROUTING "MGRE_FWD_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged nat POSTROUTING "MGRE_FWD_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged filter FORWARD "MGRE_FWD_${t}"
 }
 clean_mss_rules() {
     local t="$1"; [ -z "$t" ] && return
@@ -1273,6 +1288,15 @@ mgre_mtu_limits() { # <proto> -> "min max default"
     esac
 }
 
+# IPIP6->6 forwards to its single IPv6 core peer, so there is no IPv4 target list to choose from.
+mgre_target_label() {
+    if [ "$TUN_PROTO" == ipip6to6 ]; then printf '%s' "${CORE_V6}::2 (IPv6 peer)"; return 0; fi
+    mt_fwd_target_summary "$1" "$2"
+}
+mgre_choose_fwd() {
+    if [ "$TUN_PROTO" == ipip6to6 ]; then FWD_TARGETS=''; return 0; fi
+    mt_choose_fwd_targets "$1" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"
+}
 mgre_apply_fwd() {
     local conf="$1"
     local TYPE="" T_NAME="" TUN_ID="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
@@ -1281,7 +1305,15 @@ mgre_apply_fwd() {
     mgre_fill_legacy_core || { echo "Invalid legacy core subnet in $conf" >&2; return 1; }
     clean_fwd_rules "$T_NAME"
     [ "$TYPE" == "1" ] || return 0
-    [ "$TUN_PROTO" == "ipip6to6" ] && return 0
+    if [ "$TUN_PROTO" == "ipip6to6" ]; then
+        # IPIP6->6: the destination is the far end's IPv6 core address; no vIPs, no load balancing.
+        if [ -n "$FWD_TCP" ]; then FWD_TCP=$(mt_sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
+        if [ -n "$FWD_UDP" ]; then FWD_UDP=$(mt_sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
+        [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
+        mt_build_fwd_rules6 "MGRE_FWD_$T_NAME" "$T_NAME" "$FWD_TCP" "$FWD_UDP" "${CORE_V6}::2" || { clean_fwd_rules "$T_NAME"; return 1; }
+        mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_${T_NAME}"
+        return 0
+    fi
     if [ -n "$FWD_TCP" ]; then FWD_TCP=$(mt_sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
     if [ -n "$FWD_UDP" ]; then FWD_UDP=$(mt_sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
     [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
@@ -1357,7 +1389,7 @@ mgre_watchdog() {
         mgre_fill_legacy_core || { wd_log "$(basename "$conf"): invalid legacy core subnet"; continue; }
         [ -z "$T_NAME" ] && continue
         mgre_core_ips
-        if [ "$TYPE" == "1" ] && [ "$TUN_PROTO" != "ipip6to6" ]; then mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_${T_NAME}" wd_log; fi
+        if [ "$TYPE" == "1" ]; then mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_${T_NAME}" wd_log; fi
         if [ ! -d "/sys/class/net/$T_NAME" ]; then
             wd_log "$T_NAME: interface missing, re-applying"; apply_tunnel "$conf"; continue
         fi
@@ -1689,10 +1721,10 @@ mt_link_import() {
     if mt_link_deploy; then
         echo -e "  ${G}● Peer configuration created. Check Live Monitor for the peer connection.${NC}"
         # Imported on the IRAN side (ROLE 1): ask about forwarding, same rule as local creation.
-        if [ "$MT_KIND" = gre ] && [ "${MT_LINK_DATA[ROLE]}" = 1 ] && [ "${MT_LINK_DATA[PROTO]}" != ipip6to6 ]; then
+        if [ "$MT_KIND" = gre ] && [ "${MT_LINK_DATA[ROLE]}" = 1 ]; then
             local new_conf
             new_conf=$(grep -l "^TUN_ID=${MT_LINK_DATA[TUN_ID]}$" "$CONF_DIR"/*.conf 2>/dev/null | head -1)
-            mt_ask ans 'Do you want to configure Port Forwarding / Load Balancer now? (y/n): ' || ans=n
+            mt_ask ans 'Configure TCP/UDP port forwarding now? (IPv6 IPIP6->6 supports single target; no load balancing) (y/n): ' || ans=n
             case "${ans,,}" in y|yes) [ -n "$new_conf" ] && manage_port_forwarding "$new_conf";; esac
         fi
         mt_sync_bbr_from_peer "${MT_LINK_DATA[BBR]:-0}"
@@ -1982,9 +2014,9 @@ while true; do
                setup_service
                mt_ask_bbr_on_create
                echo -e "  ${G}● Tunnel [${t_name}] deployed successfully.${NC}"
-               # Port forwarding is meaningful only on the IRAN/access side when the tunnel payload is IPv4.
-               if [[ "$s_type" == "1" && "$tun_proto" != "ipip6to6" ]]; then
-                   echo -ne "  ${C}●${NC} ${W}Do you want to configure Port Forwarding / Load Balancer now? (y/n): ${NC}"
+               # Port forwarding supports IPv4 payloads and single-peer IPv6 IPIP6->6 (no LB for IPv6).
+               if [[ "$s_type" == "1" ]]; then
+                   echo -ne "  ${C}●${NC} ${W}Configure TCP/UDP port forwarding now? (IPv6 IPIP6->6 supports single target; no load balancing) (y/n): ${NC}"
                    read -r setup_fwd_now
                    setup_fwd_now=$(echo "$setup_fwd_now" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
                    if [[ "$setup_fwd_now" == "y" || "$setup_fwd_now" == "yes" ]]; then

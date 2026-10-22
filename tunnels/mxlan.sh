@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MXLAN | VXLAN Fabric Engine v1.2.7 ---
+# --- MTunnel MXLAN | VXLAN Fabric Engine v1.3.0 ---
 # [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
 #          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
 #          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
@@ -8,7 +8,7 @@
 #          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
 # [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
 
-MODULE_VERSION="1.2.7"
+MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -318,28 +318,28 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap '' SIGUSR1   # ignored: a signal must never interrupt typing in any prompt
 
-UPDATE_CHECK_INTERVAL=30
-PING_CHECK_INTERVAL=5
+UPDATE_CHECK_INTERVAL=900
+PING_CHECK_INTERVAL=15
 
 # Live header: repaint ONLY the header box in place (cursor saved/restored, nothing else touched).
 # LIVE_HEADER_FUNC = header function, LIVE_ROWS = number of lines printed above the prompt line.
 LIVE_HEADER_FUNC=""
 LIVE_ROWS=0
-LIVE_HEADER_INTERVAL=2
+LIVE_HEADER_INTERVAL=1
 LIVE_MENU_FUNC=""        # menu renderer: redrawn (typed text kept) when the watcher finds a new remote version
 LIVE_FRAME_FILE=""
 LIVE_VER_FILE="$SECURE_TMP/.mxlan_remote_ver"
 
 live_header_tick() {
     [ -n "$LIVE_HEADER_FUNC" ] || return 0
-    local rows frame
-    rows=$(stty size 2>/dev/null | awk '{print $1}'); [ -z "$rows" ] && rows="${LINES:-24}"
-    # page taller than the terminal -> header already scrolled off-screen, never paint over the menu
+    local rows="${LINES:-24}"
+    [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
     [ "$LIVE_ROWS" -ge "$rows" ] && return 0
-    frame=$(HEADER_LIVE=1 "$LIVE_HEADER_FUNC")
-    printf '\e7\e[%dA\r%s\e8' "$LIVE_ROWS" "$frame"
+    mt_live_vitals_update 2>/dev/null || true
+    printf '\e7\e[%dA\r' "$LIVE_ROWS"
+    HEADER_LIVE=1 "$LIVE_HEADER_FUNC"
+    printf '\e8'
 }
-
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
@@ -401,9 +401,9 @@ read_with_refresh() {
 fetch_remote_version() {
     local url="$1" payload version=""
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+        payload=$(curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+        payload=$(wget -qO- --header="Range: bytes=0-4095" --timeout=8 "$url" 2>/dev/null) || return 1
     else
         return 1
     fi
@@ -413,7 +413,7 @@ fetch_remote_version() {
 }
 
 check_update_bg() {
-    local cb="?t=$(date +%s)"
+    local cb=""
     local raw_url="${MTUNNEL_GITHUB_BASE}/tunnels/mxlan.sh${cb}"
     local mirror_url="${MTUNNEL_MIRROR_BASE}/tunnels/mxlan.sh${cb}"
     local gh_ver="" mirror_ver=""
@@ -436,6 +436,7 @@ check_update_bg() {
 
 
 update_watcher_loop() {
+    sleep 60
     while true; do
         check_update_bg
         sleep "$UPDATE_CHECK_INTERVAL"
@@ -566,8 +567,22 @@ mxlan_header_rows() {
 }
 
 draw_mxlan_header() {
-    local act_col="$DIM"
-    mxlan_header_rows
+    local act_col="$DIM" cache="$SECURE_TMP/.mxlan_header_state" up now ts=0 line
+    local cached=0 rows=''
+    read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
+    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$cache" ]; then
+        local first=1
+        while IFS= read -r line; do
+            if [ "$first" -eq 1 ]; then IFS='|' read -r ts HDR_TOTAL HDR_ACTIVE <<< "$line"; first=0
+            else rows+="$line"$'\n'; fi
+        done < "$cache"
+        if [[ "$ts" =~ ^[0-9]+$ ]] && [ $((now-ts)) -lt 15 ]; then MT_HDR_ROWS="$rows"; cached=1; fi
+    fi
+    if [ "$cached" -eq 0 ]; then
+        mxlan_header_rows
+        printf '%s|%s|%s\n' "$now" "$HDR_TOTAL" "$HDR_ACTIVE" > "$cache"
+        printf '%s' "$MT_HDR_ROWS" >> "$cache"
+    fi
     if [ "$HDR_TOTAL" -gt 0 ]; then
         if [ "$HDR_ACTIVE" -eq "$HDR_TOTAL" ]; then act_col="$G"; elif [ "$HDR_ACTIVE" -gt 0 ]; then act_col="$Y"; else act_col="$R"; fi
     fi

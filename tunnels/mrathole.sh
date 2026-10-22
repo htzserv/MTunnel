@@ -1,8 +1,8 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v1.2.7 ---
+# --- MTunnel MRathole | Reverse Tunnel Engine v1.3.0 ---
 # [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
 
-MODULE_VERSION="1.2.7"
+MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -66,7 +66,6 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
-find "$CONF_DIR" -maxdepth 3 -type f -exec chmod 600 {} + 2>/dev/null || true
 rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
 ensure_dependencies() {
@@ -109,14 +108,15 @@ trap 'NEED_REFRESH=true' SIGUSR1
 NEED_HDR=false
 trap 'NEED_HDR=true' SIGUSR2
 
-UPDATE_CHECK_INTERVAL=60
-
+UPDATE_CHECK_INTERVAL=900
+HDR_CHECK_INTERVAL=15
+MT_FAST_FIRST_DRAW=1
 read_with_refresh() {
     local prompt="$1"
     local __resultvar="$2"
     local redraw_func="$3"
     local buffer=""
-    local char rc
+    local char rc up now last_live=-1
     touch "$SECURE_TMP/.mrathole_in_menu"
     echo -ne "$prompt"
 
@@ -137,6 +137,8 @@ read_with_refresh() {
         rc=$?
         if [ $rc -ne 0 ]; then
             if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
+                read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
+                if [ "$now" != "$last_live" ]; then last_live="$now"; refresh_header_live; fi
                 continue
             fi
     rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
@@ -164,9 +166,9 @@ read_with_refresh() {
 fetch_remote_version() {
     local url="$1" payload version=""
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
+        payload=$(curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 8 "$url" 2>/dev/null) || return 1
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Cache-Control: no-cache" --timeout=8 "$url" 2>/dev/null) || return 1
+        payload=$(wget -qO- --header="Range: bytes=0-4095" --timeout=8 "$url" 2>/dev/null) || return 1
     else
         return 1
     fi
@@ -176,7 +178,7 @@ fetch_remote_version() {
 }
 # Keeps the last known good value when a source is unreachable (no "Unknown" overwrite).
 check_update_bg() {
-    local cb="?t=$(date +%s)" gh_ver="" mirror_ver="" latest_ver="" cand
+    local cb="" gh_ver="" mirror_ver="" latest_ver="" cand
     gh_ver=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/tunnels/mrathole.sh${cb}")
     mirror_ver=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/tunnels/mrathole.sh${cb}")
     [ -n "$gh_ver" ] && printf '%s\n' "$gh_ver" > "$SECURE_TMP/.mrathole_remote_ver_github"
@@ -190,16 +192,20 @@ check_update_bg() {
 }
 
 update_watcher_loop() {
+    sleep 60
+    local before after
     while true; do
+        before=$(cat "$SECURE_TMP/.mrathole_remote_ver" 2>/dev/null)
         check_update_bg
-        if [ -f "$SECURE_TMP/.mrathole_in_menu" ]; then
+        after=$(cat "$SECURE_TMP/.mrathole_remote_ver" 2>/dev/null)
+        if [ -f "$SECURE_TMP/.mrathole_in_menu" ] && [ "$before" != "$after" ]; then
             kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
         fi
         sleep "$UPDATE_CHECK_INTERVAL"
     done
 }
-if [[ "${1:-}" != --* ]]; then update_watcher_loop & fi
-WATCHER_PID=$!
+WATCHER_PID=""
+if [[ "${1:-}" != --* ]]; then update_watcher_loop & WATCHER_PID=$!; fi
 trap 'kill "$WATCHER_PID" ${HDR_PID:-} 2>/dev/null; rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null' EXIT
 
 self_update_module() {
@@ -790,22 +796,41 @@ collect_header_rows() {
     printf '%s%s' "$act" "$ina" | head -n 3 > "$tmp"
     mv -f "$tmp" "$HDR_ROWS_FILE" 2>/dev/null
 }
-hdr_rows_count() { [ -s "$HDR_ROWS_FILE" ] && wc -l < "$HDR_ROWS_FILE" || echo 0; }
+hdr_rows_count() {
+    local _n=0 _l
+    if [ -s "$HDR_ROWS_FILE" ]; then while IFS= read -r _l; do [ -n "$_l" ] && _n=$((_n+1)); done < "$HDR_ROWS_FILE"; fi
+    HDR_ROWS_COUNT="$_n"
+}
 refresh_header_live() {
-    if [ "$(hdr_rows_count)" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
-    printf '\033[?25l\0337\033[1;1H'
+    hdr_rows_count
+    if [ "$HDR_ROWS_COUNT" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
+    mt_live_vitals_update 2>/dev/null || true
+    printf '[?25l7[1;1H'
     HEADER_LIVE=1 draw_header
-    printf '\0338\033[?25h'
+    printf '8[?25h'
 }
 hdr_stats_loop() {
     while true; do
         collect_header_rows
         [ -f "$SECURE_TMP/.mrathole_in_menu" ] && kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
-        sleep 5
+        sleep "$HDR_CHECK_INTERVAL"
     done
 }
 
 draw_header() {
+    local _meta_cache="$SECURE_TMP/.mrathole_header_meta"
+    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$_meta_cache" ]; then
+        local act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_t
+        IFS='|' read -r act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_t < "$_meta_cache"
+        mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "RAT" ""
+        HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
+        mt_hdr_draw "MRathole Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \
+            "Core|${core_raw}|${core_color}" "Status|${stat_icon} ${stat_text}|${stat_color}" \
+            "Peer Ping|${g_text}|${g_color}" "Tunnels|${total_t}|${W}"
+        return 0
+    fi
+    local _deep=1
+    if [ "${MT_FAST_FIRST_DRAW:-1}" = 1 ]; then _deep=0; MT_FAST_FIRST_DRAW=0; fi
     local total_t=0; local active_t=0; local online_t=0; local waiting_t=0; local reconnecting_t=0
     local t_names=() units=()
     for d in "$CONF_DIR"/*; do
@@ -821,12 +846,10 @@ draw_header() {
         for t_name in "${t_names[@]}"; do
             if [ "${states[$i]}" == "active" ]; then
                 ((active_t++))
-                local st=$(get_tunnel_status "$t_name" "1")
-                case "$st" in
-                    CONNECTED) ((online_t++));;
-                    WAITING) ((waiting_t++));;
-                    RECONNECTING) ((reconnecting_t++));;
-                esac
+                if [ "$_deep" = 1 ]; then
+                    local st=$(get_tunnel_status "$t_name" "1")
+                    case "$st" in CONNECTED) ((online_t++));; WAITING) ((waiting_t++));; RECONNECTING) ((reconnecting_t++));; esac
+                fi
             fi
             ((i++))
         done
@@ -929,6 +952,7 @@ draw_header() {
     if [ ! -f "$HDR_ROWS_FILE" ] || [ $(( _now - _mtime )) -gt 15 ]; then collect_header_rows fast; fi
     mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "RAT" ""
     HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$act_text" "$act_color" "$core_raw" "$core_color" "$stat_icon" "$stat_text" "$stat_color" "$g_text" "$g_color" "${total_t}" > "$_meta_cache"
     mt_hdr_draw "MRathole Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \
         "Core|${core_raw}|${core_color}" "Status|${stat_icon} ${stat_text}|${stat_color}" \
         "Peer Ping|${g_text}|${g_color}" "Tunnels|${total_t}|${W}"

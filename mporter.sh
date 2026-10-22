@@ -1,5 +1,5 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v1.2.7 ---
+# --- MTunnel MPorter | Port Forwarding Manager v1.3.0 ---
 # [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
 #
 # v1.0.x changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
@@ -25,7 +25,7 @@
 #  - Tunnel .conf files are parsed, never sourced
 #  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
 
-MODULE_VERSION="1.2.7"
+MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -302,11 +302,11 @@ download_file() {
 check_update_bg() {
     local cache="$SECURE_TMP/.mporter_remote_ver"
     if [ -f "$cache" ] && [ $(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 25 ]; then return 0; fi
-    local cb="?t=$(date +%s)" remote_ver="" url tmp
+    local cb="" remote_ver="" url tmp
     tmp=$(mp_tmp ver) || return 0
     for url in "${MTUNNEL_GITHUB_BASE}/mporter.sh${cb}" "${MTUNNEL_MIRROR_BASE}/mporter.sh${cb}"; do
-        if command -v curl >/dev/null 2>&1; then curl -fsSL --connect-timeout 3 --max-time 6 -o "$tmp" "$url" 2>/dev/null
-        else wget -q --timeout=6 -O "$tmp" "$url" 2>/dev/null; fi
+        if command -v curl >/dev/null 2>&1; then curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 6 -o "$tmp" "$url" 2>/dev/null
+        else wget -q --header="Range: bytes=0-4095" --timeout=6 -O "$tmp" "$url" 2>/dev/null; fi
         remote_ver=$(grep -m1 '^MODULE_VERSION=' "$tmp" 2>/dev/null | cut -d'"' -f2 | tr -cd '0-9A-Za-z.-')
         [ -n "$remote_ver" ] && break
     done
@@ -2533,13 +2533,17 @@ setup_mporter_service
 MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
-MPORTER_UPDATE_CHECK_INTERVAL=30
+MPORTER_UPDATE_CHECK_INTERVAL=300
 check_update_bg >/dev/null 2>&1 &
 mporter_update_watcher() {
+    local before after
     while true; do
         sleep "$MPORTER_UPDATE_CHECK_INTERVAL"
+        before=$(cat "$SECURE_TMP/.mporter_remote_ver" 2>/dev/null)
         check_update_bg >/dev/null 2>&1
-        kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        after=$(cat "$SECURE_TMP/.mporter_remote_ver" 2>/dev/null)
+        # repaint only when a newer version was actually found
+        [ "$before" == "$after" ] || kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
     done
 }
 mporter_update_watcher &

@@ -1,7 +1,6 @@
 #!/bin/bash
-# --- MTunnel LinkTest | Link & Protocol Benchmark v1.3.0 ---
-# [Features: Full Option-1 Matrix | Native Protocols | BH/RH Dual-Stack Engine Lab | TCP/UDP/ICMP Probes | MTU/Loss]
-MODULE_VERSION="1.3.2"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.3.4).
+MODULE_VERSION="1.3.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

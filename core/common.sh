@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core API 1 (v1.3.0; modular layout revision 2).
-# Functions only: safe to source from installers, dashboards and all tunnel engines.
-# Changes must be tested against every consuming module.
+# MTunnel shared core — release 1.3.4, API 1, layout revision 2.
+# Shared functions used by the installer, dashboard, and tunnel modules.
+# Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.3.2"
+MTUNNEL_RELEASE_VERSION="1.3.4"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -518,24 +518,33 @@ mt_install_files() {
 }
 # Avoid accidentally replacing a different engine when paste auto-applies.
 mt_validate_module_role() {
-    local candidate="$1" rel="$2" role
+    local candidate="$1" rel="$2" role header_pattern
     case "$rel" in
-        main.sh) role='Master Core';;
-        mporter.sh) role='MPorter';;
-        tunnels/mgre.sh) role='MGRE';;
-        tunnels/mxlan.sh) role='MXLAN';;
-        tunnels/mrathole.sh) role='MRathole';;
-        tunnels/mbackhaul.sh) role='MBackhaul';;
-        tunnels/mpaqet.sh) role='MPaqet';;
-        mdoctor.sh) role='Doctor';;
-        linktest.sh) role='LinkTest';;
+        mirror.sh)
+            head -n 10 "$candidate" | grep -Fq '# MTunnel Ecosystem - MDesign Speed & Network Optimizer' || {
+                echo "Incorrect Mirror module pasted for $rel. Current script preserved." >&2
+                return 1
+            }
+            return 0;;
+        main.sh) role='Master Core'; header_pattern='# MTunnel — main dashboard';;
+        mporter.sh) role='MPorter'; header_pattern='# MTunnel MPorter —';;
+        tunnels/mgre.sh) role='MGRE'; header_pattern='# MTunnel MGRE —';;
+        tunnels/mxlan.sh) role='MXLAN'; header_pattern='# MTunnel MXLAN —';;
+        tunnels/mrathole.sh) role='MRathole'; header_pattern='# MTunnel MRathole —';;
+        tunnels/mbackhaul.sh) role='MBackhaul'; header_pattern='# MTunnel MBackhaul —';;
+        tunnels/mpaqet.sh) role='MPaqet'; header_pattern='# MTunnel MPaqet —';;
+        mdoctor.sh) role='Doctor'; header_pattern='# MTunnel Doctor —';;
+        linktest.sh) role='LinkTest'; header_pattern='# MTunnel LinkTest —';;
         *) echo "Unrecognized MTunnel module path: $rel" >&2; return 1;;
     esac
-    # Header check guards against accidental cross-module paste, not malicious code.
-    head -n 5 "$candidate" | grep -Fq "# --- MTunnel $role |" || {
-        echo "Incorrect module pasted for $rel. Current script preserved." >&2
-        return 1
-    }
+    # Accept the concise current headers and the legacy release headers. This is
+    # an accidental cross-module paste guard, not a security boundary.
+    if head -n 5 "$candidate" | grep -Fq "# --- MTunnel $role |" ||
+       head -n 5 "$candidate" | grep -Fq "$header_pattern"; then
+        return 0
+    fi
+    echo "Incorrect module pasted for $rel. Current script preserved." >&2
+    return 1
 }
 mt_install_script() {
     local candidate="$1" rel="$2" target="$3" current="${4:-}"; local -a files=()

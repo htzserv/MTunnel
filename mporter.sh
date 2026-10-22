@@ -1,31 +1,6 @@
 #!/bin/bash
-# --- MTunnel MPorter | Port Forwarding Manager v1.3.0 ---
-# [Features: State Controller | Smart Loadbalancing | Failover | L4 Health | Safe OBFS | BBR/MSS Optimized]
-#
-# v1.0.x changelog (IPv6 awareness, in sync with mgre 6.4 / mxlan 2.2)
-#  - IPv6 targets everywhere: HAProxy / Gost / Realm / Kernel NAT (ip6tables) / OBFS / health probes
-#  - New tunnel interface families recognised: GRE6 / 6to4 (g6*), IPIP4>4 (i4*), IPIP4>6 (i46*), IPIP6>6 (i66*), VXLAN over IPv6
-#  - Peer discovery understands IPv6 cores (ipip6to6 CORE_V6, 6to4 inner peer, ip -6 neighbours)
-#  - Header shows the host's IPv6, target columns widened for IPv6 addresses
-#
-# v11.1 changelog (bugfix release over v10.0.0)
-#  - Added missing edit_mapping (menu 5): remove single port / disable OBFS / add ports
-#  - Headless flags (--health-scan, --purge-ip, ...) no longer run installer/update side effects
-#  - OBFS runner is never executed in the foreground (menu no longer hangs) -> systemctl restart
-#  - Purge now really finds HAProxy / Realm / Gost / KernelNAT entries (exact IP match, no regex dots)
-#  - HAProxy: explicit "mode tcp", Debian default http config replaced on install, validate+rollback on every change
-#  - Loadbalance keeps existing pools, never duplicates frontends, managed markers are never eaten by purge
-#  - Auto-distribute really round-robins peers; OBFS uses the exact same target as the mapping
-#  - OBFS works for Kernel NAT (PREROUTING redirect), HAProxy OBFS listener bound to 127.0.0.1
-#  - State: locked writes, reconcile keeps interface/pool/obfs metadata, orphan detection fixed
-#  - Peer discovery keeps priority order and only accepts peers routed via the selected interface
-#  - MSS clamp persisted and re-applied on boot / by watchdog
-#  - No more dpkg lock deletion, no apt killed by timeouts, TLS verification on downloads, binary self-test
-#  - Input validation for IPs, hosts and ports (no command injection into generated scripts)
-#  - Tunnel .conf files are parsed, never sourced
-#  - Wipe/Nuclear clean state, FORWARD rules, helper scripts; UI border fixes
-
-MODULE_VERSION="1.3.2"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.3.4).
+MODULE_VERSION="1.3.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

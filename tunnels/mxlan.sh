@@ -1,14 +1,6 @@
 #!/bin/bash
-# --- MTunnel MXLAN | VXLAN Fabric Engine v1.3.0 ---
-# [v2.4.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (VXLAN / VXLAN6 told apart) | IPv6 2nd header line removed
-#          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
-#          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
-# [v2.2.0: IPv6 underlay (VXLAN over IPv6) | IPv6-aware header (2nd line) | ip6tables peer Guard | IPv6 ESP | IPv6 path-MTU probe | manual MTU menu]
-# [v2.0.0: Quote-safe iptables cleanup | Safe pickers | Cross-tool subnet guard | SSH-safe DNAT | MSS clamp
-#          | IPsec ESP | Firewall Guard (UDP 4789) | Watchdog + LB health | MTU manager | Traffic | Backup | CLI]
-# [Features: Symmetric Telemetry Header | Compact Peer Link | Integer Ping | Pinned Header | MPorter Launcher]
-
-MODULE_VERSION="1.3.2"
+# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.3.4).
+MODULE_VERSION="1.3.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

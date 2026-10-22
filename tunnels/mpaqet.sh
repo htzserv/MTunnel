@@ -1,8 +1,6 @@
 #!/bin/bash
-# --- MTunnel MPaqet | Raw Packet KCP Engine v1.3.0 ---
-# [Features: Unified Flat Menu | First-Run Prompt | Port Collision Check | Signal-Safe Menu | Full Uninstaller]
-
-MODULE_VERSION="1.3.2"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.3.4).
+MODULE_VERSION="1.3.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

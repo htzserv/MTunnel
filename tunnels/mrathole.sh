@@ -1,8 +1,6 @@
 #!/bin/bash
-# --- MTunnel MRathole | Reverse Tunnel Engine v1.3.0 ---
-# [Features: Leak-Free Updater | Strict Port Guard | Universal Download | Port Collision Check]
-
-MODULE_VERSION="1.3.2"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.3.4).
+MODULE_VERSION="1.3.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

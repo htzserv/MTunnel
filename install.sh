@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel standalone installer: use local scripts or bootstrap from GitHub.
-MODULE_VERSION="1.3.2"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.3.4).
+MODULE_VERSION="1.3.4"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -296,7 +296,7 @@ installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target item
     local script_file="${BASH_SOURCE[0]:-}" script_dir=''
     [[ ! -f "$script_file" ]] || script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
-    local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh)
+    local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
     local -a active_modules=()
     local -a files=()
     local current=0 mod_ver

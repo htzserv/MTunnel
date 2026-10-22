@@ -8,7 +8,7 @@
 # [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
 #          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
-MODULE_VERSION="1.3.2"
+MODULE_VERSION="1.3.3"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -872,6 +872,40 @@ select_tunnel_interactive() {
     return 1
 }
 
+# Inline port-forward prompt (IRAN role): asks the ports right here instead of opening the manager menu.
+mgre_quick_forward() {
+    local conf="$1" tcp="" udp="" m_tcp m_udp
+    local TYPE="" T_NAME="" MAX_IPS="0" TUN_PROTO="ipv4" FWD_TCP="" FWD_UDP="" FWD_TARGETS="" CORE_SUBNET="" TUN_ID="" SYNC_KEY="" LB_MODE="0"
+    mt_source_conf "$conf" 2>/dev/null
+    [ "$TYPE" == "1" ] && [ -n "$T_NAME" ] || return 0
+    mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return 1; }
+    echo -e "\n  ${DIM}┌─[ PORT FORWARDING: ${W}${T_NAME}${DIM} ]${NC}"
+    while true; do
+        echo -ne "  ${C}●${NC} ${W}TCP ports to forward (e.g. 443,8080 or 10000:10100) [Enter: none | q: skip]: ${NC}"; read -r tcp || return 0
+        [[ "$tcp" == "q" ]] && return 0
+        tcp=$(mt_sanitize_ports "$tcp" tcp) && break
+    done
+    while true; do
+        echo -ne "  ${C}●${NC} ${W}UDP ports to forward (e.g. 53,7000) [Enter: none | q: skip]: ${NC}"; read -r udp || return 0
+        [[ "$udp" == "q" ]] && return 0
+        udp=$(mt_sanitize_ports "$udp" udp) && break
+    done
+    [ -z "$tcp" ] && [ -z "$udp" ] && { echo -e "  ${DIM}● No ports entered; forwarding left OFF.${NC}"; return 0; }
+    mt_port_guard nat "$tcp" "$udp" "" "MGRE_FWD_${T_NAME}" "GRE ${T_NAME}" || return 0
+    tcp="$MT_PORT_TCP"; udp="$MT_PORT_UDP"
+    m_tcp=$(mt_merge_ports "$FWD_TCP" "$tcp"); m_udp=$(mt_merge_ports "$FWD_UDP" "$udp")
+    set_conf_var "$conf" FWD_TCP "$m_tcp" && set_conf_var "$conf" FWD_UDP "$m_udp" || return 1
+    FWD_TCP="$m_tcp"; FWD_UDP="$m_udp"
+    # Target IP picker only matters when extra virtual IPs exist; otherwise the core peer is used.
+    if [ "$TUN_PROTO" != ipip6to6 ] && [ "${MAX_IPS:-0}" -gt 0 ] 2>/dev/null; then mgre_choose_fwd "$conf" || true; fi
+    if mgre_apply_fwd "$conf"; then
+        echo -e "  ${G}● Forwarding active. TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}${NC}"
+    else
+        echo -e "  ${Y}● Ports saved (TCP: ${FWD_TCP:-None} | UDP: ${FWD_UDP:-None}) but could not be applied. Is iptables installed?${NC}"
+    fi
+    sleep 1.5
+}
+
 manage_port_forwarding() {
     local target_conf="$1"
     local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
@@ -1705,10 +1739,20 @@ mt_link_import() {
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
+    if [ "$MT_KIND" = gre ]; then
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Tunnel" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[NAME]:--}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Protocol" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[PROTO]:--}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Local EP" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LOCAL_PUB6]:-${MT_LINK_DATA[LOCAL_PUB]:--}}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Remote EP" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[REMOTE_PUB6]:-${MT_LINK_DATA[REMOTE_PUB]:--}}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Core subnet" "$NC" "$DIM" "$NC" "$W" "$(if [ -n "${MT_LINK_DATA[CORE_V6]:-}" ]; then echo "${MT_LINK_DATA[CORE_V6]}::/64"; elif [ -n "${MT_LINK_DATA[CORE_SUBNET]:-}" ]; then echo "${MT_LINK_DATA[CORE_SUBNET]}.0/30"; else echo -; fi)" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "MTU" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[CUSTOM_MTU]:-default}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Encryption" "$NC" "$DIM" "$NC" "$W" "$([ "${MT_LINK_DATA[ENCRYPT]:-0}" = 1 ] && echo ON || echo OFF)" "$NC"
+    else
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
+        printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
+    fi
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
@@ -1724,8 +1768,7 @@ mt_link_import() {
         if [ "$MT_KIND" = gre ] && [ "${MT_LINK_DATA[ROLE]}" = 1 ]; then
             local new_conf
             new_conf=$(grep -l "^TUN_ID=${MT_LINK_DATA[TUN_ID]}$" "$CONF_DIR"/*.conf 2>/dev/null | head -1)
-            mt_ask ans 'Configure TCP/UDP port forwarding now? (IPv6 IPIP6->6 supports single target; no load balancing) (y/n): ' || ans=n
-            case "${ans,,}" in y|yes) [ -n "$new_conf" ] && manage_port_forwarding "$new_conf";; esac
+            [ -n "$new_conf" ] && mgre_quick_forward "$new_conf"
         fi
         mt_sync_bbr_from_peer "${MT_LINK_DATA[BBR]:-0}"
     else echo -e "  ${R}✖ Creation failed; see the error above.${NC}"; fi
@@ -2016,12 +2059,7 @@ while true; do
                echo -e "  ${G}● Tunnel [${t_name}] deployed successfully.${NC}"
                # Port forwarding supports IPv4 payloads and single-peer IPv6 IPIP6->6 (no LB for IPv6).
                if [[ "$s_type" == "1" ]]; then
-                   echo -ne "  ${C}●${NC} ${W}Configure TCP/UDP port forwarding now? (IPv6 IPIP6->6 supports single target; no load balancing) (y/n): ${NC}"
-                   read -r setup_fwd_now
-                   setup_fwd_now=$(echo "$setup_fwd_now" | tr -d '\r ' | tr '[:upper:]' '[:lower:]')
-                   if [[ "$setup_fwd_now" == "y" || "$setup_fwd_now" == "yes" ]]; then
-                       manage_port_forwarding "$conf_path"
-                   fi
+                   mgre_quick_forward "$conf_path"
                fi
                mt_link_offer "$conf_path"
            else

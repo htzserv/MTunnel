@@ -1,12 +1,4 @@
 #!/bin/bash
-# --- MTunnel MGRE | GRE / GRE6 / IPIP Engine v1.3.0 ---
-# [Features: Symmetric Telemetry Header | Compact Peer Link | Dynamic MTU | Instant MSS Engine]
-# [v6.6.1: Header rows = name ➔ local IPv4 ➔ remote IPv4 [TYPE] (same-name IPv4/IPv6 tunnels are now distinguishable) | IPv6 2nd header line removed
-#          | optional "Remote Server IPv4" (REMOTE_V4) in setup + Edit IPs | Live in-place header refresh (ping/loss/uptime, no full-screen redraw)
-#          | Update badge repaints the menu live without erasing typed text | Background signals can no longer interrupt/erase prompt input]
-# [v6.4.0: GRE6 / IPIP4>4 / IPIP4>6 / IPIP6>6 | IPv6-aware header (2nd line) | locale-safe layout | shared proto helpers]
-# [v6.0.0: Quote-safe iptables cleanup | Safe index pickers | Cross-tool subnet guard | SSH-safe DNAT
-#          | Correct MTU math | IPsec ESP | Firewall Guard | Traffic | Traffic | Backup | CLI]
 
 MODULE_VERSION="1.3.2"
 MTUNNEL_REQUIRED_CORE_API=1
@@ -874,7 +866,7 @@ select_tunnel_interactive() {
 
 manage_port_forwarding() {
     local target_conf="$1"
-    local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
+    local TYPE LOCAL_PUB REMOTE_PUB MAX_IPS SYNC_KEY TUN_SECRET T_NAME TUN_ID CORE_SUBNET CORE_V6 TUN_PROTO LOCAL_IP6 REMOTE_IP6 FWD_TCP FWD_UDP LB_MODE FWD_TARGETS=''
     mt_source_conf "$target_conf" 2>/dev/null
     mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return; }
     
@@ -954,6 +946,7 @@ manage_port_forwarding() {
                 echo -e "  ${G}● Ports replaced. TCP: ${new_tcp:-None} | UDP: ${new_udp:-None}${NC}"; sleep 1.8
                 ;;
             4)
+                [ "$TUN_PROTO" == ipip6to6 ] && { echo -e "  ${Y}● Not available for IPIP6→6 (single IPv6 peer).${NC}"; sleep 1.2; continue; }
                 if [ "$LB_MODE" == 1 ]; then
                     set_conf_var "$target_conf" LB_MODE 0 || continue
                     mgre_apply_fwd "$target_conf"
@@ -964,6 +957,7 @@ manage_port_forwarding() {
                 sleep 1.5
                 ;;
             5)
+                [ "$TUN_PROTO" == ipip6to6 ] && { echo -e "  ${Y}● Not available for IPIP6→6 (single IPv6 peer).${NC}"; sleep 1.2; continue; }
                 if mgre_choose_fwd "$target_conf"; then mgre_apply_fwd "$target_conf"; fi
                 ;;
             6)
@@ -1023,6 +1017,13 @@ show_mgre_monitor() {
             pad2=$(( 92 - ${#raw_l2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
             lb_stat=$([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")
             eval_l2="   ${DIM}↳ NAT:${NC} ${Y}T:[${disp_tcp}]${NC} ${C}U:[${disp_udp}]${NC} ${DIM}LB:[${lb_stat}${DIM}]${NC}"
+            echo -e "  ${B}│${NC}${eval_l2}${sp2}${B}│${NC}"
+        elif [ "$TYPE" != "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
+            disp_tcp="${FWD_TCP:-0}"; [ ${#disp_tcp} -gt 30 ] && disp_tcp="${disp_tcp:0:27}..."
+            disp_udp="${FWD_UDP:-0}"; [ ${#disp_udp} -gt 30 ] && disp_udp="${disp_udp:0:27}..."
+            raw_l2="   < IN:  T:[${disp_tcp}] U:[${disp_udp}]"
+            pad2=$(( 92 - ${#raw_l2} )); [ "$pad2" -lt 0 ] && pad2=0; sp2=$(printf '%*s' "$pad2" "")
+            eval_l2="   ${DIM}↳ IN:${NC}  ${Y}T:[${disp_tcp}]${NC} ${C}U:[${disp_udp}]${NC}"
             echo -e "  ${B}│${NC}${eval_l2}${sp2}${B}│${NC}"
         fi
 
@@ -1129,6 +1130,12 @@ show_tunnel_details() {
             l5="NAT FWD TCP  : ${fwd_disp}"; r5="Load Balancer: ${lb_txt}"
             pad5=$(( 90 - ${#l5} - ${#r5} )); [ "$pad5" -lt 0 ] && pad5=0; sp5=$(printf '%*s' "$pad5" "")
             echo -e "  ${B}│${NC} ${Y}NAT FWD TCP  :${NC} ${W}${fwd_disp}${NC}${sp5}${C}Load Balancer:${NC} ${W}${lb_txt}${NC} ${B}│${NC}"
+        else
+            inc_t="${FWD_TCP:-None}"; [ ${#inc_t} -gt 25 ] && inc_t="${inc_t:0:22}..."
+            inc_u="${FWD_UDP:-None}"; [ ${#inc_u} -gt 25 ] && inc_u="${inc_u:0:22}..."
+            l5="Incoming TCP : ${inc_t}"; r5="UDP: ${inc_u}"
+            pad5=$(( 90 - ${#l5} - ${#r5} )); [ "$pad5" -lt 0 ] && pad5=0; sp5=$(printf '%*s' "$pad5" "")
+            echo -e "  ${B}│${NC} ${Y}Incoming TCP :${NC} ${W}${inc_t}${NC}${sp5}${C}UDP:${NC} ${W}${inc_u}${NC} ${B}│${NC}"
         fi
 
         echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────╯\n"
@@ -1297,9 +1304,25 @@ mgre_choose_fwd() {
     if [ "$TUN_PROTO" == ipip6to6 ]; then FWD_TARGETS=''; return 0; fi
     mt_choose_fwd_targets "$1" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE"
 }
+# Kernel forwarding for the forwarded payload family (idempotent, runtime only: --apply re-runs it at boot).
+# v6: enabling IPv6 forwarding makes the kernel ignore Router Advertisements unless accept_ra=2,
+# which could drop the host's default IPv6 route (the tunnel underlay) -> raise accept_ra 1->2 first.
+mgre_enable_forwarding() { # <v4|v6>
+    local f
+    if [ "$1" == v6 ]; then
+        [ "$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)" == 1 ] && return 0
+        for f in /proc/sys/net/ipv6/conf/*/accept_ra; do
+            if [ -r "$f" ] && [ "$(cat "$f" 2>/dev/null)" == 1 ]; then echo 2 > "$f" 2>/dev/null; fi
+        done
+        sysctl -qw net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+    else
+        [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" == 1 ] && return 0
+        sysctl -qw net.ipv4.ip_forward=1 >/dev/null 2>&1
+    fi
+}
 mgre_apply_fwd() {
     local conf="$1"
-    local TYPE="" T_NAME="" TUN_ID="" CORE_SUBNET="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
+    local TYPE="" T_NAME="" TUN_ID="" CORE_SUBNET="" CORE_V6="" MAX_IPS="0" SYNC_KEY="" FWD_TCP="" FWD_UDP="" LB_MODE="0" TUN_PROTO="ipv4" FWD_TARGETS=''
     mt_validate_conf "$conf" || { echo "Invalid tunnel config: $conf" >&2; return 1; }
     mt_source_conf "$conf" 2>/dev/null
     mgre_fill_legacy_core || { echo "Invalid legacy core subnet in $conf" >&2; return 1; }
@@ -1310,6 +1333,8 @@ mgre_apply_fwd() {
         if [ -n "$FWD_TCP" ]; then FWD_TCP=$(mt_sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
         if [ -n "$FWD_UDP" ]; then FWD_UDP=$(mt_sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
         [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
+        [ -n "$CORE_V6" ] || { echo "IPv6 core prefix missing for $T_NAME; cannot forward." >&2; return 1; }
+        mgre_enable_forwarding v6 || { echo "Cannot enable IPv6 forwarding for $T_NAME." >&2; return 1; }
         mt_build_fwd_rules6 "MGRE_FWD_$T_NAME" "$T_NAME" "$FWD_TCP" "$FWD_UDP" "${CORE_V6}::2" || { clean_fwd_rules "$T_NAME"; return 1; }
         mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_${T_NAME}"
         return 0
@@ -1317,6 +1342,7 @@ mgre_apply_fwd() {
     if [ -n "$FWD_TCP" ]; then FWD_TCP=$(mt_sanitize_ports "$FWD_TCP" tcp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
     if [ -n "$FWD_UDP" ]; then FWD_UDP=$(mt_sanitize_ports "$FWD_UDP" udp 2>/dev/null) || { clean_fwd_rules "$T_NAME"; return 1; }; fi
     [ -z "$FWD_TCP" ] && [ -z "$FWD_UDP" ] && return 0
+    mgre_enable_forwarding v4 || { echo "Cannot enable IPv4 forwarding for $T_NAME." >&2; return 1; }
     local pool
     pool=$(mt_fwd_selected "$FWD_TARGETS" "$LB_MODE" "${CORE_SUBNET}.2" "$SYNC_KEY" "$MAX_IPS" "$TYPE") || { echo "No selected forwarding targets remain for $T_NAME. Select Target IP(s) again." >&2; return 1; }
     local -a targets=()
@@ -1710,6 +1736,9 @@ mt_link_import() {
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
+    if [ "$MT_KIND" = gre ] && [ "${MT_LINK_DATA[ROLE]}" = 2 ] && [ -z "${MT_LINK_DATA[TCP_PORTS]:-}${MT_LINK_DATA[UDP_PORTS]:-}" ]; then
+        echo -e "  ${DIM}│${NC} ${Y}No forwarded ports in this link. If the Iran side already forwards ports, regenerate the link there.${NC}"
+    fi
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
     mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
@@ -1774,11 +1803,19 @@ mt_link_deploy_locked() {
     if [ -n "${MT_LINK_DATA[CUSTOM_MTU]:-}" ]; then mt_link_uint "${MT_LINK_DATA[CUSTOM_MTU]}" "$min" "$max" || { echo 'MTU outside protocol limits.' >&2; return 1; }; fi
     # Existing vIP generator uses IPv4 pairs; IPIP6->6 carries only IPv6 payload.
     if [ "$proto" = ipip6to6 ] && [ "${MT_LINK_DATA[MAX_IPS]}" != 0 ]; then echo 'IPv4 vIPs cannot be carried by IPIP6->6.' >&2; return 1; fi
+    # Foreign (role 2) side: remember which ports the Iran side forwards to us (display only;
+    # mgre_apply_fwd returns early for TYPE!=1, so no NAT rules are ever built from these).
+    local in_tcp="" in_udp=""
+    if [ "$role" = 2 ] && [ "$MT_KIND" = gre ]; then
+        in_tcp="${MT_LINK_DATA[TCP_PORTS]:-}"; in_udp="${MT_LINK_DATA[UDP_PORTS]:-}"
+        [ -z "$in_tcp" ] || mt_link_ports "$in_tcp" || in_tcp=""
+        [ -z "$in_udp" ] || mt_link_ports "$in_udp" || in_udp=""
+    fi
     stage=$(mktemp "$SECURE_TMP/peer-network.XXXXXX") || return 1
     {
         printf 'TYPE=%s\n' "$role"
         for key in LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 TUN_SECRET CORE_SUBNET CORE_V6 MAX_IPS CUSTOM_MTU ENCRYPT; do printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]:-}"; done
-        printf 'SYNC_KEY=%s\nFWD_TCP=\nFWD_UDP=\nLB_MODE=0\n' "${MT_LINK_DATA[SYNC_KEY]:-${MT_LINK_DATA[TUN_SECRET]}}"
+        printf 'SYNC_KEY=%s\nFWD_TCP=%s\nFWD_UDP=%s\nLB_MODE=0\n' "${MT_LINK_DATA[SYNC_KEY]:-${MT_LINK_DATA[TUN_SECRET]}}" "$in_tcp" "$in_udp"
         if [ "$MT_KIND" = gre ]; then printf 'T_NAME=%s\nTUN_ID=%s\nTUN_PROTO=%s\n' "$name" "${MT_LINK_DATA[TUN_ID]}" "$proto"
         else printf 'VX_NAME=%s\nBR_NAME=br_%s\nVNI_ID=%s\nFAB_PROTO=%s\n' "$name" "${name#vx_}" "${MT_LINK_DATA[VNI_ID]}" "$proto"; fi
     } > "$stage"

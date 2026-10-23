@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.3.4).
-MODULE_VERSION="1.3.4"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.3.5).
+MODULE_VERSION="1.3.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -877,17 +877,85 @@ deploy_binaries_from_dir() {
         if [ "$src_dir" != "$LOCAL_DIR/packages" ]; then mt_install_files 755 "$source" "$LOCAL_DIR/packages/$name" || rc=1; fi
     done
     local -a debs=()
-    for deb in "$src_dir"/*.deb; do
-        [ -f "$deb" ] || continue
-        arch=$(dpkg-deb -f "$deb" Architecture 2>/dev/null) || { rc=1; continue; }
-        if [ "$arch" != all ] && [ "$arch" != "$(dpkg --print-architecture)" ]; then echo "Wrong package architecture: $deb" >&2; rc=1; continue; fi
-        debs+=("$deb")
-    done
-    if [ "${#debs[@]}" -gt 0 ]; then
-        dpkg -i --force-confdef --force-confold "${debs[@]}" || rc=1
-        ldconfig || rc=1
-    fi
+    for deb in "$src_dir"/*.deb; do [ -f "$deb" ] && debs+=("$deb"); done
+    if [ "${#debs[@]}" -gt 0 ]; then mt_install_debs "${debs[@]}" || rc=1; fi
     return "$rc"
+}
+# Install every .deb it is given (all of them in ONE dpkg run, so inter-package dependencies such as
+# libiperf0 -> iperf3 or iptables -> libxtables resolve among themselves). A package is skipped only when
+# the same or a NEWER version is already installed, so a pinned older .deb can never downgrade the system.
+# If dpkg fails as a batch, each package is retried alone so one bad file cannot block the rest.
+mt_install_debs() {
+    local deb pkg ver arch inst sys_arch log rc=0 installed_n=0 skipped_n=0
+    local -a todo=() failed=()
+    MT_DEB_FAILED=()
+    sys_arch=$(dpkg --print-architecture 2>/dev/null)
+    for deb in "$@"; do
+        [ -f "$deb" ] || continue
+        pkg=$(dpkg-deb -f "$deb" Package 2>/dev/null); ver=$(dpkg-deb -f "$deb" Version 2>/dev/null); arch=$(dpkg-deb -f "$deb" Architecture 2>/dev/null)
+        if [ -z "$pkg" ] || [ -z "$ver" ]; then echo -e "  ${R}✖ Not a valid .deb: ${deb##*/}${NC}" >&2; rc=1; continue; fi
+        if [ "$arch" != all ] && [ "$arch" != "$sys_arch" ]; then echo -e "  ${R}✖ Wrong architecture (${arch}, system is ${sys_arch}): ${deb##*/}${NC}" >&2; rc=1; continue; fi
+        inst=$(dpkg-query -W -f='${Status}|${Version}' "$pkg" 2>/dev/null || true)
+        if [ "${inst%%|*}" == 'install ok installed' ] && ! dpkg --compare-versions "${inst#*|}" lt "$ver"; then
+            skipped_n=$((skipped_n+1)); continue
+        fi
+        todo+=("$deb")
+    done
+    if [ "${#todo[@]}" -gt 0 ]; then
+        log=$(mktemp "$SECURE_TMP/dpkg.XXXXXX") || return 1
+        local -a dpkg_cmd=(env DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold)
+        local -A lasts=()
+        if ! "${dpkg_cmd[@]}" "${todo[@]}" >"$log" 2>&1; then
+            if grep -qiE 'lock|frontend' "$log"; then mt_apt_force_unlock; fi
+            if "${dpkg_cmd[@]}" "${todo[@]}" >"$log" 2>&1; then installed_n=${#todo[@]}
+            else
+                # The batch failed: go package by package and repeat while a pass makes progress, so a package
+                # whose dependency comes later in the list still gets installed. Whatever is left is reported.
+                local -a pending=("${todo[@]}") next=()
+                local progress=1
+                while [ "${#pending[@]}" -gt 0 ] && [ "$progress" == 1 ]; do
+                    progress=0; next=()
+                    for deb in "${pending[@]}"; do
+                        if "${dpkg_cmd[@]}" "$deb" >"$log" 2>&1; then installed_n=$((installed_n+1)); progress=1
+                        else lasts["$deb"]=$( { grep -iE 'returned error|dependency problems|depends on|conflicts with|not installable|cannot' "$log" || grep -iE 'error|fail' "$log" || cat "$log"; } | grep -v '^[[:space:]]*$' | head -n1 ); next+=("$deb"); fi
+                    done
+                    pending=("${next[@]}")
+                done
+                for deb in "${pending[@]}"; do failed+=("${deb##*/}: ${lasts[$deb]:-unknown error}"); MT_DEB_FAILED+=("${deb##*/}"); done
+                [ "${#failed[@]}" -eq 0 ] || rc=1
+            fi
+        else installed_n=${#todo[@]}; fi
+        rm -f "$log"
+        ldconfig 2>/dev/null || true
+    fi
+    for deb in "${failed[@]}"; do echo -e "  ${R}✖ dpkg failed — ${deb}${NC}" >&2; done
+    echo -e "  ${DIM}● Packages installed: ${installed_n}, already up to date: ${skipped_n}, failed: $((${#failed[@]}))${NC}"
+    return "$rc"
+}
+# Dependency-free check of a staged file (the staged bundle's OWN validators run later).
+mt_stage_script_ok() { [ -s "$1" ] && bash -n "$1" 2>/dev/null; }
+# Validate a staged bundle with the validators that ship INSIDE that bundle (its own core/common.sh), not with
+# the installed core. A stale installed common.sh used to reject every newer module ("Wrong module role")
+# and so the bundle could never replace the very core that would accept it. Runs in a subshell, so the
+# staged core never leaks into this running process.
+mt_validate_staged_bundle() {
+    local src="$1"
+    (
+        # shellcheck disable=SC1090
+        source "$src/core/common.sh" >/dev/null || { echo 'Staged shared core could not be loaded.' >&2; exit 1; }
+        declare -F mt_validate_script >/dev/null && declare -F mt_validate_module_role >/dev/null &&
+            declare -F mt_validate_module_core_contract >/dev/null || { echo 'Staged shared core lacks the module validators.' >&2; exit 1; }
+        local mod rel cand
+        for mod in "${ALL_MODULES[@]}"; do
+            rel="${MOD_MAP[$mod]}"; cand="$src/$rel"
+            mt_validate_script "$cand" || { echo "Invalid module (shebang, syntax or MODULE_VERSION): $rel" >&2; exit 1; }
+            mt_validate_module_role "$cand" "$rel" || { echo "Wrong module role in bundle: $rel" >&2; exit 1; }
+            mt_validate_module_core_contract "$cand" || { echo "Incompatible module/core contract in bundle: $rel" >&2; exit 1; }
+        done
+        mt_validate_script "$src/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; exit 1; }
+        head -n 5 "$src/install.sh" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect install.sh in complete bundle.' >&2; exit 1; }
+        exit 0
+    )
 }
 ensure_module() {
     local mod="$1"
@@ -988,17 +1056,17 @@ install_bundle_scripts() {
     # Entire bundles must include the shared core. Never deploy loader scripts
     # without their matching dependency.
     [ -s "$source/core/common.sh" ] && bash -n "$source/core/common.sh" &&
-        grep -q '^MTUNNEL_CORE_API=1$' "$source/core/common.sh" &&
-        grep -q '^MTUNNEL_LAYOUT_REV=2$' "$source/core/common.sh" || {
+        grep -q '^MTUNNEL_CORE_API=[0-9][0-9]*$' "$source/core/common.sh" &&
+        grep -q '^MTUNNEL_LAYOUT_REV=[0-9][0-9]*$' "$source/core/common.sh" || {
         echo 'MTunnel shared core missing or invalid in the bundle.' >&2; return 1;
     }
+    # The bundle is replaced as ONE unit (core + every module + installer), so its API/layout only has to be
+    # self-consistent. That is verified with the bundle's own validators, never the installed (older) ones.
+    mt_validate_staged_bundle "$source" || return 1
     files+=("$source/core/common.sh" /usr/lib/mtunnel/common.sh
             "$source/core/common.sh" "$LOCAL_DIR/core/common.sh")
     for mod in "${ALL_MODULES[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"
-        mt_validate_script "$candidate" || { echo "Incomplete MTunnel bundle: $rel" >&2; return 1; }
-        mt_validate_module_role "$candidate" "$rel" || { echo "Wrong module role in bundle: $rel" >&2; return 1; }
-        mt_validate_module_core_contract "$candidate" || { echo "Incompatible module/core contract in bundle: $rel" >&2; return 1; }
         local candidate_version
         candidate_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate")
         if [ -z "${bundle_version:-}" ]; then bundle_version="$candidate_version"; fi
@@ -1008,8 +1076,6 @@ install_bundle_scripts() {
     core_version=$(sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' "$source/core/common.sh")
     # Installer must be included too: otherwise the installed release is mixed
     # after a successful "Sync All Scripts" downgrade.
-    mt_validate_script "$source/install.sh" || { echo 'Missing installer in complete bundle.' >&2; return 1; }
-    head -n 5 "$source/install.sh" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect install.sh in complete bundle.' >&2; return 1; }
     local installer_version
     installer_version=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source/install.sh")
     # Compare ALL installed scripts to the candidate and authorize one coherent
@@ -1060,11 +1126,13 @@ sync_script_bundle() {
     stage=$(mktemp -d "$SECURE_TMP/sync.XXXXXX") || return 1
     # Stage the shared core and all scripts before committing any module.
     mkdir -p "$stage/core"
-    if ! mt_download "$(mt_cb_url "$base/core/common.sh")" "$stage/core/common.sh" ||
-       ! bash -n "$stage/core/common.sh" 2>/dev/null ||
-       ! grep -q '^MTUNNEL_CORE_API=1$' "$stage/core/common.sh" ||
-       ! grep -q '^MTUNNEL_LAYOUT_REV=2$' "$stage/core/common.sh"; then
-        rm -rf "$stage"; return 1
+    if ! mt_download "$(mt_cb_url "$base/core/common.sh")" "$stage/core/common.sh"; then
+        echo "Could not download core/common.sh from $base" >&2; rm -rf "$stage"; return 1
+    fi
+    if ! bash -n "$stage/core/common.sh" 2>/dev/null ||
+       ! grep -q '^MTUNNEL_CORE_API=[0-9][0-9]*$' "$stage/core/common.sh" ||
+       ! grep -q '^MTUNNEL_LAYOUT_REV=[0-9][0-9]*$' "$stage/core/common.sh"; then
+        echo 'Downloaded core/common.sh is not a valid MTunnel shared core.' >&2; rm -rf "$stage"; return 1
     fi
     # VERSION is metadata only. Mirrors, caches and custom sources may refresh
     # files at different times, so a marker/core version mismatch must never
@@ -1076,10 +1144,10 @@ sync_script_bundle() {
         rel="${MOD_MAP[$mod]}"
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
         if ! mt_download "$(mt_cb_url "$base/$rel")" "$stage/$rel"; then
-            echo "Could not download $rel; existing scripts preserved." >&2
+            echo "Could not download $rel from $base; existing scripts preserved." >&2
             rc=1; break
         fi
-        if ! mt_validate_script "$stage/$rel" 2>/dev/null; then
+        if ! mt_stage_script_ok "$stage/$rel"; then
             echo "Invalid Bash module from source: $rel; existing scripts preserved." >&2
             rc=1; break
         fi
@@ -1088,7 +1156,7 @@ sync_script_bundle() {
         if ! mt_download "$(mt_cb_url "$base/install.sh")" "$stage/install.sh"; then
             echo 'Could not download install.sh; existing scripts preserved.' >&2
             rc=1
-        elif ! mt_validate_script "$stage/install.sh" 2>/dev/null; then
+        elif ! mt_stage_script_ok "$stage/install.sh"; then
             echo 'Invalid Bash installer from source: install.sh; existing scripts preserved.' >&2
             rc=1
         fi
@@ -1158,35 +1226,239 @@ offline_local_deploy() {
     return "$rc"
 }
 
-fetch_package_group() {
-    local base="$1" kind="$2" item file rc=0
-    local -a items=()
-    case "$kind" in
-        cores) items=(bh rathole paqet gost haproxy);;
-        deps)  for item in "${ALL_PACKAGES[@]}"; do [[ "$item" == *.deb ]] && items+=("$item"); done;;
-        *)     items=("${ALL_PACKAGES[@]}");;
-    esac
-    local stage; stage=$(mktemp -d "$SECURE_TMP/packages.XXXXXX") || return 1
-    for item in "${items[@]}"; do
-        file="$stage/$item"
-        if ! mt_download "$(mt_cb_url "$base/$item")" "$file"; then rc=1; break; fi
-        case "$item" in *.deb) dpkg-deb --info "$file" >/dev/null || { rc=1; break; };; *) mt_valid_elf "$file" || { rc=1; break; };; esac
-    done
-    if [ "$rc" == 0 ]; then
-        local -a files=()
-        for item in "${items[@]}"; do files+=("$stage/$item" "$LOCAL_DIR/packages/$item"); done
-        mt_install_files 755 "${files[@]}" || rc=1
-        if [ "$kind" == cores ] && [ "$rc" == 0 ]; then deploy_binaries_from_dir "$stage" || rc=1; fi
+# Why a package file cannot be used (prints nothing when it is fine): size, checksum, ELF / .deb validity.
+mt_package_problem() {
+    local file="$1" item="$2" hash="${3:--}" size
+    [ -s "$file" ] || { printf 'missing or empty file'; return 0; }
+    size=$(wc -c < "$file")
+    if [ "$hash" != - ] && [ "$(sha256sum "$file" | cut -d' ' -f1)" != "$hash" ]; then
+        printf 'checksum differs from manifest.txt (stale or corrupted upload)'; return 0
     fi
-    if [ "$rc" == 0 ] && [ "${3:-0}" == 1 ]; then
-        local current=0 version label
-        for item in "${items[@]}"; do
-            current=$((current+1)); label="$item"; version="${BIN_VERSIONS[$item]:-Core}"
-            if [[ "$item" == *.deb ]]; then label="${item%%_*}"; version="${item#*_}"; version="${version%%_*}"; fi
-            draw_item_progress "$current" "${#items[@]}" "$label" "$version"
+    case "$item" in
+        *.deb) dpkg-deb --info "$file" >/dev/null 2>&1 || printf 'not a valid .deb package (%s bytes)' "$size";;
+        *)     mt_valid_elf "$file" || printf 'not a valid %s ELF executable (%s bytes; empty or wrong upload?)' "$(uname -m)" "$size";;
+    esac
+    return 0
+}
+# packages/manifest.txt lists every file of the packages folder ("<sha256>  <name>" or just "<name>").
+# With it, a .deb dropped into the repo/mirror is picked up automatically (no script edit); the optional
+# sha256 is verified. Without a manifest the built-in ALL_PACKAGES list is used. Prints "<hash|-> <name>" lines.
+mt_fetch_package_manifest() {
+    local base="$1" out="$2" tmp line name hash
+    tmp=$(mktemp "$SECURE_TMP/manifest.XXXXXX") || return 1
+    if ! mt_download "$(mt_cb_url "$base/manifest.txt")" "$tmp" 2>/dev/null; then rm -f "$tmp"; return 1; fi
+    : > "$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+        if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]]; then
+            hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ^[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
+            hash='-'; name="${BASH_REMATCH[1]}"
+        else continue; fi
+        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue   # plain file names only (no paths)
+        case "$name" in *.deb|bh|rathole|paqet|gost|haproxy) printf '%s %s\n' "$hash" "$name" >> "$out";; esac
+    done < "$tmp"
+    rm -f "$tmp"
+    [ -s "$out" ]
+}
+# Build the download plan for kind cores|deps|all into $3 and set MT_PLAN_SOURCE (manifest|builtin).
+mt_package_plan() {
+    local base="$1" kind="$2" out="$3" all hash item
+    local -A seen=()
+    all=$(mktemp "$SECURE_TMP/plan.XXXXXX") || return 1
+    if mt_fetch_package_manifest "$base" "$all"; then MT_PLAN_SOURCE=manifest
+    else
+        MT_PLAN_SOURCE=builtin; : > "$all"
+        for item in "${ALL_PACKAGES[@]}"; do printf '%s %s\n' - "$item" >> "$all"; done
+    fi
+    : > "$out"
+    while read -r hash item; do
+        [ -z "${seen[$item]:-}" ] || continue; seen[$item]=1
+        case "$kind" in
+            cores) [[ "$item" != *.deb ]] || continue;;
+            deps)  [[ "$item" == *.deb ]] || continue;;
+        esac
+        printf '%s %s\n' "$hash" "$item" >> "$out"
+    done < "$all"
+    rm -f "$all"
+    [ -s "$out" ]
+}
+# Download + validate every item of the plan, then install what passed. One bad file no longer hides the
+# reason or blocks the others: each failure is printed with its file name and cause (HTTP error, checksum,
+# not an ELF/.deb, size). Returns 1 if anything failed; the valid items are still installed.
+fetch_package_group() {
+    local base="$1" kind="$2" show="${3:-0}" stage plan item hash file i size reason rc=0 n_ok=0 sys_arch
+    local -a names=() hashes=() status=() reasons=() files=()
+    sys_arch=$(uname -m)
+    stage=$(mktemp -d "$SECURE_TMP/packages.XXXXXX") || return 1
+    plan="$stage/.plan"
+    if ! mt_package_plan "$base" "$kind" "$plan"; then
+        echo -e "  ${R}✖ Nothing to download for '${kind}' from ${base}${NC}" >&2; rm -rf "$stage"; return 1
+    fi
+    while read -r hash item; do hashes+=("$hash"); names+=("$item"); done < "$plan"
+    [ "${MT_PLAN_SOURCE:-}" != builtin ] || echo -e "  ${DIM}● packages/manifest.txt not found at the source; using the built-in package list.${NC}"
+    for i in "${!names[@]}"; do
+        item="${names[$i]}"; hash="${hashes[$i]}"; file="$stage/$item"; reason=''
+        if ! mt_download "$(mt_cb_url "$base/$item")" "$file" 2>"$stage/.err"; then
+            reason="download failed: $(grep -v '^[[:space:]]*$' "$stage/.err" 2>/dev/null | tail -n1)"
+        else
+            reason=$(mt_package_problem "$file" "$item" "$hash")
+        fi
+        if [ -n "$reason" ]; then rm -f "$file"; status+=(failed); reasons+=("$item — $reason"); rc=1
+        else status+=(ok); n_ok=$((n_ok+1)); fi
+    done
+    if [ "$n_ok" -gt 0 ]; then
+        for i in "${!names[@]}"; do [ "${status[$i]}" != ok ] || files+=("$stage/${names[$i]}" "$LOCAL_DIR/packages/${names[$i]}"); done
+        mt_install_files 755 "${files[@]}" || rc=1
+        # Engines go to their service locations; every .deb is installed (missing or older ones only).
+        MT_DEB_FAILED=()
+        deploy_binaries_from_dir "$stage" || rc=1
+        for i in "${!names[@]}"; do
+            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || status[$i]=failed; done
         done
     fi
+    if [ "$show" == 1 ]; then
+        local current=0 version label
+        for i in "${!names[@]}"; do
+            item="${names[$i]}"; current=$((current+1)); label="$item"; version="${BIN_VERSIONS[$item]:-Core}"
+            if [[ "$item" == *.deb ]]; then
+                label="${item%%_*}"; version="${item#*_}"; version="${version%%_*}"
+                [[ "$item" == *_* ]] || version='?'
+            fi
+            draw_item_progress "$current" "${#names[@]}" "$label" "$version" "${status[$i]}"
+        done
+    fi
+    for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
     rm -rf "$stage"
+    return "$rc"
+}
+# GitHub: the branch archive of the same repo that MTUNNEL_GITHUB_BASE points to. Mirror: <base>/MTunnel.zip
+# (upload a zip of the whole repo folder there).
+mt_repo_archive_url() {
+    local base="$1"
+    if [[ "$base" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)$ ]]; then
+        printf 'https://github.com/%s/%s/archive/refs/heads/%s.zip' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
+    else
+        printf '%s/MTunnel.zip' "${base%/}"
+    fi
+}
+# ONE mechanism for GitHub and the mirror: fetch the whole repo as a single archive (HTTP hosts cannot list a
+# folder, an archive is the only thing both can serve), unpack it on the server, build packages/manifest.txt from the
+# files that are really there, and install item by item. Anything that cannot be installed is reported with its
+# reason and skipped; the next item is still processed.
+#
+# Writes <dir>/manifest.txt ("<sha256>  <name>") for every engine / .deb found in <dir>.
+mt_build_local_manifest() {
+    local dir="$1" f name n=0 tmp
+    tmp=$(mktemp "$SECURE_TMP/localmanifest.XXXXXX") || return 1
+    for f in "$dir"/*; do
+        [ -f "$f" ] || continue; name="${f##*/}"
+        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
+        case "$name" in *.deb|bh|backhaul|rathole|paqet|gost|haproxy) ;; *) continue;; esac
+        printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$name" >> "$tmp"; n=$((n+1))
+    done
+    if [ "$n" -eq 0 ]; then rm -f "$tmp"; return 1; fi
+    cat "$tmp" > "$dir/manifest.txt"; rm -f "$tmp"
+}
+# Install what the packages folder <dir> contains (kind: cores | deps | all). Valid files are installed and cached
+# in /root/mtunnel/packages together with the generated manifest.txt; invalid ones are listed and skipped.
+mt_install_packages_dir() {
+    local dir="$1" kind="$2" show="${3:-0}" hash item i rc=0 reason n_ok=0 stage current=0 label version
+    local -a names=() status=() reasons=() files=()
+    if ! mt_build_local_manifest "$dir"; then
+        echo -e "  ${R}✖ No engines or .deb packages found in the packages folder.${NC}" >&2; return 1
+    fi
+    stage=$(mktemp -d "$SECURE_TMP/pkginst.XXXXXX") || return 1
+    while read -r hash item; do
+        case "$kind" in cores) [[ "$item" != *.deb ]] || continue;; deps) [[ "$item" == *.deb ]] || continue;; esac
+        names+=("$item")
+        reason=$(mt_package_problem "$dir/$item" "$item" "$hash")
+        if [ -n "$reason" ]; then status+=(failed); reasons+=("$item — $reason"); rc=1
+        else status+=(ok); cp -f "$dir/$item" "$stage/$item"; files+=("$dir/$item" "$LOCAL_DIR/packages/$item"); n_ok=$((n_ok+1)); fi
+    done < "$dir/manifest.txt"
+    if [ "${#names[@]}" -eq 0 ]; then echo -e "  ${R}✖ Nothing of this kind in the packages folder.${NC}" >&2; rm -rf "$stage"; return 1; fi
+    if [ "$n_ok" -gt 0 ]; then
+        mt_install_files 755 "${files[@]}" "$dir/manifest.txt" "$LOCAL_DIR/packages/manifest.txt" || rc=1
+        MT_DEB_FAILED=()
+        deploy_binaries_from_dir "$stage" || rc=1
+        for i in "${!names[@]}"; do
+            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || status[$i]=failed; done
+        done
+    fi
+    if [ "$show" == 1 ]; then
+        for i in "${!names[@]}"; do
+            item="${names[$i]}"; current=$((current+1)); label="$item"; version="${BIN_VERSIONS[$item]:-Core}"
+            if [[ "$item" == *.deb ]]; then
+                label="${item%%_*}"; version="${item#*_}"; version="${version%%_*}"; [[ "$item" == *_* ]] || version='?'
+            fi
+            draw_item_progress "$current" "${#names[@]}" "$label" "$version" "${status[$i]}"
+        done
+    fi
+    for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
+    rm -rf "$stage"
+    return "$rc"
+}
+# Download + unpack the repo archive. Sets MT_ARCHIVE_WORK (caller deletes), MT_ARCHIVE_ROOT (complete script
+# bundle, or empty) and MT_ARCHIVE_PKGS (its packages folder, or empty).
+mt_fetch_repo_archive() {
+    local url="$1" f err
+    MT_ARCHIVE_ROOT=''; MT_ARCHIVE_PKGS=''
+    MT_ARCHIVE_WORK=$(mktemp -d "$SECURE_TMP/archive.XXXXXX") || return 1
+    mkdir "$MT_ARCHIVE_WORK/extracted"; f="$MT_ARCHIVE_WORK/repo.archive"; err="$MT_ARCHIVE_WORK/.err"
+    echo -e "  ${DIM}● Downloading the whole repository as one archive...${NC}"
+    if ! mt_download "$url" "$f" 2>"$err"; then
+        echo -e "  ${R}✖ Archive download failed: $(grep -v '^[[:space:]]*$' "$err" | tail -n1)${NC}" >&2; return 1
+    fi
+    if ! mt_is_archive_file "$f"; then echo -e "  ${R}✖ The link did not return an archive: ${url}${NC}" >&2; return 1; fi
+    mt_ensure_unzip || true
+    if ! mt_extract_archive "$f" "$MT_ARCHIVE_WORK/extracted"; then
+        echo -e "  ${R}✖ Archive could not be extracted (unsupported, unsafe, or unzip missing).${NC}" >&2; return 1
+    fi
+    MT_ARCHIVE_ROOT=$(mt_find_bundle_root "$MT_ARCHIVE_WORK/extracted" 2>/dev/null) || MT_ARCHIVE_ROOT=''
+    if [ -n "$MT_ARCHIVE_ROOT" ] && [ -d "$MT_ARCHIVE_ROOT/packages" ]; then MT_ARCHIVE_PKGS="$MT_ARCHIVE_ROOT/packages"
+    else MT_ARCHIVE_PKGS=$(find "$MT_ARCHIVE_WORK/extracted" -maxdepth 4 -type d -name packages -print -quit 2>/dev/null); fi
+    return 0
+}
+# what = scripts | engines | deps | all. Returns 9 when the archive is unavailable (caller falls back).
+# For "all" the result is the script bundle's result; package failures are printed and flagged in OTA_PKG_FAILED.
+ota_sync_from_archive() {
+    local what="$1" url="$2" kind pkg_rc=0 script_rc=0 did_pkg=0
+    OTA_PKG_FAILED=0
+    if ! mt_fetch_repo_archive "$url"; then rm -rf "$MT_ARCHIVE_WORK"; return 9; fi
+    if [ "$what" != scripts ]; then
+        case "$what" in engines) kind=cores;; deps) kind=deps;; *) kind=all;; esac
+        echo -e "\n  ${W}Packages${NC} ${DIM}(${what}: every file in the packages folder)${NC}"
+        if [ -z "$MT_ARCHIVE_PKGS" ]; then echo -e "  ${R}✖ The archive has no packages folder.${NC}" >&2; pkg_rc=1
+        else mt_install_packages_dir "$MT_ARCHIVE_PKGS" "$kind" 1 || pkg_rc=$?; fi
+        did_pkg=1
+    fi
+    if [ "$what" == scripts ] || [ "$what" == all ]; then
+        echo -e "\n  ${W}Scripts${NC} ${DIM}(shared core + all modules)${NC}"
+        if [ -z "$MT_ARCHIVE_ROOT" ]; then echo -e "  ${R}✖ No complete script bundle found in the archive.${NC}" >&2; script_rc=1
+        else install_bundle_scripts "$MT_ARCHIVE_ROOT" 1 || script_rc=$?; fi
+    fi
+    rm -rf "$MT_ARCHIVE_WORK"
+    if [ "$what" == all ]; then [ "$pkg_rc" == 0 ] || OTA_PKG_FAILED=1; return "$script_rc"; fi
+    [ "$did_pkg" == 1 ] && return "$pkg_rc"
+    return "$script_rc"
+}
+# Archive first; if it cannot be obtained, the old file-by-file download takes over.
+ota_group_install() {
+    local what="$1" scripts_base="$2" pkg_base="$3" rc=0
+    ota_sync_from_archive "$what" "$(mt_repo_archive_url "$scripts_base")" || rc=$?
+    if [ "$rc" == 9 ]; then
+        echo -e "\n  ${Y}● Single-archive download unavailable; falling back to file-by-file download.${NC}\n"
+        rc=0; OTA_PKG_FAILED=0
+        case "$what" in
+            scripts) sync_script_bundle "$scripts_base" 1 || rc=$?;;
+            engines) fetch_package_group "$pkg_base" cores 1 || rc=$?;;
+            deps)    fetch_package_group "$pkg_base" deps 1 || rc=$?;;
+            all)     fetch_package_group "$pkg_base" cores 1 || OTA_PKG_FAILED=1
+                     fetch_package_group "$pkg_base" deps 1 || OTA_PKG_FAILED=1
+                     sync_script_bundle "$scripts_base" 1 || rc=$?;;
+        esac
+    fi
     return "$rc"
 }
 render_ota_menu() {
@@ -1199,7 +1471,8 @@ render_ota_menu() {
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Download Main Script${NC}$(module_update_badge main)"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Download Mirror Script${NC}$(module_update_badge mmirror)"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Download Prerequisites${NC} ${DIM}(DEB Packages)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Download & Install Prerequisites${NC} ${DIM}(every .deb in packages)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}A${NC} ${DIM}❯${NC} ${C}Download Everything${NC} ${DIM}(whole repo as one archive: scripts + engines + every .deb)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ DOWNLOAD FROM IRANIAN MIRROR ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1207,7 +1480,8 @@ render_ota_menu() {
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Download Main Script${NC}$(module_update_badge main)"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Download Mirror Script${NC}$(module_update_badge mmirror)"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}Download Prerequisites${NC} ${DIM}(DEB Packages)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}Download & Install Prerequisites${NC} ${DIM}(every .deb in packages)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}B${NC} ${DIM}❯${NC} ${G}Download Everything${NC} ${DIM}(whole repo as one archive: scripts + engines + every .deb)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ OFFLINE & MANUAL INSTALL ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1339,6 +1613,7 @@ ota_update_one_file() {
     fi
     if ! validate_component_candidate "$module" "$file"; then
         echo -e "  ${R}✖ Downloaded file is invalid or incompatible. Existing script preserved.${NC}"
+        echo -e "  ${DIM}  Tip: 'Download Scripts' (1/6) or 'Download Everything' (A/B) validates with the bundle's own shared core.${NC}"
         rm -rf "$work"; return 1
     fi
     target=$(component_primary_target "$module")
@@ -1379,7 +1654,7 @@ show_ota_update_hub() {
                     0)  # Download scripts (whole bundle: shared core + every module + installer)
                         draw_main_header
                         echo -e "\n  ${DIM}┌─[ DOWNLOADING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
-                        sync_script_bundle "$base_scripts" 1 && sync_rc=0 || sync_rc=$?
+                        sync_rc=0; ota_group_install scripts "$base_scripts" "$base_packages" || sync_rc=$?
                         if [ "$sync_rc" == 0 ]; then
                             : > "$UPDATE_FILE"
                             echo -e "\n\n  ${G}● Scripts downloaded and installed. Press Enter to reload core...${NC}\n"
@@ -1397,20 +1672,38 @@ show_ota_update_hub() {
                     3)  # Download engines (binary cores)
                         draw_main_header
                         echo -e "\n  ${DIM}┌─[ DOWNLOADING ENGINES FROM ${source_name} (BH, RATHOLE, PAQET, GOST, HAPROXY) ]${NC}\n"
-                        if fetch_package_group "$base_packages" cores 1; then
+                        if ota_group_install engines "$base_scripts" "$base_packages"; then
                             echo -e "\n\n  ${G}● Engines downloaded and installed successfully.${NC}\n"
                         else
-                            echo -e "\n  ${R}✖ Engine download failed. Check the reported error.${NC}\n" >&2
+                            echo -e "\n  ${R}✖ Some engines failed (reasons above). Engines that passed validation were still installed.${NC}\n" >&2
                         fi;;
                     4)  # Download prerequisites (DEB packages)
                         draw_main_header
-                        echo -e "\n  ${DIM}┌─[ DOWNLOADING PREREQUISITES FROM ${source_name} (DEB PACKAGES) ]${NC}\n"
-                        if fetch_package_group "$base_packages" deps 1; then
-                            echo -e "\n\n  ${G}● Prerequisites downloaded successfully.${NC}\n"
+                        echo -e "\n  ${DIM}┌─[ DOWNLOADING + INSTALLING PREREQUISITES FROM ${source_name} (DEB PACKAGES) ]${NC}\n"
+                        if ota_group_install deps "$base_scripts" "$base_packages"; then
+                            echo -e "\n\n  ${G}● Prerequisites downloaded and installed successfully.${NC}\n"
                         else
-                            echo -e "\n  ${R}✖ Prerequisite download failed. Check the reported error.${NC}\n" >&2
+                            echo -e "\n  ${R}✖ Some prerequisites failed (reasons above). Packages that passed validation were still installed.${NC}\n" >&2
                         fi;;
                 esac;;
+            a|A|b|B)  # Everything in one press, same mechanism for GitHub and the mirror
+                if [[ "$option" == [aA] ]]; then
+                    base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS/packages"; source_name='OFFICIAL GITHUB'
+                else
+                    base_scripts="$MIRROR_SCRIPTS"; base_packages="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'
+                fi
+                draw_main_header
+                echo -e "\n  ${DIM}┌─[ DOWNLOADING EVERYTHING FROM ${source_name} ]${NC}\n"
+                sync_rc=0; ota_group_install all "$base_scripts" "$base_packages" || sync_rc=$?
+                if [ "$sync_rc" == 0 ]; then
+                    : > "$UPDATE_FILE"
+                    [ "${OTA_PKG_FAILED:-0}" != 1 ] || echo -e "\n  ${Y}● Some packages failed (reasons above); everything else was installed.${NC}"
+                    echo -e "\n\n  ${G}● Scripts installed. Press Enter to reload core...${NC}\n"
+                    read -r confirm
+                    reload_dashboard
+                else
+                    echo -e "\n  ${R}✖ Script install failed (reason above). Previous scripts preserved.${NC}\n" >&2
+                fi;;
             11) show_local_install; continue;;
             12)  # Install from a direct link (single .sh component or a full .zip bundle)
                 work=$(mktemp -d "$SECURE_TMP/link.XXXXXX") || return 1

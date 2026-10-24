@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.3.4).
-MODULE_VERSION="1.3.4"
+MODULE_VERSION="1.4.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -75,7 +75,7 @@ case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-
 
 if [ "$(id -u)" -ne 0 ] && [ "${MPORTER_LIB:-0}" != "1" ]; then echo "MPorter must be run as root."; exit 1; fi
 
-mkdir -p "$LOCAL_DIR/packages" /etc/haproxy /var/lib/haproxy /etc/gost /etc/realm "$OBFS_DIR" "$IPT_DIR" "$STATE_DIR" /usr/local/bin "$SECURE_TMP" /var/lock 2>/dev/null
+mkdir -p "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" /etc/haproxy /var/lib/haproxy /etc/gost /etc/realm "$OBFS_DIR" "$IPT_DIR" "$STATE_DIR" /usr/local/bin "$SECURE_TMP" /var/lock 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 touch "$IPT_CONF" 2>/dev/null; chmod +x "$IPT_CONF" 2>/dev/null
 
@@ -1084,7 +1084,7 @@ mp_choose_core_source() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack + official fallback${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom HTTPS link (asked per engine)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local /root/mtunnel/packages${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local /root/mtunnel/engines${NC}"
     echo -ne "  ${DIM}└─${NC} ${C}Select [1-4 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
     [[ "$choice" =~ ^[1-4]$ ]] || return 1
     MP_CORE_SOURCE="$choice"
@@ -1163,8 +1163,12 @@ mp_download_core() {
             fi
             [[ "$url" == https://* ]] || { rm -rf "$work"; echo 'Use an HTTPS direct link.' >&2; return 1; }; urls=("$url");;
         4)
-            locals=("${LOCAL_DIR:-/root/mtunnel}/packages/$engine" "${LOCAL_DIR:-/root/mtunnel}/packages/$asset" "${LOCAL_DIR:-/root/mtunnel}/packages/$engine.tar.gz")
-            for item in "${locals[@]}"; do [ ! -f "$item" ] || { cp "$item" "$package"; break; }; done
+            locals=("${LOCAL_DIR:-/root/mtunnel}/engines/$engine" "${LOCAL_DIR:-/root/mtunnel}/engines/$asset" "${LOCAL_DIR:-/root/mtunnel}/engines/$engine.tar.gz")
+            # Binary first; if it is missing or not usable, the original archive is the fallback.
+            for item in "${locals[@]}"; do
+                [ -f "$item" ] && { mt_valid_elf "$item" || mt_is_archive_file "$item"; } || continue
+                cp "$item" "$package"; break
+            done
             [ -s "$package" ] || { echo "No local $engine binary / $asset found." >&2; rm -rf "$work"; return 1; }; urls=();;
         *) rm -rf "$work"; return 1;;
     esac
@@ -1172,6 +1176,7 @@ mp_download_core() {
         mp_ensure_download_tools 0 || { rm -rf "$work"; return 1; }
         for url in "${urls[@]}"; do
             if mp_download "$url" "$package"; then
+                mt_engine_cache "$package" "$url"
                 rm -rf "$work/extracted"
                 candidate=$(mp_unpack_core "$engine" "$package" "$work/extracted") && break
                 echo "Downloaded package is incompatible with $engine / $(uname -m)." >&2

@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.3.4).
-MODULE_VERSION="1.3.4"
+MODULE_VERSION="1.4.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -54,7 +54,7 @@ LISTENER_PIDS=()
 SYNC_PORT=49999
 SPEED_PORT=49998
 
-mkdir -p "$LOCAL_DIR/packages" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then

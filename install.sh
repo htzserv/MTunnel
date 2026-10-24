@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.3.4).
-MODULE_VERSION="1.3.4"
+MODULE_VERSION="1.4.0"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -411,10 +411,10 @@ installer_main() {
     files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
     if [ "$with_cores" == 1 ]; then
         for name in bh rathole paqet gost haproxy; do
-            path="packages/$name"
+            path="engines/$name"
             if [ -n "$remote" ]; then
-                mkdir -p "$work/scripts/packages" || return 1
-                mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || { echo "Could not fetch $path" >&2; return 1; }
+                mkdir -p "$work/scripts/engines" || return 1
+                mt_download "$(mt_cb_url "$remote/packages/$name")" "$work/scripts/$path" || { echo "Could not fetch packages/$name" >&2; return 1; }
             fi
             mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
             files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")

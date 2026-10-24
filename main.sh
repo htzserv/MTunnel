@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.3.5).
-MODULE_VERSION="1.3.5"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.0).
+MODULE_VERSION="1.4.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -160,6 +160,12 @@ ALL_PACKAGES=(
     "paqet"
     "gost"
     "haproxy"
+    "realm"
+    "backhaul_linux_amd64.tar.gz"
+    "rathole-x86_64-unknown-linux-gnu.zip"
+    "paqet-linux-amd64-v1.0.0-alpha.21.tar.gz"
+    "gost-linux-amd64-2.11.5.gz"
+    "realm-x86_64-unknown-linux-musl.tar.gz"
     "cron_3.0pl1-184ubuntu2_amd64.deb"
     "curl_8.5.0-2ubuntu10.11_amd64.deb"
     "gzip_1.12-1ubuntu3.2_amd64.deb"
@@ -179,7 +185,7 @@ declare -A BIN_VERSIONS=(
     ["gost"]="2.11.5"
     ["haproxy"]="2.8.16"
 )
-mkdir -p "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 if [[ ! -x "$MTUNNEL_PATH" ]]; then
     cp "$0" "$MTUNNEL_PATH" 2>/dev/null
@@ -866,16 +872,33 @@ deploy_cached_module() {
 }
 deploy_binaries_from_dir() {
     local src_dir="$1" name source unit rc=0 deb arch
+    MT_DEPLOY_FAILED=()
     [ -d "$src_dir" ] || return 1
+    # Original archive for each engine: used when the raw binary is missing or not a valid ELF.
+    declare -A ARC=([bh]=backhaul_linux_amd64.tar.gz [rathole]=rathole-x86_64-unknown-linux-gnu.zip
+                    [paqet]=paqet-linux-amd64-v1.0.0-alpha.21.tar.gz [gost]=gost-linux-amd64-2.11.5.gz)
     for name in bh rathole paqet gost haproxy; do
         source="$src_dir/$name"
         [ "$name" != bh ] || [ -f "$source" ] || source="$src_dir/backhaul"
-        [ -f "$source" ] || continue
-        mt_valid_elf "$source" || { echo "Invalid/incompatible binary: $source" >&2; rc=1; continue; }
+        if ! { [ -f "$source" ] && mt_valid_elf "$source"; }; then
+            if [ -n "${ARC[$name]:-}" ] && [ -f "$src_dir/${ARC[$name]}" ]; then
+                source="$src_dir/${ARC[$name]}"
+            elif [ -f "$source" ]; then
+                echo "Invalid/incompatible binary: $source" >&2; rc=1; MT_DEPLOY_FAILED+=("$name"); continue
+            else
+                continue
+            fi
+        fi
         case "$name" in bh) unit=mbackhaul;; rathole) unit=mrathole;; paqet) unit=mpaqet;; *) unit="$name";; esac
-        mt_update_core "$name" "$unit" "$source" local || rc=1
-        if [ "$src_dir" != "$LOCAL_DIR/packages" ]; then mt_install_files 755 "$source" "$LOCAL_DIR/packages/$name" || rc=1; fi
+        mt_update_core "$name" "$unit" "$source" local || { rc=1; MT_DEPLOY_FAILED+=("$name"); }
+        if [ "$src_dir" != "$(mt_engines_dir)" ] && mt_valid_elf "$source"; then mt_install_files 755 "$source" "$(mt_engines_dir)/$name" || rc=1; fi
     done
+    # Original archives (tar.gz / zip / gz) are kept next to the binaries: they are the fallback when a binary is unusable.
+    if [ "$src_dir" != "$(mt_engines_dir)" ]; then
+        for f in "$src_dir"/*.tar.gz "$src_dir"/*.zip "$src_dir"/*.gz; do
+            [ -f "$f" ] && mt_is_archive_file "$f" && mt_install_files 644 "$f" "$(mt_engines_dir)/${f##*/}" || true
+        done
+    fi
     local -a debs=()
     for deb in "$src_dir"/*.deb; do [ -f "$deb" ] && debs+=("$deb"); done
     if [ "${#debs[@]}" -gt 0 ]; then mt_install_debs "${debs[@]}" || rc=1; fi
@@ -888,6 +911,7 @@ deploy_binaries_from_dir() {
 mt_install_debs() {
     local deb pkg ver arch inst sys_arch log rc=0 installed_n=0 skipped_n=0
     local -a todo=() failed=()
+    declare -gA MT_DEB_REASON=()
     MT_DEB_FAILED=()
     sys_arch=$(dpkg --print-architecture 2>/dev/null)
     for deb in "$@"; do
@@ -921,7 +945,7 @@ mt_install_debs() {
                     done
                     pending=("${next[@]}")
                 done
-                for deb in "${pending[@]}"; do failed+=("${deb##*/}: ${lasts[$deb]:-unknown error}"); MT_DEB_FAILED+=("${deb##*/}"); done
+                for deb in "${pending[@]}"; do failed+=("${deb##*/}: ${lasts[$deb]:-unknown error}"); MT_DEB_FAILED+=("${deb##*/}"); MT_DEB_REASON["${deb##*/}"]="${lasts[$deb]:-unknown error}"; done
                 [ "${#failed[@]}" -eq 0 ] || rc=1
             fi
         else installed_n=${#todo[@]}; fi
@@ -1168,8 +1192,9 @@ sync_script_bundle() {
 mt_local_source_has_packages() {
     local dir="$1" f
     [ -d "$dir" ] || return 1
-    for f in bh backhaul rathole paqet gost haproxy; do [ -f "$dir/$f" ] && return 0; done
-    compgen -G "$dir/*.deb" >/dev/null 2>&1
+    for f in bh backhaul rathole paqet gost haproxy realm; do [ -f "$dir/$f" ] && return 0; done
+    compgen -G "$dir/*.deb" >/dev/null 2>&1 && return 0
+    compgen -G "$dir/*.tar.gz" >/dev/null 2>&1 || compgen -G "$dir/*.zip" >/dev/null 2>&1 || compgen -G "$dir/*.gz" >/dev/null 2>&1
 }
 mt_bundle_root_is_complete() {
     local d="$1" mod rel
@@ -1210,12 +1235,35 @@ offline_local_deploy() {
     bundle=$(mt_find_bundle_root "$source") || find_rc=$?
     if [ "$find_rc" == 2 ]; then [ -z "$stage" ] || rm -rf "$stage"; return 1; fi
     if [ -n "$bundle" ]; then
+        # A package was selected: rebuild the MTunnel folder from it (tunnel state is kept).
+        # The package is copied out first when it lives inside that folder, so it is not deleted under us.
+        case "$bundle" in
+            "$LOCAL_DIR"|"$LOCAL_DIR"/*)
+                local keep; keep=$(mktemp -d "$SECURE_TMP/package.XXXXXX") || return 1
+                cp -a "$bundle/." "$keep/" || { rm -rf "$keep"; return 1; }
+                [ -n "$stage" ] && rm -rf "$stage"; stage="$keep"; bundle="$keep";;
+        esac
+        # Tunnel state, backups and reports are moved aside and put back; everything else is rebuilt from the package.
+        local keep_dir keep_item; keep_dir=$(mktemp -d "$SECURE_TMP/keep.XXXXXX") || { [ -z "$stage" ] || rm -rf "$stage"; return 1; }
+        for keep_item in tunnels backups reports; do
+            [ -e "$LOCAL_DIR/$keep_item" ] && mv "$LOCAL_DIR/$keep_item" "$keep_dir/"
+        done
+        rm -rf "$LOCAL_DIR" || { [ -z "$stage" ] || rm -rf "$stage"; return 1; }
+        mkdir -p "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" || { [ -z "$stage" ] || rm -rf "$stage"; return 1; }
+        for keep_item in tunnels backups reports; do
+            [ -e "$keep_dir/$keep_item" ] && mv "$keep_dir/$keep_item" "$LOCAL_DIR/"
+        done
+        rm -rf "$keep_dir"
         install_bundle_scripts "$bundle" "${2:-0}" || { rc=$?; [ -z "$stage" ] || rm -rf "$stage"; return "$rc"; }
-        if [ -d "$bundle/packages" ] && mt_local_source_has_packages "$bundle/packages"; then
-            deploy_binaries_from_dir "$bundle/packages" || {
-                rc=1; echo 'Scripts were installed, but some packages/engines failed to install.' >&2
-            }
-        fi
+        # engines/ = binaries + archives, prereqs/ = .deb files.
+        local sub
+        for sub in engines prereqs; do
+            if [ -d "$bundle/$sub" ] && mt_local_source_has_packages "$bundle/$sub"; then
+                deploy_binaries_from_dir "$bundle/$sub" || {
+                    rc=1; echo "Scripts were installed, but some files in $sub/ failed to install." >&2
+                }
+            fi
+        done
     elif mt_local_source_has_packages "$source"; then
         deploy_binaries_from_dir "$source" || rc=1
     else
@@ -1236,11 +1284,12 @@ mt_package_problem() {
     fi
     case "$item" in
         *.deb) dpkg-deb --info "$file" >/dev/null 2>&1 || printf 'not a valid .deb package (%s bytes)' "$size";;
+        *.tar.gz|*.zip|*.gz) mt_is_archive_file "$file" || printf 'not a valid archive (%s bytes)' "$size";;
         *)     mt_valid_elf "$file" || printf 'not a valid %s ELF executable (%s bytes; empty or wrong upload?)' "$(uname -m)" "$size";;
     esac
     return 0
 }
-# packages/manifest.txt lists every file of the packages folder ("<sha256>  <name>" or just "<name>").
+# manifest.txt (remote repo layout) lists every file of the repo packages folder ("<sha256>  <name>" or just "<name>").
 # With it, a .deb dropped into the repo/mirror is picked up automatically (no script edit); the optional
 # sha256 is verified. Without a manifest the built-in ALL_PACKAGES list is used. Prints "<hash|-> <name>" lines.
 mt_fetch_package_manifest() {
@@ -1284,6 +1333,32 @@ mt_package_plan() {
     rm -f "$all"
     [ -s "$out" ]
 }
+# Final list of a group install: what is installed and what is not, with the reason for each.
+# Written to $MT_REPORT_FILE when set (background runs), otherwise to the terminal.
+mt_group_report() {
+    local -n _rn="$1" _rs="$2" _rr="$3"
+    local out=/dev/stdout i r reason okc=0 badc=0
+    [ -n "${MT_REPORT_FILE:-}" ] && out="$MT_REPORT_FILE"
+    {
+        echo -e "\n  ${W}Installed${NC}"
+        for i in "${!_rn[@]}"; do
+            [ "${_rs[$i]}" == ok ] || continue
+            okc=$((okc+1)); echo -e "    ${G}✔${NC} ${_rn[$i]}"
+        done
+        [ "$okc" -gt 0 ] || echo -e "    ${DIM}(none)${NC}"
+        echo -e "\n  ${W}Not installed${NC}"
+        for i in "${!_rn[@]}"; do
+            [ "${_rs[$i]}" == failed ] || continue
+            badc=$((badc+1)); reason=''
+            for r in "${_rr[@]}"; do
+                if [[ "$r" == "${_rn[$i]} — "* ]]; then reason="${r#* — }"; break; fi
+            done
+            echo -e "    ${R}✖${NC} ${_rn[$i]}  ${DIM}${reason:-unknown reason}${NC}"
+        done
+        [ "$badc" -gt 0 ] || echo -e "    ${DIM}(none)${NC}"
+    } >> "$out" 2>/dev/null
+    [ "$badc" -eq 0 ]
+}
 # Download + validate every item of the plan, then install what passed. One bad file no longer hides the
 # reason or blocks the others: each failure is printed with its file name and cause (HTTP error, checksum,
 # not an ELF/.deb, size). Returns 1 if anything failed; the valid items are still installed.
@@ -1291,13 +1366,13 @@ fetch_package_group() {
     local base="$1" kind="$2" show="${3:-0}" stage plan item hash file i size reason rc=0 n_ok=0 sys_arch
     local -a names=() hashes=() status=() reasons=() files=()
     sys_arch=$(uname -m)
-    stage=$(mktemp -d "$SECURE_TMP/packages.XXXXXX") || return 1
+    stage=$(mktemp -d "$SECURE_TMP/download.XXXXXX") || return 1
     plan="$stage/.plan"
     if ! mt_package_plan "$base" "$kind" "$plan"; then
         echo -e "  ${R}✖ Nothing to download for '${kind}' from ${base}${NC}" >&2; rm -rf "$stage"; return 1
     fi
     while read -r hash item; do hashes+=("$hash"); names+=("$item"); done < "$plan"
-    [ "${MT_PLAN_SOURCE:-}" != builtin ] || echo -e "  ${DIM}● packages/manifest.txt not found at the source; using the built-in package list.${NC}"
+    [ "${MT_PLAN_SOURCE:-}" != builtin ] || echo -e "  ${DIM}● manifest.txt not found at the source; using the built-in package list.${NC}"
     for i in "${!names[@]}"; do
         item="${names[$i]}"; hash="${hashes[$i]}"; file="$stage/$item"; reason=''
         if ! mt_download "$(mt_cb_url "$base/$item")" "$file" 2>"$stage/.err"; then
@@ -1309,13 +1384,14 @@ fetch_package_group() {
         else status+=(ok); n_ok=$((n_ok+1)); fi
     done
     if [ "$n_ok" -gt 0 ]; then
-        for i in "${!names[@]}"; do [ "${status[$i]}" != ok ] || files+=("$stage/${names[$i]}" "$LOCAL_DIR/packages/${names[$i]}"); done
+        for i in "${!names[@]}"; do [ "${status[$i]}" != ok ] || files+=("$stage/${names[$i]}" "$(mt_cache_dir_for "${names[$i]}")/${names[$i]}"); done
         mt_install_files 755 "${files[@]}" || rc=1
         # Engines go to their service locations; every .deb is installed (missing or older ones only).
-        MT_DEB_FAILED=()
+        MT_DEB_FAILED=(); MT_DEPLOY_FAILED=()
         deploy_binaries_from_dir "$stage" || rc=1
         for i in "${!names[@]}"; do
-            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || status[$i]=failed; done
+            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || { status[$i]=failed; reasons+=("${names[$i]} — dpkg: ${MT_DEB_REASON[$item]:-failed}"); }; done
+            for item in "${MT_DEPLOY_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || { status[$i]=failed; reasons+=("${names[$i]} — could not be installed into its service location"); }; done
         done
     fi
     if [ "$show" == 1 ]; then
@@ -1329,7 +1405,11 @@ fetch_package_group() {
             draw_item_progress "$current" "${#names[@]}" "$label" "$version" "${status[$i]}"
         done
     fi
-    for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
+    if [ "$show" == 1 ]; then
+        mt_group_report names status reasons
+    else
+        for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
+    fi
     rm -rf "$stage"
     return "$rc"
 }
@@ -1355,19 +1435,19 @@ mt_build_local_manifest() {
     for f in "$dir"/*; do
         [ -f "$f" ] || continue; name="${f##*/}"
         [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
-        case "$name" in *.deb|bh|backhaul|rathole|paqet|gost|haproxy) ;; *) continue;; esac
+        case "$name" in *.deb|*.tar.gz|*.zip|*.gz|bh|backhaul|rathole|paqet|gost|haproxy|realm) ;; *) continue;; esac
         printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$name" >> "$tmp"; n=$((n+1))
     done
     if [ "$n" -eq 0 ]; then rm -f "$tmp"; return 1; fi
     cat "$tmp" > "$dir/manifest.txt"; rm -f "$tmp"
 }
-# Install what the packages folder <dir> contains (kind: cores | deps | all). Valid files are installed and cached
-# in /root/mtunnel/packages together with the generated manifest.txt; invalid ones are listed and skipped.
+# Install what the source folder <dir> contains (kind: cores | deps | all). Valid engines/archives are cached in
+# /root/mtunnel/engines and .deb files in /root/mtunnel/prereqs; invalid ones are listed and skipped.
 mt_install_packages_dir() {
     local dir="$1" kind="$2" show="${3:-0}" hash item i rc=0 reason n_ok=0 stage current=0 label version
     local -a names=() status=() reasons=() files=()
     if ! mt_build_local_manifest "$dir"; then
-        echo -e "  ${R}✖ No engines or .deb packages found in the packages folder.${NC}" >&2; return 1
+        echo -e "  ${R}✖ No engines or .deb packages found in the source folder.${NC}" >&2; return 1
     fi
     stage=$(mktemp -d "$SECURE_TMP/pkginst.XXXXXX") || return 1
     while read -r hash item; do
@@ -1375,15 +1455,16 @@ mt_install_packages_dir() {
         names+=("$item")
         reason=$(mt_package_problem "$dir/$item" "$item" "$hash")
         if [ -n "$reason" ]; then status+=(failed); reasons+=("$item — $reason"); rc=1
-        else status+=(ok); cp -f "$dir/$item" "$stage/$item"; files+=("$dir/$item" "$LOCAL_DIR/packages/$item"); n_ok=$((n_ok+1)); fi
+        else status+=(ok); cp -f "$dir/$item" "$stage/$item"; files+=("$dir/$item" "$(mt_cache_dir_for "$item")/$item"); n_ok=$((n_ok+1)); fi
     done < "$dir/manifest.txt"
-    if [ "${#names[@]}" -eq 0 ]; then echo -e "  ${R}✖ Nothing of this kind in the packages folder.${NC}" >&2; rm -rf "$stage"; return 1; fi
+    if [ "${#names[@]}" -eq 0 ]; then echo -e "  ${R}✖ Nothing of this kind in the source folder.${NC}" >&2; rm -rf "$stage"; return 1; fi
     if [ "$n_ok" -gt 0 ]; then
-        mt_install_files 755 "${files[@]}" "$dir/manifest.txt" "$LOCAL_DIR/packages/manifest.txt" || rc=1
-        MT_DEB_FAILED=()
+        mt_install_files 755 "${files[@]}" || rc=1
+        MT_DEB_FAILED=(); MT_DEPLOY_FAILED=()
         deploy_binaries_from_dir "$stage" || rc=1
         for i in "${!names[@]}"; do
-            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || status[$i]=failed; done
+            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || { status[$i]=failed; reasons+=("${names[$i]} — dpkg: ${MT_DEB_REASON[$item]:-failed}"); }; done
+            for item in "${MT_DEPLOY_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || { status[$i]=failed; reasons+=("${names[$i]} — could not be installed into its service location"); }; done
         done
     fi
     if [ "$show" == 1 ]; then
@@ -1395,7 +1476,11 @@ mt_install_packages_dir() {
             draw_item_progress "$current" "${#names[@]}" "$label" "$version" "${status[$i]}"
         done
     fi
-    for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
+    if [ "$show" == 1 ]; then
+        mt_group_report names status reasons
+    else
+        for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
+    fi
     rm -rf "$stage"
     return "$rc"
 }
@@ -1428,7 +1513,7 @@ ota_sync_from_archive() {
     if ! mt_fetch_repo_archive "$url"; then rm -rf "$MT_ARCHIVE_WORK"; return 9; fi
     if [ "$what" != scripts ]; then
         case "$what" in engines) kind=cores;; deps) kind=deps;; *) kind=all;; esac
-        echo -e "\n  ${W}Packages${NC} ${DIM}(${what}: every file in the packages folder)${NC}"
+        echo -e "\n  ${W}Prerequisites & engines${NC} ${DIM}(${what})${NC}"
         if [ -z "$MT_ARCHIVE_PKGS" ]; then echo -e "  ${R}✖ The archive has no packages folder.${NC}" >&2; pkg_rc=1
         else mt_install_packages_dir "$MT_ARCHIVE_PKGS" "$kind" 1 || pkg_rc=$?; fi
         did_pkg=1
@@ -1465,14 +1550,18 @@ render_ota_menu() {
     draw_main_header
     echo -e "\n  ${DIM}┌─[ Update & Local Install ]${NC}"
     echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ INSTALL FULL PACKAGE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}A${NC} ${DIM}❯${NC} ${C}Install Full Package from GitHub${NC} ${DIM}(scripts + engines + every .deb)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}B${NC} ${DIM}❯${NC} ${G}Install Full Package from Mirror${NC} ${DIM}(scripts + engines + every .deb)${NC}"
+    echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ DOWNLOAD FROM OFFICIAL GITHUB ]${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Download Main Script${NC}$(module_update_badge main)"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Download Mirror Script${NC}$(module_update_badge mmirror)"
     echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Download & Install Prerequisites${NC} ${DIM}(every .deb in packages)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}A${NC} ${DIM}❯${NC} ${C}Download Everything${NC} ${DIM}(whole repo as one archive: scripts + engines + every .deb)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Download & Install Prerequisites${NC} ${DIM}(every .deb in prereqs)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ DOWNLOAD FROM IRANIAN MIRROR ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1480,8 +1569,7 @@ render_ota_menu() {
     echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Download Main Script${NC}$(module_update_badge main)"
     echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Download Mirror Script${NC}$(module_update_badge mmirror)"
     echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}Download & Install Prerequisites${NC} ${DIM}(every .deb in packages)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}B${NC} ${DIM}❯${NC} ${G}Download Everything${NC} ${DIM}(whole repo as one archive: scripts + engines + every .deb)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}Download & Install Prerequisites${NC} ${DIM}(every .deb in prereqs)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}├─[ OFFLINE & MANUAL INSTALL ]${NC}"
     echo -e "  ${DIM}│${NC}"
@@ -1613,7 +1701,7 @@ ota_update_one_file() {
     fi
     if ! validate_component_candidate "$module" "$file"; then
         echo -e "  ${R}✖ Downloaded file is invalid or incompatible. Existing script preserved.${NC}"
-        echo -e "  ${DIM}  Tip: 'Download Scripts' (1/6) or 'Download Everything' (A/B) validates with the bundle's own shared core.${NC}"
+        echo -e "  ${DIM}  Tip: 'Download Scripts' (1/6) or 'Install Full Package' (A/B) validates with the bundle's own shared core.${NC}"
         rm -rf "$work"; return 1
     fi
     target=$(component_primary_target "$module")
@@ -1677,14 +1765,26 @@ show_ota_update_hub() {
                         else
                             echo -e "\n  ${R}✖ Some engines failed (reasons above). Engines that passed validation were still installed.${NC}\n" >&2
                         fi;;
-                    4)  # Download prerequisites (DEB packages)
+                    4)  # Download & install prerequisites: progress bar only, output goes to a log
                         draw_main_header
-                        echo -e "\n  ${DIM}┌─[ DOWNLOADING + INSTALLING PREREQUISITES FROM ${source_name} (DEB PACKAGES) ]${NC}\n"
-                        if ota_group_install deps "$base_scripts" "$base_packages"; then
-                            echo -e "\n\n  ${G}● Prerequisites downloaded and installed successfully.${NC}\n"
+                        echo -e "\n  ${DIM}┌─[ PREREQUISITES: ${source_name} ]${NC}\n"
+                        pre_log=$(mktemp "$SECURE_TMP/prereq.XXXXXX.log") || pre_log="$SECURE_TMP/prereq.log"
+                        pre_rc=$(mktemp "$SECURE_TMP/prereq.XXXXXX.rc") || pre_rc="$SECURE_TMP/prereq.rc"
+                        pre_report=$(mktemp "$SECURE_TMP/prereq.XXXXXX.report") || pre_report="$SECURE_TMP/prereq.report"
+                        : > "$pre_report"
+                        ( export MT_REPORT_FILE="$pre_report"; ota_group_install deps "$base_scripts" "$base_packages" >"$pre_log" 2>&1; echo $? >"$pre_rc" ) &
+                        pid=$!
+                        draw_progress_bar "$pid" "Prerequisites"
+                        wait "$pid" 2>/dev/null
+                        cat "$pre_report" 2>/dev/null
+                        if [ "$(cat "$pre_rc" 2>/dev/null)" == 0 ]; then
+                            rm -f "$pre_log"
+                            echo -e "  ${G}● All prerequisites downloaded and installed.${NC}\n"
                         else
-                            echo -e "\n  ${R}✖ Some prerequisites failed (reasons above). Packages that passed validation were still installed.${NC}\n" >&2
-                        fi;;
+                            echo -e "  ${R}✖ Some prerequisites were not installed (see above). Log: ${pre_log}${NC}\n" >&2
+                        fi
+                        rm -f "$pre_rc" "$pre_report"
+                        ;;
                 esac;;
             a|A|b|B)  # Everything in one press, same mechanism for GitHub and the mirror
                 if [[ "$option" == [aA] ]]; then
@@ -1693,7 +1793,7 @@ show_ota_update_hub() {
                     base_scripts="$MIRROR_SCRIPTS"; base_packages="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'
                 fi
                 draw_main_header
-                echo -e "\n  ${DIM}┌─[ DOWNLOADING EVERYTHING FROM ${source_name} ]${NC}\n"
+                echo -e "\n  ${DIM}┌─[ INSTALLING FULL PACKAGE FROM ${source_name} ]${NC}\n"
                 sync_rc=0; ota_group_install all "$base_scripts" "$base_packages" || sync_rc=$?
                 if [ "$sync_rc" == 0 ]; then
                     : > "$UPDATE_FILE"
@@ -1866,8 +1966,8 @@ install_iperf3_source() {
             for deb_f in "$SECURE_TMP"/libiperf*.deb "$SECURE_TMP"/iperf3*.deb; do
                 if [ -s "$deb_f" ]; then
                     dpkg -i --force-confdef --force-confold "$deb_f" >/dev/null 2>&1
-                    mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-                    cp -f "$deb_f" "$LOCAL_DIR/packages/" 2>/dev/null
+                    mkdir -p "$LOCAL_DIR/prereqs" 2>/dev/null
+                    cp -f "$deb_f" "$LOCAL_DIR/prereqs/" 2>/dev/null
                     rm -f "$deb_f"
                 fi
             done
@@ -1875,9 +1975,9 @@ install_iperf3_source() {
             ldconfig 2>/dev/null || true
             ;;
         4)
-            echo -e "\n  ${DIM}● Checking local packages directory for iperf3 and libiperf...${NC}"
+            echo -e "\n  ${DIM}● Checking local prereqs directory for iperf3 and libiperf...${NC}"
             local found_any=false
-            for deb in $(find "$LOCAL_DIR/packages" -type f \( -name "*libiperf*.deb" -o -name "*iperf3*.deb" \) 2>/dev/null | sort -V); do
+            for deb in $(find "$LOCAL_DIR/prereqs" -type f \( -name "*libiperf*.deb" -o -name "*iperf3*.deb" \) 2>/dev/null | sort -V); do
                 if [ -s "$deb" ]; then
                     dpkg -i --force-confdef --force-confold "$deb" >/dev/null 2>&1
                     found_any=true
@@ -1887,7 +1987,7 @@ install_iperf3_source() {
                 apt-get -o DPkg::Lock::Timeout=180 install -f -y -q >/dev/null 2>&1 || true
                 ldconfig 2>/dev/null || true
             else
-                echo -e "  ${R}✖ No iPerf3 or libiperf .deb packages found in ${LOCAL_DIR}/packages/${NC}"
+                echo -e "  ${R}✖ No iPerf3 or libiperf .deb packages found in ${LOCAL_DIR}/prereqs/${NC}"
                 sleep 2
                 return 1
             fi
@@ -1910,8 +2010,8 @@ install_iperf3_source() {
                 dpkg -i --force-confdef --force-confold "$dl_target" >/dev/null 2>&1 || { rm -f "$dl_target"; return 1; }
             fi
             ldconfig 2>/dev/null || true
-            mkdir -p "$LOCAL_DIR/packages" 2>/dev/null
-            cp -f "$dl_target" "$LOCAL_DIR/packages/" 2>/dev/null
+            mkdir -p "$LOCAL_DIR/prereqs" 2>/dev/null
+            cp -f "$dl_target" "$LOCAL_DIR/prereqs/" 2>/dev/null
             rm -f "$dl_target"
             ;;
     esac
@@ -1934,7 +2034,7 @@ run_iperf3() {
         echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official APT Repository (apt-get install libiperf0 iperf3)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror (.deb Packages)${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
         echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Official GitHub Packages (.deb)${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
         echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Custom Direct Link (.deb)${NC}"
         echo -e "  ${DIM}│${NC}"
         echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel / Return to Main Core${NC}\n"
@@ -2017,26 +2117,26 @@ render_main_menu() {
     printf '\n'
     printf '  %b┌─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
-    printf '  %b├─%b %b1%b %b❯%b %bUse Peer Code%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %b2%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
-    printf '  %b├─%b %b3%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
-    printf '  %b├─%b %b4%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
-    printf '  %b├─%b %b5%b %b❯%b %bBackhaul Multiplexer%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
-    printf '  %b├─%b %b6%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
+    printf '  %b├─%b %bp%b %b❯%b %bUse Peer Code%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b1%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
+    printf '  %b├─%b %b2%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
+    printf '  %b├─%b %b3%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
+    printf '  %b├─%b %b4%b %b❯%b %bBackhaul Multiplexer%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
+    printf '  %b├─%b %b5%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ TOOLS & BENCHMARK UTILITIES ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
-    printf '  %b├─%b %b7%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
-    printf '  %b├─%b %b8%b %b❯%b %bLink Test & Protocol Benchmark%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge linktest)"
-    printf '  %b├─%b %b9%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b10%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
-    printf '  %b├─%b %b12%b %b❯%b %bMirror (DNS & APT Optimizer)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mmirror)"
+    printf '  %b├─%b %b6%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
+    printf '  %b├─%b %b7%b %b❯%b %bLink Test & Protocol Benchmark%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge linktest)"
+    printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b9%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
+    printf '  %b├─%b %b10%b %b❯%b %bMirror (DNS & APT Optimizer)%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mmirror)"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$DIM" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b├─%b %b11%b %b❯%b %bUpdate & Local Install%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
-    printf '  %b├─%b %b13%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
-    printf '  %b├─%b %b14%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b12%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
+    printf '  %b├─%b %b13%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
@@ -2207,21 +2307,21 @@ while true; do
     read_with_refresh "  ${C}CORE ❯❯ ${NC}" opt render_main_menu || break
     opt=$(echo "$opt" | tr -d '\r ')
     case $opt in
-        1) use_peer_code ;;
-        2) run_mod "mgre" ;;
-        3) run_mod "mxlan" ;;
-        4) run_mod "mrathole" ;;
-        5) run_mod "mbackhaul" ;;
-        6) run_mod "mpaqet" ;;
-        7) run_mod "mporter" ;;
-        8) run_mod "linktest" ;;
-        9) run_iperf3 ;;
-        10) run_mod "mdoctor" ;;
-        12) run_mod "mmirror" ;;
+        p|P) use_peer_code ;;
+        1) run_mod "mgre" ;;
+        2) run_mod "mxlan" ;;
+        3) run_mod "mrathole" ;;
+        4) run_mod "mbackhaul" ;;
+        5) run_mod "mpaqet" ;;
+        6) run_mod "mporter" ;;
+        7) run_mod "linktest" ;;
+        8) run_iperf3 ;;
+        9) run_mod "mdoctor" ;;
+        10) run_mod "mmirror" ;;
         0) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
         11) show_ota_update_hub ;;
-        13) delete_all_tunnels_keep_files ;;
-        14)
+        12) delete_all_tunnels_keep_files ;;
+        13)
             draw_main_header
             echo -e "\n  ${R}╭────────────────────────────────────────────────────────────╮${NC}"
             echo -e "  ${R}│${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}│${NC}"

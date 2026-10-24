@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.3.4).
-MODULE_VERSION="1.3.4"
+MODULE_VERSION="1.4.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -62,7 +62,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 # Never delete a pre-existing executable merely by opening this menu.
 
-mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$CONF_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
 find "$CONF_DIR" -maxdepth 2 -type f -exec chmod 600 {} + 2>/dev/null || true
 chmod 700 "$SECURE_TMP" 2>/dev/null

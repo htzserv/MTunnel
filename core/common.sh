@@ -576,6 +576,35 @@ mt_valid_elf() {
     case "$arch:$machine" in x86_64:62|aarch64:183|arm64:183|armv7l:40|i686:3) return 0;; esac
     return 1
 }
+# ---- Local cache folders -------------------------------------------------------------------------
+# engines/ : engine binaries AND their original archives (the archive is the fallback when a binary is unusable)
+# prereqs/ : .deb packages (Ubuntu prerequisites)
+mt_engines_dir() { printf '%s\n' "${LOCAL_DIR:-/root/mtunnel}/engines"; }
+mt_prereqs_dir() { printf '%s\n' "${LOCAL_DIR:-/root/mtunnel}/prereqs"; }
+# Cache folder for one item: .deb -> prereqs, everything else (binaries, archives) -> engines.
+mt_cache_dir_for() { case "$1" in *.deb) mt_prereqs_dir;; *) mt_engines_dir;; esac; }
+# mt_local_engine <binary-name> <archive-name>: best local source for an engine.
+# engines/<binary> if it is a valid ELF, otherwise engines/<archive>; prints the path, returns 1 if neither.
+mt_local_engine() {
+    local dir; dir=$(mt_engines_dir)
+    if [ -f "$dir/$1" ] && mt_valid_elf "$dir/$1"; then printf '%s\n' "$dir/$1"; return 0; fi
+    if [ -n "${2:-}" ] && [ -f "$dir/$2" ] && { mt_valid_elf "$dir/$2" || mt_is_archive_file "$dir/$2"; }; then
+        printf '%s\n' "$dir/$2"; return 0
+    fi
+    return 1
+}
+# mt_engine_cache <downloaded-file> <url-or-name>: keep the ORIGINAL file (binary or archive) in engines/,
+# named as the server named it, so the next run can use it without downloading. .deb files and error pages are not cached.
+mt_engine_cache() {
+    local file="$1" name="${2%%\?*}" dir
+    name="${name##*/}"
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || return 0
+    case "$name" in *.deb) return 0;; esac
+    if mt_valid_elf "$file" || mt_is_archive_file "$file"; then
+        dir=$(mt_engines_dir); mkdir -p "$dir" 2>/dev/null && cp -f "$file" "$dir/$name" 2>/dev/null
+    fi
+    return 0
+}
 # mt_zip_extract_python <archive> <dest>
 # Safe ZIP extraction without unzip. Refuses the whole archive if any member is absolute, contains
 # "..", a backslash or ":", or is a symlink / device / fifo / socket. Nothing is written before the check.
@@ -924,6 +953,7 @@ mt_update_core() {
         cp "$source" "$work/download" || { rm -rf "$work"; return 1; }
     else
         mt_download "$source" "$work/download" || { rm -rf "$work"; return 1; }
+        mt_engine_cache "$work/download" "$source"
     fi
     candidate="$work/download"
     if ! mt_valid_elf "$candidate"; then

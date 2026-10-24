@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.3.4).
-MODULE_VERSION="1.3.4"
+MODULE_VERSION="1.4.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -62,7 +62,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 # Never delete a pre-existing executable merely by opening this menu.
 
-mkdir -p "$CONF_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$CONF_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mpaqet_in_menu" 2>/dev/null
@@ -303,7 +303,7 @@ install_core_from_source() {
             [ "$src_choice" != 2 ] || dl_url="${MTUNNEL_MIRROR_BASE}/packages/$asset"
             ;;
         3) echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r dl_url; [ -n "$dl_url" ] || return 0;;
-        4) dl_url="$LOCAL_DIR/packages/paqet"; kind=local;;
+        4) dl_url=$(mt_local_engine paqet "paqet-linux-${target}-v1.0.0-alpha.21.tar.gz") || { echo -e "  ${R}✖ No local paqet binary or archive in $(mt_engines_dir).${NC}"; return 1; }; kind=local;;
         *) return 0;;
     esac
     echo -e "  ${DIM}● Preparing MPaqet Core...${NC}"
@@ -387,7 +387,7 @@ menu_install_core() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/paqet)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines/paqet)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
@@ -409,7 +409,7 @@ check_first_run_core() {
             echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
             echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages/paqet)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines/paqet)${NC}"
             echo -e "  ${DIM}│${NC}"
             echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt

@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.3.4).
-MODULE_VERSION="1.3.4"
+MODULE_VERSION="1.4.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -62,7 +62,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 # Never delete a pre-existing executable merely by opening this menu.
 
-mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/packages" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$CONF_DIR" "$CERT_DIR" "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null
 
@@ -651,7 +651,7 @@ bh_validate_package() {
 }
 
 install_core_from_source() {
-    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0
+    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0 chosen_url=""
     triplet=$(case "$(uname -m)" in x86_64) echo amd64;; aarch64|arm64) echo arm64;; *) exit 1;; esac) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
     asset="backhaul_linux_${triplet}.tar.gz"
     local -a urls=()
@@ -670,12 +670,12 @@ install_core_from_source() {
             urls=("$url"); need_zip=0;;
         4)
             kind=local
-            for item in "$LOCAL_DIR/packages/bh" "$LOCAL_DIR/packages/backhaul" "$LOCAL_DIR/packages/$asset"; do
+            for item in "$LOCAL_DIR/engines/bh" "$LOCAL_DIR/engines/backhaul" "$LOCAL_DIR/engines/$asset"; do
                 [ -f "$item" ] || continue
                 if [[ "$item" != *.tar.gz && "$item" != *.zip ]] && ! mt_valid_elf "$item"; then continue; fi
                 source="$item"; break
             done
-            [ -n "$source" ] || { echo "No compatible Backhaul binary or $asset found in $LOCAL_DIR/packages." >&2; return 1; }
+            [ -n "$source" ] || { echo "No compatible Backhaul binary or $asset found in $LOCAL_DIR/engines." >&2; return 1; }
             [[ "$source" != *.zip ]] || need_zip=1;;
         *) return 0;;
     esac
@@ -692,12 +692,13 @@ install_core_from_source() {
             local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
             echo -e "  ${DIM}● Source: $source_host${NC}"
             if bh_download "$url" "$work/package"; then
-                if bh_validate_package "$work/package"; then source="$work/package"; break
+                if bh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
                 else echo 'Downloaded file is not a compatible Backhaul binary/archive.' >&2; fi
             fi
             [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
         done
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
+        mt_engine_cache "$source" "$chosen_url"
     fi
     if mt_update_core bh mbackhaul "$source" local; then
         [ -z "$work" ] || rm -rf "$work"
@@ -781,7 +782,7 @@ menu_install_core() {
     echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
     echo -e "  ${DIM}│${NC}"
     echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
@@ -802,7 +803,7 @@ check_first_run_core() {
             echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
             echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/packages)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
             echo -e "  ${DIM}│${NC}"
             echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt

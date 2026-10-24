@@ -1550,33 +1550,38 @@ ota_group_install() {
     return "$rc"
 }
 render_ota_menu() {
-    local pk_full pk_scripts pk_lean src_m src_g
-    pk_full='○'; pk_scripts='○'; pk_lean='○'; src_m='○'; src_g='○'
-    case "${OTA_PKG:-}" in 1) pk_full='●';; 2) pk_scripts='●';; 3) pk_lean='●';; esac
-    case "${OTA_SRC:-}" in mirror) src_m='●';; github) src_g='●';; esac
-    local ready=0; [ -n "${OTA_PKG:-}" ] && [ -n "${OTA_SRC:-}" ] && ready=1
     draw_main_header
-    echo -e "\n  ${C}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${C}║${NC}  ${W}MTunnel Installer${NC}$(printf '%*s' $((60-2-18-${#MODULE_VERSION}-1)) '')${DIM}v${MODULE_VERSION}${NC} ${C}║${NC}"
-    echo -e "  ${C}║${NC}  ${DIM}Pick a package, pick a source, then press Y to install${NC}$(printf '%*s' 5 '')${C}║${NC}"
-    echo -e "  ${C}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo -e "\n  ${DIM}STEP 1 · PACKAGE${NC}"
-    echo -e "    ${G}${pk_full}${NC} ${W}[1]${NC} Full package        ${DIM}scripts + tunnels + engines + prerequisites${NC}"
-    echo -e "    ${G}${pk_scripts}${NC} ${W}[2]${NC} Scripts + tunnels   ${DIM}all modules, no engines or .deb files${NC}"
-    echo -e "    ${G}${pk_lean}${NC} ${W}[3]${NC} Scripts only        ${DIM}core + main + helpers; tunnels stay as they are${NC}"
-    echo -e "\n  ${DIM}STEP 2 · SOURCE${NC}"
-    echo -e "    ${G}${src_m}${NC} ${W}[M]${NC} Iranian mirror"
-    echo -e "    ${C}${src_g}${NC} ${W}[G]${NC} Official GitHub"
-    echo -e "\n  ${DIM}────────────────────────────────────────────────────────────${NC}"
-    if [ "$ready" == 1 ]; then
-        echo -e "  ${G}[Y] ▶ INSTALL${NC}  ${DIM}${OTA_PKG_LABEL[$OTA_PKG]} from $([ "$OTA_SRC" == mirror ] && echo 'Iranian mirror' || echo 'Official GitHub')${NC}"
-    else
-        echo -e "  ${DIM}[Y] ▶ INSTALL  (choose a package and a source first)${NC}"
-    fi
-    echo -e "  ${DIM}────────────────────────────────────────────────────────────${NC}"
-    echo -e "  ${DIM}OTHER${NC}  ${W}[E]${NC} Engines only   ${W}[P]${NC} Prerequisites only   ${W}[O]${NC} Offline install (dir/zip)"
-    echo -e "         ${W}[L]${NC} Install from link   ${W}[C]${NC} Install via code paste   ${W}[0]${NC} Back"
-    echo
+    echo -e "\n  ${DIM}┌─[ Update & Local Install ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ INSTALL FULL PACKAGE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}A${NC} ${DIM}❯${NC} ${C}Install Full Package from GitHub${NC} ${DIM}(scripts + engines + every .deb)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}B${NC} ${DIM}❯${NC} ${G}Install Full Package from Mirror${NC} ${DIM}(scripts + engines + every .deb)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ DOWNLOAD FROM OFFICIAL GITHUB ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Download Main Script${NC}$(module_update_badge main)"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Download Mirror Script${NC}$(module_update_badge mmirror)"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Download & Install Prerequisites${NC} ${DIM}(every .deb in prereqs)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ DOWNLOAD FROM IRANIAN MIRROR ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
+    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Download Main Script${NC}$(module_update_badge main)"
+    echo -e "  ${DIM}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Download Mirror Script${NC}$(module_update_badge mmirror)"
+    echo -e "  ${DIM}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}Download & Install Prerequisites${NC} ${DIM}(every .deb in prereqs)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ OFFLINE & MANUAL INSTALL ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}11${NC} ${DIM}❯${NC} ${M}Offline Install${NC} ${DIM}(Directory / ZIP / Archive)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}12${NC}${DIM}❯${NC} ${Y}Install from Link${NC} ${DIM}(Direct .sh / .zip URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}13${NC}${DIM}❯${NC} ${Y}Install via Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├────────────────────────────${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit to Dashboard${NC}\n"
 }
 draw_item_progress() {
     local n="$1" total="$2" label="$3" version="$4" state="${5:-ok}" width=30
@@ -1722,36 +1727,11 @@ ota_update_one_file() {
     rm -rf "$work"
 }
 show_ota_update_hub() {
-    OTA_PKG_LABEL=([1]='Full package' [2]='Scripts + tunnels' [3]='Scripts only')
     local option base_scripts base_packages source_name act work file module rel target confirm new_ver current_v sync_rc url pid
     while true; do
         render_ota_menu
         read_with_refresh "  ${C}OTA-HUB ❯❯ ${NC}" option render_ota_menu || return 0
         option="${option//[$' \r']/}"
-        MT_SCRIPTS_ONLY=0
-        # New installer keys -> the existing actions below (numbers/letters are their internal ids).
-        case "${option,,}" in
-            1|2|3) OTA_PKG="${option}"; continue;;
-            m) OTA_SRC=mirror; continue;;
-            g) OTA_SRC=github; continue;;
-            y)
-                if [ -z "${OTA_PKG:-}" ] || [ -z "${OTA_SRC:-}" ]; then
-                    echo -e "\n  ${Y}● Choose a package (1-3) and a source (M/G) first.${NC}"; ota_pause; continue
-                fi
-                case "$OTA_PKG:$OTA_SRC" in
-                    1:github) option=a;;  1:mirror) option=b;;
-                    2:github) option=1;;  2:mirror) option=6;;
-                    3:github) option=1; MT_SCRIPTS_ONLY=1;;
-                    3:mirror) option=6; MT_SCRIPTS_ONLY=1;;
-                esac;;
-            e|p)
-                if [ -z "${OTA_SRC:-}" ]; then echo -e "\n  ${Y}● Choose a source (M/G) first.${NC}"; ota_pause; continue; fi
-                if [ "${option,,}" == e ]; then [ "$OTA_SRC" == github ] && option=4 || option=9
-                else [ "$OTA_SRC" == github ] && option=5 || option=10; fi;;
-            o) option=11;;
-            l) option=12;;
-            c) option=13;;
-        esac
         case "$option" in
             0|'') return 0;;
             1|2|3|4|5|6|7|8|9|10)

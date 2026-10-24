@@ -3,6 +3,7 @@
 MODULE_VERSION="1.4.0"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
+MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"
 
 # MTUNNEL_COMMON_LOADER -- installer bootstrap (also supports curl | bash --online).
 # Installers cannot assume a shared core has been installed yet, so fetch it
@@ -242,13 +243,14 @@ draw_progress() {
 }
 
 draw_installer_header() {
-    local title="MTunnel Core Modular Installer v${MODULE_VERSION}"
-    local padding=$((59-${#title}))
-    [ "$padding" -ge 0 ] || padding=0
+    local l1="  MTunnel Installer" l2="  Installer v${MODULE_VERSION}   |   Core v${MTUNNEL_RELEASE_VERSION:-?}"
+    local w=62 p1 p2
+    p1=$((w-${#l1}-1)); p2=$((w-${#l2}-1)); [ "$p1" -ge 0 ] || p1=0; [ "$p2" -ge 0 ] || p2=0
     clear 2>/dev/null || true
-    echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-    printf "  %b│%b %b%s%b%*s%b│%b\n" "$B" "$NC" "$W" "$title" "$NC" "$padding" '' "$B" "$NC"
-    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
+    echo -e "\n  ${Y}╔$(printf '═%.0s' $(seq 1 $w))╗${NC}"
+    printf "  ${Y}║${NC}${W}%s%*s${NC}${Y}║${NC}\n" "$l1" "$p1" ''
+    printf "  ${Y}║${NC}${DIM}%s%*s${NC}${Y}║${NC}\n" "$l2" "$p2" ''
+    echo -e "  ${Y}╚$(printf '═%.0s' $(seq 1 $w))╝${NC}\n"
 }
 
 mt_validate_shared_core() {
@@ -292,8 +294,92 @@ mt_installer_retire_legacy() {
     fi
     return 0
 }
+# ---- Interactive wizard (shown when started with no source flags) ----------------------------
+installer_wizard() {
+    local pkg='' src='' key
+    while true; do
+        draw_installer_header
+        echo -e "  ${Y}STEP 1 · PACKAGE${NC}"
+        echo -e "    $([ "$pkg" == 1 ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[1]${NC} Full package        ${DIM}scripts + tunnels + engines + prerequisites${NC}"
+        echo -e "    $([ "$pkg" == 2 ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[2]${NC} Scripts + tunnels   ${DIM}all modules, no engines or .deb files${NC}"
+        echo -e "    $([ "$pkg" == 3 ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[3]${NC} Scripts only        ${DIM}core + main + helpers; tunnel modules are left alone${NC}"
+        echo -e "\n  ${Y}STEP 2 · SOURCE${NC}"
+        echo -e "    $([ "$src" == mirror ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[M]${NC} Iranian mirror"
+        echo -e "    $([ "$src" == github ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[G]${NC} Official GitHub"
+        echo -e "\n  ${DIM}────────────────────────────────────────────────────────────${NC}"
+        if [ -n "$pkg" ] && [ -n "$src" ]; then
+            echo -e "  ${Y}[Y] ▶ INSTALL${NC}  ${DIM}(${pkg}) from $([ "$src" == mirror ] && echo 'Iranian mirror' || echo 'Official GitHub')${NC}"
+        else
+            echo -e "  ${DIM}[Y] ▶ INSTALL  (choose a package and a source first)${NC}"
+        fi
+        echo -e "  ${DIM}[Q] Quit${NC}\n"
+        printf "  ${Y}❯❯ ${NC}"
+        IFS= read -r key </dev/tty || return 1
+        key="${key//[$' \r\t']/}"
+        case "${key,,}" in
+            1|2|3) pkg="$key";;
+            m) src=mirror;;
+            g) src=github;;
+            y)
+                [ -n "$pkg" ] && [ -n "$src" ] || continue
+                case "$pkg" in
+                    1) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=1;;
+                    2) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
+                    3) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=1; WIZ_PREREQS=0;;
+                esac
+                if [ "$src" == mirror ]; then WIZ_REMOTE="$MIRROR_REMOTE"; else WIZ_REMOTE="$DEFAULT_REMOTE"; fi
+                return 0;;
+            q) return 1;;
+        esac
+    done
+}
+
+# Installs the .deb prerequisites of a full package: from the remote packages/ folder or a local prereqs/ folder.
+installer_install_prereqs() {
+    local remote="$1" src="$2" work="$3" dir="$3/prereqs" mf name hash deb progress ok
+    local -a debs=() pending=() next=()
+    mkdir -p "$dir" || return 1
+    if [ -n "$remote" ]; then
+        # Fixed list of prerequisites: no manifest file is needed on the source.
+        local -a deb_names=(
+            cron_3.0pl1-184ubuntu2_amd64.deb
+            curl_8.5.0-2ubuntu10.11_amd64.deb
+            gzip_1.12-1ubuntu3.2_amd64.deb
+            haproxy_2.8.16-0ubuntu0.24.04.3_amd64.deb
+            libiperf0_3.20-2.1_amd64.deb
+            iperf3_3.16-1build2_amd64.deb
+            iproute2_6.1.0-1ubuntu6.4_amd64.deb
+            jq_1.7.1-3ubuntu0.24.04.2_amd64.deb
+            qrencode_4.1.1-1build2_amd64.deb
+            socat_1.8.0.0-4ubuntu0.1_amd64.deb
+            wget_1.21.4-1ubuntu4.1_amd64.deb
+        )
+        for name in "${deb_names[@]}"; do
+            if mt_download "$(mt_cb_url "$remote/packages/$name")" "$dir/$name" 2>/dev/null; then debs+=("$dir/$name")
+            else echo -e "  ${R}✖ ${name} — download failed${NC}" >&2; fi
+        done
+    else
+        for deb in "$src"/prereqs/*.deb; do [ -f "$deb" ] && debs+=("$deb"); done
+    fi
+    [ "${#debs[@]}" -gt 0 ] || { echo -e "  ${Y}● No .deb prerequisites found for this package.${NC}"; return 0; }
+    pending=("${debs[@]}"); progress=1
+    while [ "${#pending[@]}" -gt 0 ] && [ "$progress" == 1 ]; do
+        progress=0; next=()
+        for deb in "${pending[@]}"; do
+            if DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "$deb" >/dev/null 2>&1; then progress=1
+            else next+=("$deb"); fi
+        done
+        pending=("${next[@]}")
+    done
+    ok=$(( ${#debs[@]} - ${#pending[@]} ))
+    echo -e "  ${G}● Prerequisites installed: ${ok} of ${#debs[@]}${NC}"
+    for deb in "${pending[@]}"; do echo -e "  ${R}✖ Not installed: ${deb##*/}${NC}" >&2; done
+    [ "${#pending[@]}" -eq 0 ]
+}
+
 installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target item
+    local scripts_only=0 want_prereqs=0
     local script_file="${BASH_SOURCE[0]:-}" script_dir=''
     [[ ! -f "$script_file" ]] || script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
@@ -336,8 +422,16 @@ installer_main() {
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -n "$script_dir" ] && [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
         elif [ -n "$script_dir" ] && [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
+        elif { : </dev/tty; } 2>/dev/null && installer_wizard; then
+            remote="$WIZ_REMOTE"; with_cores="$WIZ_CORES"; scripts_only="$WIZ_SCRIPTS_ONLY"; want_prereqs="$WIZ_PREREQS"
         else remote="$DEFAULT_REMOTE"; fi
     fi
+    # Scripts-only skips the tunnel modules (they stay as they are and are fetched on demand).
+    for item in "${modules[@]}"; do
+        path="${item#*:}"
+        [ "$scripts_only" == 1 ] && [[ "$path" == tunnels/* ]] && continue
+        active_modules+=("$item")
+    done
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"
     INSTALLER_WORK="$work"
@@ -350,7 +444,7 @@ installer_main() {
         if ! mt_download "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
             echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
-        for item in "${modules[@]}"; do
+        for item in "${active_modules[@]}"; do
             path="${item#*:}"
             mkdir -p "$work/scripts/$(dirname "$path")" || return 1
             if ! mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
@@ -358,7 +452,7 @@ installer_main() {
             fi
             current=$((current+1)); name="${item%%:*}"
             mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$work/scripts/$path")
-            draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
+            draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
             echo ''
         done
         if ! mt_download "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
@@ -379,16 +473,15 @@ installer_main() {
     mt_validate_script "$source_dir/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; return 1; }
     head -n 5 "$source_dir/install.sh" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect install.sh in complete bundle.' >&2; return 1; }
     if [ -n "$remote" ]; then
-        active_modules=("${modules[@]}")
+        :
     else
         # A partial package must not silently leave mixed module/core versions.
-        for item in "${modules[@]}"; do
+        for item in "${active_modules[@]}"; do
             path="${item#*:}"
             mt_validate_script "$source_dir/$path" || { echo "Missing module: $path. Existing installation preserved." >&2; return 1; }
             mt_validate_module_role "$source_dir/$path" "$path" || { echo "Wrong module role: $path. Existing installation preserved." >&2; return 1; }
             mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Existing installation preserved." >&2; return 1; }
         done
-        active_modules=("${modules[@]}")
     fi
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
@@ -435,6 +528,10 @@ installer_main() {
     done
     if [ -z "$root" ]; then
         mt_installer_retire_legacy
+    fi
+    if [ "$want_prereqs" == 1 ]; then
+        echo -e "\n  ${Y}● Installing prerequisites...${NC}"
+        installer_install_prereqs "$remote" "$source_dir" "$work" || echo -e "  ${Y}● Some prerequisites were not installed (see above).${NC}" >&2
     fi
     if [ "$launch" == 1 ]; then
         echo -e "\n  ${G}● MTunnel Installation Complete! Launching Core Dashboard...${NC}\n"

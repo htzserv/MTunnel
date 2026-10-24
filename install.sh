@@ -203,7 +203,7 @@ if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { r
 
 
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+B='\033[1;37m'; G='\033[1;33m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;33m'; M='\033[1;33m'; W='\033[1;37m'; DIM='\033[0;37m'; NC='\033[0m'
 
 draw_progress() {
     local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
@@ -294,34 +294,41 @@ mt_installer_retire_legacy() {
     fi
     return 0
 }
-# ---- Interactive wizard (shown when started with no source flags) ----------------------------
+# ---- Interactive menu (shown when started with no source flags) ------------------------------
+# One number does everything:
+#   1-3  official GitHub : full package / scripts + tunnels / scripts only
+#   4-6  Iranian mirror  : full package / scripts + tunnels / scripts only
+#   7    uninstall MTunnel from this system          0  quit
+# One menu entry (name only, one per line).
+_wiz_item() {
+    case "$1" in
+        1|4) echo -e "    ${Y}[$1]${NC} ${W}Full package${NC}";;
+        2|5) echo -e "    ${Y}[$1]${NC} ${W}Scripts + tunnels${NC}";;
+        3|6) echo -e "    ${Y}[$1]${NC} ${W}Scripts only${NC}";;
+        7)   echo -e "    ${Y}[7]${NC} ${W}Uninstall${NC}";;
+    esac
+}
 installer_wizard() {
-    local pkg='' src='' key
+    local key pkg src
+    WIZ_UNINSTALL=0
     while true; do
         draw_installer_header
-        echo -e "  ${Y}STEP 1 · PACKAGE${NC}"
-        echo -e "    $([ "$pkg" == 1 ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[1]${NC} Full package        ${DIM}scripts + tunnels + engines + prerequisites${NC}"
-        echo -e "    $([ "$pkg" == 2 ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[2]${NC} Scripts + tunnels   ${DIM}all modules, no engines or .deb files${NC}"
-        echo -e "    $([ "$pkg" == 3 ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[3]${NC} Scripts only        ${DIM}core + main + helpers; tunnel modules are left alone${NC}"
-        echo -e "\n  ${Y}STEP 2 · SOURCE${NC}"
-        echo -e "    $([ "$src" == mirror ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[M]${NC} Iranian mirror"
-        echo -e "    $([ "$src" == github ] && echo "${Y}●" || echo "${DIM}○")${NC} ${W}[G]${NC} Official GitHub"
+        local n
+        echo -e "  ${Y}OFFICIAL GITHUB${NC}"
+        for n in 1 2 3; do _wiz_item "$n"; done
+        echo -e "\n  ${Y}IRANIAN MIRROR${NC}"
+        for n in 4 5 6; do _wiz_item "$n"; done
+        echo -e "\n  ${Y}REMOVE${NC}"
+        _wiz_item 7
         echo -e "\n  ${DIM}────────────────────────────────────────────────────────────${NC}"
-        if [ -n "$pkg" ] && [ -n "$src" ]; then
-            echo -e "  ${Y}[Y] ▶ INSTALL${NC}  ${DIM}(${pkg}) from $([ "$src" == mirror ] && echo 'Iranian mirror' || echo 'Official GitHub')${NC}"
-        else
-            echo -e "  ${DIM}[Y] ▶ INSTALL  (choose a package and a source first)${NC}"
-        fi
-        echo -e "  ${DIM}[Q] Quit${NC}\n"
-        printf "  ${Y}❯❯ ${NC}"
-        IFS= read -r key </dev/tty || return 1
+        echo -e "    ${Y}[0]${NC} ${W}Quit${NC}\n"
+        printf "  ${Y}❯❯ ${NC}${W}"
+        IFS= read -r key </dev/tty || { printf '%b' "$NC"; return 1; }
+        printf '%b' "$NC"
         key="${key//[$' \r\t']/}"
         case "${key,,}" in
-            1|2|3) pkg="$key";;
-            m) src=mirror;;
-            g) src=github;;
-            y)
-                [ -n "$pkg" ] && [ -n "$src" ] || continue
+            1|2|3|4|5|6)
+                if [ "$key" -le 3 ]; then src=github; pkg="$key"; else src=mirror; pkg=$((key-3)); fi
                 case "$pkg" in
                     1) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=1;;
                     2) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
@@ -329,9 +336,70 @@ installer_wizard() {
                 esac
                 if [ "$src" == mirror ]; then WIZ_REMOTE="$MIRROR_REMOTE"; else WIZ_REMOTE="$DEFAULT_REMOTE"; fi
                 return 0;;
-            q) return 1;;
+            7) WIZ_UNINSTALL=1; return 0;;
+            0|q) return 1;;
         esac
     done
+}
+
+# Complete removal (same steps as "Nuclear Wipe" in the main menu), confirmed by typing WIPE-MTUNNEL.
+installer_uninstall() {
+    local del_confirm cron_tmp bin table chain tag core_bin
+    draw_installer_header
+    echo -e "  ${Y}⚠ This stops and removes all tunnels, services, MTunnel tunnel cores${NC}"
+    echo -e "  ${Y}  and MTunnel-owned configs from this system!${NC}\n"
+    printf "  ${Y}Type WIPE-MTUNNEL to continue (anything else cancels): ${W}"
+    IFS= read -r del_confirm </dev/tty || { printf '%b\n' "$NC"; return 1; }
+    printf '%b' "$NC"
+    del_confirm="${del_confirm//[$' \r\n']/}"
+    if [ "$del_confirm" != "WIPE-MTUNNEL" ]; then
+        echo -e "\n  ${Y}● Uninstall cancelled.${NC}\n"; return 1
+    fi
+    echo -e "\n  ${Y}● Terminating services and wiping files...${NC}"
+    systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mporter-watchdog.service 2>/dev/null || true
+    /usr/bin/mgre --teardown-all 2>/dev/null || true
+    /usr/bin/mxlan --teardown-all 2>/dev/null || true
+    for bin in iptables ip6tables; do
+        command -v "$bin" >/dev/null 2>&1 || continue
+        for table in filter nat mangle raw; do
+            for chain in INPUT OUTPUT FORWARD PREROUTING POSTROUTING; do
+                for tag in MGRE_ MXLAN_ MPORTER_ MBH_ RAT_ MPAQET_ OBFS_CNT_; do mt_delete_tagged_rules "$bin" "$table" "$chain" "$tag" prefix; done
+            done
+        done
+        for chain in MGRE_GUARD MGRE6_GUARD MXLAN_GUARD MXLAN6_GUARD; do
+            "$bin" -F "$chain" 2>/dev/null; "$bin" -X "$chain" 2>/dev/null
+        done
+    done
+    if command -v crontab >/dev/null 2>&1; then
+        cron_tmp=$(mktemp "${TMPDIR:-/tmp}/uninstall-cron.XXXXXX") && {
+            crontab -l 2>/dev/null | awk '!/mbackhaul@|mrathole@|mpaqet@|\/usr\/bin\/mgre|\/usr\/bin\/mxlan|\/usr\/local\/bin\/mporter-watchdog/' > "$cron_tmp"
+            crontab "$cron_tmp"; rm -f "$cron_tmp"
+        }
+    fi
+    systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+    systemctl disable mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+    rm -f /etc/systemd/system/mgre-watchdog.{service,timer} /etc/systemd/system/mxlan-watchdog.{service,timer} /etc/systemd/system/{mbackhaul,mrathole,mpaqet}-apply.service /etc/systemd/system/mporter-{iptables,obfs}.service
+    rm -f /usr/local/bin/mhealer_daemon.sh /usr/local/bin/mporter-{watchdog,iptables,obfs}.sh /etc/mhealer.conf
+    rm -f /var/lock/mporter-state.lock /run/mporter-backends.tsv
+    # Generic Gost/Realm installations may belong to another project: remove only when MPorter marked ownership.
+    if [ -f /etc/mporter/.owns_gost ]; then systemctl disable --now gost.service 2>/dev/null || true; rm -f /etc/systemd/system/gost.service /usr/local/bin/gost; rm -rf /etc/gost; fi
+    if [ -f /etc/mporter/.owns_realm ]; then systemctl disable --now realm.service 2>/dev/null || true; rm -f /etc/systemd/system/realm.service /usr/local/bin/realm; rm -rf /etc/realm; fi
+    rm -rf /run/mtunnel-healer
+    systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service 'mbackhaul@*' 'mrathole@*' 'mpaqet@*' 2>/dev/null || true
+    systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service 'mbackhaul@*' 'mrathole@*' 'mpaqet@*' 2>/dev/null || true
+    rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/mporter.service \
+          /etc/systemd/system/mporter-watchdog.service /etc/systemd/system/mbackhaul@.service \
+          /etc/systemd/system/mrathole@.service /etc/systemd/system/mpaqet@.service 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    # Only delete MTunnel-provisioned cores whose stored hash still matches.
+    for core_bin in bh rathole paqet; do
+        mt_owned_binary_remove "$core_bin" "/usr/local/bin/$core_bin" "/usr/bin/$core_bin" || true
+    done
+    rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
+    rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest
+    rm -f /usr/local/bin/mtunnel
+    echo -e "\n  ${Y}✓ MTunnel was completely removed from this system.${NC}\n"
+    return 0
 }
 
 # Installs the .deb prerequisites of a full package: from the remote packages/ folder or a local prereqs/ folder.
@@ -379,7 +447,7 @@ installer_install_prereqs() {
 
 installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target item
-    local scripts_only=0 want_prereqs=0
+    local scripts_only=0 want_prereqs=0 do_uninstall=0
     local script_file="${BASH_SOURCE[0]:-}" script_dir=''
     [[ ! -f "$script_file" ]] || script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
@@ -395,6 +463,7 @@ installer_main() {
             --remote) [ "$#" -ge 2 ] || { echo '--remote needs an HTTPS base URL.' >&2; return 1; }; remote="${2%/}"; source_dir=''; shift 2;;
             --online) remote="$DEFAULT_REMOTE"; source_dir=''; shift;;
             --allow-downgrade) export MT_ALLOW_DOWNGRADE=1; shift;;
+            --uninstall) do_uninstall=1; shift;;
             --help|-h)
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
@@ -403,6 +472,7 @@ installer_main() {
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'
+                echo '  --uninstall          Remove MTunnel completely (asks for confirmation).'
                 echo ''
                 echo 'Version switching is unrestricted: upgrade or downgrade directly from any compatible bundle.'
                 echo 'Local install example:'
@@ -419,13 +489,16 @@ installer_main() {
         root=$(readlink -m -- "$root") || return 1
         [ "$root" != / ] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
+    if [ "$do_uninstall" == 1 ]; then installer_uninstall; return $?; fi
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -n "$script_dir" ] && [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
         elif [ -n "$script_dir" ] && [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
         elif { : </dev/tty; } 2>/dev/null && installer_wizard; then
-            remote="$WIZ_REMOTE"; with_cores="$WIZ_CORES"; scripts_only="$WIZ_SCRIPTS_ONLY"; want_prereqs="$WIZ_PREREQS"
+            if [ "${WIZ_UNINSTALL:-0}" == 1 ]; then do_uninstall=1
+            else remote="$WIZ_REMOTE"; with_cores="$WIZ_CORES"; scripts_only="$WIZ_SCRIPTS_ONLY"; want_prereqs="$WIZ_PREREQS"; fi
         else remote="$DEFAULT_REMOTE"; fi
     fi
+    if [ "$do_uninstall" == 1 ]; then installer_uninstall; return $?; fi
     # Scripts-only skips the tunnel modules (they stay as they are and are fetched on demand).
     for item in "${modules[@]}"; do
         path="${item#*:}"

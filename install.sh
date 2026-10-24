@@ -331,7 +331,7 @@ installer_wizard() {
                 if [ "$key" -le 3 ]; then src=github; pkg="$key"; else src=mirror; pkg=$((key-3)); fi
                 case "$pkg" in
                     1) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=1;;
-                    2) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
+                    2) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
                     3) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=1; WIZ_PREREQS=0;;
                 esac
                 if [ "$src" == mirror ]; then WIZ_REMOTE="$MIRROR_REMOTE"; else WIZ_REMOTE="$DEFAULT_REMOTE"; fi

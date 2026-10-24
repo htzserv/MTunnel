@@ -402,47 +402,105 @@ installer_uninstall() {
     return 0
 }
 
+# Echoes "<state>|<installed-version>" for a .deb file name: state is "current" (same or newer version already
+# installed), "older" (installed but older), or "missing".
+installer_deb_state() {
+    local base="${1##*/}" pkg ver cur
+    base="${base%.deb}"; pkg="${base%%_*}"; ver="${base#*_}"; ver="${ver%_*}"; ver="${ver//%3a/:}"
+    cur=$(dpkg-query -W -f='${db:Status-Abbrev}|${Version}' "$pkg" 2>/dev/null) || { echo "missing|"; return 0; }
+    case "$cur" in
+        ii*) cur="${cur#*|}"
+             if dpkg --compare-versions "$cur" ge "$ver" 2>/dev/null; then echo "current|$cur"; else echo "older|$cur"; fi;;
+        *) echo "missing|";;
+    esac
+}
+
 # Installs the .deb prerequisites of a full package: from the remote prereqs/ folder or a local prereqs/ folder.
+# Already-installed packages are reported as such (not as errors) and are not downloaded again.
 installer_install_prereqs() {
-    local remote="$1" src="$2" work="$3" dir="$3/prereqs" mf name hash deb progress ok
-    local -a debs=() pending=() next=()
+    local remote="$1" src="$2" work="$3" dir="$3/prereqs" name deb st ver pkg
+    local total=0 n_ok=0 n_have=0 n_apt=0 n_fail=0 progress
+    local -a debs=() pending=() next=() failed=()
     mkdir -p "$dir" || return 1
+    local -a deb_names=() core_names=() fixed_names=(
+        cron_3.0pl1-184ubuntu2_amd64.deb
+        curl_8.5.0-2ubuntu10.16_amd64.deb
+        gzip_1.12-1ubuntu3.2_amd64.deb
+        haproxy_2.8.30-0ubuntu0.24.04.1_amd64.deb
+        libiperf0_3.16-1build2_amd64.deb
+        iperf3_3.16-1build2_amd64.deb
+        iproute2_6.1.0-1ubuntu6.4_amd64.deb
+        libonig5_6.9.9-1build1_amd64.deb
+        libjq1_1.7.1-3ubuntu0.24.04.2_amd64.deb
+        jq_1.7.1-3ubuntu0.24.04.2_amd64.deb
+        qrencode_4.1.1-1build2_amd64.deb
+        socat_1.8.0.0-4ubuntu0.1_amd64.deb
+        wget_1.21.4-1ubuntu4.5_amd64.deb
+    )
+    local mf line
     if [ -n "$remote" ]; then
-        # Fixed list of prerequisites: no manifest file is needed on the source.
-        local -a deb_names=(
-            cron_3.0pl1-184ubuntu2_amd64.deb
-            curl_8.5.0-2ubuntu10.11_amd64.deb
-            gzip_1.12-1ubuntu3.2_amd64.deb
-            haproxy_2.8.16-0ubuntu0.24.04.3_amd64.deb
-            libiperf0_3.20-2.1_amd64.deb
-            iperf3_3.16-1build2_amd64.deb
-            iproute2_6.1.0-1ubuntu6.4_amd64.deb
-            jq_1.7.1-3ubuntu0.24.04.2_amd64.deb
-            qrencode_4.1.1-1build2_amd64.deb
-            socat_1.8.0.0-4ubuntu0.1_amd64.deb
-            wget_1.21.4-1ubuntu4.1_amd64.deb
-        )
-        for name in "${deb_names[@]}"; do
-            if mt_download "$(mt_cb_url "$remote/prereqs/$name")" "$dir/$name" 2>/dev/null; then debs+=("$dir/$name")
-            else echo -e "  ${R}✖ ${name} — download failed${NC}" >&2; fi
-        done
+        # Prefer the remote prereqs/manifest.txt (every .deb in the folder, dependencies included);
+        # fall back to the built-in list when the source has no manifest.
+        mf="$work/prereqs-manifest.txt"
+        if mt_download "$(mt_cb_url "$remote/prereqs/manifest.txt")" "$mf" 2>/dev/null; then
+            while IFS= read -r line || [ -n "$line" ]; do
+                line="${line//$'\r'/}"; line="${line##*[[:space:]]}"; line="${line#\*}"
+                [[ "$line" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*\.deb$ ]] && deb_names+=("$line")
+            done < "$mf"
+        fi
+        [ "${#deb_names[@]}" -gt 0 ] || deb_names=("${fixed_names[@]}")
     else
-        for deb in "$src"/prereqs/*.deb; do [ -f "$deb" ] && debs+=("$deb"); done
+        for deb in "$src"/prereqs/*.deb; do [ -f "$deb" ] && deb_names+=("${deb##*/}"); done
     fi
-    [ "${#debs[@]}" -gt 0 ] || { echo -e "  ${Y}● No .deb prerequisites found for this package.${NC}"; return 0; }
+    # Packages listed individually in the report; the rest (libraries pulled in as dependencies) are only counted.
+    local primary=" cron curl gzip haproxy libiperf0 iperf3 iproute2 jq qrencode socat wget "
+    [ "${#deb_names[@]}" -gt 0 ] || { echo -e "  ${Y}● No .deb prerequisites found for this package.${NC}"; return 0; }
+    total=${#deb_names[@]}
+    for name in "${deb_names[@]}"; do
+        pkg="${name%%_*}"
+        st=$(installer_deb_state "$name"); ver="${st#*|}"; st="${st%%|*}"
+        if [ "$st" == current ]; then
+            [[ "$primary" == *" $pkg "* ]] && echo -e "  ${G}✓ ${pkg}${NC} ${DIM}— already installed (${ver})${NC}"
+            n_have=$((n_have+1)); continue
+        fi
+        if [ -n "$remote" ]; then
+            if mt_download "$(mt_cb_url "$remote/prereqs/$name")" "$dir/$name" 2>/dev/null; then debs+=("$dir/$name")
+            else
+                # Not on the source: fall back to the system package manager when available.
+                if command -v apt-get >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+                    echo -e "  ${G}✓ ${pkg}${NC} ${DIM}— installed via apt${NC}"; n_apt=$((n_apt+1))
+                else
+                    echo -e "  ${R}✖ ${pkg} — not available on the source and apt could not install it${NC}" >&2
+                    failed+=("$name"); n_fail=$((n_fail+1))
+                fi
+            fi
+        else
+            debs+=("$src/prereqs/$name")
+        fi
+    done
     pending=("${debs[@]}"); progress=1
     while [ "${#pending[@]}" -gt 0 ] && [ "$progress" == 1 ]; do
         progress=0; next=()
         for deb in "${pending[@]}"; do
-            if DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "$deb" >/dev/null 2>&1; then progress=1
+            if DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "$deb" >/dev/null 2>&1; then
+                progress=1; n_ok=$((n_ok+1)); echo -e "  ${G}✓ ${deb##*/}${NC} ${DIM}— installed${NC}"
             else next+=("$deb"); fi
         done
         pending=("${next[@]}")
     done
-    ok=$(( ${#debs[@]} - ${#pending[@]} ))
-    echo -e "  ${G}● Prerequisites installed: ${ok} of ${#debs[@]}${NC}"
-    for deb in "${pending[@]}"; do echo -e "  ${R}✖ Not installed: ${deb##*/}${NC}" >&2; done
-    [ "${#pending[@]}" -eq 0 ]
+    for deb in "${pending[@]}"; do
+        pkg="${deb##*/}"; pkg="${pkg%%_*}"
+        st=$(installer_deb_state "$deb"); st="${st%%|*}"
+        if [ "$st" == current ]; then
+            echo -e "  ${G}✓ ${pkg}${NC} ${DIM}— already installed${NC}"; n_have=$((n_have+1))
+        elif command -v apt-get >/dev/null 2>&1 && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg" >/dev/null 2>&1; then
+            echo -e "  ${G}✓ ${pkg}${NC} ${DIM}— installed via apt${NC}"; n_apt=$((n_apt+1))
+        else
+            echo -e "  ${R}✖ Not installed: ${deb##*/}${NC}" >&2; failed+=("$deb"); n_fail=$((n_fail+1))
+        fi
+    done
+    echo -e "  ${G}● Prerequisites: ${n_have} already installed, $((n_ok+n_apt)) newly installed, ${n_fail} failed (total ${total})${NC}"
+    [ "$n_fail" -eq 0 ]
 }
 
 installer_main() {
@@ -577,7 +635,7 @@ installer_main() {
     files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
     # Engines: install every one that exists at the source and is a valid ELF; a missing one is reported and
     # skipped (it can be added later from the main menu) instead of aborting the whole installation.
-    local -a got_cores=() skipped_cores=()
+    local -a got_cores=() skipped_cores=() same_cores=()
     if [ "$with_cores" == 1 ]; then
         local gz_arch='' gz_name='' src_file=''
         case "$(uname -m)" in x86_64) gz_arch=amd64;; aarch64|arm64) gz_arch=arm64;; esac
@@ -601,6 +659,7 @@ installer_main() {
                 skipped_cores+=("$name (missing or not a valid ELF for this CPU)"); continue
             fi
             got_cores+=("$name")
+            if cmp -s "$src_file" "$root/usr/local/bin/$name" 2>/dev/null; then same_cores+=("$name"); fi
             files+=("$src_file" "$root/usr/local/bin/$name" "$src_file" "$root/usr/bin/$name" "$src_file" "$root/root/mtunnel/$path")
         done
         if [ "${#skipped_cores[@]}" -gt 0 ]; then
@@ -617,6 +676,23 @@ installer_main() {
         fi
     done
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
+    if [ "$with_cores" == 1 ]; then
+        local n_eng_total=5 n_eng_ok=0 n_eng_same=0 eng eng_same
+        echo -e "\n  ${Y}● Engines report:${NC}"
+        for eng in bh rathole paqet gost haproxy; do
+            if [[ " ${got_cores[*]} " == *" $eng "* ]]; then
+                eng_same=0; [[ " ${same_cores[*]} " == *" $eng "* ]] && eng_same=1
+                if [ "$eng_same" == 1 ]; then
+                    echo -e "  ${G}✓ ${eng}${NC} ${DIM}— already installed (up to date)${NC}"; n_eng_same=$((n_eng_same+1))
+                else
+                    echo -e "  ${G}✓ ${eng}${NC} ${DIM}— installed${NC}"; n_eng_ok=$((n_eng_ok+1))
+                fi
+            else
+                echo -e "  ${R}✖ ${eng}${NC} ${DIM}— skipped${NC}" >&2
+            fi
+        done
+        echo -e "  ${G}● Engines: ${n_eng_same} already up to date, ${n_eng_ok} newly installed, ${#skipped_cores[@]} skipped (total ${n_eng_total})${NC}"
+    fi
     for name in "${owned_candidates[@]}"; do
         MTUNNEL_TEST_ROOT="$root" mt_owned_binary_register "$name" "$root/usr/local/bin/$name" || echo "Warning: Could not record $name ownership" >&2
     done

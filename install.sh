@@ -402,7 +402,7 @@ installer_uninstall() {
     return 0
 }
 
-# Installs the .deb prerequisites of a full package: from the remote packages/ folder or a local prereqs/ folder.
+# Installs the .deb prerequisites of a full package: from the remote prereqs/ folder or a local prereqs/ folder.
 installer_install_prereqs() {
     local remote="$1" src="$2" work="$3" dir="$3/prereqs" mf name hash deb progress ok
     local -a debs=() pending=() next=()
@@ -423,7 +423,7 @@ installer_install_prereqs() {
             wget_1.21.4-1ubuntu4.1_amd64.deb
         )
         for name in "${deb_names[@]}"; do
-            if mt_download "$(mt_cb_url "$remote/packages/$name")" "$dir/$name" 2>/dev/null; then debs+=("$dir/$name")
+            if mt_download "$(mt_cb_url "$remote/prereqs/$name")" "$dir/$name" 2>/dev/null; then debs+=("$dir/$name")
             else echo -e "  ${R}✖ ${name} — download failed${NC}" >&2; fi
         done
     else
@@ -580,7 +580,7 @@ installer_main() {
             path="engines/$name"
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/engines" || return 1
-                mt_download "$(mt_cb_url "$remote/packages/$name")" "$work/scripts/$path" || { echo "Could not fetch packages/$name" >&2; return 1; }
+                mt_download "$(mt_cb_url "$remote/engines/$name")" "$work/scripts/$path" || { echo "Could not fetch engines/$name" >&2; return 1; }
             fi
             mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
             files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")

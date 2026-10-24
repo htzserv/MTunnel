@@ -658,9 +658,9 @@ install_core_from_source() {
     case "$src_choice" in
         1) urls=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset"); need_zip=0;;
         2)
-            urls=("${MTUNNEL_MIRROR_BASE}/packages/$asset")
+            urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
             # The unqualified mirror binary is the bundled x86_64 build only.
-            [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/packages/bh")
+            [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/bh")
             urls+=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset")
             need_zip=0;;
         3)

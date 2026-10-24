@@ -1140,12 +1140,12 @@ mp_download_core() {
         gost)
             asset="gost-linux-${MP_GOST_ARCH}-2.11.5.gz"
             official="https://github.com/ginuerzh/gost/releases/download/v2.11.5/$asset"
-            urls=("${MTUNNEL_MIRROR_BASE}/packages/$asset" "${MTUNNEL_MIRROR_BASE}/$asset" "$official")
+            urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset" "${MTUNNEL_MIRROR_BASE}/$asset" "$official")
             ;;
         realm)
             asset="realm-${MP_REALM_ARCH}-unknown-linux-musl.tar.gz"
             official="https://github.com/zhboner/realm/releases/download/v2.7.0/$asset"
-            urls=("${MTUNNEL_MIRROR_BASE}/packages/$asset")
+            urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
             [ "$MP_REALM_ARCH" != x86_64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/realm.tar.gz")
             urls+=("$official" "https://github.com/zhboner/realm/releases/download/v2.7.0/realm-${MP_REALM_ARCH}-unknown-linux-gnu.tar.gz");;
         *) return 1;;

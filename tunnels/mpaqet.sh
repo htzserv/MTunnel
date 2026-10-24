@@ -300,7 +300,7 @@ install_core_from_source() {
         1|2)
             local asset="paqet-linux-${target}-v1.0.0-alpha.21.tar.gz"
             dl_url="https://github.com/hanselime/paqet/releases/download/v1.0.0-alpha.21/$asset"
-            [ "$src_choice" != 2 ] || dl_url="${MTUNNEL_MIRROR_BASE}/packages/$asset"
+            [ "$src_choice" != 2 ] || dl_url="${MTUNNEL_MIRROR_BASE}/engines/$asset"
             ;;
         3) echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r dl_url; [ -n "$dl_url" ] || return 0;;
         4) dl_url=$(mt_local_engine paqet "paqet-linux-${target}-v1.0.0-alpha.21.tar.gz") || { echo -e "  ${R}✖ No local paqet binary or archive in $(mt_engines_dir).${NC}"; return 1; }; kind=local;;

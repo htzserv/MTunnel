@@ -376,9 +376,9 @@ install_core_from_source() {
     case "$src_choice" in
         1) urls=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset"); need_zip=1;;
         2)
-            urls=("${MTUNNEL_MIRROR_BASE}/packages/$asset")
+            urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
             # The unqualified mirror binary is the bundled x86_64 build only.
-            [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("${MTUNNEL_MIRROR_BASE}/packages/rathole")
+            [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/rathole")
             urls+=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset")
             need_zip=1;;
         3)

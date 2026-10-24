@@ -119,7 +119,7 @@ B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; 
 MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_SCRIPTS="$MTUNNEL_GITHUB_BASE"
 MIRROR_SCRIPTS="$MTUNNEL_MIRROR_BASE"
-MIRROR_PACKAGES="$MTUNNEL_MIRROR_BASE/packages"
+MIRROR_PACKAGES="$MTUNNEL_MIRROR_BASE"   # repo base; engines/ and prereqs/ are appended per file
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 UPDATE_FILE="$SECURE_TMP/.modules_update_status"
@@ -1292,14 +1292,16 @@ mt_package_problem() {
     esac
     return 0
 }
-# manifest.txt (remote repo layout) lists every file of the repo packages folder ("<sha256>  <name>" or just "<name>").
-# With it, a .deb dropped into the repo/mirror is picked up automatically (no script edit); the optional
-# sha256 is verified. Without a manifest the built-in ALL_PACKAGES list is used. Prints "<hash|-> <name>" lines.
+# Remote repo layout: <base>/engines/ (engines + archives) and <base>/prereqs/ (.deb files). Each folder has its own
+# manifest.txt ("<sha256>  <n>" or just "<n>"), built with make_manifest.py. With it, a file dropped into the repo/mirror
+# is picked up automatically (no script edit) and its sha256 is verified. Without a manifest the built-in
+# ALL_PACKAGES list is used for that folder.
+mt_pkg_sub() { case "$1" in *.deb) printf prereqs;; *) printf engines;; esac; }
+# Appends "<hash|-> <n>" lines of the manifest of folder $2 (engines|prereqs) to $3. Fails if there is none.
 mt_fetch_package_manifest() {
-    local base="$1" out="$2" tmp line name hash
+    local base="$1" sub="$2" out="$3" tmp line name hash n=0
     tmp=$(mktemp "$SECURE_TMP/manifest.XXXXXX") || return 1
-    if ! mt_download "$(mt_cb_url "$base/manifest.txt")" "$tmp" 2>/dev/null; then rm -f "$tmp"; return 1; fi
-    : > "$out"
+    if ! mt_download "$(mt_cb_url "$base/$sub/manifest.txt")" "$tmp" 2>/dev/null; then rm -f "$tmp"; return 1; fi
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line//$'\r'/}"
         [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
@@ -1309,21 +1311,32 @@ mt_fetch_package_manifest() {
             hash='-'; name="${BASH_REMATCH[1]}"
         else continue; fi
         [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue   # plain file names only (no paths)
-        case "$name" in *.deb|bh|rathole|paqet|gost|haproxy) printf '%s %s\n' "$hash" "$name" >> "$out";; esac
+        if [ "$sub" == prereqs ]; then
+            [[ "$name" == *.deb ]] || continue
+        else
+            case "$name" in *.deb) continue;; *.tar.gz|*.zip|*.gz|bh|backhaul|rathole|paqet|gost|haproxy|realm) ;; *) continue;; esac
+        fi
+        printf '%s %s\n' "$hash" "$name" >> "$out"; n=$((n+1))
     done < "$tmp"
     rm -f "$tmp"
-    [ -s "$out" ]
+    [ "$n" -gt 0 ]
 }
 # Build the download plan for kind cores|deps|all into $3 and set MT_PLAN_SOURCE (manifest|builtin).
 mt_package_plan() {
-    local base="$1" kind="$2" out="$3" all hash item
+    local base="$1" kind="$2" out="$3" all hash item sub
     local -A seen=()
     all=$(mktemp "$SECURE_TMP/plan.XXXXXX") || return 1
-    if mt_fetch_package_manifest "$base" "$all"; then MT_PLAN_SOURCE=manifest
-    else
-        MT_PLAN_SOURCE=builtin; : > "$all"
-        for item in "${ALL_PACKAGES[@]}"; do printf '%s %s\n' - "$item" >> "$all"; done
-    fi
+    : > "$all"; MT_PLAN_SOURCE=manifest
+    for sub in engines prereqs; do
+        case "$kind" in cores) [ "$sub" == engines ] || continue;; deps) [ "$sub" == prereqs ] || continue;; esac
+        if ! mt_fetch_package_manifest "$base" "$sub" "$all"; then
+            MT_PLAN_SOURCE=builtin
+            for item in "${ALL_PACKAGES[@]}"; do
+                [ "$(mt_pkg_sub "$item")" == "$sub" ] || continue
+                printf '%s %s\n' - "$item" >> "$all"
+            done
+        fi
+    done
     : > "$out"
     while read -r hash item; do
         [ -z "${seen[$item]:-}" ] || continue; seen[$item]=1
@@ -1375,10 +1388,10 @@ fetch_package_group() {
         echo -e "  ${R}✖ Nothing to download for '${kind}' from ${base}${NC}" >&2; rm -rf "$stage"; return 1
     fi
     while read -r hash item; do hashes+=("$hash"); names+=("$item"); done < "$plan"
-    [ "${MT_PLAN_SOURCE:-}" != builtin ] || echo -e "  ${DIM}● manifest.txt not found at the source; using the built-in package list.${NC}"
+    [ "${MT_PLAN_SOURCE:-}" != builtin ] || echo -e "  ${DIM}● manifest.txt not found in engines/ or prereqs/ at the source; using the built-in package list.${NC}"
     for i in "${!names[@]}"; do
         item="${names[$i]}"; hash="${hashes[$i]}"; file="$stage/$item"; reason=''
-        if ! mt_download "$(mt_cb_url "$base/$item")" "$file" 2>"$stage/.err"; then
+        if ! mt_download "$(mt_cb_url "$base/$(mt_pkg_sub "$item")/$item")" "$file" 2>"$stage/.err"; then
             reason="download failed: $(grep -v '^[[:space:]]*$' "$stage/.err" 2>/dev/null | tail -n1)"
         else
             reason=$(mt_package_problem "$file" "$item" "$hash")
@@ -1427,7 +1440,7 @@ mt_repo_archive_url() {
     fi
 }
 # ONE mechanism for GitHub and the mirror: fetch the whole repo as a single archive (HTTP hosts cannot list a
-# folder, an archive is the only thing both can serve), unpack it on the server, build packages/manifest.txt from the
+# folder, an archive is the only thing both can serve), unpack it on the server, build engines/ and prereqs/ manifest.txt from the
 # files that are really there, and install item by item. Anything that cannot be installed is reported with its
 # reason and skipped; the next item is still processed.
 #
@@ -1488,10 +1501,10 @@ mt_install_packages_dir() {
     return "$rc"
 }
 # Download + unpack the repo archive. Sets MT_ARCHIVE_WORK (caller deletes), MT_ARCHIVE_ROOT (complete script
-# bundle, or empty) and MT_ARCHIVE_PKGS (its packages folder, or empty).
+# bundle, or empty), MT_ARCHIVE_ENGINES and MT_ARCHIVE_PREREQS (its engines/ and prereqs/ folders, or empty).
 mt_fetch_repo_archive() {
-    local url="$1" f err
-    MT_ARCHIVE_ROOT=''; MT_ARCHIVE_PKGS=''
+    local url="$1" f err sub dir
+    MT_ARCHIVE_ROOT=''; MT_ARCHIVE_ENGINES=''; MT_ARCHIVE_PREREQS=''
     MT_ARCHIVE_WORK=$(mktemp -d "$SECURE_TMP/archive.XXXXXX") || return 1
     mkdir "$MT_ARCHIVE_WORK/extracted"; f="$MT_ARCHIVE_WORK/repo.archive"; err="$MT_ARCHIVE_WORK/.err"
     echo -e "  ${DIM}● Downloading the whole repository as one archive...${NC}"
@@ -1504,8 +1517,11 @@ mt_fetch_repo_archive() {
         echo -e "  ${R}✖ Archive could not be extracted (unsupported, unsafe, or unzip missing).${NC}" >&2; return 1
     fi
     MT_ARCHIVE_ROOT=$(mt_find_bundle_root "$MT_ARCHIVE_WORK/extracted" 2>/dev/null) || MT_ARCHIVE_ROOT=''
-    if [ -n "$MT_ARCHIVE_ROOT" ] && [ -d "$MT_ARCHIVE_ROOT/packages" ]; then MT_ARCHIVE_PKGS="$MT_ARCHIVE_ROOT/packages"
-    else MT_ARCHIVE_PKGS=$(find "$MT_ARCHIVE_WORK/extracted" -maxdepth 4 -type d -name packages -print -quit 2>/dev/null); fi
+    for sub in engines prereqs; do
+        if [ -n "$MT_ARCHIVE_ROOT" ] && [ -d "$MT_ARCHIVE_ROOT/$sub" ]; then dir="$MT_ARCHIVE_ROOT/$sub"
+        else dir=$(find "$MT_ARCHIVE_WORK/extracted" -maxdepth 4 -type d -name "$sub" -print -quit 2>/dev/null); fi
+        if [ "$sub" == engines ]; then MT_ARCHIVE_ENGINES="$dir"; else MT_ARCHIVE_PREREQS="$dir"; fi
+    done
     return 0
 }
 # what = scripts | engines | deps | all. Returns 9 when the archive is unavailable (caller falls back).
@@ -1517,8 +1533,14 @@ ota_sync_from_archive() {
     if [ "$what" != scripts ]; then
         case "$what" in engines) kind=cores;; deps) kind=deps;; *) kind=all;; esac
         echo -e "\n  ${W}Prerequisites & engines${NC} ${DIM}(${what})${NC}"
-        if [ -z "$MT_ARCHIVE_PKGS" ]; then echo -e "  ${R}✖ The archive has no packages folder.${NC}" >&2; pkg_rc=1
-        else mt_install_packages_dir "$MT_ARCHIVE_PKGS" "$kind" 1 || pkg_rc=$?; fi
+        if [ "$kind" != deps ]; then
+            if [ -z "$MT_ARCHIVE_ENGINES" ]; then echo -e "  ${R}✖ The archive has no engines folder.${NC}" >&2; pkg_rc=1
+            else mt_install_packages_dir "$MT_ARCHIVE_ENGINES" cores 1 || pkg_rc=$?; fi
+        fi
+        if [ "$kind" != cores ]; then
+            if [ -z "$MT_ARCHIVE_PREREQS" ]; then echo -e "  ${R}✖ The archive has no prereqs folder.${NC}" >&2; pkg_rc=1
+            else mt_install_packages_dir "$MT_ARCHIVE_PREREQS" deps 1 || pkg_rc=$?; fi
+        fi
         did_pkg=1
     fi
     if [ "$what" == scripts ] || [ "$what" == all ]; then
@@ -1736,7 +1758,7 @@ show_ota_update_hub() {
             0|'') return 0;;
             1|2|3|4|5|6|7|8|9|10)
                 if [ "$option" -le 5 ]; then
-                    base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS/packages"; source_name='OFFICIAL GITHUB'
+                    base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
                 else
                     base_scripts="$MIRROR_SCRIPTS"; base_packages="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'
                 fi
@@ -1791,7 +1813,7 @@ show_ota_update_hub() {
                 esac;;
             a|A|b|B)  # Everything in one press, same mechanism for GitHub and the mirror
                 if [[ "$option" == [aA] ]]; then
-                    base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS/packages"; source_name='OFFICIAL GITHUB'
+                    base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
                 else
                     base_scripts="$MIRROR_SCRIPTS"; base_packages="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'
                 fi
@@ -1938,12 +1960,12 @@ install_iperf3_source() {
             ldconfig 2>/dev/null || true
             ;;
         2|3)
-            local base_url="$MIRROR_PACKAGES"
-            local fb_url="${MTUNNEL_GITHUB_BASE}/packages"
+            local base_url="$MIRROR_PACKAGES/prereqs"
+            local fb_url="${MTUNNEL_GITHUB_BASE}/prereqs"
             local src_name="Iranian Mirror"
             if [ "$src_choice" == "3" ]; then
-                base_url="${MTUNNEL_GITHUB_BASE}/packages"
-                fb_url="$MIRROR_PACKAGES"
+                base_url="${MTUNNEL_GITHUB_BASE}/prereqs"
+                fb_url="$MIRROR_PACKAGES/prereqs"
                 src_name="Official GitHub"
             fi
             echo -e "\n  ${DIM}● Fetching iPerf3 & Libs from ${src_name}...${NC}"

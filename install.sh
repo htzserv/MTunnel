@@ -575,26 +575,47 @@ installer_main() {
         fi
     done
     files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
+    # Engines: install every one that exists at the source and is a valid ELF; a missing one is reported and
+    # skipped (it can be added later from the main menu) instead of aborting the whole installation.
+    local -a got_cores=() skipped_cores=()
     if [ "$with_cores" == 1 ]; then
+        local gz_arch='' gz_name='' src_file=''
+        case "$(uname -m)" in x86_64) gz_arch=amd64;; aarch64|arm64) gz_arch=arm64;; esac
         for name in bh rathole paqet gost haproxy; do
-            path="engines/$name"
+            path="engines/$name"; src_file="$source_dir/$path"
+            # gost is also published as gost-linux-<arch>-2.11.5.gz (gzip of the binary): used when no plain file exists.
+            gz_name=''; [ "$name" != gost ] || [ -z "$gz_arch" ] || gz_name="gost-linux-${gz_arch}-2.11.5.gz"
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/engines" || return 1
-                mt_download "$(mt_cb_url "$remote/engines/$name")" "$work/scripts/$path" || { echo "Could not fetch engines/$name" >&2; return 1; }
+                if ! mt_download "$(mt_cb_url "$remote/engines/$name")" "$src_file" 2>/dev/null; then
+                    if [ -n "$gz_name" ] && mt_download "$(mt_cb_url "$remote/engines/$gz_name")" "$work/scripts/engines/$gz_name" 2>/dev/null \
+                       && gzip -dc "$work/scripts/engines/$gz_name" > "$src_file" 2>/dev/null && [ -s "$src_file" ]; then :
+                    else rm -f "$src_file"; skipped_cores+=("$name (not found in engines/)"); continue; fi
+                fi
+            elif [ ! -f "$src_file" ] && [ -n "$gz_name" ] && [ -f "$source_dir/engines/$gz_name" ]; then
+                mkdir -p "$work/engines" || return 1
+                src_file="$work/engines/$name"
+                gzip -dc "$source_dir/engines/$gz_name" > "$src_file" 2>/dev/null || { skipped_cores+=("$name (cannot unpack $gz_name)"); continue; }
             fi
-            mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
-            files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")
+            if ! mt_valid_elf "$src_file"; then
+                skipped_cores+=("$name (missing or not a valid ELF for this CPU)"); continue
+            fi
+            got_cores+=("$name")
+            files+=("$src_file" "$root/usr/local/bin/$name" "$src_file" "$root/usr/bin/$name" "$src_file" "$root/root/mtunnel/$path")
         done
+        if [ "${#skipped_cores[@]}" -gt 0 ]; then
+            echo -e "  ${Y}● Engines skipped:${NC}" >&2
+            for name in "${skipped_cores[@]}"; do echo -e "    ${Y}-${NC} $name" >&2; done
+        fi
     fi
     local -a owned_candidates=()
-    if [ "$with_cores" == 1 ]; then
-        for name in bh rathole paqet; do
-            if [ -f "$root/var/lib/mtunnel/owned-binaries/$name" ] || \
-               { [ ! -e "$root/usr/local/bin/$name" ] && [ ! -e "$root/usr/bin/$name" ]; }; then
-                owned_candidates+=("$name")
-            fi
-        done
-    fi
+    for name in "${got_cores[@]}"; do
+        case "$name" in bh|rathole|paqet) ;; *) continue;; esac
+        if [ -f "$root/var/lib/mtunnel/owned-binaries/$name" ] || \
+           { [ ! -e "$root/usr/local/bin/$name" ] && [ ! -e "$root/usr/bin/$name" ]; }; then
+            owned_candidates+=("$name")
+        fi
+    done
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
     for name in "${owned_candidates[@]}"; do
         MTUNNEL_TEST_ROOT="$root" mt_owned_binary_register "$name" "$root/usr/local/bin/$name" || echo "Warning: Could not record $name ownership" >&2

@@ -204,6 +204,7 @@ if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { r
 
 
 B='\033[1;37m'; G='\033[1;33m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;33m'; M='\033[1;33m'; W='\033[1;37m'; DIM='\033[0;37m'; NC='\033[0m'
+FR='\033[1;33m'
 
 draw_progress() {
     local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
@@ -242,15 +243,127 @@ draw_progress() {
     tput cnorm 2>/dev/null || true
 }
 
-draw_installer_header() {
+# ---- Installer header: same dashboard facts as the MTunnel main header -------------------------
+# IPv4 / IPv6, BBR, Porter, CPU, cores, RAM and network rates, drawn in the same gold double-line
+# frame. The tunnel rows are left out: the installer has no tunnels to list yet.
+mt_installer_hdr_cleanup() {
+    [ -z "${MT_INSTALLER_HDR_TMP:-}" ] || rm -rf -- "$MT_INSTALLER_HDR_TMP" 2>/dev/null
+    MT_INSTALLER_HDR_TMP=''
+}
+
+# Shown when the loaded shared core is too old to provide the dashboard helpers.
+_installer_header_basic() {
     local l1="  MTunnel Installer" l2="  Installer v${MODULE_VERSION}   |   Core v${MTUNNEL_RELEASE_VERSION:-?}"
     local w=62 p1 p2
     p1=$((w-${#l1}-1)); p2=$((w-${#l2}-1)); [ "$p1" -ge 0 ] || p1=0; [ "$p2" -ge 0 ] || p2=0
+    echo -e "\n  ${FR}╔$(printf '═%.0s' $(seq 1 $w))╗${NC}"
+    printf "  ${FR}║${NC}${W}%s%*s${NC}${FR}║${NC}\n" "$l1" "$p1" ''
+    printf "  ${FR}║${NC}${DIM}%s%*s${NC}${FR}║${NC}\n" "$l2" "$p2" ''
+    echo -e "  ${FR}╚$(printf '═%.0s' $(seq 1 $w))╝${NC}\n"
+}
+
+# One quick CPU sample (the dashboard keeps a running sample; the installer has none yet).
+_installer_cpu_pct() {
+    local _c u n s i io ir sir st rest i1 t1 i2 t2 d
+    read -r _c u n s i io ir sir st rest < /proc/stat 2>/dev/null || { echo 0; return 0; }
+    i1=$(( ${i:-0} + ${io:-0} )); t1=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} + ${ir:-0} + ${sir:-0} + ${st:-0} ))
+    sleep 0.2
+    read -r _c u n s i io ir sir st rest < /proc/stat 2>/dev/null || { echo 0; return 0; }
+    i2=$(( ${i:-0} + ${io:-0} )); t2=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} + ${ir:-0} + ${sir:-0} + ${st:-0} ))
+    d=$(( t2 - t1 ))
+    if [ "$d" -gt 0 ]; then d=$(( (d - (i2 - i1)) * 100 / d )); [ "$d" -lt 0 ] && d=0; [ "$d" -gt 100 ] && d=100; echo "$d"; else echo 0; fi
+}
+
+draw_installer_header() {
     clear 2>/dev/null || true
-    echo -e "\n  ${Y}╔$(printf '═%.0s' $(seq 1 $w))╗${NC}"
-    printf "  ${Y}║${NC}${W}%s%*s${NC}${Y}║${NC}\n" "$l1" "$p1" ''
-    printf "  ${Y}║${NC}${DIM}%s%*s${NC}${Y}║${NC}\n" "$l2" "$p2" ''
-    echo -e "  ${Y}╚$(printf '═%.0s' $(seq 1 $w))╝${NC}\n"
+    if ! declare -F mt_header_static_read >/dev/null 2>&1 || ! declare -F mt_sys_stats_read >/dev/null 2>&1 ||
+       ! declare -F mt_hdr_cols_update >/dev/null 2>&1; then
+        _installer_header_basic; return 0
+    fi
+    local inst_v="${MODULE_VERSION:-?}" core_v="${MTUNNEL_RELEASE_VERSION:-?}" LC_CTYPE=C.UTF-8
+    local title="MTunnel Installer v${inst_v}"
+    if [ -z "${MT_INSTALLER_HDR_TMP:-}" ] || [ ! -d "$MT_INSTALLER_HDR_TMP" ]; then
+        MT_INSTALLER_HDR_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-installer-hdr.XXXXXX" 2>/dev/null) || MT_INSTALLER_HDR_TMP=''
+    fi
+    local SECURE_TMP="${MT_INSTALLER_HDR_TMP:-/root/mtunnel/tmp}" HEADER_LIVE=''
+    mt_header_static_read force 2>/dev/null || true
+    mt_sys_stats_read 2>/dev/null || true
+    local cpu_pct; cpu_pct=$(_installer_cpu_pct); [[ "$cpu_pct" =~ ^[0-9]+$ ]] || cpu_pct=0
+    local s_ip="${MT_STATIC_IP4:-Unknown}" s_v6="${MT_STATIC_IP6:-}" bbr_cc="${MT_STATIC_BBR:-}"
+    s_ip="${s_ip:0:16}"
+    local bbr_col="$DIM" bbr_icon="○" bbr_text="OFF"
+    [ "$bbr_cc" = bbr ] && { bbr_col="$G"; bbr_icon="●"; bbr_text="ON"; }
+    local porter_col="$DIM" porter_icon="○" porter_text="OFF"
+    [ "${MT_STATIC_PORTER:-OFF}" = ON ] && { porter_col="$G"; porter_icon="●"; porter_text="ON"; }
+    local cpu_col="$G" ram_col="$G" rx_col="$DIM" tx_col="$DIM" cores="${MT_CPU_CORES:-1}" core_label
+    local ram_pct="${MT_RAM_PCT:-0}" rx="${MT_RX:-0 B/s}" tx="${MT_TX:-0 B/s}"
+    core_label="${cores} Cores"; [ "$cores" = 1 ] && core_label="1 Core"
+    [ "$cpu_pct" -gt 60 ] 2>/dev/null && cpu_col="$Y"; [ "$cpu_pct" -gt 85 ] 2>/dev/null && cpu_col="$R"
+    [ "$ram_pct" -gt 70 ] 2>/dev/null && ram_col="$Y"; [ "$ram_pct" -gt 88 ] 2>/dev/null && ram_col="$R"
+    [[ "$rx" != "0 B/s" && -n "$rx" ]] && rx_col="$G"
+    [[ "$tx" != "0 B/s" && -n "$tx" ]] && tx_col="$Y"
+    local cpu_str="${cpu_pct}%" ram_str="${MT_RAM_USED:-0G}/${MT_RAM_TOTAL:-0G} [${ram_pct}%]"
+    local ver_line="Installer v${inst_v}   |   Core v${core_v}"
+
+    local term_cols boxw content_w border
+    mt_hdr_cols_update 2>/dev/null || true; term_cols="${MT_HDR_COLS:-120}"
+    [[ "$term_cols" =~ ^[0-9]+$ ]] || term_cols=120
+
+    if [ "$term_cols" -lt 124 ]; then
+        # Compact stacked layout for narrow terminals (same facts, one per line group).
+        local v6_txt="OFF"; [ -z "$s_v6" ] || v6_txt="$s_v6"
+        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
+        content_w=$((boxw - 2))
+        printf -v border '%*s' "$content_w" ''; border="${border// /═}"
+        _inst_hdr_line() {
+            local t="$1" w=$((content_w-2)) LC_CTYPE=C.UTF-8
+            (( ${#t} > w )) && t="${t:0:w}"
+            printf "  ${FR}║${NC} %s%*s ${FR}║${NC}\033[K\n" "$t" "$((w-${#t}))" ''
+        }
+        printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+        _inst_hdr_line "${title} | ${s_ip}"
+        _inst_hdr_line "IPv6 ${v6_txt}"
+        _inst_hdr_line "CPU ${cpu_str} (${core_label}) | RAM ${ram_str}"
+        _inst_hdr_line "BBR ${bbr_text} | Porter ${porter_text}"
+        _inst_hdr_line "Net ▼ ${rx} | Net ▲ ${tx}"
+        printf '  %b╠%s╣%b\033[K\n' "$FR" "$border" "$NC"
+        _inst_hdr_line "$ver_line"
+        printf '  %b╚%s╝%b\033[K\n\n' "$FR" "$border" "$NC"
+        unset -f _inst_hdr_line
+        return 0
+    fi
+
+    # Wide dashboard: identical column layout and sizing rules as the main header.
+    local total extra v6_col v6_text v6_need need_total w6 w4 v6_field
+    if [ -n "$s_v6" ]; then v6_col="$M"; v6_text="$s_v6"; v6_need=$(( ${#s_v6} + 10 ))
+    else v6_col="$DIM"; v6_text="OFF"; v6_need=21; fi
+    (( v6_need < 21 )) && v6_need=21
+    need_total=$(( 31 + 25 + v6_need + 29 + 3 ))
+    (( need_total < 117 )) && need_total=117
+    total=$(( term_cols - 4 )); (( total > 150 )) && total=150
+    (( total > need_total )) && total=$need_total
+    (( total < 117 )) && total=117
+    w6=$v6_need
+    (( w6 > total - 31 - 25 - 29 - 3 )) && w6=$(( total - 31 - 25 - 29 - 3 ))
+    w4=$(( total - 31 - 25 - w6 - 3 ))
+    v6_field=$(( w6 - 10 ))
+    printf -v border '%*s' "$total" ''; border="${border// /═}"
+
+    printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+    printf "  ${FR}║${NC} ${W}%-29.29s${NC} ${FR}║${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${FR}║${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${FR}║${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${FR}║${NC}\033[K\n" \
+        "$title" "$s_ip" \
+        "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
+        "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
+        "$porter_col" "$porter_icon" "$NC" "$((w4-24))" "$((w4-24))" "$porter_text"
+    printf '  %b╠%s╣%b\033[K\n' "$FR" "$border" "$NC"
+    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
+        "$ram_col" "$ram_str" "$NC" \
+        "$rx_col" "$((w6-9))" "$((w6-9))" "$rx" "$NC" \
+        "$tx_col" "$((w4-9))" "$((w4-9))" "$tx" "$NC"
+    printf '  %b╠%s╣%b\033[K\n' "$FR" "$border" "$NC"
+    printf "  ${FR}║${NC} ${DIM}%-*.*s${NC} ${FR}║${NC}\033[K\n" "$((total-2))" "$((total-2))" "$ver_line"
+    printf '  %b╚%s╝%b\033[K\n\n' "$FR" "$border" "$NC"
 }
 
 mt_validate_shared_core() {
@@ -320,7 +433,7 @@ installer_wizard() {
         for n in 4 5 6; do _wiz_item "$n"; done
         echo -e "\n  ${Y}REMOVE${NC}"
         _wiz_item 7
-        echo -e "\n  ${DIM}────────────────────────────────────────────────────────────${NC}"
+        echo -e "\n  ${FR}════════════════════════════════════════════════════════════${NC}"
         echo -e "    ${Y}[0]${NC} ${W}Quit${NC}\n"
         printf "  ${Y}❯❯ ${NC}${W}"
         IFS= read -r key </dev/tty || { printf '%b' "$NC"; return 1; }
@@ -566,7 +679,7 @@ installer_main() {
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"
     INSTALLER_WORK="$work"
-    trap 'rm -rf -- "$INSTALLER_WORK"' EXIT
+    trap 'rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup' EXIT
     draw_installer_header
     if [ -n "$remote" ]; then
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
@@ -713,11 +826,12 @@ installer_main() {
     fi
     if [ "$launch" == 1 ]; then
         sleep 1.5
-        rm -rf -- "$INSTALLER_WORK"
+        rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup
         trap - EXIT
         # After "curl ... | bash" stdin is the exhausted pipe: give the dashboard the terminal.
         if [ ! -t 0 ] && { : </dev/tty; } 2>/dev/null; then exec "$root/usr/bin/mtunnel" </dev/tty; fi
         exec "$root/usr/bin/mtunnel"
     fi
 }
+trap 'mt_installer_hdr_cleanup' EXIT
 installer_main "$@"

@@ -14,7 +14,7 @@ set -o pipefail
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
-C_LINE='\033[38;5;240m'      # Dark Divider Line
+C_LINE='\033[1;33m'          # Gold divider line (matches the MTunnel frame colour)
 C_CYAN='\033[38;5;45m'       # Pure Aqua / Cyan
 C_GREEN='\033[38;5;48m'      # Mint Green Indicator
 C_RED='\033[38;5;203m'       # Soft Red Exit / IP
@@ -183,14 +183,14 @@ show_header() {
 EOF
     echo -e "${C_RESET}"
     echo ""
-    echo -e "   ${C_WHITE}${C_BOLD}Network Core v8.8.0${C_RESET}  ${C_LINE}│${C_RESET}  ${C_CYAN}IP:${C_RESET} ${C_RED}${server_ip}${C_RESET}  ${C_LINE}│${C_RESET}  ${C_CYAN}OS:${C_RESET} ${C_WHITE}Ubuntu ${UBUNTU_RELEASE} (${UBUNTU_CODENAME})${C_RESET}"
+    echo -e "   ${C_WHITE}${C_BOLD}Network Core v8.8.0${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}IP:${C_RESET} ${C_RED}${server_ip}${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}OS:${C_RESET} ${C_WHITE}Ubuntu ${UBUNTU_RELEASE} (${UBUNTU_CODENAME})${C_RESET}"
     echo ""
-    echo -e "   ${C_LINE}────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────${C_RESET}"
+    echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
     echo -e "   ${C_CYAN}Mirror:${C_RESET} ${C_WHITE}${C_BOLD}${current_mirror_name}${C_RESET} ${C_GRAY}(${current_mirror_url})${C_RESET}"
     echo -e "   ${C_CYAN}DNS:${C_RESET}    ${C_GREEN}●${C_RESET} ${C_GRAY}Pri:${C_RESET} ${C_RED}${DNS1}${C_RESET}   ${C_GREEN}●${C_RESET} ${C_GRAY}Sec:${C_RESET} ${C_RED}${DNS2}${C_RESET}"
     echo ""
-    echo -e "   ${C_LINE}────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────${C_RESET}"
+    echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
 }
 
@@ -669,13 +669,13 @@ while true; do
     echo -e "     ${C_WHITE}${C_BOLD}5${C_RESET} ${C_CYAN}›${C_RESET} ${C_MAGENTA}Global APT Repository Matrix (International Speed Benchmark)${C_RESET}"
     echo -e "     ${C_WHITE}${C_BOLD}6${C_RESET} ${C_CYAN}›${C_RESET} ${C_ORANGE}Full Auto-Pilot Optimization (Global DNS + Mirror Sync)${C_RESET}"
     echo ""
-    echo -e "   ${C_LINE}────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────${C_RESET}"
+    echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
     echo -e "   ${C_WHITE}${C_BOLD}SYSTEM OPERATIONS${C_RESET}"
     echo ""
     echo -e "     ${C_WHITE}${C_BOLD}0${C_RESET} ${C_CYAN}›${C_RESET} ${C_RED}Exit Terminal${C_RESET}"
     echo ""
-    echo -e "   ${C_LINE}────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────${C_RESET}"
+    echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
     echo -ne "   ${C_CYAN}${C_BOLD}CORE >> ${C_RESET}"
     read -r choice

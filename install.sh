@@ -1,8 +1,9 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.2).
-MODULE_VERSION="1.4.2"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.3).
+MODULE_VERSION="1.4.3"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
+MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"
 
 # MTUNNEL_COMMON_LOADER -- installer bootstrap (also supports curl | bash --online).
 # Installers cannot assume a shared core has been installed yet, so fetch it
@@ -202,7 +203,8 @@ if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { r
 
 
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+B='\033[1;37m'; G='\033[1;33m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;33m'; M='\033[1;33m'; W='\033[1;37m'; DIM='\033[0;37m'; NC='\033[0m'
+FR='\033[1;33m'
 
 draw_progress() {
     local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
@@ -241,14 +243,127 @@ draw_progress() {
     tput cnorm 2>/dev/null || true
 }
 
+# ---- Installer header: same dashboard facts as the MTunnel main header -------------------------
+# IPv4 / IPv6, BBR, Porter, CPU, cores, RAM and network rates, drawn in the same gold double-line
+# frame. The tunnel rows are left out: the installer has no tunnels to list yet.
+mt_installer_hdr_cleanup() {
+    [ -z "${MT_INSTALLER_HDR_TMP:-}" ] || rm -rf -- "$MT_INSTALLER_HDR_TMP" 2>/dev/null
+    MT_INSTALLER_HDR_TMP=''
+}
+
+# Shown when the loaded shared core is too old to provide the dashboard helpers.
+_installer_header_basic() {
+    local l1="  MTunnel Installer" l2="  Installer v${MODULE_VERSION}   |   Core v${MTUNNEL_RELEASE_VERSION:-?}"
+    local w=62 p1 p2
+    p1=$((w-${#l1}-1)); p2=$((w-${#l2}-1)); [ "$p1" -ge 0 ] || p1=0; [ "$p2" -ge 0 ] || p2=0
+    echo -e "\n  ${FR}╔$(printf '═%.0s' $(seq 1 $w))╗${NC}"
+    printf "  ${FR}║${NC}${W}%s%*s${NC}${FR}║${NC}\n" "$l1" "$p1" ''
+    printf "  ${FR}║${NC}${DIM}%s%*s${NC}${FR}║${NC}\n" "$l2" "$p2" ''
+    echo -e "  ${FR}╚$(printf '═%.0s' $(seq 1 $w))╝${NC}\n"
+}
+
+# One quick CPU sample (the dashboard keeps a running sample; the installer has none yet).
+_installer_cpu_pct() {
+    local _c u n s i io ir sir st rest i1 t1 i2 t2 d
+    read -r _c u n s i io ir sir st rest < /proc/stat 2>/dev/null || { echo 0; return 0; }
+    i1=$(( ${i:-0} + ${io:-0} )); t1=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} + ${ir:-0} + ${sir:-0} + ${st:-0} ))
+    sleep 0.2
+    read -r _c u n s i io ir sir st rest < /proc/stat 2>/dev/null || { echo 0; return 0; }
+    i2=$(( ${i:-0} + ${io:-0} )); t2=$(( ${u:-0} + ${n:-0} + ${s:-0} + ${i:-0} + ${io:-0} + ${ir:-0} + ${sir:-0} + ${st:-0} ))
+    d=$(( t2 - t1 ))
+    if [ "$d" -gt 0 ]; then d=$(( (d - (i2 - i1)) * 100 / d )); [ "$d" -lt 0 ] && d=0; [ "$d" -gt 100 ] && d=100; echo "$d"; else echo 0; fi
+}
+
 draw_installer_header() {
-    local title="MTunnel Core Modular Installer v${MODULE_VERSION}"
-    local padding=$((59-${#title}))
-    [ "$padding" -ge 0 ] || padding=0
     clear 2>/dev/null || true
-    echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
-    printf "  %b│%b %b%s%b%*s%b│%b\n" "$B" "$NC" "$W" "$title" "$NC" "$padding" '' "$B" "$NC"
-    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
+    if ! declare -F mt_header_static_read >/dev/null 2>&1 || ! declare -F mt_sys_stats_read >/dev/null 2>&1 ||
+       ! declare -F mt_hdr_cols_update >/dev/null 2>&1; then
+        _installer_header_basic; return 0
+    fi
+    local inst_v="${MODULE_VERSION:-?}" core_v="${MTUNNEL_RELEASE_VERSION:-?}" LC_CTYPE=C.UTF-8
+    local title="MTunnel Installer v${inst_v}"
+    if [ -z "${MT_INSTALLER_HDR_TMP:-}" ] || [ ! -d "$MT_INSTALLER_HDR_TMP" ]; then
+        MT_INSTALLER_HDR_TMP=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-installer-hdr.XXXXXX" 2>/dev/null) || MT_INSTALLER_HDR_TMP=''
+    fi
+    local SECURE_TMP="${MT_INSTALLER_HDR_TMP:-/root/mtunnel/tmp}" HEADER_LIVE=''
+    mt_header_static_read force 2>/dev/null || true
+    mt_sys_stats_read 2>/dev/null || true
+    local cpu_pct; cpu_pct=$(_installer_cpu_pct); [[ "$cpu_pct" =~ ^[0-9]+$ ]] || cpu_pct=0
+    local s_ip="${MT_STATIC_IP4:-Unknown}" s_v6="${MT_STATIC_IP6:-}" bbr_cc="${MT_STATIC_BBR:-}"
+    s_ip="${s_ip:0:16}"
+    local bbr_col="$DIM" bbr_icon="○" bbr_text="OFF"
+    [ "$bbr_cc" = bbr ] && { bbr_col="$G"; bbr_icon="●"; bbr_text="ON"; }
+    local porter_col="$DIM" porter_icon="○" porter_text="OFF"
+    [ "${MT_STATIC_PORTER:-OFF}" = ON ] && { porter_col="$G"; porter_icon="●"; porter_text="ON"; }
+    local cpu_col="$G" ram_col="$G" rx_col="$DIM" tx_col="$DIM" cores="${MT_CPU_CORES:-1}" core_label
+    local ram_pct="${MT_RAM_PCT:-0}" rx="${MT_RX:-0 B/s}" tx="${MT_TX:-0 B/s}"
+    core_label="${cores} Cores"; [ "$cores" = 1 ] && core_label="1 Core"
+    [ "$cpu_pct" -gt 60 ] 2>/dev/null && cpu_col="$Y"; [ "$cpu_pct" -gt 85 ] 2>/dev/null && cpu_col="$R"
+    [ "$ram_pct" -gt 70 ] 2>/dev/null && ram_col="$Y"; [ "$ram_pct" -gt 88 ] 2>/dev/null && ram_col="$R"
+    [[ "$rx" != "0 B/s" && -n "$rx" ]] && rx_col="$G"
+    [[ "$tx" != "0 B/s" && -n "$tx" ]] && tx_col="$Y"
+    local cpu_str="${cpu_pct}%" ram_str="${MT_RAM_USED:-0G}/${MT_RAM_TOTAL:-0G} [${ram_pct}%]"
+    local ver_line="Installer v${inst_v}   |   Core v${core_v}"
+
+    local term_cols boxw content_w border
+    mt_hdr_cols_update 2>/dev/null || true; term_cols="${MT_HDR_COLS:-120}"
+    [[ "$term_cols" =~ ^[0-9]+$ ]] || term_cols=120
+
+    if [ "$term_cols" -lt 124 ]; then
+        # Compact stacked layout for narrow terminals (same facts, one per line group).
+        local v6_txt="OFF"; [ -z "$s_v6" ] || v6_txt="$s_v6"
+        boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
+        content_w=$((boxw - 2))
+        printf -v border '%*s' "$content_w" ''; border="${border// /═}"
+        _inst_hdr_line() {
+            local t="$1" w=$((content_w-2)) LC_CTYPE=C.UTF-8
+            (( ${#t} > w )) && t="${t:0:w}"
+            printf "  ${FR}║${NC} %s%*s ${FR}║${NC}\033[K\n" "$t" "$((w-${#t}))" ''
+        }
+        printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+        _inst_hdr_line "${title} | ${s_ip}"
+        _inst_hdr_line "IPv6 ${v6_txt}"
+        _inst_hdr_line "CPU ${cpu_str} (${core_label}) | RAM ${ram_str}"
+        _inst_hdr_line "BBR ${bbr_text} | Porter ${porter_text}"
+        _inst_hdr_line "Net ▼ ${rx} | Net ▲ ${tx}"
+        printf '  %b╠%s╣%b\033[K\n' "$FR" "$border" "$NC"
+        _inst_hdr_line "$ver_line"
+        printf '  %b╚%s╝%b\033[K\n\n' "$FR" "$border" "$NC"
+        unset -f _inst_hdr_line
+        return 0
+    fi
+
+    # Wide dashboard: identical column layout and sizing rules as the main header.
+    local total extra v6_col v6_text v6_need need_total w6 w4 v6_field
+    if [ -n "$s_v6" ]; then v6_col="$M"; v6_text="$s_v6"; v6_need=$(( ${#s_v6} + 10 ))
+    else v6_col="$DIM"; v6_text="OFF"; v6_need=21; fi
+    (( v6_need < 21 )) && v6_need=21
+    need_total=$(( 31 + 25 + v6_need + 29 + 3 ))
+    (( need_total < 117 )) && need_total=117
+    total=$(( term_cols - 4 )); (( total > 150 )) && total=150
+    (( total > need_total )) && total=$need_total
+    (( total < 117 )) && total=117
+    w6=$v6_need
+    (( w6 > total - 31 - 25 - 29 - 3 )) && w6=$(( total - 31 - 25 - 29 - 3 ))
+    w4=$(( total - 31 - 25 - w6 - 3 ))
+    v6_field=$(( w6 - 10 ))
+    printf -v border '%*s' "$total" ''; border="${border// /═}"
+
+    printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+    printf "  ${FR}║${NC} ${W}%-29.29s${NC} ${FR}║${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${FR}║${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${FR}║${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${FR}║${NC}\033[K\n" \
+        "$title" "$s_ip" \
+        "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
+        "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
+        "$porter_col" "$porter_icon" "$NC" "$((w4-24))" "$((w4-24))" "$porter_text"
+    printf '  %b╠%s╣%b\033[K\n' "$FR" "$border" "$NC"
+    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
+        "$ram_col" "$ram_str" "$NC" \
+        "$rx_col" "$((w6-9))" "$((w6-9))" "$rx" "$NC" \
+        "$tx_col" "$((w4-9))" "$((w4-9))" "$tx" "$NC"
+    printf '  %b╠%s╣%b\033[K\n' "$FR" "$border" "$NC"
+    printf "  ${FR}║${NC} ${DIM}%-*.*s${NC} ${FR}║${NC}\033[K\n" "$((total-2))" "$((total-2))" "$ver_line"
+    printf '  %b╚%s╝%b\033[K\n\n' "$FR" "$border" "$NC"
 }
 
 mt_validate_shared_core() {
@@ -292,8 +407,194 @@ mt_installer_retire_legacy() {
     fi
     return 0
 }
+# ---- Interactive menu (shown when started with no source flags) ------------------------------
+# One number does everything:
+#   1-3  official GitHub : full package / scripts + tunnels / scripts only
+#   4-6  Iranian mirror  : full package / scripts + tunnels / scripts only
+#   7    uninstall MTunnel from this system          0  quit
+# One menu entry (name only, one per line).
+_wiz_item() {
+    case "$1" in
+        1|4) echo -e "    ${Y}[$1]${NC} ${W}Full package${NC}";;
+        2|5) echo -e "    ${Y}[$1]${NC} ${W}Scripts + tunnels${NC}";;
+        3|6) echo -e "    ${Y}[$1]${NC} ${W}Scripts only${NC}";;
+        7)   echo -e "    ${Y}[7]${NC} ${W}Uninstall${NC}";;
+    esac
+}
+installer_wizard() {
+    local key pkg src
+    WIZ_UNINSTALL=0
+    while true; do
+        draw_installer_header
+        local n
+        echo -e "  ${Y}OFFICIAL GITHUB${NC}"
+        for n in 1 2 3; do _wiz_item "$n"; done
+        echo -e "\n  ${Y}IRANIAN MIRROR${NC}"
+        for n in 4 5 6; do _wiz_item "$n"; done
+        echo -e "\n  ${Y}REMOVE${NC}"
+        _wiz_item 7
+        echo -e "\n  ${FR}════════════════════════════════════════════════════════════${NC}"
+        echo -e "    ${Y}[0]${NC} ${W}Quit${NC}\n"
+        printf "  ${Y}❯❯ ${NC}${W}"
+        IFS= read -r key </dev/tty || { printf '%b' "$NC"; return 1; }
+        printf '%b' "$NC"
+        key="${key//[$' \r\t']/}"
+        case "${key,,}" in
+            1|2|3|4|5|6)
+                if [ "$key" -le 3 ]; then src=github; pkg="$key"; else src=mirror; pkg=$((key-3)); fi
+                case "$pkg" in
+                    1) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=1;;
+                    2) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
+                    3) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=1; WIZ_PREREQS=0;;
+                esac
+                if [ "$src" == mirror ]; then WIZ_REMOTE="$MIRROR_REMOTE"; else WIZ_REMOTE="$DEFAULT_REMOTE"; fi
+                return 0;;
+            7) WIZ_UNINSTALL=1; return 0;;
+            0|q) return 1;;
+        esac
+    done
+}
+
+# Complete removal (same steps as "Nuclear Wipe" in the main menu), confirmed by typing WIPE-MTUNNEL.
+installer_uninstall() {
+    local del_confirm cron_tmp bin table chain tag core_bin
+    draw_installer_header
+    echo -e "  ${Y}⚠ This stops and removes all tunnels, services, MTunnel tunnel cores${NC}"
+    echo -e "  ${Y}  and MTunnel-owned configs from this system!${NC}\n"
+    printf "  ${Y}Type WIPE-MTUNNEL to continue (anything else cancels): ${W}"
+    IFS= read -r del_confirm </dev/tty || { printf '%b\n' "$NC"; return 1; }
+    printf '%b' "$NC"
+    del_confirm="${del_confirm//[$' \r\n']/}"
+    if [ "$del_confirm" != "WIPE-MTUNNEL" ]; then
+        echo -e "\n  ${Y}● Uninstall cancelled.${NC}\n"; return 1
+    fi
+    echo -e "\n  ${Y}● Terminating services and wiping files...${NC}"
+    systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mporter-watchdog.service 2>/dev/null || true
+    /usr/bin/mgre --teardown-all 2>/dev/null || true
+    /usr/bin/mxlan --teardown-all 2>/dev/null || true
+    for bin in iptables ip6tables; do
+        command -v "$bin" >/dev/null 2>&1 || continue
+        for table in filter nat mangle raw; do
+            for chain in INPUT OUTPUT FORWARD PREROUTING POSTROUTING; do
+                for tag in MGRE_ MXLAN_ MPORTER_ MBH_ RAT_ MPAQET_ OBFS_CNT_; do mt_delete_tagged_rules "$bin" "$table" "$chain" "$tag" prefix; done
+            done
+        done
+        for chain in MGRE_GUARD MGRE6_GUARD MXLAN_GUARD MXLAN6_GUARD; do
+            "$bin" -F "$chain" 2>/dev/null; "$bin" -X "$chain" 2>/dev/null
+        done
+    done
+    if command -v crontab >/dev/null 2>&1; then
+        cron_tmp=$(mktemp "${TMPDIR:-/tmp}/uninstall-cron.XXXXXX") && {
+            crontab -l 2>/dev/null | awk '!/mbackhaul@|mrathole@|mpaqet@|\/usr\/bin\/mgre|\/usr\/bin\/mxlan|\/usr\/local\/bin\/mporter-watchdog/' > "$cron_tmp"
+            crontab "$cron_tmp"; rm -f "$cron_tmp"
+        }
+    fi
+    systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+    systemctl disable mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+    rm -f /etc/systemd/system/mgre-watchdog.{service,timer} /etc/systemd/system/mxlan-watchdog.{service,timer} /etc/systemd/system/{mbackhaul,mrathole,mpaqet}-apply.service /etc/systemd/system/mporter-{iptables,obfs}.service
+    rm -f /usr/local/bin/mhealer_daemon.sh /usr/local/bin/mporter-{watchdog,iptables,obfs}.sh /etc/mhealer.conf
+    rm -f /var/lock/mporter-state.lock /run/mporter-backends.tsv
+    # Generic Gost/Realm installations may belong to another project: remove only when MPorter marked ownership.
+    if [ -f /etc/mporter/.owns_gost ]; then systemctl disable --now gost.service 2>/dev/null || true; rm -f /etc/systemd/system/gost.service /usr/local/bin/gost; rm -rf /etc/gost; fi
+    if [ -f /etc/mporter/.owns_realm ]; then systemctl disable --now realm.service 2>/dev/null || true; rm -f /etc/systemd/system/realm.service /usr/local/bin/realm; rm -rf /etc/realm; fi
+    rm -rf /run/mtunnel-healer
+    systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service 'mbackhaul@*' 'mrathole@*' 'mpaqet@*' 2>/dev/null || true
+    systemctl disable mgre.service mxlan.service mporter.service mporter-watchdog.service 'mbackhaul@*' 'mrathole@*' 'mpaqet@*' 2>/dev/null || true
+    rm -f /etc/systemd/system/mgre.service /etc/systemd/system/mxlan.service /etc/systemd/system/mporter.service \
+          /etc/systemd/system/mporter-watchdog.service /etc/systemd/system/mbackhaul@.service \
+          /etc/systemd/system/mrathole@.service /etc/systemd/system/mpaqet@.service 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    # Only delete MTunnel-provisioned cores whose stored hash still matches.
+    for core_bin in bh rathole paqet; do
+        mt_owned_binary_remove "$core_bin" "/usr/local/bin/$core_bin" "/usr/bin/$core_bin" || true
+    done
+    rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
+    rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest
+    rm -f /usr/local/bin/mtunnel
+    echo -e "\n  ${Y}✓ MTunnel was completely removed from this system.${NC}\n"
+    return 0
+}
+
+# Echoes "<state>|<installed-version>" for a .deb file name: state is "current" (same or newer version already
+# installed), "older" (installed but older), or "missing".
+installer_deb_state() {
+    local base="${1##*/}" pkg ver cur
+    base="${base%.deb}"; pkg="${base%%_*}"; ver="${base#*_}"; ver="${ver%_*}"; ver="${ver//%3a/:}"
+    cur=$(dpkg-query -W -f='${db:Status-Abbrev}|${Version}' "$pkg" 2>/dev/null) || { echo "missing|"; return 0; }
+    case "$cur" in
+        ii*) cur="${cur#*|}"
+             if dpkg --compare-versions "$cur" ge "$ver" 2>/dev/null; then echo "current|$cur"; else echo "older|$cur"; fi;;
+        *) echo "missing|";;
+    esac
+}
+
+# Installs the .deb prerequisites of a full package: from the remote prereqs/ folder or a local prereqs/ folder.
+# Already-installed packages are reported as such (not as errors) and are not downloaded again.
+# Validate the manifest as data; no filename-only or unsigned fallback.
+installer_manifest_hash() {
+    local manifest="$1" wanted="$2" line hash name result=''
+    [ -f "$manifest" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+        [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]] || return 1
+        hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
+        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || return 1
+        if [ "$name" = "$wanted" ]; then
+            [ -z "$result" ] || return 1
+            result="$hash"
+        fi
+    done < "$manifest"
+    [ -n "$result" ] || return 1
+    printf '%s' "$result"
+}
+installer_verify_package() {
+    local manifest="$1" file="$2" name="$3" hash
+    hash=$(installer_manifest_hash "$manifest" "$name") || { echo "Missing/invalid SHA256 manifest entry: $name" >&2; return 1; }
+    [ "$(sha256sum "$file" | cut -d' ' -f1)" = "$hash" ] || { echo "SHA256 mismatch: $name" >&2; return 1; }
+}
+
+installer_install_prereqs() {
+    local remote="$1" src="$2" work="$3" dir="$3/prereqs" mf line name hash deb pkg ver arch installed
+    local -a debs=() pending=() next=()
+    mkdir -p "$dir" || return 1
+    mf="$src/prereqs/manifest.txt"
+    if [ -n "$remote" ]; then
+        mf="$work/prereqs-manifest.txt"
+        mt_download "$(mt_cb_url "$remote/prereqs/manifest.txt")" "$mf" || return 1
+    fi
+    [ -f "$mf" ] || { echo 'Prerequisites require prereqs/manifest.txt with SHA256 hashes.' >&2; return 1; }
+    # Stage and verify the entire batch before invoking any package manager.
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+        [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]] || return 1
+        name="${BASH_REMATCH[2]}"
+        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*\.deb$ ]] || return 1
+        deb="$src/prereqs/$name"
+        if [ -n "$remote" ]; then
+            deb="$dir/$name"
+            mt_download "$(mt_cb_url "$remote/prereqs/$name")" "$deb" || return 1
+        fi
+        installer_verify_package "$mf" "$deb" "$name" || return 1
+        pkg=$(dpkg-deb -f "$deb" Package) && ver=$(dpkg-deb -f "$deb" Version) && arch=$(dpkg-deb -f "$deb" Architecture) || return 1
+        [ "$arch" = all ] || [ "$arch" = "$(dpkg --print-architecture)" ] || { echo "Wrong architecture: $name" >&2; return 1; }
+        installed=$(dpkg-query -W -f='${Status}|${Version}' "$pkg" 2>/dev/null || true)
+        if [ "${installed%%|*}" = 'install ok installed' ] && dpkg --compare-versions "${installed#*|}" ge "$ver"; then
+            echo "Already installed: $pkg"; continue
+        fi
+        debs+=("$deb")
+    done < "$mf"
+    [ "${#debs[@]}" -gt 0 ] || return 0
+    # dpkg owns lock acquisition; never forcibly release another process's lock.
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" || {
+        echo 'Prerequisite installation failed. Resolve the reported package/lock error and retry.' >&2; return 1;
+    }
+}
+
 installer_main() {
     local source_dir='' root='' with_cores=0 launch=1 remote='' work path name target item
+    local scripts_only=0 want_prereqs=0 do_uninstall=0
     local script_file="${BASH_SOURCE[0]:-}" script_dir=''
     [[ ! -f "$script_file" ]] || script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
     local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
@@ -303,12 +604,13 @@ installer_main() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --local) [ "$#" -ge 2 ] || { echo '--local needs a directory.' >&2; return 1; }; source_dir="$2"; remote=''; shift 2;;
-            --root) [ "$#" -ge 2 ] || { echo '--root needs an absolute directory.' >&2; return 1; }; root="${2%/}"; launch=0; shift 2;;
+            --root) [ "$#" -ge 2 ] || { echo '--root needs an absolute directory.' >&2; return 1; }; [[ "$2" == /* && "$2" != / ]] || { echo 'Unsafe --root path.' >&2; return 1; }; root="${2%/}"; launch=0; shift 2;;
             --with-cores) with_cores=1; shift;;
             --no-launch) launch=0; shift;;
             --remote) [ "$#" -ge 2 ] || { echo '--remote needs an HTTPS base URL.' >&2; return 1; }; remote="${2%/}"; source_dir=''; shift 2;;
             --online) remote="$DEFAULT_REMOTE"; source_dir=''; shift;;
             --allow-downgrade) export MT_ALLOW_DOWNGRADE=1; shift;;
+            --uninstall) do_uninstall=1; shift;;
             --help|-h)
                 echo 'Usage: sudo bash install.sh [--local DIR] [--remote HTTPS_BASE | --online] [--no-launch]'
                 echo 'Without options: use adjacent scripts, or download from the official GitHub source.'
@@ -317,6 +619,7 @@ installer_main() {
                 echo '  --remote URL         Use a custom HTTPS repository base instead of the official source.'
                 echo '  --with-cores         Also install bundled binary cores when available.'
                 echo '  --root DIR           Test-install under DIR without touching the live root.'
+                echo '  --uninstall          Remove MTunnel completely (asks for confirmation).'
                 echo ''
                 echo 'Version switching is unrestricted: upgrade or downgrade directly from any compatible bundle.'
                 echo 'Local install example:'
@@ -333,15 +636,36 @@ installer_main() {
         root=$(readlink -m -- "$root") || return 1
         [ "$root" != / ] || return 1
     elif [ "$EUID" != 0 ]; then echo 'Run the installer with sudo.' >&2; return 1; fi
+    if [ "$do_uninstall" == 1 ]; then
+        [ -z "$root" ] || { echo '--uninstall cannot be combined with --root.' >&2; return 1; }
+        installer_uninstall; return $?
+    fi
     if [ -z "$source_dir" ] && [ -z "$remote" ]; then
         if [ -n "$script_dir" ] && [ -f "$script_dir/main.sh" ]; then source_dir="$script_dir"
         elif [ -n "$script_dir" ] && [ -f "$PWD/main.sh" ]; then source_dir="$PWD"
+        elif { : </dev/tty; } 2>/dev/null; then
+            installer_wizard || return 0
+            if [ "${WIZ_UNINSTALL:-0}" == 1 ]; then do_uninstall=1
+            else remote="$WIZ_REMOTE"; with_cores="$WIZ_CORES"; scripts_only="$WIZ_SCRIPTS_ONLY"; want_prereqs="$WIZ_PREREQS"; fi
         else remote="$DEFAULT_REMOTE"; fi
     fi
+    if [ "$do_uninstall" == 1 ]; then
+        [ -z "$root" ] || { echo '--uninstall cannot be combined with --root.' >&2; return 1; }
+        installer_uninstall; return $?
+    fi
+    [ -z "$root" ] || [ "$want_prereqs" != 1 ] || {
+        echo 'Prerequisite installation is not supported with --root.' >&2; return 1;
+    }
+    # Scripts-only skips the tunnel modules (they stay as they are and are fetched on demand).
+    for item in "${modules[@]}"; do
+        path="${item#*:}"
+        [ "$scripts_only" == 1 ] && [[ "$path" == tunnels/* ]] && continue
+        active_modules+=("$item")
+    done
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"
     INSTALLER_WORK="$work"
-    trap 'rm -rf -- "$INSTALLER_WORK"' EXIT
+    trap 'rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup' EXIT
     draw_installer_header
     if [ -n "$remote" ]; then
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
@@ -350,7 +674,7 @@ installer_main() {
         if ! mt_download "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
             echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
-        for item in "${modules[@]}"; do
+        for item in "${active_modules[@]}"; do
             path="${item#*:}"
             mkdir -p "$work/scripts/$(dirname "$path")" || return 1
             if ! mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
@@ -358,7 +682,7 @@ installer_main() {
             fi
             current=$((current+1)); name="${item%%:*}"
             mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$work/scripts/$path")
-            draw_progress "$current" "${#modules[@]}" "$name" "$mod_ver"
+            draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
             echo ''
         done
         if ! mt_download "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
@@ -379,16 +703,15 @@ installer_main() {
     mt_validate_script "$source_dir/install.sh" || { echo 'Missing or invalid install.sh in complete bundle.' >&2; return 1; }
     head -n 5 "$source_dir/install.sh" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect install.sh in complete bundle.' >&2; return 1; }
     if [ -n "$remote" ]; then
-        active_modules=("${modules[@]}")
+        :
     else
         # A partial package must not silently leave mixed module/core versions.
-        for item in "${modules[@]}"; do
+        for item in "${active_modules[@]}"; do
             path="${item#*:}"
             mt_validate_script "$source_dir/$path" || { echo "Missing module: $path. Existing installation preserved." >&2; return 1; }
             mt_validate_module_role "$source_dir/$path" "$path" || { echo "Wrong module role: $path. Existing installation preserved." >&2; return 1; }
             mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Existing installation preserved." >&2; return 1; }
         done
-        active_modules=("${modules[@]}")
     fi
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
@@ -409,61 +732,90 @@ installer_main() {
         fi
     done
     files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
+    # Engines: install every one that exists at the source and is a valid ELF; a missing one is reported and
+    # skipped (it can be added later from the main menu) instead of aborting the whole installation.
+    local -a got_cores=() skipped_cores=() same_cores=()
     if [ "$with_cores" == 1 ]; then
-        local mf="$work/engines-manifest.txt" line hash mf_name
-        local -A core_hash=()
+        local gz_arch='' gz_name='' src_file='' engine_manifest engine_input
+        engine_manifest="$source_dir/engines/manifest.txt"
         if [ -n "$remote" ]; then
-            mt_download "$(mt_cb_url "$remote/engines/manifest.txt")" "$mf" || { echo 'Could not fetch engines/manifest.txt' >&2; return 1; }
-        else
-            mf="$source_dir/engines/manifest.txt"
-            [ -f "$mf" ] || { echo 'Missing engines/manifest.txt for --with-cores.' >&2; return 1; }
+            mkdir -p "$work/scripts/engines" || return 1
+            mt_download "$(mt_cb_url "$remote/engines/manifest.txt")" "$engine_manifest" || return 1
         fi
-        while IFS= read -r line || [ -n "$line" ]; do
-            line="${line//$'\r'/}"
-            if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]]; then
-                hash="${BASH_REMATCH[1],,}"; mf_name="${BASH_REMATCH[2]}"
-                [[ "$mf_name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
-                core_hash["$mf_name"]="$hash"
-            fi
-        done < "$mf"
+        case "$(uname -m)" in x86_64) gz_arch=amd64;; aarch64|arm64) gz_arch=arm64;; esac
         for name in bh rathole paqet gost haproxy realm; do
-            local archive_name='' engine_source
-            path="engines/$name"
-            if [ "$name" = gost ] && [ -z "${core_hash[gost]:-}" ]; then
-                archive_name=gost-linux-amd64-2.11.5.gz
-                path="engines/$archive_name"
-            fi
-            hash="${core_hash[${archive_name:-$name}]:-}"
-            [ -n "$hash" ] || { echo "Missing SHA-256 manifest entry for engine: $name" >&2; return 1; }
+            path="engines/$name"; src_file="$source_dir/$path"; engine_input="$name"
+            # gost is also published as gost-linux-<arch>-2.11.5.gz (gzip of the binary): used when no plain file exists.
+            gz_name=''; [ "$name" != gost ] || [ -z "$gz_arch" ] || gz_name="gost-linux-${gz_arch}-2.11.5.gz"
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/engines" || return 1
-                mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || { echo "Could not fetch $path" >&2; return 1; }
+                if ! mt_download "$(mt_cb_url "$remote/engines/$name")" "$src_file" 2>/dev/null; then
+                    if [ -n "$gz_name" ] && mt_download "$(mt_cb_url "$remote/engines/$gz_name")" "$work/scripts/engines/$gz_name" 2>/dev/null \
+                       ; then
+                        installer_verify_package "$engine_manifest" "$work/scripts/engines/$gz_name" "$gz_name" || return 1
+                        gzip -dc "$work/scripts/engines/$gz_name" > "$src_file" || return 1
+                        engine_input="$gz_name"
+                    else rm -f "$src_file"; skipped_cores+=("$name (not found in engines/)"); continue; fi
+                fi
+            elif [ ! -f "$src_file" ] && [ -n "$gz_name" ] && [ -f "$source_dir/engines/$gz_name" ]; then
+                mkdir -p "$work/engines" || return 1
+                src_file="$work/engines/$name"
+                installer_verify_package "$engine_manifest" "$source_dir/engines/$gz_name" "$gz_name" || return 1
+                engine_input="$gz_name"
+                gzip -dc "$source_dir/engines/$gz_name" > "$src_file" 2>/dev/null || { skipped_cores+=("$name (cannot unpack $gz_name)"); continue; }
             fi
-            [ "$(sha256sum "$source_dir/$path" | awk '{print $1}')" = "$hash" ] || { echo "SHA-256 mismatch: $path" >&2; return 1; }
-            engine_source="$source_dir/$path"
-            if [ -n "$archive_name" ]; then
-                engine_source="$work/$name"
-                gzip -dc -- "$source_dir/$path" > "$engine_source" || { echo "Invalid archive: $path" >&2; return 1; }
+            if [ "$engine_input" = "$name" ] && [ -f "$src_file" ]; then
+                installer_verify_package "$engine_manifest" "$src_file" "$name" || return 1
             fi
-            mt_valid_elf "$engine_source" || { echo "Missing or incompatible core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
-            files+=("$engine_source" "$root/usr/local/bin/$name" "$engine_source" "$root/usr/bin/$name" "$engine_source" "$root/root/mtunnel/engines/$name")
+            if ! mt_valid_elf "$src_file"; then
+                skipped_cores+=("$name (missing or not a valid ELF for this CPU)"); continue
+            fi
+            got_cores+=("$name")
+            if cmp -s "$src_file" "$root/usr/local/bin/$name" 2>/dev/null; then same_cores+=("$name"); fi
+            files+=("$src_file" "$root/usr/local/bin/$name" "$src_file" "$root/usr/bin/$name" "$src_file" "$root/root/mtunnel/$path")
         done
+        if [ "${#skipped_cores[@]}" -gt 0 ]; then
+            echo -e "  ${Y}● Engines skipped:${NC}" >&2
+            for name in "${skipped_cores[@]}"; do echo -e "    ${Y}-${NC} $name" >&2; done
+        fi
     fi
     local -a owned_candidates=()
+    for name in "${got_cores[@]}"; do
+        case "$name" in bh|rathole|paqet) ;; *) continue;; esac
+        if [ -f "$root/var/lib/mtunnel/owned-binaries/$name" ] || \
+           { [ ! -e "$root/usr/local/bin/$name" ] && [ ! -e "$root/usr/bin/$name" ]; }; then
+            owned_candidates+=("$name")
+        fi
+    done
+    mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
     if [ "$with_cores" == 1 ]; then
-        for name in bh rathole paqet; do
-            if [ -f "$root/var/lib/mtunnel/owned-binaries/$name" ] || \
-               { [ ! -e "$root/usr/local/bin/$name" ] && [ ! -e "$root/usr/bin/$name" ]; }; then
-                owned_candidates+=("$name")
+        local n_eng_total=6 n_eng_ok=0 n_eng_same=0 eng eng_same
+        echo -e "\n  ${Y}● Engines report:${NC}"
+        for eng in bh rathole paqet gost haproxy realm; do
+            if [[ " ${got_cores[*]} " == *" $eng "* ]]; then
+                eng_same=0; [[ " ${same_cores[*]} " == *" $eng "* ]] && eng_same=1
+                if [ "$eng_same" == 1 ]; then
+                    echo -e "  ${G}✓ ${eng}${NC} ${DIM}— already installed (up to date)${NC}"; n_eng_same=$((n_eng_same+1))
+                else
+                    echo -e "  ${G}✓ ${eng}${NC} ${DIM}— installed${NC}"; n_eng_ok=$((n_eng_ok+1))
+                fi
+            else
+                echo -e "  ${R}✖ ${eng}${NC} ${DIM}— skipped${NC}" >&2
             fi
         done
+        echo -e "  ${G}● Engines: ${n_eng_same} already up to date, ${n_eng_ok} newly installed, ${#skipped_cores[@]} skipped (total ${n_eng_total})${NC}"
     fi
-    mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
     for name in "${owned_candidates[@]}"; do
         MTUNNEL_TEST_ROOT="$root" mt_owned_binary_register "$name" "$root/usr/local/bin/$name" || echo "Warning: Could not record $name ownership" >&2
     done
     if [ -z "$root" ]; then
         mt_installer_retire_legacy
+    fi
+    if [ "$want_prereqs" == 1 ]; then
+        echo -e "\n  ${Y}● Installing prerequisites...${NC}"
+        installer_install_prereqs "$remote" "$source_dir" "$work" || {
+            echo 'Scripts installed, but prerequisites failed. Installation is incomplete.' >&2; return 1;
+        }
     fi
     if [ "$launch" == 1 ]; then
         echo -e "\n  ${G}● MTunnel Installation Complete! Launching Core Dashboard...${NC}\n"
@@ -475,11 +827,12 @@ installer_main() {
     fi
     if [ "$launch" == 1 ]; then
         sleep 1.5
-        rm -rf -- "$INSTALLER_WORK"
+        rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup
         trap - EXIT
         # After "curl ... | bash" stdin is the exhausted pipe: give the dashboard the terminal.
         if [ ! -t 0 ] && { : </dev/tty; } 2>/dev/null; then exec "$root/usr/bin/mtunnel" </dev/tty; fi
         exec "$root/usr/bin/mtunnel"
     fi
 }
+trap 'mt_installer_hdr_cleanup' EXIT
 installer_main "$@"

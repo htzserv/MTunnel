@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.4.2).
-MODULE_VERSION="1.4.2"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.3.4).
+MODULE_VERSION="1.4.3"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -54,6 +54,7 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/mrathole"
 CONF_DIR="/etc/mrathole/tunnels"
 SERVICE_TPL="/etc/systemd/system/mrathole@.service"
@@ -62,7 +63,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 # Never delete a pre-existing executable merely by opening this menu.
 
-mkdir -p "$CONF_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$CONF_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
@@ -222,17 +223,17 @@ self_update_module() {
     fi
 
     if [ -z "$src_opt" ]; then
-    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MRathole) ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    clear; echo -e "\n  ${FR}┌─[ OTA Update (MRathole) ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─[ MANUAL OVERRIDES ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
     fi
     
@@ -257,10 +258,10 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
         
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -369,7 +370,7 @@ rh_validate_package() {
 }
 
 install_core_from_source() {
-    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0
+    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0 chosen_url=""
     triplet=$(rh_release_triplet) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
     asset="rathole-${triplet}.zip"
     local -a urls=()
@@ -410,12 +411,13 @@ install_core_from_source() {
             local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
             echo -e "  ${DIM}● Source: $source_host${NC}"
             if rh_download "$url" "$work/package"; then
-                if rh_validate_package "$work/package"; then source="$work/package"; break
+                if rh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
                 else echo 'Downloaded file is not a compatible Rathole binary/archive.' >&2; fi
             fi
             [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
         done
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
+        mt_engine_cache "$source" "$chosen_url"
     fi
     if mt_update_core rathole mrathole "$source" local; then
         [ -z "$work" ] || rm -rf "$work"
@@ -463,16 +465,16 @@ render_unified_update_menu() {
     core_v=$(mt_core_version)
     [ -n "$core_v" ] && [ "$core_v" != "not-installed" ] && core_tag=" ${G}(installed)${NC}"
     mt_workspace_screen
-    echo -e "\n  ${DIM}┌─[ UPDATE & LOCAL INSTALL — MRATHOLE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Install Script From Github${NC} ${DIM}(${gh_label})${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install Script From Iranian Mirror${NC} ${DIM}(${mirror_label})${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+    echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL — MRATHOLE ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Install Script From Github${NC} ${DIM}(${gh_label})${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install Script From Iranian Mirror${NC} ${DIM}(${mirror_label})${NC}"
+    echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
+    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
 }
 unified_update_menu() {
     local opt
@@ -494,14 +496,14 @@ unified_update_menu() {
 }
 
 menu_install_core() {
-    echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "\n  ${FR}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
 
@@ -513,16 +515,16 @@ check_first_run_core() {
         local first_prompt_flag="$CONF_DIR/.core_prompted"
         if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
-            echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-            echo -e "  ${B}│${NC}   ${R}● Rathole Core binary is NOT installed on this machine!${NC}                  ${B}│${NC}"
-            echo -e "  ${B}│${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${B}│${NC}"
-            echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
-            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
-            echo -e "  ${DIM}│${NC}"
-            echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "  ${FR}║${NC}   ${R}● Rathole Core binary is NOT installed on this machine!${NC}                  ${FR}║${NC}"
+            echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
+            echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+            echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+            echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
+            echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
+            echo -e "  ${FR}│${NC}"
+            echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
@@ -994,40 +996,40 @@ show_tunnel_registry() {
         elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}";
         elif [ "$st" == "RECONNECTING" ]; then stat_icon="◎"; stat_text="RECONNECTING..."; stat_color="${Y}"; fi
 
-        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
+        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
         local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
-        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
-        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
+        echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
+        echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
         
         local l1="Link Port    : ${LINK_PORT}"; local r1="Latency: ${ping_val}"
         local pad1=$(( 122 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${LINK_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
+        echo -e "  ${FR}║${NC} ${M}Link Port    :${NC} ${W}${LINK_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${FR}║${NC}"
         
         local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_icon} ${stat_text}"
         local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
         local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
+        echo -e "  ${FR}║${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${FR}║${NC}"
         if [ "$st" != "CONNECTED" ]; then
             mt_reason_row "$(mt_link_why "mrathole@${t_name}" "$([ "$TYPE" == "1" ] && echo 1 || echo 0)" "$([ "$TYPE" == "1" ] && echo "$LINK_PORT")" "$([ "$TYPE" != "1" ] && echo "$REMOTE_IP")")"
         fi
 
         local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: TCP (Rathole Native)"
         local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}TCP (Rathole Native)${NC} ${B}│${NC}"
+        echo -e "  ${FR}║${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}TCP (Rathole Native)${NC} ${FR}║${NC}"
 
         local tcp_str="${TCP_PORTS:0:100}"; [ ${#TCP_PORTS} -gt 100 ] && tcp_str="${tcp_str}..."
         local udp_str="${UDP_PORTS:0:100}"; [ ${#UDP_PORTS} -gt 100 ] && udp_str="${udp_str}..."
         
         local l4="TCP Mappings : ${tcp_str:-None}"
         local pad4=$(( 122 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
-        echo -e "  ${B}│${NC} ${DIM}TCP Mappings :${NC} ${Y}${tcp_str:-None}${NC}${sp4} ${B}│${NC}"
+        echo -e "  ${FR}║${NC} ${DIM}TCP Mappings :${NC} ${Y}${tcp_str:-None}${NC}${sp4} ${FR}║${NC}"
         
         local l5="UDP Mappings : ${udp_str:-None}"
         local pad5=$(( 122 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; local sp5=$(printf '%*s' "$pad5" "")
-        echo -e "  ${B}│${NC} ${DIM}UDP Mappings :${NC} ${C}${udp_str:-None}${NC}${sp5} ${B}│${NC}"
+        echo -e "  ${FR}║${NC} ${DIM}UDP Mappings :${NC} ${C}${udp_str:-None}${NC}${sp5} ${FR}║${NC}"
         
-        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n"
+        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
@@ -1040,10 +1042,10 @@ show_live_radar() {
     tput civis; clear
     while true; do
         printf "\033[H"; draw_header
-        echo -e "\n  ${DIM}┌─[ RATHOLE TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
-        echo -e "  ${B}╭──────────────────────┬────────────────┬──────────────────────────┬────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${Y}%-24s${NC} ${B}│${NC} ${DIM}%-26s${NC} ${B}│${NC}\n" "TUNNEL NAME" "STATUS" "TCP PORTS" "UDP PORTS"
-        echo -e "  ${B}├──────────────────────┼────────────────┼──────────────────────────┼────────────────────────────┤${NC}"
+        echo -e "\n  ${FR}┌─[ RATHOLE TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
+        echo -e "  ${FR}╔══════════════════════╦════════════════╦══════════════════════════╦════════════════════════════╗${NC}"
+        printf "  ${FR}║${NC} ${W}%-20s${NC} ${FR}║${NC} ${W}%-14s${NC} ${FR}║${NC} ${Y}%-24s${NC} ${FR}║${NC} ${DIM}%-26s${NC} ${FR}║${NC}\n" "TUNNEL NAME" "STATUS" "TCP PORTS" "UDP PORTS"
+        echo -e "  ${FR}╠══════════════════════╬════════════════╬══════════════════════════╬════════════════════════════╣${NC}"
 
         local count=0
         for d in "$CONF_DIR"/*; do
@@ -1061,14 +1063,14 @@ show_live_radar() {
             local disp_tcp="${TCP_PORTS:0:24}"; [ ${#TCP_PORTS} -gt 24 ] && disp_tcp="${disp_tcp:0:21}..."
             local disp_udp="${UDP_PORTS:0:26}"; [ ${#UDP_PORTS} -gt 26 ] && disp_udp="${disp_udp:0:23}..."
 
-            printf "  ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-14s%b ${B}│${NC} ${Y}%-24s${NC} ${B}│${NC} ${C}%-26s${NC} ${B}│${NC}\n" "$t_name" "$st_color" "$st_text" "$NC" "${disp_tcp:-None}" "${disp_udp:-None}"
+            printf "  ${FR}║${NC} ${W}%-20s${NC} ${FR}║${NC} %b%-14s%b ${FR}║${NC} ${Y}%-24s${NC} ${FR}║${NC} ${C}%-26s${NC} ${FR}║${NC}\n" "$t_name" "$st_color" "$st_text" "$NC" "${disp_tcp:-None}" "${disp_udp:-None}"
             ((count++))
         done
 
         if [ "$count" -eq 0 ]; then
-            printf "  ${B}│${NC} ${DIM}%-91s${NC} ${B}│${NC}\n" "  No active Rathole tunnels configured."
+            printf "  ${FR}║${NC} ${DIM}%-91s${NC} ${FR}║${NC}\n" "  No active Rathole tunnels configured."
         fi
-        echo -e "  ${B}╰──────────────────────┴────────────────┴──────────────────────────┴────────────────────────────╯${NC}"
+        echo -e "  ${FR}╚══════════════════════╩════════════════╩══════════════════════════╩════════════════════════════╝${NC}"
         printf "\033[J"
         mt_monitor_wait 1 || break
     done
@@ -1079,12 +1081,12 @@ manage_cron() {
     local t_name="$1"
     local cron_script="$CONF_DIR/$t_name/restart.sh"
     
-    echo -e "\n  ${DIM}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "\n  ${FR}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read cr_opt
 
     if [[ "$cr_opt" == "1" ]]; then
@@ -1123,14 +1125,14 @@ manage_cron() {
 
 uninstall_mrathole() {
     clear
-    echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MRATHOLE${NC}                  ${R}│${NC}"
-    echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
-    echo -e "  ${R}│${NC}   ● All active Rathole tunnels & systemd units                             ${R}│${NC}"
-    echo -e "  ${R}│${NC}   ● All TOML configuration files & metadata                                ${R}│${NC}"
-    echo -e "  ${R}│${NC}   ● All restart cronjobs                                                   ${R}│${NC}"
-    echo -e "  ${R}│${NC}   ● Rathole core binary (/usr/local/bin/rathole) & mrathole module         ${R}│${NC}"
-    echo -e "  ${R}╰────────────────────────────────────────────────────────────────────────────╯${NC}\n"
+    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MRATHOLE${NC}                  ${R}║${NC}"
+    echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
+    echo -e "  ${R}║${NC}   ● All active Rathole tunnels & systemd units                             ${R}║${NC}"
+    echo -e "  ${R}║${NC}   ● All TOML configuration files & metadata                                ${R}║${NC}"
+    echo -e "  ${R}║${NC}   ● All restart cronjobs                                                   ${R}║${NC}"
+    echo -e "  ${R}║${NC}   ● Rathole core binary (/usr/local/bin/rathole) & mrathole module         ${R}║${NC}"
+    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
@@ -1173,11 +1175,11 @@ select_tunnel() {
     local configs=($(ls -d "$CONF_DIR"/* 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
     
-    echo -e "\n  ${B}╭────────────────── Select Tunnel to Manage ─────────────────╮${NC}"
+    echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
     for i in "${!configs[@]}"; do
-        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}")"
+        printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}")"
     done
-    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
@@ -1321,9 +1323,9 @@ mt_peer_ensure_core() {
     is_rathole_core_valid && return 0
     local choice
     echo -e "\n  ${Y}● Rathole Core is required before applying this Peer Code.${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     while true; do
         mt_live_readline choice "  ${C}Select Source ❯❯ ${NC}" || return 1
         choice="${choice//$'\r'/}"
@@ -1348,18 +1350,18 @@ mt_link_import() {
     if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1; fi
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
-    echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
+    echo -e "\n  ${FR}┌─[ PEER SETUP PREVIEW ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
     mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
@@ -1508,7 +1510,7 @@ while true; do
     case $opt in
         1) 
            mt_workspace_screen
-           echo -e "\n  ${DIM}┌─[ DEPLOY NEW TUNNEL ]${NC}"
+           echo -e "\n  ${FR}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
                echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read s_type
                s_type=$(echo "$s_type" | tr -d '\r')
@@ -1597,9 +1599,9 @@ EOF
         2)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
            [ ${#tunnels[@]} -eq 0 ] && continue
-           echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ─────────────────╮${NC}"
-           for i in "${!tunnels[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${tunnels[$i]}")"; done
-           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
+           echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
+           for i in "${!tunnels[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${tunnels[$i]}")"; done
+           echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
            echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then

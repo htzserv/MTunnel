@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.2).
-MODULE_VERSION="1.4.2"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.3.4).
+MODULE_VERSION="1.4.3"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -46,6 +46,7 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/linktest"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
@@ -54,7 +55,7 @@ LISTENER_PIDS=()
 SYNC_PORT=49999
 SPEED_PORT=49998
 
-mkdir -p "$LOCAL_DIR/engines" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SECURE_TMP" 2>/dev/null
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
@@ -135,17 +136,17 @@ self_update_module() {
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
-    draw_header; echo -e "\n  ${DIM}┌─[ OTA Update (Linktest Engine) ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    draw_header; echo -e "\n  ${FR}┌─[ OTA Update (Linktest Engine) ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack Iranian Mirror${NC} ${DIM}(c107328.parspack.net)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─[ MANUAL OVERRIDES ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
     
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
@@ -168,10 +169,10 @@ self_update_module() {
     sed -i 's/\r$//' "$tmp_file"
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
-        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
         
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -242,9 +243,9 @@ finally:
 
 run_protocol_matrix_test() {
     draw_header
-    echo -e "\n  ${DIM}┌─[ AUTO-SYNCED PROTOCOL BENCHMARK ]${NC}"
-    echo -e "  ${DIM}│${NC} ${W}Info:${NC} Automated Step-by-Step handshake across both endpoints."
-    echo -e "  ${DIM}├────────────────────────────────────────────────────────────────────────────${NC}"
+    echo -e "\n  ${FR}┌─[ AUTO-SYNCED PROTOCOL BENCHMARK ]${NC}"
+    echo -e "  ${FR}│${NC} ${W}Info:${NC} Automated Step-by-Step handshake across both endpoints."
+    echo -e "  ${FR}├────────────────────────────────────────────────────────────────────────────${NC}"
 
     while true; do
         echo -ne "  ${C}●${NC} ${W}Server Role [1: IRAN (Responder) | 2: KHAREJ (Initiator) | q: Back]: ${NC}"; read s_role
@@ -340,9 +341,9 @@ PY
         fi
 
         echo -e "  ${G}✔ Sync Established!${NC} Executing benchmark matrix...\n"
-        echo -e "  ${B}╭─────────────────────────────┬────────────┬──────────────┬──────────────────────────────╮${NC}"
-        printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-10s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "PROTOCOL / TRANSPORT" "STATUS" "LATENCY" "DIAGNOSTICS & DETAILS"
-        echo -e "  ${B}├─────────────────────────────┼────────────┼──────────────┼──────────────────────────────┤${NC}"
+        echo -e "  ${FR}╔═════════════════════════════╦════════════╦══════════════╦══════════════════════════════╗${NC}"
+        printf "  ${FR}║${NC} ${W}%-27s${NC} ${FR}║${NC} ${W}%-10s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "PROTOCOL / TRANSPORT" "STATUS" "LATENCY" "DIAGNOSTICS & DETAILS"
+        echo -e "  ${FR}╠═════════════════════════════╬════════════╬══════════════╬══════════════════════════════╣${NC}"
 
         local passed_protocols=()
 
@@ -353,10 +354,10 @@ PY
         sleep 1.5
         local res_gre=$(verify_tunnel_ping "10.254.254.1")
         if [[ "$res_gre" =~ ^OK ]]; then
-            printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "PASSED" "${res_gre#OK|}" "Protocol 47 (GRE) Clean"
+            printf "  ${FR}║${NC} ${C}%-27s${NC} ${FR}║${NC} ${G}%-10s${NC} ${FR}║${NC} ${Y}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "Standard IPv4 GRE" "PASSED" "${res_gre#OK|}" "Protocol 47 (GRE) Clean"
             passed_protocols+=("Standard GRE (L3)|10.254.254.1|$SPEED_PORT")
         else
-            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "GRE Drop / ISP Filter"
+            printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-10s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "Standard IPv4 GRE" "BLOCKED" "---" "GRE Drop / ISP Filter"
             ip link del mtest_gre 2>/dev/null || true; ip tunnel del mtest_gre 2>/dev/null || true
         fi
 
@@ -368,10 +369,10 @@ PY
         local ping_sit=$(ping6_compat -c 3 -W 2 "fdfe:7465:7374::1" 2>&1)
         if echo "$ping_sit" | grep -q ", 0% packet loss" || echo "$ping_sit" | grep -q ", 0.0% packet loss"; then
             local lat6=$(echo "$ping_sit" | grep -oP 'time=\K[0-9.]+' | head -1)
-            printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "PASSED" "${lat6:-1}ms" "Protocol 41 (SIT) Clean"
+            printf "  ${FR}║${NC} ${M}%-27s${NC} ${FR}║${NC} ${G}%-10s${NC} ${FR}║${NC} ${Y}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "6to4 IP6GRE Encap" "PASSED" "${lat6:-1}ms" "Protocol 41 (SIT) Clean"
             passed_protocols+=("6to4 IP6GRE|fdfe:7465:7374::1|$SPEED_PORT")
         else
-            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "Protocol 41 Filtered"
+            printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-10s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "6to4 IP6GRE Encap" "BLOCKED" "---" "Protocol 41 Filtered"
             ip link del mtest_sit 2>/dev/null || true; ip tunnel del mtest_sit 2>/dev/null || true
         fi
 
@@ -386,37 +387,37 @@ PY
         sleep 1.5
         local res_vx=$(verify_tunnel_ping "10.253.253.1")
         if [[ "$res_vx" =~ ^OK ]]; then
-            printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "${res_vx#OK|}" "UDP 4789 Open & Fast"
+            printf "  ${FR}║${NC} ${M}%-27s${NC} ${FR}║${NC} ${G}%-10s${NC} ${FR}║${NC} ${Y}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "VXLAN L2 Bridge Mesh" "PASSED" "${res_vx#OK|}" "UDP 4789 Open & Fast"
             passed_protocols+=("VXLAN L2 Fabric|10.253.253.1|$SPEED_PORT")
         else
-            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "UDP Port 4789 Dropped"
+            printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-10s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "VXLAN L2 Bridge Mesh" "BLOCKED" "---" "UDP Port 4789 Dropped"
             ip link del mtest_vx 2>/dev/null || true; ip link del mtest_br 2>/dev/null || true
         fi
 
         # 4. Rathole Reverse TCP
         if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/8443" 2>/dev/null; then
-            printf "  ${B}│${NC} ${R}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Rathole port precheck" "PASSED" "Direct" "Raw TCP :8443 reachable"
+            printf "  ${FR}║${NC} ${R}%-27s${NC} ${FR}║${NC} ${G}%-10s${NC} ${FR}║${NC} ${Y}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "Rathole port precheck" "PASSED" "Direct" "Raw TCP :8443 reachable"
             passed_protocols+=("Rathole port precheck|$remote_ip|8443")
         else
-            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Rathole port precheck" "BLOCKED" "---" "Port 8443 Filtered"
+            printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-10s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "Rathole port precheck" "BLOCKED" "---" "Port 8443 Filtered"
         fi
 
         # 5. Paqet Raw Packet (Port 8888)
         if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/8888" 2>/dev/null; then
-            printf "  ${B}│${NC} ${M}%-27s${NC} ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "Paqet port precheck" "PASSED" "Direct" "Raw TCP :8888 reachable"
+            printf "  ${FR}║${NC} ${M}%-27s${NC} ${FR}║${NC} ${G}%-10s${NC} ${FR}║${NC} ${Y}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "Paqet port precheck" "PASSED" "Direct" "Raw TCP :8888 reachable"
             passed_protocols+=("Paqet port precheck|$remote_ip|8888")
         else
-            printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "Paqet port precheck" "BLOCKED" "---" "Port 8888 Filtered"
+            printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-10s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "Paqet port precheck" "BLOCKED" "---" "Port 8888 Filtered"
         fi
 
         # 6. Backhaul Modes
         test_bh_mode() {
             local mode_name=$1; local port_num=$2; local label_color=$3
             if timeout 2 bash -c "exec 3<>/dev/tcp/$remote_ip/$port_num" 2>/dev/null; then
-                printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${G}%-10s${NC} ${B}│${NC} ${Y}%-12s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "PASSED" "Direct" "Port $port_num Open"
+                printf "  ${FR}║${NC} %b%-27s%b ${FR}║${NC} ${G}%-10s${NC} ${FR}║${NC} ${Y}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "$label_color" "$mode_name" "$NC" "PASSED" "Direct" "Port $port_num Open"
                 passed_protocols+=("$mode_name|$remote_ip|$port_num")
             else
-                printf "  ${B}│${NC} %b%-27s%b ${B}│${NC} ${R}%-10s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$label_color" "$mode_name" "$NC" "BLOCKED" "---" "Port $port_num Filtered"
+                printf "  ${FR}║${NC} %b%-27s%b ${FR}║${NC} ${R}%-10s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "$label_color" "$mode_name" "$NC" "BLOCKED" "---" "Port $port_num Filtered"
             fi
         }
 
@@ -424,28 +425,28 @@ PY
         test_bh_mode "Backhaul WSMUX precheck" "9643" "${Y}"
         test_bh_mode "Backhaul WSSMUX precheck" "9743" "${M}"
 
-        echo -e "  ${B}╰─────────────────────────────┴────────────┴──────────────┴──────────────────────────────╯${NC}"
+        echo -e "  ${FR}╚═════════════════════════════╩════════════╩══════════════╩══════════════════════════════╝${NC}"
 
         if [ ${#passed_protocols[@]} -gt 0 ]; then
             echo ""
             echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}PASSED${W} channels? [y/N]: ${NC}"; read do_speed
             if [[ "${do_speed,,}" == "y" ]]; then
                 echo -e "\n  ${Y}● Measuring Real-time Throughput (3s per channel)...${NC}\n"
-                echo -e "  ${B}╭─────────────────────────────┬──────────────────────────┬──────────────────────────────╮${NC}"
-                printf "  ${B}│${NC} ${W}%-27s${NC} ${B}│${NC} ${W}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "PASSED CHANNEL" "BANDWIDTH THROUGHPUT" "DIAGNOSTIC STATUS"
-                echo -e "  ${B}├─────────────────────────────┼──────────────────────────┼──────────────────────────────┤${NC}"
+                echo -e "  ${FR}╔═════════════════════════════╦══════════════════════════╦══════════════════════════════╗${NC}"
+                printf "  ${FR}║${NC} ${W}%-27s${NC} ${FR}║${NC} ${W}%-24s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "PASSED CHANNEL" "BANDWIDTH THROUGHPUT" "DIAGNOSTIC STATUS"
+                echo -e "  ${FR}╠═════════════════════════════╬══════════════════════════╬══════════════════════════════╣${NC}"
 
                 for item in "${passed_protocols[@]}"; do
                     IFS='|' read -r p_name p_host p_port <<< "$item"
 
                     local sp_val=$(measure_tcp_speed "$p_host" "$p_port")
                     if [ "$sp_val" != "ERR" ] && [ -n "$sp_val" ]; then
-                        printf "  ${B}│${NC} ${C}%-27s${NC} ${B}│${NC} ${G}%-24s${NC} ${B}│${NC} ${W}%-28s${NC} ${B}│${NC}\n" "$p_name" "▲ ${sp_val} Mbps" "Raw TCP throughput"
+                        printf "  ${FR}║${NC} ${C}%-27s${NC} ${FR}║${NC} ${G}%-24s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "$p_name" "▲ ${sp_val} Mbps" "Raw TCP throughput"
                     else
-                        printf "  ${B}│${NC} ${DIM}%-27s${NC} ${B}│${NC} ${R}%-24s${NC} ${B}│${NC} ${DIM}%-28s${NC} ${B}│${NC}\n" "$p_name" "N/A" "Connection Timeout"
+                        printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-24s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "$p_name" "N/A" "Connection Timeout"
                     fi
                 done
-                echo -e "  ${B}╰─────────────────────────────┴──────────────────────────┴──────────────────────────────╯${NC}"
+                echo -e "  ${FR}╚═════════════════════════════╩══════════════════════════╩══════════════════════════════╝${NC}"
             fi
         fi
 
@@ -755,44 +756,44 @@ lt_start_engine_responder() {
     local key rec engine payload link linkport publicport backendport core cfg log bindok cap='' local4 local6
     local4=$(mt_local_ipv4); local6=$(mt_local_ipv6)
     [ "$local4" != Unknown ] || local4=''
-    echo -e "\n  ${DIM}┌─[ BH / RH DUAL-STACK RESPONDER ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}IPv4:${NC} ${C}${local4:-Unavailable}${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}IPv6:${NC} ${C}${local6:-Unavailable}${NC}"
-    echo -e "  ${DIM}├────────────────────────────────────────────────────────────${NC}"
+    echo -e "\n  ${FR}┌─[ BH / RH DUAL-STACK RESPONDER ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}IPv4:${NC} ${C}${local4:-Unavailable}${NC}"
+    echo -e "  ${FR}├─${NC} ${W}IPv6:${NC} ${C}${local6:-Unavailable}${NC}"
+    echo -e "  ${FR}├────────────────────────────────────────────────────────────${NC}"
     local caps_file="$TMP_DIR/engine_caps"; : > "$caps_file"
     for key in BH44 BH46 BH64 BH66 RH44 RH46 RH64 RH66; do
         rec=$(lt_engine_record "$key"); IFS='|' read -r engine payload link linkport publicport backendport <<< "$rec"
         if { [ "$link" = 4 ] && [ -z "$local4" ]; } || { [ "$payload" = 4 ] && [ -z "$local4" ]; } || { [ "$link" = 6 ] && [ -z "$local6" ]; } || { [ "$payload" = 6 ] && [ -z "$local6" ]; }; then
-            printf '  %b├─%b %-9s %bUNAVAILABLE%b  %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
+            printf '  %b├─%b %-9s %bUNAVAILABLE%b  %s\n' "$FR" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
             continue
         fi
         core=''
         if [ "$engine" = BH ]; then core=$(lt_core_path bh 2>/dev/null || true); else core=$(lt_core_path rathole 2>/dev/null || true); fi
         if [ -z "$core" ]; then
-            printf '  %b├─%b %-9s %bCORE MISSING%b  %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
+            printf '  %b├─%b %-9s %bCORE MISSING%b  %s\n' "$FR" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
             continue
         fi
         if mt_port_busy "$linkport" tcp || mt_port_busy "$publicport" tcp; then
-            printf '  %b├─%b %-9s %bPORT BUSY%b    %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
+            printf '  %b├─%b %-9s %bPORT BUSY%b    %s\n' "$FR" "$NC" "$(lt_engine_label "$key")" "$Y" "$NC" "$(lt_engine_detail "$key")"
             continue
         fi
         cfg="$TMP_DIR/${key}.server.toml"; log="$TMP_DIR/${key}.server.log"
         if [ "$engine" = BH ]; then lt_write_bh_server "$cfg" "$link" "$payload" "$linkport" "$publicport" "$backendport"; lt_start_bg "$log" "$core" -c "$cfg"
         else lt_write_rh_server "$cfg" "$link" "$payload" "$linkport" "$publicport"; lt_start_bg "$log" "$core" "$cfg"; fi
         if kill -0 "$LT_LAST_PID" 2>/dev/null; then
-            cap+="${cap:+,}$key"; printf '  %b├─%b %-9s %bREADY%b        %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$G" "$NC" "$(lt_engine_detail "$key")"
+            cap+="${cap:+,}$key"; printf '  %b├─%b %-9s %bREADY%b        %s\n' "$FR" "$NC" "$(lt_engine_label "$key")" "$G" "$NC" "$(lt_engine_detail "$key")"
         else
-            printf '  %b├─%b %-9s %bENGINE FAIL%b  %s\n' "$DIM" "$NC" "$(lt_engine_label "$key")" "$R" "$NC" "$(lt_engine_detail "$key")"
+            printf '  %b├─%b %-9s %bENGINE FAIL%b  %s\n' "$FR" "$NC" "$(lt_engine_label "$key")" "$R" "$NC" "$(lt_engine_detail "$key")"
         fi
     done
     printf '%s' "$cap" > "$caps_file"
     if ! mt_port_busy "$ENGINE_CTRL_PORT" tcp && lt_start_control_server "$caps_file"; then
-        echo -e "  ${DIM}├────────────────────────────────────────────────────────────${NC}"
+        echo -e "  ${FR}├────────────────────────────────────────────────────────────${NC}"
         echo -e "  ${G}✔ Control + TCP/UDP family probes are ready.${NC}"
     else
         echo -e "  ${R}✖ Control port ${ENGINE_CTRL_PORT} could not be opened.${NC}"
     fi
-    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}"
     if [ "${1:-}" = "--no-wait" ]; then
         echo -e "  ${G}✔ Embedded in Option 1 Full Matrix; responder remains active.${NC}"
         return 0
@@ -803,7 +804,7 @@ lt_start_engine_responder() {
 
 lt_matrix_row() {
     local label="$1" status="$2" latency="$3" detail="$4" color="$5"
-    printf '  %b│%b %-10s %b│%b %b%-11s%b %b│%b %-9s %b│%b %-34s %b│%b\n' "$B" "$NC" "$label" "$B" "$NC" "$color" "$status" "$NC" "$B" "$NC" "$latency" "$B" "$NC" "$detail" "$B" "$NC"
+    printf '  %b║%b %-10s %b║%b %b%-11s%b %b║%b %-9s %b║%b %-34s %b║%b\n' "$FR" "$NC" "$label" "$FR" "$NC" "$color" "$status" "$NC" "$FR" "$NC" "$latency" "$FR" "$NC" "$detail" "$FR" "$NC"
 }
 
 lt_run_one_engine_test() {
@@ -848,13 +849,13 @@ lt_run_engine_matrix_tester() {
         return 1
     fi
 
-    echo -e "\n  ${DIM}┌─[ REAL BACKHAUL / RATHOLE IPv4 ↔ IPv6 ENGINE MATRIX ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4→6:${NC} IPv4 payload over IPv6 engine link"
-    echo -e "  ${DIM}├─${NC} ${W}6→4:${NC} IPv6 payload over IPv4 engine link"
-    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}\n"
-    echo -e "  ${B}╭────────────┬─────────────┬───────────┬────────────────────────────────────╮${NC}"
-    echo -e "  ${B}│${NC} ${W}ENGINE     ${NC}${B}│${NC} ${W}STATUS      ${NC}${B}│${NC} ${W}LATENCY  ${NC}${B}│${NC} ${W}PATH / DIAGNOSTIC                  ${NC}${B}│${NC}"
-    echo -e "  ${B}├────────────┼─────────────┼───────────┼────────────────────────────────────┤${NC}"
+    echo -e "\n  ${FR}┌─[ REAL BACKHAUL / RATHOLE IPv4 ↔ IPv6 ENGINE MATRIX ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4→6:${NC} IPv4 payload over IPv6 engine link"
+    echo -e "  ${FR}├─${NC} ${W}6→4:${NC} IPv6 payload over IPv4 engine link"
+    echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
+    echo -e "  ${FR}╔════════════╦═════════════╦═══════════╦════════════════════════════════════╗${NC}"
+    echo -e "  ${FR}║${NC} ${W}ENGINE     ${NC}${FR}║${NC} ${W}STATUS      ${NC}${FR}║${NC} ${W}LATENCY  ${NC}${FR}║${NC} ${W}PATH / DIAGNOSTIC                  ${NC}${FR}║${NC}"
+    echo -e "  ${FR}╠════════════╬═════════════╬═══════════╬════════════════════════════════════╣${NC}"
     for key in BH44 BH46 BH64 BH66 RH44 RH46 RH64 RH66; do
         if lt_run_one_engine_test "$key" "$remote4" "$remote6" "$caps"; then
             status_color="$G"
@@ -863,29 +864,29 @@ lt_run_engine_matrix_tester() {
         fi
         lt_matrix_row "$(lt_engine_label "$key")" "$LT_STATUS" "$LT_LAT" "$LT_DETAIL" "$status_color"
     done
-    echo -e "  ${B}╰────────────┴─────────────┴───────────┴────────────────────────────────────╯${NC}"
+    echo -e "  ${FR}╚════════════╩═════════════╩═══════════╩════════════════════════════════════╝${NC}"
 
-    echo -e "\n  ${DIM}┌─[ EXTRA NETWORK FAMILY PROBES ]${NC}"
+    echo -e "\n  ${FR}┌─[ EXTRA NETWORK FAMILY PROBES ]${NC}"
     if [ -n "$remote4" ]; then
-        if mt_tcp_probe "$remote4" "$ENGINE_CTRL_PORT"; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}TCP IPv4${NC}   ${C}reachable${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}TCP IPv4${NC}   blocked"; fi
-        ud4=$(lt_udp_probe "$remote4"); if [[ "$ud4" =~ ^[0-9]+$ ]]; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}UDP IPv4${NC}   ${C}${ud4}ms${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}UDP IPv4${NC}   blocked"; fi
-        ping4=$(ping -c 2 -W 1 "$remote4" 2>/dev/null | grep -oP 'time=\K[0-9.]+' | head -1); [ -n "$ping4" ] && echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}ICMP IPv4${NC}  ${C}${ping4}ms${NC}" || echo -e "  ${DIM}├─${NC} ${Y}●${NC} ${W}ICMP IPv4${NC}  no reply"
+        if mt_tcp_probe "$remote4" "$ENGINE_CTRL_PORT"; then echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}TCP IPv4${NC}   ${C}reachable${NC}"; else echo -e "  ${FR}├─${NC} ${R}✖${NC} ${W}TCP IPv4${NC}   blocked"; fi
+        ud4=$(lt_udp_probe "$remote4"); if [[ "$ud4" =~ ^[0-9]+$ ]]; then echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}UDP IPv4${NC}   ${C}${ud4}ms${NC}"; else echo -e "  ${FR}├─${NC} ${R}✖${NC} ${W}UDP IPv4${NC}   blocked"; fi
+        ping4=$(ping -c 2 -W 1 "$remote4" 2>/dev/null | grep -oP 'time=\K[0-9.]+' | head -1); [ -n "$ping4" ] && echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}ICMP IPv4${NC}  ${C}${ping4}ms${NC}" || echo -e "  ${FR}├─${NC} ${Y}●${NC} ${W}ICMP IPv4${NC}  no reply"
     fi
     if [ -n "$remote6" ]; then
-        if mt_tcp_probe "$remote6" "$ENGINE_CTRL_PORT"; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}TCP IPv6${NC}   ${C}reachable${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}TCP IPv6${NC}   blocked"; fi
-        ud6=$(lt_udp_probe "$remote6"); if [[ "$ud6" =~ ^[0-9]+$ ]]; then echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}UDP IPv6${NC}   ${C}${ud6}ms${NC}"; else echo -e "  ${DIM}├─${NC} ${R}✖${NC} ${W}UDP IPv6${NC}   blocked"; fi
-        ping6=$(ping -6 -c 2 -W 1 "$remote6" 2>/dev/null | grep -oP 'time=\K[0-9.]+' | head -1); [ -n "$ping6" ] && echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}ICMP IPv6${NC}  ${C}${ping6}ms${NC}" || echo -e "  ${DIM}├─${NC} ${Y}●${NC} ${W}ICMP IPv6${NC}  no reply"
+        if mt_tcp_probe "$remote6" "$ENGINE_CTRL_PORT"; then echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}TCP IPv6${NC}   ${C}reachable${NC}"; else echo -e "  ${FR}├─${NC} ${R}✖${NC} ${W}TCP IPv6${NC}   blocked"; fi
+        ud6=$(lt_udp_probe "$remote6"); if [[ "$ud6" =~ ^[0-9]+$ ]]; then echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}UDP IPv6${NC}   ${C}${ud6}ms${NC}"; else echo -e "  ${FR}├─${NC} ${R}✖${NC} ${W}UDP IPv6${NC}   blocked"; fi
+        ping6=$(ping -6 -c 2 -W 1 "$remote6" 2>/dev/null | grep -oP 'time=\K[0-9.]+' | head -1); [ -n "$ping6" ] && echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}ICMP IPv6${NC}  ${C}${ping6}ms${NC}" || echo -e "  ${FR}├─${NC} ${Y}●${NC} ${W}ICMP IPv6${NC}  no reply"
     fi
-    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}"
+    echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}"
     return 0
 }
 
 run_engine_family_matrix() {
     draw_header
-    echo -e "\n  ${DIM}┌─[ BACKHAUL / RATHOLE IPv4 ↔ IPv6 MATRIX ]${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4→6 means IPv4 payload over an IPv6 engine link.${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6→4 means IPv6 payload over an IPv4 engine link.${NC}"
-    echo -e "  ${DIM}└────────────────────────────────────────────────────────────${NC}\n"
+    echo -e "\n  ${FR}┌─[ BACKHAUL / RATHOLE IPv4 ↔ IPv6 MATRIX ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4→6 means IPv4 payload over an IPv6 engine link.${NC}"
+    echo -e "  ${FR}├─${NC} ${W}6→4 means IPv6 payload over an IPv4 engine link.${NC}"
+    echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
     local role remote4 remote6
     while true; do
         echo -ne "  ${C}●${NC} ${W}Role [1: IRAN / Responder | 2: KHAREJ / Tester | q: Back]: ${NC}"; read -r role
@@ -904,14 +905,14 @@ run_engine_family_matrix() {
 
 run_mtu_discovery() {
     draw_header
-    echo -e "\n  ${DIM}┌─[ ACCURATE MTU & PACKET-LOSS DISCOVERY ]${NC}"
+    echo -e "\n  ${FR}┌─[ ACCURATE MTU & PACKET-LOSS DISCOVERY ]${NC}"
     echo -ne "  ${C}●${NC} ${W}Target Peer IP Address: ${NC}"; read target_ip
     target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
     [ -z "$target_ip" ] && return
 
-    echo -e "\n  ${B}╭──────────┬──────────────┬─────────────┬──────────────┬─────────────────╮${NC}"
-    printf "  ${B}│${NC} ${W}%-8s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-11s${NC} ${B}│${NC} ${W}%-12s${NC} ${B}│${NC} ${W}%-15s${NC} ${B}│${NC}\n" "MTU SIZE" "PAYLOAD" "PACKET LOSS" "PING (MS)" "STATUS"
-    echo -e "  ${B}├──────────┼──────────────┼─────────────┼──────────────┼─────────────────┤${NC}"
+    echo -e "\n  ${FR}╔══════════╦══════════════╦═════════════╦══════════════╦═════════════════╗${NC}"
+    printf "  ${FR}║${NC} ${W}%-8s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-15s${NC} ${FR}║${NC}\n" "MTU SIZE" "PAYLOAD" "PACKET LOSS" "PING (MS)" "STATUS"
+    echo -e "  ${FR}╠══════════╬══════════════╬═════════════╬══════════════╬═════════════════╣${NC}"
 
     local test_sizes=("1472:1500" "1400:1428" "1350:1378" "1300:1328" "1280:1308" "1200:1228" "1100:1128" "1000:1028")
     for test in "${test_sizes[@]}"; do
@@ -931,9 +932,9 @@ run_mtu_discovery() {
             st_badge="${Y}FRAGMENTED${NC}"
         fi
 
-        printf "  ${B}│${NC} ${Y}%-8s${NC} ${B}│${NC} ${DIM}%-12s${NC} ${B}│${NC} ${W}%-11s${NC} ${B}│${NC} ${C}%-12s${NC} ${B}│${NC} %b%-15s%b ${B}│${NC}\n" "$mtu" "$payload" "$loss" "$avg_ping" "$st_badge" "$NC"
+        printf "  ${FR}║${NC} ${Y}%-8s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${C}%-12s${NC} ${FR}║${NC} %b%-15s%b ${FR}║${NC}\n" "$mtu" "$payload" "$loss" "$avg_ping" "$st_badge" "$NC"
     done
-    echo -e "  ${B}╰──────────┴──────────────┴─────────────┴──────────────┴─────────────────╯${NC}"
+    echo -e "  ${FR}╚══════════╩══════════════╩═════════════╩══════════════╩═════════════════╝${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
 }
 
@@ -947,23 +948,23 @@ while true; do
     fi
 
     draw_header
-    echo -e "\n  ${DIM}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Full Auto-Synced Protocol + BH/RH Matrix & Speedtest${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Backhaul / Rathole IPv4 ↔ IPv6 Matrix${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Run Dynamic MTU & Loss Discovery Test${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ DIAGNOSTIC UTILITIES ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Run as Listener (Open Temporary Test Ports)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Run as Tester (Check Peer Ports & Filtering)${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}View Active Listening Ports (OS Socket State)${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─[ SYSTEM OPERATIONS ]${NC}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
-    echo -e "  ${DIM}│${NC}"
-    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "\n  ${FR}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Full Auto-Synced Protocol + BH/RH Matrix & Speedtest${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Backhaul / Rathole IPv4 ↔ IPv6 Matrix${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Run Dynamic MTU & Loss Discovery Test${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─[ DIAGNOSTIC UTILITIES ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Run as Listener (Open Temporary Test Ports)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Run as Tester (Check Peer Ports & Filtering)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}View Active Listening Ports (OS Socket State)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─[ SYSTEM OPERATIONS ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 
     echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read opt
     case $opt in
@@ -1011,7 +1012,7 @@ while True:
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
         6)
            draw_header
-           echo -e "\n  ${DIM}┌─[ SYSTEM LISTENING PORTS ]${NC}"
+           echo -e "\n  ${FR}┌─[ SYSTEM LISTENING PORTS ]${NC}"
            ss -lntp 2>/dev/null | awk 'NR>1 {split($5, a, ":"); port = a[length(a)]; proc = $0; gsub(/.*users:\(\("/, "", proc); gsub(/".*/, "", proc); if (port != "") printf "  %-7s %-47s\n", port, proc;}' || true
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
         7) self_update_module ;;

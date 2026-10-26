@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -513,7 +513,12 @@ doc_persist_forwarding() {
     local v4="$1" v6="$2" file=/etc/sysctl.d/99-mtunnel-doctor.conf tmp
     tmp=$(mktemp "$SECURE_TMP/doctor-sysctl.XXXXXX") || return 1
     {
-        echo '# Managed by MTunnel Doctor'
+        if [ -f "$file" ]; then
+            awk -v v4="$v4" -v v6="$v6" '
+                v4 == 1 && /^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=/ {next}
+                v6 == 1 && /^[[:space:]]*net\.ipv6\.conf\.all\.forwarding[[:space:]]*=/ {next}
+                {print}' "$file"
+        else echo '# Managed by MTunnel Doctor'; fi
         [ "$v4" = 1 ] && echo 'net.ipv4.ip_forward = 1'
         [ "$v6" = 1 ] && echo 'net.ipv6.conf.all.forwarding = 1'
     } > "$tmp"

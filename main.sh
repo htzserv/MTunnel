@@ -1,12 +1,12 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.3).
-MODULE_VERSION="1.4.3"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
 # Source next to a checkout first, or from the system-wide installed location.
-# No network calls, implicit fallbacks to generated code, or silent failures.
+# The loader only reads local core files; explicit update actions below may download.
 mt_load_common() {
     local script_dir candidate
     script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
@@ -877,8 +877,8 @@ deploy_binaries_from_dir() {
     [ -d "$src_dir" ] || return 1
     # Original archive for each engine: used when the raw binary is missing or not a valid ELF.
     declare -A ARC=([bh]=backhaul_linux_amd64.tar.gz [rathole]=rathole-x86_64-unknown-linux-gnu.zip
-                    [paqet]=paqet-linux-amd64-v1.0.0-alpha.21.tar.gz [gost]=gost-linux-amd64-2.11.5.gz)
-    for name in bh rathole paqet gost haproxy; do
+                    [paqet]=paqet-linux-amd64-v1.0.0-alpha.21.tar.gz [gost]=gost-linux-amd64-2.11.5.gz [realm]=realm-x86_64-unknown-linux-musl.tar.gz)
+    for name in bh rathole paqet gost haproxy realm; do
         source="$src_dir/$name"
         [ "$name" != bh ] || [ -f "$source" ] || source="$src_dir/backhaul"
         if ! { [ -f "$source" ] && mt_valid_elf "$source"; }; then
@@ -892,14 +892,10 @@ deploy_binaries_from_dir() {
         fi
         case "$name" in bh) unit=mbackhaul;; rathole) unit=mrathole;; paqet) unit=mpaqet;; *) unit="$name";; esac
         mt_update_core "$name" "$unit" "$source" local || { rc=1; MT_DEPLOY_FAILED+=("$name"); }
-        if [ "$src_dir" != "$(mt_engines_dir)" ] && mt_valid_elf "$source"; then mt_install_files 755 "$source" "$(mt_engines_dir)/$name" || rc=1; fi
+        if [ "$src_dir" != "$(mt_engines_dir)" ]; then
+            mt_verify_engine_package "$source" "$source" && mt_engine_cache "$source" "$source" || rc=1
+        fi
     done
-    # Original archives (tar.gz / zip / gz) are kept next to the binaries: they are the fallback when a binary is unusable.
-    if [ "$src_dir" != "$(mt_engines_dir)" ]; then
-        for f in "$src_dir"/*.tar.gz "$src_dir"/*.zip "$src_dir"/*.gz; do
-            [ -f "$f" ] && mt_is_archive_file "$f" && mt_install_files 644 "$f" "$(mt_engines_dir)/${f##*/}" || true
-        done
-    fi
     local -a debs=()
     for deb in "$src_dir"/*.deb; do [ -f "$deb" ] && debs+=("$deb"); done
     if [ "${#debs[@]}" -gt 0 ]; then mt_install_debs "${debs[@]}" || rc=1; fi
@@ -967,6 +963,7 @@ mt_stage_script_ok() { [ -s "$1" ] && bash -n "$1" 2>/dev/null; }
 # staged core never leaks into this running process.
 mt_validate_staged_bundle() {
     local src="$1"
+    mt_verify_bundle_digests "$src" || return 1
     (
         # shellcheck disable=SC1090
         source "$src/core/common.sh" >/dev/null || { echo 'Staged shared core could not be loaded.' >&2; exit 1; }
@@ -1134,12 +1131,14 @@ install_bundle_scripts() {
     # strictly newer than every readable installed version.
     if [ "$unknown_installed" == 1 ] && { [ -z "$conf_installed" ] || ! mt_is_newer_version "$bundle_version" "$conf_installed"; }; then conf_installed=unknown; fi
     files+=("$source/install.sh" "$LOCAL_DIR/install.sh")
+    [ ! -f "$source/SHA256SUMS" ] || files+=("$source/SHA256SUMS" "$LOCAL_DIR/SHA256SUMS")
     for mod in "${mods[@]}"; do
         rel="${MOD_MAP[$mod]}"; candidate="$source/$rel"; target="/usr/bin/$mod"
         [ "$mod" != main ] || target="$MTUNNEL_PATH"
         files+=("$candidate" "$LOCAL_DIR/$rel" "$candidate" "$target")
     done
     mt_install_files 755 "${files[@]}" || return 1
+    [ -f "$source/SHA256SUMS" ] || rm -f "$LOCAL_DIR/SHA256SUMS"
     if [ "${2:-0}" == 1 ]; then
         local current=0 version total="${#mods[@]}"
         for mod in "${mods[@]}"; do
@@ -1155,6 +1154,7 @@ sync_script_bundle() {
     stage=$(mktemp -d "$SECURE_TMP/sync.XXXXXX") || return 1
     # Stage the shared core and all scripts before committing any module.
     mkdir -p "$stage/core"
+    mt_download "$(mt_cb_url "$base/SHA256SUMS")" "$stage/SHA256SUMS" 2>/dev/null || rm -f "$stage/SHA256SUMS"
     if ! mt_download "$(mt_cb_url "$base/core/common.sh")" "$stage/core/common.sh"; then
         echo "Could not download core/common.sh from $base" >&2; rm -rf "$stage"; return 1
     fi
@@ -1285,6 +1285,7 @@ mt_package_problem() {
     local file="$1" item="$2" hash="${3:--}" size
     [ -s "$file" ] || { printf 'missing or empty file'; return 0; }
     size=$(wc -c < "$file")
+    if [ "$hash" = - ]; then printf 'missing trusted SHA256 manifest entry'; return 0; fi
     if [ "$hash" != - ] && [ "$(sha256sum "$file" | cut -d' ' -f1)" != "$hash" ]; then
         printf 'checksum differs from manifest.txt (stale or corrupted upload)'; return 0
     fi
@@ -1400,7 +1401,7 @@ fetch_package_group() {
             reason=$(mt_package_problem "$file" "$item" "$hash")
         fi
         if [ -n "$reason" ]; then rm -f "$file"; status+=(failed); reasons+=("$item — $reason"); rc=1
-        else status+=(ok); n_ok=$((n_ok+1)); fi
+        else status+=(ok); n_ok=$((n_ok+1)); printf '%s  %s\n' "$hash" "$item" >> "$stage/manifest.txt"; fi
     done
     if [ "$n_ok" -gt 0 ]; then
         for i in "${!names[@]}"; do [ "${status[$i]}" != ok ] || files+=("$stage/${names[$i]}" "$(mt_cache_dir_for "${names[$i]}")/${names[$i]}"); done
@@ -1465,7 +1466,7 @@ mt_build_local_manifest() {
 mt_install_packages_dir() {
     local dir="$1" kind="$2" show="${3:-0}" hash item i rc=0 reason n_ok=0 stage current=0 label version
     local -a names=() status=() reasons=() files=()
-    if ! mt_build_local_manifest "$dir"; then
+    if [ ! -f "$dir/manifest.txt" ] && ! mt_build_local_manifest "$dir"; then
         echo -e "  ${R}✖ No engines or .deb packages found in the source folder.${NC}" >&2; return 1
     fi
     stage=$(mktemp -d "$SECURE_TMP/pkginst.XXXXXX") || return 1
@@ -1474,7 +1475,7 @@ mt_install_packages_dir() {
         names+=("$item")
         reason=$(mt_package_problem "$dir/$item" "$item" "$hash")
         if [ -n "$reason" ]; then status+=(failed); reasons+=("$item — $reason"); rc=1
-        else status+=(ok); cp -f "$dir/$item" "$stage/$item"; files+=("$dir/$item" "$(mt_cache_dir_for "$item")/$item"); n_ok=$((n_ok+1)); fi
+        else status+=(ok); printf '%s  %s\n' "$hash" "$item" >> "$stage/manifest.txt"; cp -f "$dir/$item" "$stage/$item"; files+=("$dir/$item" "$(mt_cache_dir_for "$item")/$item"); n_ok=$((n_ok+1)); fi
     done < "$dir/manifest.txt"
     if [ "${#names[@]}" -eq 0 ]; then echo -e "  ${R}✖ Nothing of this kind in the source folder.${NC}" >&2; rm -rf "$stage"; return 1; fi
     if [ "$n_ok" -gt 0 ]; then
@@ -2395,6 +2396,14 @@ while true; do
                 rm -f /usr/local/bin/mhealer_daemon.sh /usr/local/bin/mporter-{watchdog,iptables,obfs}.sh /etc/mhealer.conf
                 rm -f /var/lock/mporter-state.lock /run/mporter-backends.tsv
                 # Generic Gost/Realm installations may belong to another project. Remove only when MPorter explicitly marked ownership.
+                if [ -f /etc/mporter/.owns_haproxy ]; then
+                    systemctl disable --now haproxy.service >/dev/null 2>&1 || true
+                    if ! DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 purge -y haproxy; then
+                        echo 'HAProxy removal failed; MTunnel configs/ownership markers were retained. Retry after resolving the package error.' >&2
+                        continue
+                    fi
+                    rm -rf /etc/haproxy /var/lib/haproxy
+                fi
                 if [ -f /etc/mporter/.owns_gost ]; then systemctl disable --now gost.service 2>/dev/null || true; rm -f /etc/systemd/system/gost.service /usr/local/bin/gost; rm -rf /etc/gost; fi
                 if [ -f /etc/mporter/.owns_realm ]; then systemctl disable --now realm.service 2>/dev/null || true; rm -f /etc/systemd/system/realm.service /usr/local/bin/realm; rm -rf /etc/realm; fi
                 rm -rf /run/mtunnel-healer
@@ -2415,7 +2424,9 @@ while true; do
                 done
                 rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
                 rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest
-                rm -f /usr/local/bin/mtunnel
+                rm -f /usr/local/bin/mtunnel /usr/bin/mmirror
+    rm -f /etc/sysctl.d/99-mtunnel-bbr.conf /etc/sysctl.d/99-mtunnel-doctor.conf
+    rm -f /etc/sysctl.d/99-mporter-ipv4.conf /etc/sysctl.d/99-mporter-ipv6.conf
                 kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null
                 echo -e "\n  ${G}✓ MTunnel ecosystem completely wiped from this system.${NC}\n"; exit 0
             else

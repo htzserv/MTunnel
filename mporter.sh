@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -339,7 +339,7 @@ self_update_module() {
     fi
     rm -f "$tmp_file"
     echo -e "  ${G}✔ Update successfully applied! Rebooting module...${NC}"
-    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
+    [ -z "${MPORTER_WATCHER_PID:-}" ] || kill "$MPORTER_WATCHER_PID" 2>/dev/null || true
     exec "$INSTALL_PATH"
 }
 

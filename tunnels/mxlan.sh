@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -109,11 +109,11 @@ check_update_bg() {
     local remote_ver=""
     
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(curl -fSL --range 0-4095 -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL --range 0-4095 -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO-  --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(wget -qO- --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.linktest_remote_ver"
@@ -152,11 +152,7 @@ self_update_module() {
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
     tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
     if [ "$src_opt" == 4 ]; then
-        if command -v nano >/dev/null 2>&1; then
-            echo -e "  ${DIM}● Opening Nano editor... Paste your code, press Ctrl+O, Enter, then Ctrl+X to save.${NC}"
-            nano "$tmp_file"
-        elif command -v vi >/dev/null 2>&1; then vi "$tmp_file"
-        else rm -f "$tmp_file"; echo -e "  ${R}✖ No text editor (nano/vi) found!${NC}"; return 1; fi
+        mt_capture_manual_script "$tmp_file" || { rm -f "$tmp_file"; return 1; }
     else
         case "$src_opt" in
             1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path";;
@@ -248,18 +244,18 @@ run_protocol_matrix_test() {
     echo -e "  ${FR}├────────────────────────────────────────────────────────────────────────────${NC}"
 
     while true; do
-        echo -ne "  ${C}●${NC} ${W}Server Role [1: IRAN (Responder) | 2: KHAREJ (Initiator) | q: Back]: ${NC}"; read s_role
+        echo -ne "  ${C}●${NC} ${W}Server Role [1: IRAN (Responder) | 2: KHAREJ (Initiator) | q: Back]: ${NC}"; read -r s_role
         [[ "$s_role" =~ ^[12q]$ ]] && break
     done
     [[ "$s_role" == "q" ]] && return
 
     local local_ip=$(mt_local_ipv4)
     [ "$local_ip" != "Unknown" ] || local_ip=$(get_local_ip)
-    echo -ne "  ${C}●${NC} ${W}Local Public IPv4 [${Y}${local_ip}${W}]: ${NC}"; read custom_l
+    echo -ne "  ${C}●${NC} ${W}Local Public IPv4 [${Y}${local_ip}${W}]: ${NC}"; read -r custom_l
     local_ip=${custom_l:-$local_ip}; local_ip="${local_ip// /}"
     mt_valid_ipv4 "$local_ip" || { echo -e "  ${R}● A valid local IPv4 is required for the native GRE/SIT/VXLAN stage.${NC}"; sleep 1.5; return; }
 
-    echo -ne "  ${C}●${NC} ${W}Remote Peer Public IPv4: ${NC}"; read remote_ip
+    echo -ne "  ${C}●${NC} ${W}Remote Peer Public IPv4: ${NC}"; read -r remote_ip
     remote_ip=$(echo "$remote_ip" | tr -d '\r' | tr -d ' ')
     if ! mt_valid_ipv4 "$remote_ip"; then echo -e "  ${R}● A valid remote IPv4 is required for Option 1 native tests.${NC}"; sleep 1.5; return; fi
 
@@ -325,7 +321,7 @@ PY
 
         echo -e "  ${C}✓ Native tunnels, test ports, and BH/RH matrix responder are ready.${NC}"
         echo -e "  ${Y}● Go to KHAREJ server now and start Option 1.${NC}"
-        echo -ne "\n  ${DIM}Press Enter when Kharej tests are finished to tear down...${NC}"; read dummy
+        echo -ne "\n  ${DIM}Press Enter when Kharej tests are finished to tear down...${NC}"; read -r dummy
         cleanup_session
         echo -e "  ${G}● Teardown complete. All test interfaces purged.${NC}"; sleep 1.5
         return
@@ -337,7 +333,7 @@ PY
             echo -e "\n  ${R}✖ IRAN Server is NOT ready!${NC}"
             echo -e "  ${Y}Step 1:${NC} Open this menu on IRAN server and select ${W}1 (IRAN Responder)${NC}."
             echo -e "  ${Y}Step 2:${NC} Then run this option again on Kharej."
-            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy; return
+            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy; return
         fi
 
         echo -e "  ${G}✔ Sync Established!${NC} Executing benchmark matrix...\n"
@@ -429,7 +425,7 @@ PY
 
         if [ ${#passed_protocols[@]} -gt 0 ]; then
             echo ""
-            echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}PASSED${W} channels? [y/N]: ${NC}"; read do_speed
+            echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}PASSED${W} channels? [y/N]: ${NC}"; read -r do_speed
             if [[ "${do_speed,,}" == "y" ]]; then
                 echo -e "\n  ${Y}● Measuring Real-time Throughput (3s per channel)...${NC}\n"
                 echo -e "  ${FR}╔═════════════════════════════╦══════════════════════════╦══════════════════════════════╗${NC}"
@@ -467,7 +463,7 @@ PY
         lt_stop_engine_pids 2>/dev/null || true
 
         echo -e "\n  ${DIM}Full Matrix finished. Native tunnels, BH/RH engines, and temporary listeners cleaned up.${NC}"
-        echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+        echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy
     fi
 }
 
@@ -906,9 +902,13 @@ run_engine_family_matrix() {
 run_mtu_discovery() {
     draw_header
     echo -e "\n  ${FR}┌─[ ACCURATE MTU & PACKET-LOSS DISCOVERY ]${NC}"
-    echo -ne "  ${C}●${NC} ${W}Target Peer IP Address: ${NC}"; read target_ip
+    echo -ne "  ${C}●${NC} ${W}Target Peer IP Address: ${NC}"; read -r target_ip
     target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
     [ -z "$target_ip" ] && return
+    target_ip=$(mt_normalize_host "$target_ip")
+    mt_valid_ipv4 "$target_ip" || mt_valid_ipv6 "$target_ip" || { echo 'Enter an IPv4 or IPv6 address.' >&2; return 1; }
+    local family=-4 overhead=28
+    if [[ "$target_ip" == *:* ]]; then family=-6; overhead=48; fi
 
     echo -e "\n  ${FR}╔══════════╦══════════════╦═════════════╦══════════════╦═════════════════╗${NC}"
     printf "  ${FR}║${NC} ${W}%-8s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-15s${NC} ${FR}║${NC}\n" "MTU SIZE" "PAYLOAD" "PACKET LOSS" "PING (MS)" "STATUS"
@@ -916,9 +916,9 @@ run_mtu_discovery() {
 
     local test_sizes=("1472:1500" "1400:1428" "1350:1378" "1300:1328" "1280:1308" "1200:1228" "1100:1128" "1000:1028")
     for test in "${test_sizes[@]}"; do
-        local payload="${test%%:*}"
         local mtu="${test##*:}"
-        local ping_out=$(ping -c 4 -W 1 -M do -s "$payload" "$target_ip" 2>&1)
+        local payload=$((mtu-overhead))
+        local ping_out=$(ping "$family" -c 4 -W 1 -M do -s "$payload" "$target_ip" 2>&1)
         local loss="100%"
         local avg_ping="---"
         local st_badge="${R}FAILED${NC}"
@@ -935,7 +935,7 @@ run_mtu_discovery() {
         printf "  ${FR}║${NC} ${Y}%-8s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${C}%-12s${NC} ${FR}║${NC} %b%-15s%b ${FR}║${NC}\n" "$mtu" "$payload" "$loss" "$avg_ping" "$st_badge" "$NC"
     done
     echo -e "  ${FR}╚══════════╩══════════════╩═════════════╩══════════════╩═════════════════╝${NC}"
-    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy
+    echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy
 }
 
 while true; do
@@ -966,40 +966,52 @@ while true; do
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 
-    echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read opt
+    echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read -r opt
     case $opt in
         1) run_protocol_matrix_test ;;
         2) run_engine_family_matrix ;;
         3) run_mtu_discovery ;;
         4) 
            draw_header
-           echo -ne "\n  ${C}●${NC} ${W}Target ports to open [e.g. 80,443,8443]: ${NC}"; read p_in
+           echo -ne "\n  ${C}●${NC} ${W}Target ports to open [e.g. 80,443,8443]: ${NC}"; read -r p_in
            p_in=${p_in:-"80,443,2053,2083,8080,8443,9743"}
            for p in $(echo "$p_in" | tr ',' ' '); do
                mt_valid_port "$p" || { echo -e "  ${R}SKIP${NC} '$p' is not a valid port number."; continue; }
                LISTEN_PORT="$p" python3 -c "
-import socket, os
+import socket, os, selectors
 port = int(os.environ['LISTEN_PORT'])
-s = socket.socket()
-s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(('0.0.0.0', port))
-s.listen(1024)
+selector = selectors.DefaultSelector()
+for family, address in ((socket.AF_INET, '0.0.0.0'), (socket.AF_INET6, '::')):
+    s = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if family == socket.AF_INET6:
+            s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        s.bind((address, port))
+        s.listen(1024)
+        selector.register(s, selectors.EVENT_READ)
+    except OSError as exc:
+        s.close()
+        print(f'{address}:{port}: {exc}', flush=True)
+if not selector.get_map():
+    raise SystemExit(1)
 while True:
-    c, _ = s.accept()
-    c.close()
+    for key, _ in selector.select():
+        c, _ = key.fileobj.accept()
+        c.close()
 " &
                listener_pid=$!; LISTENER_PIDS+=("$listener_pid")
                sleep 0.1
                if ! kill -0 "$listener_pid" 2>/dev/null; then wait "$listener_pid"; echo "Port $p could not be opened." >&2; continue; fi
                echo -e "  ${G}OK${NC} Port $p is now listening."
            done
-           echo -ne "\n  ${Y}Press Enter to stop listeners...${NC}"; read dummy
+           echo -ne "\n  ${Y}Press Enter to stop listeners...${NC}"; read -r dummy
            for listener_pid in "${LISTENER_PIDS[@]}"; do kill "$listener_pid" 2>/dev/null || true; done
            LISTENER_PIDS=() ;;
         5) 
            draw_header
-           echo -ne "\n  ${C}●${NC} ${W}Target Peer IP: ${NC}"; read r_p
-           echo -ne "  ${C}●${NC} ${W}Test Ports [e.g. 80,443,8443]: ${NC}"; read p_in
+           echo -ne "\n  ${C}●${NC} ${W}Target Peer IP: ${NC}"; read -r r_p
+           echo -ne "  ${C}●${NC} ${W}Test Ports [e.g. 80,443,8443]: ${NC}"; read -r p_in
            p_in=${p_in:-"80,443,2053,2083,8080,8443,9743"}
            echo ""
            for p in $(echo "$p_in" | tr ',' ' '); do
@@ -1009,12 +1021,12 @@ while True:
                    echo -e "  ${R}✘ BLOCKED${NC} Port $p on $r_p is filtered/closed."
                fi
            done
-           echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+           echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy ;;
         6)
            draw_header
            echo -e "\n  ${FR}┌─[ SYSTEM LISTENING PORTS ]${NC}"
            ss -lntp 2>/dev/null | awk 'NR>1 {split($5, a, ":"); port = a[length(a)]; proc = $0; gsub(/.*users:\(\("/, "", proc); gsub(/".*/, "", proc); if (port != "") printf "  %-7s %-47s\n", port, proc;}' || true
-           echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read dummy ;;
+           echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy ;;
         7) self_update_module ;;
         0) break ;;
     esac

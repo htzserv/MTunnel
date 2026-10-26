@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -411,7 +411,7 @@ install_core_from_source() {
             local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
             echo -e "  ${DIM}● Source: $source_host${NC}"
             if rh_download "$url" "$work/package"; then
-                if rh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
+                if mt_verify_engine_package "$work/package" "$url" && rh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
                 else echo 'Downloaded file is not a compatible Rathole binary/archive.' >&2; fi
             fi
             [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
@@ -419,7 +419,9 @@ install_core_from_source() {
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
         mt_engine_cache "$source" "$chosen_url"
     fi
-    if mt_update_core rathole mrathole "$source" local; then
+    local verified_hash=''
+    [ -z "$work" ] || verified_hash=$(sha256sum "$source" | cut -d' ' -f1)
+    if mt_update_core rathole mrathole "$source" local "$verified_hash"; then
         [ -z "$work" ] || rm -rf "$work"
         echo -e "  ${G}✔ Rathole Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
@@ -504,7 +506,7 @@ menu_install_core() {
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
 
     [[ "$src_choice" =~ ^[1-4]$ ]] && install_core_from_source "$src_choice"
@@ -525,7 +527,7 @@ check_first_run_core() {
             echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
             echo -e "  ${FR}│${NC}"
             echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
-            echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
+            echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
                 if install_core_from_source "$init_opt"; then printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
@@ -805,9 +807,9 @@ refresh_header_live() {
     hdr_rows_count
     if [ "$HDR_ROWS_COUNT" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
     mt_live_vitals_update 2>/dev/null || true
-    printf '[?25l7[1;1H'
+    printf '\033[?25l\0337\033[1;1H'
     HEADER_LIVE=1 draw_header
-    printf '8[?25h'
+    printf '\0338\033[?25h'
 }
 hdr_stats_loop() {
     while true; do
@@ -1034,7 +1036,7 @@ show_tunnel_registry() {
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
     if [ "${1:-}" != --no-pause ]; then
-        echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+        echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r dummy
     fi
 }
 
@@ -1087,10 +1089,10 @@ manage_cron() {
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo -ne "  ${C}Select ❯❯ ${NC}"; read cr_opt
+    echo -ne "  ${C}Select ❯❯ ${NC}"; read -r cr_opt
 
     if [[ "$cr_opt" == "1" ]]; then
-        echo -ne "  ${C}●${NC} ${W}Restart interval in hours (e.g. 2, 4, 6): ${NC}"; read interval
+        echo -ne "  ${C}●${NC} ${W}Restart interval in hours (e.g. 2, 4, 6): ${NC}"; read -r interval
         interval=$(echo "$interval" | tr -d '\r')
         [[ "$interval" =~ ^[0-9]+$ ]] && ((10#$interval >= 1 && 10#$interval <= 24)) || { echo -e "  ${R}Invalid interval! Use 1-24 hours.${NC}"; sleep 1.5; return; }
         
@@ -1134,7 +1136,7 @@ uninstall_mrathole() {
     echo -e "  ${R}║${NC}   ● Rathole core binary (/usr/local/bin/rathole) & mrathole module         ${R}║${NC}"
     echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
-    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
+    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
     
     if [ "$confirm" != "yes" ]; then
@@ -1180,7 +1182,7 @@ select_tunnel() {
         printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}")"
     done
     echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
+    echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
     t_idx=$((10#$t_idx))
@@ -1512,14 +1514,14 @@ while true; do
            mt_workspace_screen
            echo -e "\n  ${FR}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
-               echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read s_type
+               echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read -r s_type
                s_type=$(echo "$s_type" | tr -d '\r')
                [[ "$s_type" =~ ^[12q]$ ]] && break
            done
            [[ "$s_type" == "q" ]] && continue
            
            while true; do 
-               echo -ne "  ${C}●${NC} ${W}Tunnel Name (e.g. rt1): ${NC}"; read t_name
+               echo -ne "  ${C}●${NC} ${W}Tunnel Name (e.g. rt1): ${NC}"; read -r t_name
                t_name=$(echo "$t_name" | tr -dc 'a-zA-Z0-9_-')
                if [ -d "$CONF_DIR/$t_name" ]; then echo -e "  ${R}Error: Tunnel exists!${NC}"; continue; fi
                [[ -n "$t_name" ]] && break
@@ -1530,7 +1532,7 @@ while true; do
            r_ip="0.0.0.0"
            if [ "$s_type" == "2" ]; then
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Target IRAN Host/IP: ${NC}"; read r_ip
+                   echo -ne "  ${C}●${NC} ${W}Target IRAN Host/IP: ${NC}"; read -r r_ip
                    r_ip=$(mt_normalize_host "${r_ip//$'\r'/}")
                    is_valid_host "$r_ip" && break
                    echo -e "  ${R}Error: Invalid Host or IP format!${NC}"
@@ -1538,7 +1540,7 @@ while true; do
            fi
            
            while true; do
-               echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5050): ${NC}"; read t_port
+               echo -ne "  ${C}●${NC} ${W}Tunnel Link Port (e.g. 5050): ${NC}"; read -r t_port
                t_port=${t_port//$'\r'/}
                if ! mt_valid_port "$t_port"; then
                    echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"
@@ -1552,20 +1554,20 @@ while true; do
                break
            done
            
-           echo -ne "  ${C}●${NC} ${W}Custom Token (Leave blank to generate auto): ${NC}"; read t_token
+           echo -ne "  ${C}●${NC} ${W}Custom Token (Leave blank to generate auto): ${NC}"; read -r t_token
            t_token=$(echo "$t_token" | tr -dc 'a-zA-Z0-9_-')
            [ -z "$t_token" ] && t_token=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
            
            # رفع باگ ۲: بررسی و اعتبارسنجی دقیق پورت‌های فوروارد
            while true; do
-               echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Blank if none]: ${NC}"; read tcp_p
+               echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Blank if none]: ${NC}"; read -r tcp_p
                tcp_p=$(echo "$tcp_p" | tr -d '\r ')
                if [ "$s_type" = 1 ] && [ -n "$tcp_p" ]; then mt_port_guard bind "$tcp_p" "" "" "" "Rathole ${t_name}" || continue; tcp_p="$MT_PORT_TCP"; fi
                validate_forward_ports "$tcp_p" "$s_type" "tcp" && break
            done
 
            while true; do
-               echo -ne "  ${C}●${NC} ${W}UDP Ports to Forward (e.g. 53) [Blank if none]: ${NC}"; read udp_p
+               echo -ne "  ${C}●${NC} ${W}UDP Ports to Forward (e.g. 53) [Blank if none]: ${NC}"; read -r udp_p
                udp_p=$(echo "$udp_p" | tr -d '\r ')
                if [ "$s_type" = 1 ] && [ -n "$udp_p" ]; then mt_port_guard bind "" "$udp_p" "" "" "Rathole ${t_name}" || continue; udp_p="$MT_PORT_UDP"; fi
                validate_forward_ports "$udp_p" "$s_type" "udp" && break
@@ -1602,7 +1604,7 @@ EOF
            echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
            for i in "${!tunnels[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${tunnels[$i]}")"; done
            echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
-           echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read del_idx
+           echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read -r del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
                for d in "${tunnels[@]}"; do
@@ -1638,7 +1640,7 @@ EOF
            mt_source_conf "$SELECTED_TUN/meta.conf" 2>/dev/null
            
            if [[ "$opt" == "3" ]]; then
-               echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read n_ip
+               echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read -r n_ip
                n_ip=$(mt_normalize_host "${n_ip//$'\r'/}")
                if [ -z "$n_ip" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
@@ -1650,7 +1652,7 @@ EOF
                
            elif [[ "$opt" == "4" ]]; then
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Enter TCP Ports (none to clear; e.g. 80,443) [Current: ${Y}${TCP_PORTS:-None}${W}]: ${NC}"; read n_tcp
+                   echo -ne "  ${C}●${NC} ${W}Enter TCP Ports (none to clear; e.g. 80,443) [Current: ${Y}${TCP_PORTS:-None}${W}]: ${NC}"; read -r n_tcp
                    n_tcp=${n_tcp//$'\r'/}
                    if [ "${n_tcp,,}" == none ] || [ "$n_tcp" == - ]; then TCP_PORTS=""; break; fi
                    if [ -z "$n_tcp" ]; then
@@ -1663,7 +1665,7 @@ EOF
                
            elif [[ "$opt" == "5" ]]; then
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Enter UDP Ports (none to clear; e.g. 53) [Current: ${C}${UDP_PORTS:-None}${W}]: ${NC}"; read n_udp
+                   echo -ne "  ${C}●${NC} ${W}Enter UDP Ports (none to clear; e.g. 53) [Current: ${C}${UDP_PORTS:-None}${W}]: ${NC}"; read -r n_udp
                    n_udp=${n_udp//$'\r'/}
                    if [ "${n_udp,,}" == none ] || [ "$n_udp" == - ]; then UDP_PORTS=""; break; fi
                    if [ -z "$n_udp" ]; then
@@ -1675,7 +1677,7 @@ EOF
                [ -z "$n_udp" ] && continue
 
            elif [[ "$opt" == "6" ]]; then
-               echo -ne "  ${C}●${NC} ${W}New Auth Token / Secret [Current: ${Y}${TOKEN}${W}]: ${NC}"; read n_tok
+               echo -ne "  ${C}●${NC} ${W}New Auth Token / Secret [Current: ${Y}${TOKEN}${W}]: ${NC}"; read -r n_tok
                n_tok=$(echo "$n_tok" | tr -dc 'a-zA-Z0-9_-')
                if [ -z "$n_tok" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
@@ -1685,7 +1687,7 @@ EOF
 
            elif [[ "$opt" == "7" ]]; then
                while true; do
-                   echo -ne "  ${C}●${NC} ${W}Enter New Link Port [Current: ${Y}${LINK_PORT}${W}]: ${NC}"; read n_port
+                   echo -ne "  ${C}●${NC} ${W}Enter New Link Port [Current: ${Y}${LINK_PORT}${W}]: ${NC}"; read -r n_port
                    n_port=${n_port//$'\r'/}
                    if [ -z "$n_port" ]; then
                        echo -e "  ${Y}● No changes made.${NC}"; break
@@ -1703,7 +1705,7 @@ EOF
                [ -z "$n_port" ] && continue
                
            elif [[ "$opt" == "8" ]]; then
-               echo -ne "  ${C}●${NC} ${W}New Tunnel Name (Current: ${Y}${t_name}${W}): ${NC}"; read new_name
+               echo -ne "  ${C}●${NC} ${W}New Tunnel Name (Current: ${Y}${t_name}${W}): ${NC}"; read -r new_name
                new_name=$(echo "$new_name" | tr -dc 'a-zA-Z0-9_-')
                if [ -n "$new_name" ]; then
                    if [ -d "$CONF_DIR/$new_name" ]; then

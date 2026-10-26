@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.3.4, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.4, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.3"
+MTUNNEL_RELEASE_VERSION="1.4.4"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -485,6 +485,64 @@ mt_download() {
     fi
     mv -f "$tmp" "$dest"
 }
+# SHA256 detects corruption; authenticity still depends on the trusted source.
+mt_verify_digest() {
+    local file="$1" manifest="$2" relative="$3" expected line hash name count=0
+    expected=''
+    [ -f "$manifest" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+        [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]] || return 1
+        hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
+        if [ "$name" = "$relative" ]; then expected="$hash"; count=$((count+1)); fi
+    done < "$manifest"
+    [ "$count" = 1 ] && [ "$(sha256sum "$file" | cut -d' ' -f1)" = "$expected" ] || {
+        echo "SHA256 verification failed: $relative" >&2; return 1;
+    }
+}
+mt_verify_bundle_digests() {
+    local dir="$1" file relative list
+    if [ ! -f "$dir/SHA256SUMS" ]; then
+        echo 'Legacy bundle without SHA256SUMS: source authenticity/integrity is not independently verified.' >&2
+        return 0
+    fi
+    list=$(mktemp "${TMPDIR:-/tmp}/mt-digests.XXXXXX") || return 1
+    find "$dir" -type f -name '*.sh' -print0 > "$list" || { rm -f "$list"; return 1; }
+    while IFS= read -r -d '' file; do
+        relative="${file#"$dir/"}"
+        mt_verify_digest "$file" "$dir/SHA256SUMS" "$relative" || { rm -f "$list"; return 1; }
+    done < "$list"
+    rm -f "$list"
+}
+
+mt_verify_engine_package() {
+    local file="$1" source="$2" expected="${3:-${MTUNNEL_ENGINE_SHA256:-}}" name manifest base tmp=''
+    if [ -n "$expected" ]; then
+        [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] && [ "$(sha256sum "$file" | cut -d' ' -f1)" = "${expected,,}" ] || {
+            echo 'Engine SHA256 mismatch.' >&2; return 1;
+        }
+        return 0
+    fi
+    name="${source%%\?*}"; name="${name##*/}"
+    if [[ "$source" == https://* ]]; then
+        case "$source" in
+            */engines/*) base="${source%%/engines/*}";;
+            https://github.com/Musixal/Backhaul/*|https://github.com/rapiz1/rathole/*|https://github.com/rathole-org/rathole/*|https://github.com/hanselime/paqet/*)
+                base="$MTUNNEL_GITHUB_BASE";;
+            *) echo 'Custom engine URL requires MTUNNEL_ENGINE_SHA256 from a trusted source.' >&2; return 1;;
+        esac
+        tmp=$(mktemp "${SECURE_TMP:-${TMPDIR:-/tmp}}/engine-manifest.XXXXXX") || return 1
+        mt_download "$(mt_cb_url "$base/engines/manifest.txt")" "$tmp" || { rm -f "$tmp"; return 1; }
+        manifest="$tmp"
+    else manifest="$(dirname "$source")/manifest.txt"; fi
+    local rc=0
+    mt_verify_digest "$file" "$manifest" "$name" || rc=1
+    [ -z "$tmp" ] || rm -f "$tmp"
+    [ "$rc" = 0 ] || echo 'Provide a matching engines/manifest.txt or MTUNNEL_ENGINE_SHA256; current engine was preserved.' >&2
+    return "$rc"
+}
+
 # Stage all destinations first. Roll back every committed file if a rename fails.
 mt_install_files() {
     local mode="$1"; shift
@@ -604,7 +662,14 @@ mt_engine_cache() {
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || return 0
     case "$name" in *.deb) return 0;; esac
     if mt_valid_elf "$file" || mt_is_archive_file "$file"; then
-        dir=$(mt_engines_dir); mkdir -p "$dir" 2>/dev/null && cp -f "$file" "$dir/$name" 2>/dev/null
+        dir=$(mt_engines_dir)
+        if mkdir -p "$dir" && cp -f "$file" "$dir/$name"; then
+            local list
+            list=$(mktemp "$dir/.manifest.XXXXXX") || return 1
+            if [ -f "$dir/manifest.txt" ]; then awk -v n="$name" '$2 != n {print}' "$dir/manifest.txt" > "$list"; fi
+            printf '%s  %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "$name" >> "$list"
+            mv -f "$list" "$dir/manifest.txt"
+        fi
     fi
     return 0
 }
@@ -783,6 +848,7 @@ mt_validate_conf() {
         case "$key" in TYPE|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|MAX_IPS|SYNC_KEY|TUN_SECRET|T_NAME|TUN_ID|CORE_SUBNET|CORE_V6|TUN_PROTO|LOCAL_IP6|REMOTE_IP6|REMOTE_V4|FWD_TCP|FWD_UDP|FWD_TARGETS|LB_MODE|CUSTOM_MTU|ENCRYPT|VNI_ID|BR_NAME|VX_NAME|FAB_PROTO) ;; *) return 1;; esac
         if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
         [[ "$value" =~ ^[A-Za-z0-9_:./=,+%-]*$ ]] || return 1
+        case "$key" in TUN_SECRET|SYNC_KEY) [[ "$value" =~ ^[A-Za-z0-9_=-]*$ ]] || return 1;; esac
         [ "$key" != FWD_TARGETS ] || mt_valid_fwd_targets "$value" || return 1
     done < "$file"
 }
@@ -956,23 +1022,29 @@ mt_update_core() {
         cp "$source" "$work/download" || { rm -rf "$work"; return 1; }
     else
         mt_download "$source" "$work/download" || { rm -rf "$work"; return 1; }
-        mt_engine_cache "$work/download" "$source"
     fi
+    mt_verify_engine_package "$work/download" "$source" "${5:-}" || { rm -rf "$work"; return 1; }
+    [ "$kind" != url ] || mt_engine_cache "$work/download" "$source"
     candidate="$work/download"
     if ! mt_valid_elf "$candidate"; then
-        mkdir "$work/extracted"
-        mt_extract_archive "$candidate" "$work/extracted" || { rm -rf "$work"; return 1; }
-        candidate=''
-        while IFS= read -r item; do
-            if mt_valid_elf "$item"; then
-                [ -z "$candidate" ] || { echo 'Archive contains multiple candidate executables.' >&2; rm -rf "$work"; return 1; }
-                candidate="$item"
+        if gzip -dc "$candidate" > "$work/unpacked" 2>/dev/null && mt_valid_elf "$work/unpacked"; then
+            candidate="$work/unpacked"
+        else
+            mkdir "$work/extracted"
+            mt_extract_archive "$candidate" "$work/extracted" || { rm -rf "$work"; return 1; }
+            candidate=''
+            find "$work/extracted" -type f -name "*$name*" > "$work/candidates" || { rm -rf "$work"; return 1; }
+            while IFS= read -r item; do
+                if mt_valid_elf "$item"; then
+                    [ -z "$candidate" ] || { echo 'Archive contains multiple candidate executables.' >&2; rm -rf "$work"; return 1; }
+                    candidate="$item"
+                fi
+            done < "$work/candidates"
+            if [ "$name" == bh ] && [ -z "$candidate" ]; then
+                item="$work/extracted/backhaul"; mt_valid_elf "$item" && candidate="$item"
             fi
-        done < <(find "$work/extracted" -type f -name "*$name*")
-        if [ "$name" == bh ] && [ -z "$candidate" ]; then
-            item="$work/extracted/backhaul"; mt_valid_elf "$item" && candidate="$item"
+            [ -n "$candidate" ] || { rm -rf "$work"; return 1; }
         fi
-        [ -n "$candidate" ] || { rm -rf "$work"; return 1; }
     fi
     # Do not claim ownership of a binary that predates MTunnel.
     case "$name" in
@@ -983,7 +1055,9 @@ mt_update_core() {
         mkdir -p "$(dirname "$target")" && cp -pL "$alias" "$target" || { rm -rf "$work"; return 1; }
     fi
     if [ -f "$target" ]; then cp -pL "$target" "$work/previous" || { rm -rf "$work"; return 1; }; had_old=1; fi
-    mapfile -t active < <(systemctl list-units --type=service --state=active --no-legend --plain "${unit_prefix}@*.service" "${unit_prefix}.service" 2>/dev/null | awk '{print $1}')
+    local unit_list
+    unit_list=$(systemctl list-units --type=service --state=active --no-legend --plain "${unit_prefix}@*.service" "${unit_prefix}.service" 2>/dev/null | awk '{print $1}')
+    [ -z "$unit_list" ] || mapfile -t active <<< "$unit_list"
     if ! mt_install_files 755 "$candidate" "$target" "$candidate" "$alias"; then rm -rf "$work"; return 1; fi
     for unit in "${active[@]}"; do
         systemctl restart "$unit" && systemctl is-active --quiet "$unit" || failed=1
@@ -1485,12 +1559,12 @@ mt_link_decode() {
     mt_link_validate
 }
 
-mt_bbr_state() { [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo 1 || echo 0; }
+mt_bbr_enabled() { [ "$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)" = bbr ] && echo 1 || echo 0; }
 
 mt_sync_bbr_from_peer() {
     local desired="${1:-0}" current
     [[ "$desired" =~ ^[01]$ ]] || desired=0
-    current=$(mt_bbr_state)
+    current=$(mt_bbr_enabled)
     [ "$current" = "$desired" ] && return 0
     if [ "$desired" = 1 ]; then
         mt_run_tool mbbr --enable || echo -e "  ${Y}● Could not enable BBR to match the peer; tunnel was kept.${NC}" >&2
@@ -1622,6 +1696,22 @@ mt_link_select() {
     [ -f "$MT_LINK_CONF" ]
 }
 
+# Interactive provisioning is explicit and never falls back to plaintext.
+mt_peer_key_ensure() {
+    mt_peer_key_file && return 0
+    local choice file
+    printf '\nPeer Links require the same secret key on both servers.\n' >&2
+    printf '  1) Generate a key here (then securely copy it to the peer)\n  2) Import an existing peer key file\n  0) Cancel\n' >&2
+    mt_ask choice 'Peer Link key setup: ' || return 1
+    case "$choice" in
+        1) mt_peer_key_setup generate || return 1;;
+        2) mt_ask file 'Path to securely transferred key file: ' || return 1
+           mt_peer_key_setup import "$file" || return 1;;
+        *) return 1;;
+    esac
+    mt_peer_key_file
+}
+
 mt_link_export() {
     local conf="${1:-}" host name role key ttl link dest
     [ -n "$conf" ] || { mt_link_select || return 1; conf="$MT_LINK_CONF"; }
@@ -1634,7 +1724,7 @@ mt_link_export() {
     esac
     [[ "$role" =~ ^[12]$ ]] || return 1
     MT_LINK_DATA[ROLE]=$((3-role)); MT_LINK_DATA[NAME]="$name"
-    MT_LINK_DATA[BBR]=$(mt_bbr_state)
+    MT_LINK_DATA[BBR]=$(mt_bbr_enabled)
     MT_LINK_DATA[EXPIRES]=$(($(date +%s)+604800))
     case "$MT_KIND" in
         gre|vxlan)
@@ -1669,15 +1759,14 @@ mt_link_export() {
             MT_LINK_DATA[BLOCK]=$(get_yaml_value block "$CONF_DIR/$name.yaml")
             mt_link_paqet_values "$CONF_DIR/$name.yaml" || return 1;;
     esac
-    if [[ "$MT_KIND" == backhaul || "$MT_KIND" == rathole ]]; then
-        host=$(mt_link_read "$conf" REMOTE_IP)
-        MT_LINK_DATA[BIND_HOST]=0.0.0.0
-        [[ "$host" != *:* ]] || MT_LINK_DATA[BIND_HOST]=::
-    fi
     if [[ "$MT_KIND" != gre && "$MT_KIND" != vxlan ]]; then
         mt_choose_peer_host || return 1
         host="$MT_PEER_HOST"
         MT_LINK_DATA[HOST]="$host"
+        if [[ "$MT_KIND" == backhaul || "$MT_KIND" == rathole ]]; then
+            MT_LINK_DATA[BIND_HOST]=0.0.0.0
+            [[ "$host" != *:* ]] || MT_LINK_DATA[BIND_HOST]=::
+        fi
         if [ "$MT_KIND" = backhaul ] && [ "$role" = 2 ]; then
             mt_ask dest 'Peer server port mappings (e.g. 443=127.0.0.1:443): ' || return 1
             validate_bh_ports "$dest" 0 || return 1; MT_LINK_DATA[PORTS]="$dest"
@@ -1686,11 +1775,12 @@ mt_link_export() {
             mt_link_ports "$dest" && [ -n "$dest" ] || return 1; MT_LINK_DATA[TCP_PORTS]="$dest"
         fi
     fi
+    mt_peer_key_ensure || return 1
     link=$(mt_link_encode) || { echo 'Cannot export these settings safely.' >&2; return 1; }
     mt_workspace_screen
     echo -e "\n  ${FR}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${FR}│${NC}"
     mt_link_box "$link"
-    echo -e "  ${FR}│${NC}\n  ${FR}└─${NC} ${Y}Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
+    echo -e "  ${FR}│${NC}\n  ${FR}└─${NC} ${Y}Encrypted and authenticated v3 link. Share only with the peer that has the same key.${NC}"
     mt_peer_copy_prompt "$link"
 }
 
@@ -1728,14 +1818,21 @@ mt_link_deploy() {
 }
 
 mt_workspace_auto_backup() {
-    local dest module="m$MT_KIND"
+    local dest module="m$MT_KIND" digest previous keep="${MTUNNEL_AUTO_BACKUP_KEEP:-20}" entry
     [ "$MT_KIND" != vxlan ] || module=mxlan
-    [ "$MT_KIND" != paqet ] || module=mpaqet
+    [[ "$keep" =~ ^[1-9][0-9]{0,2}$ ]] || keep=20
     mkdir -p "$LOCAL_DIR/backups" || return 1
     chmod 700 "$LOCAL_DIR/backups"
     dest=$(mktemp "$LOCAL_DIR/backups/$module-before-edit-$(date +%Y%m%d-%H%M%S)-XXXXXX.tgz") || return 1
     if ! tar -czf "$dest" -C "$(dirname "$CONF_DIR")" "$(basename "$CONF_DIR")"; then rm -f "$dest"; return 1; fi
+    digest=$(sha256sum "$dest"); digest="${digest%% *}"
+    previous="$LOCAL_DIR/backups/.$module-last-digest"
+    if [ -f "$previous" ] && [ "$(cat "$previous")" = "$digest" ]; then rm -f "$dest"; return 0; fi
     chmod 600 "$dest"
+    printf '%s\n' "$digest" > "$previous"
+    local -a snapshots=()
+    mapfile -t snapshots <<< "$(find "$LOCAL_DIR/backups" -maxdepth 1 -type f -name "$module-before-edit-*.tgz" -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)"
+    for entry in "${snapshots[@]:$keep}"; do rm -f -- "$entry"; done
     printf '  Config restore point: %s\n' "$dest"
 }
 
@@ -2193,7 +2290,7 @@ mt_master_iface_uptime_cached() {
         fi
     fi
     val=$(mt_master_iface_uptime "$dev")
-    printf '%s|%s\\n' "$now" "$val" > "$cache" 2>/dev/null || true
+    printf '%s|%s\n' "$now" "$val" > "$cache" 2>/dev/null || true
     if [ -n "$__out" ]; then printf -v "$__out" '%s' "$val"; else printf '%s' "$val"; fi
 }
 mt_master_header_draw() {
@@ -2268,16 +2365,16 @@ mt_master_header_draw() {
                 [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
                 local compact_loss="${t_loss:----}"; [[ "$t_loss" =~ ^[0-9]+$ ]] && compact_loss="${t_loss}%"
                 compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${compact_loss}"
-                printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}[K
+                printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K
 " "$((content_w-2))" "$((content_w-2))" "$compact_line"
             done < "$SECURE_TMP/.main_tun_stats"
         fi
         if [ "$cshown" -eq 0 ]; then
             compact_line='No active tunnels configured.'
-            printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}[K
+            printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K
 " "$((content_w-2))" "$((content_w-2))" "$compact_line"
         fi
-        printf "  ${FR}╚${border}╝${NC}[K
+        printf "  ${FR}╚${border}╝${NC}\033[K
 "
         return 0
     fi

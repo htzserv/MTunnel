@@ -2,9 +2,9 @@
 
 # ==========================================================
 # MTunnel Ecosystem - MDesign Speed & Network Optimizer
-# Version: 8.8.0
+# Version: 1.4.4
 # ==========================================================
-MODULE_VERSION="1.4.3"
+MODULE_VERSION="1.4.4"
 
 set -o pipefail
 
@@ -36,29 +36,34 @@ fi
 # Tools Preparation
 # ----------------------------------------------------------
 
-prepare_tools() {
-    local packages=()
-    command -v lsb_release >/dev/null 2>&1 || packages+=("lsb-release")
-    command -v curl        >/dev/null 2>&1 || packages+=("curl")
-    command -v dig         >/dev/null 2>&1 || packages+=("dnsutils")
-    command -v bc          >/dev/null 2>&1 || packages+=("bc")
-
-    if [[ ${#packages[@]} -gt 0 ]]; then
-        if command -v apt-get >/dev/null 2>&1; then
-            apt-get update -qq >/dev/null 2>&1 || true
-            apt-get install -y -qq "${packages[@]}" >/dev/null 2>&1 || true
-        fi
-    fi
+mirror_update() {
+    local dashboard=/usr/bin/mtunnel
+    [ -x "$dashboard" ] || { echo 'MTunnel dashboard is missing; use install.sh to update.' >&2; return 1; }
+    printf 'Open MTunnel -> Update & Local Install -> Mirror (script).\n'
+    "$dashboard"
 }
 
-prepare_tools
+prepare_tools() {
+    local packages=() answer
+    command -v curl >/dev/null 2>&1 || packages+=(curl)
+    command -v dig >/dev/null 2>&1 || packages+=(dnsutils)
+    [ "${#packages[@]}" = 0 ] && return 0
+    printf 'Missing tools: %s\n' "${packages[*]}" >&2
+    read -r -p 'Install these packages with APT now? [y/N]: ' answer || return 1
+    [[ "$answer" = y || "$answer" = Y ]] || return 1
+    command -v apt-get >/dev/null 2>&1 || return 1
+    apt-get -o DPkg::Lock::Timeout=120 update &&
+        apt-get -o DPkg::Lock::Timeout=120 install -y "${packages[@]}"
+}
+
+prepare_tools || exit 1
 
 # ----------------------------------------------------------
 # System Detectors
 # ----------------------------------------------------------
 
-UBUNTU_CODENAME="$(lsb_release -cs 2>/dev/null || true)"
-UBUNTU_RELEASE="$(lsb_release -rs 2>/dev/null || true)"
+UBUNTU_CODENAME="$(. /etc/os-release; printf '%s' "${VERSION_CODENAME:-}")"
+UBUNTU_RELEASE="$(. /etc/os-release; printf '%s' "${VERSION_ID:-}")"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo "amd64")"
 
 [[ -z "$UBUNTU_CODENAME" ]] && UBUNTU_CODENAME="jammy"
@@ -183,7 +188,7 @@ show_header() {
 EOF
     echo -e "${C_RESET}"
     echo ""
-    echo -e "   ${C_WHITE}${C_BOLD}Network Core v8.8.0${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}IP:${C_RESET} ${C_RED}${server_ip}${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}OS:${C_RESET} ${C_WHITE}Ubuntu ${UBUNTU_RELEASE} (${UBUNTU_CODENAME})${C_RESET}"
+    echo -e "   ${C_WHITE}${C_BOLD}Network Core v${MODULE_VERSION}${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}IP:${C_RESET} ${C_RED}${server_ip}${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}OS:${C_RESET} ${C_WHITE}Ubuntu ${UBUNTU_RELEASE} (${UBUNTU_CODENAME})${C_RESET}"
     echo ""
     echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
@@ -292,7 +297,7 @@ run_dns_benchmark() {
         T2="$(dig @"$ip2" google.com +time=2 +tries=1 +stats 2>/dev/null | awk '/Query time:/ {print $4; exit}')"
 
         if [[ "$T1" =~ ^[0-9]+([.][0-9]+)?$ && "$T2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            AVG_TIME="$(echo "scale=1; ($T1 + $T2) / 2" | bc 2>/dev/null)"
+            AVG_TIME="$(awk -v a="$T1" -v b="$T2" 'BEGIN {printf "%.1f", (a+b)/2}')"
             [[ -z "$AVG_TIME" ]] && AVG_TIME="$T1"
             echo -e "${C_GREEN}${AVG_TIME} ms${C_RESET}"
             PROVIDER_LATENCY["$name"]="$AVG_TIME"
@@ -387,15 +392,15 @@ run_mirror_benchmark() {
 
         printf "     ${C_CYAN}›${C_RESET} %-23s %-48s " "$display_name" "(${mirror_url})"
 
-        SPEED_BPS="$(curl -s -k -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
+        SPEED_BPS="$(curl -f -s -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
         SPEED_BPS_CLEAN="$(printf "%.0f" "${SPEED_BPS:-0}" 2>/dev/null || echo "0")"
 
         if [[ "$SPEED_BPS_CLEAN" =~ ^[0-9]+$ && "$SPEED_BPS_CLEAN" -gt 0 ]]; then
-            SPEED_KB="$(echo "scale=1; $SPEED_BPS_CLEAN / 1024" | bc 2>/dev/null || echo "0")"
-            SPEED_MBPS="$(echo "scale=2; ($SPEED_BPS_CLEAN * 8) / 1000000" | bc 2>/dev/null || echo "0")"
+            SPEED_KB="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.1f", n/1024}')"
+            SPEED_MBPS="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.2f", n*8/1000000}')"
 
-            if (( $(echo "$SPEED_KB > 1024" | bc -l 2>/dev/null || echo 0) )); then
-                SPEED_MB="$(echo "scale=2; $SPEED_KB / 1024" | bc 2>/dev/null)"
+            if (( $(awk -v n="$SPEED_KB" 'BEGIN {print (n>1024)}') )); then
+                SPEED_MB="$(awk -v n="$SPEED_KB" 'BEGIN {printf "%.2f", n/1024}')"
                 SPEED_TXT="${SPEED_MB} MB/s (${SPEED_MBPS} Mbps)"
             else
                 SPEED_TXT="${SPEED_KB} KB/s (${SPEED_MBPS} Mbps)"
@@ -488,7 +493,7 @@ run_auto_pilot() {
         T2="$(dig @"$ip2" google.com +time=2 +tries=1 +stats 2>/dev/null | awk '/Query time:/ {print $4; exit}')"
 
         if [[ "$T1" =~ ^[0-9]+([.][0-9]+)?$ && "$T2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            AVG_TIME="$(echo "scale=1; ($T1 + $T2) / 2" | bc 2>/dev/null)"
+            AVG_TIME="$(awk -v a="$T1" -v b="$T2" 'BEGIN {printf "%.1f", (a+b)/2}')"
             [[ -z "$AVG_TIME" ]] && AVG_TIME="$T1"
             AUTO_DNS_LATENCY["$name"]="$AVG_TIME"
             AUTO_DNS_P1["$name"]="$ip1"
@@ -536,15 +541,15 @@ run_auto_pilot() {
         mirror_url="${mirror_url%/}"
         test_file="${mirror_url}/dists/${UBUNTU_CODENAME}/Release"
 
-        SPEED_BPS="$(curl -s -k -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
+        SPEED_BPS="$(curl -f -s -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
         SPEED_BPS_CLEAN="$(printf "%.0f" "${SPEED_BPS:-0}" 2>/dev/null || echo "0")"
 
         if [[ "$SPEED_BPS_CLEAN" =~ ^[0-9]+$ && "$SPEED_BPS_CLEAN" -gt 0 ]]; then
-            SPEED_KB="$(echo "scale=1; $SPEED_BPS_CLEAN / 1024" | bc 2>/dev/null || echo "0")"
-            SPEED_MBPS="$(echo "scale=2; ($SPEED_BPS_CLEAN * 8) / 1000000" | bc 2>/dev/null || echo "0")"
+            SPEED_KB="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.1f", n/1024}')"
+            SPEED_MBPS="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.2f", n*8/1000000}')"
 
-            if (( $(echo "$SPEED_KB > 1024" | bc -l 2>/dev/null || echo 0) )); then
-                SPEED_MB="$(echo "scale=2; $SPEED_KB / 1024" | bc 2>/dev/null)"
+            if (( $(awk -v n="$SPEED_KB" 'BEGIN {print (n>1024)}') )); then
+                SPEED_MB="$(awk -v n="$SPEED_KB" 'BEGIN {printf "%.2f", n/1024}')"
                 SPEED_TXT="${SPEED_MB} MB/s (${SPEED_MBPS} Mbps)"
             else
                 SPEED_TXT="${SPEED_KB} KB/s (${SPEED_MBPS} Mbps)"
@@ -678,9 +683,11 @@ while true; do
     echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
     echo -ne "   ${C_CYAN}${C_BOLD}CORE >> ${C_RESET}"
+    echo -e "     ${C_WHITE}${C_BOLD}7${C_RESET} ${C_CYAN}›${C_RESET} OTA Update (MTunnel update menu)"
     read -r choice
 
     case "$choice" in
+        7) mirror_update;;
         1)
             run_dns_benchmark "IRAN" "${IRAN_DNS_SERVERS[@]}"
             ret=$?

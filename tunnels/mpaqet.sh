@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -308,7 +308,14 @@ install_core_from_source() {
         *) return 0;;
     esac
     echo -e "  ${DIM}● Preparing MPaqet Core...${NC}"
-    if mt_update_core "paqet" "mpaqet" "$dl_url" "$kind"; then
+    local installed=0
+    mt_update_core "paqet" "mpaqet" "$dl_url" "$kind" && installed=1
+    if [ "$installed" = 0 ] && [ "$src_choice" = 2 ]; then
+        echo 'Mirror unavailable; trying the official release.' >&2
+        dl_url="https://github.com/hanselime/paqet/releases/download/v1.0.0-alpha.21/paqet-linux-${target}-v1.0.0-alpha.21.tar.gz"
+        mt_update_core paqet mpaqet "$dl_url" url && installed=1
+    fi
+    if [ "$installed" = 1 ]; then
         echo -e "  ${G}✔ MPaqet Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else
@@ -391,7 +398,7 @@ menu_install_core() {
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines/paqet)${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
-    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
+    echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r\n ')
 
     [[ "$src_choice" =~ ^[1-4]$ ]] && install_core_from_source "$src_choice"
@@ -400,8 +407,7 @@ menu_install_core() {
 check_first_run_core() {
     if ! is_paqet_core_valid; then
         local first_prompt_flag="$CONF_DIR/.core_prompted"
-        if [ ! -f "$first_prompt_flag" ]; then
-            touch "$first_prompt_flag"
+        if ! is_paqet_core_valid; then
             clear
             echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
             echo -e "  ${FR}║${NC}   ${R}● Paqet Core binary is NOT installed on this machine!${NC}                   ${FR}║${NC}"
@@ -413,10 +419,10 @@ check_first_run_core() {
             echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines/paqet)${NC}"
             echo -e "  ${FR}│${NC}"
             echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
-            echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
+            echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r ')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
-                install_core_from_source "$init_opt"
+                if install_core_from_source "$init_opt"; then touch "$first_prompt_flag"; fi
             fi
         fi
     fi
@@ -515,7 +521,8 @@ zero_paqet_counters() {
 #   server: xt_recent list of sources hitting the tunnel port  -> client IP
 #   client: counter of packets coming from the server port      -> link liveness
 setup_paqet_probe() {
-    local name="$1" meta="$CONF_DIR/${name}.meta" role port remote src_args=()
+    local name="$1" meta role port remote src_args=()
+    meta="$CONF_DIR/${name}.meta"
     [ -f "$meta" ] || return 0
     role=$(grep -m1 '^ROLE=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     port=$(grep -m1 '^TUN_PORT=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
@@ -532,7 +539,11 @@ setup_paqet_probe() {
         # Client-side liveness must be scoped to this instance's remote host as
         # well as the port. Several Paqet tunnels can legitimately use the
         # same server port on different remote servers.
-        mt_valid_ipv4 "$remote" 2>/dev/null && src_args=(-s "$remote")
+        if ! mt_valid_ipv4 "$remote"; then
+            remote=$(getent ahostsv4 "$remote" 2>/dev/null | awk 'NR==1{print $1}')
+        fi
+        mt_valid_ipv4 "$remote" || { echo "Cannot scope Paqet probe for $name: unresolved IPv4 peer." >&2; return 1; }
+        src_args=(-s "$remote")
         iptables -w 5 -t mangle -C INPUT -p tcp "${src_args[@]}" --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
         iptables -w 5 -t mangle -A INPUT -p tcp "${src_args[@]}" --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
     fi
@@ -730,14 +741,14 @@ choose_kcp_profile() {
     echo -e "  ${FR}║${NC} ${DIM}Current: ${current}   |   CPU cores on this server: ${cores}${NC}"
     echo -e "  ${FR}╚═════════════════════════════════════════════════════════════╝${NC}"
     echo -e "  ${DIM}Apply the profile on BOTH servers. conn is capped by this server's cores.${NC}"
-    echo -ne "  ${C}Profile ❯❯ ${NC}"; read choice
+    echo -ne "  ${C}Profile ❯❯ ${NC}"; read -r choice
     case "$choice" in
         1) profile_defaults ECO "$role";;
         2) profile_defaults BALANCED "$role";;
         3) profile_defaults SPEED "$role";;
         4) profile_defaults LATENCY "$role";;
         6)
-            echo -ne "  ${C}1) normal  2) fast  3) fast2  4) fast3  ❯❯ ${NC}"; read sub
+            echo -ne "  ${C}1) normal  2) fast  3) fast2  4) fast3  ❯❯ ${NC}"; read -r sub
             case "$sub" in 1) profile_defaults NORMAL "$role";; 2) profile_defaults FAST "$role";;
                            3) profile_defaults FAST2 "$role";; 4) profile_defaults FAST3 "$role";; *) return 1;; esac ;;
         5)
@@ -779,7 +790,7 @@ choose_kcp_profile() {
 
 # Rewrites conn/tcpbuf/udpbuf, network.pcap.sockbuf and the whole kcp: block from the KCP_* globals.
 # Pure awk (no python). Unknown keys inside kcp:/pcap: (dshard, pshard, smuxkalive ...) are kept.
-# The result is read back and verified; on any failure the original file is left untouched and 1 is returned.
+# The result is read -r back and verified; on any failure the original file is left untouched and 1 is returned.
 write_kcp_settings() {
     local yaml="$1" key="$2" block="$3"
     local tmp="${yaml}.kcp.new" bak="$SECURE_TMP/$(basename "$yaml").bak"
@@ -924,7 +935,7 @@ log_link_verdict() {
 
 # Client IP as seen by the server: the xt_recent list filled by the MPAQET_PEER rule.
 # The busiest source in the last interval wins (scanner noise sends few packets); the list is
-# cleared after each read and the last answer is cached.
+# cleared after each read -r and the last answer is cached.
 get_server_peer_ip() {
     local name="$1" dir="${XT_RECENT_DIR:-/proc/net/xt_recent}" f cache best
     f="$dir/mpq_${name}"; cache="$SECURE_TMP/.mpaqet_peer_${name}"
@@ -951,7 +962,7 @@ get_server_peer_ip() {
     return 0
 }
 
-# Known failure modes are read from the service log of the last 45 seconds:
+# Known failure modes are read -r from the service log of the last 45 seconds:
 #   "send: Message too large"  -> MTU above what the NIC can send  (state MTU-ERR)
 #   5+ other [ERROR] lines     -> streams failing                  (state ERRORS)
 apply_log_health() {
@@ -1096,9 +1107,9 @@ refresh_header_live() {
     hdr_rows_count
     if [ "$HDR_ROWS_COUNT" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
     mt_live_vitals_update 2>/dev/null || true
-    printf '[?25l7[1;1H'
+    printf '\033[?25l\0337\033[1;1H'
     HEADER_LIVE=1 draw_header
-    printf '8[?25h'
+    printf '\0338\033[?25h'
 }
 hdr_stats_loop() {
     while true; do
@@ -1406,7 +1417,7 @@ show_tunnel_registry() {
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
     if [ "${1:-}" != --no-pause ]; then
-        echo -ne "  ${DIM}Press Enter to return...${NC}"; read dummy
+        echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r dummy
     fi
 }
 
@@ -1475,7 +1486,7 @@ select_tunnel() {
         printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .yaml)"
     done
     echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
+    echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
     t_idx=$((10#$t_idx))
@@ -1495,7 +1506,7 @@ uninstall_mpaqet() {
     echo -e "  ${R}║${NC}   ● Paqet core binary (/usr/local/bin/paqet) & mpaqet module               ${R}║${NC}"
     echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
-    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
+    echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
     
     if [ "$confirm" != "yes" ]; then
@@ -1744,6 +1755,10 @@ mt_link_deploy_locked() {
     {
         printf 'ROLE=%s\nTUN_PORT=%s\nREMOTE_IP=%s\nTCP_PORTS=%s\nPROFILE=%s\n' "$role" "$port" "$host" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[PROFILE]}"
     } > "$meta"; chmod 600 "$meta"
+    if [ "$role" = 2 ]; then
+        # DNS names remain in the shared link; probe metadata uses the same IP as YAML.
+        sed -i "s/^REMOTE_IP=.*/REMOTE_IP=$PQ_ROUTE_TARGET/" "$meta"
+    fi
     if [ "$role" = 1 ]; then setup_paqet_counters "$name" "$port"
     else
         for p in "${MT_PQ_PORTS[@]}"; do setup_paqet_counters "$name" "$p"; done
@@ -1845,7 +1860,7 @@ while true; do
         1)
            mt_workspace_screen
            echo -e "\n  ${FR}┌─[ DEPLOY SERVER TUNNEL ]${NC}"
-           echo -ne "  ${C}● Tunnel Suffix Name (e.g. srv1): ${NC}"; read suffix
+           echo -ne "  ${C}● Tunnel Suffix Name (e.g. srv1): ${NC}"; read -r suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            if [ -z "$suffix" ]; then echo -e "  ${R}✖ Invalid Name!${NC}"; sleep 1.5; continue; fi
            
@@ -1859,7 +1874,7 @@ while true; do
            iface="$PQ_ROUTE_IFACE"; l_ip="$PQ_ROUTE_SRC"; gw_mac="$PQ_ROUTE_MAC"
 
            while true; do
-               echo -ne "  ${C}● Tunnel Listen Port [8888]: ${NC}"; read t_port
+               echo -ne "  ${C}● Tunnel Listen Port [8888]: ${NC}"; read -r t_port
                t_port=${t_port//$'\r'/}
                t_port=${t_port:-8888}
                if ! mt_valid_port "$t_port"; then
@@ -1874,7 +1889,7 @@ while true; do
            done
            
            s_key=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
-           echo -ne "  ${C}● Secret Key [Default ${s_key}]: ${NC}"; read u_key
+           echo -ne "  ${C}● Secret Key [Default ${s_key}]: ${NC}"; read -r u_key
            u_key=$(echo "$u_key" | tr -dc 'a-zA-Z0-9_=-')
            key=${u_key:-$s_key}
 
@@ -1932,14 +1947,14 @@ EOF
            else
                echo -e "\n  ${R}✖ Failed to start! Checking logs...${NC}"
                journalctl -u "mpaqet@${t_name}" -n 5 --no-pager
-               echo -ne "  ${DIM}Press Enter...${NC}"; read dummy
+               echo -ne "  ${DIM}Press Enter...${NC}"; read -r dummy
            fi
            ;;
            
         2)
            mt_workspace_screen
            echo -e "\n  ${FR}┌─[ DEPLOY CLIENT TUNNEL ]${NC}"
-           echo -ne "  ${C}● Tunnel Suffix Name (e.g. cl1): ${NC}"; read suffix
+           echo -ne "  ${C}● Tunnel Suffix Name (e.g. cl1): ${NC}"; read -r suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            if [ -z "$suffix" ]; then echo -e "  ${R}✖ Invalid Name!${NC}"; sleep 1.5; continue; fi
            
@@ -1952,14 +1967,14 @@ EOF
            # Resolve the route after the remote IPv4 endpoint is known.
 
            while true; do
-               echo -ne "  ${C}● Remote Kharej Server Host/IP: ${NC}"; read r_ip
+               echo -ne "  ${C}● Remote Kharej Server Host/IP: ${NC}"; read -r r_ip
                r_ip=$(echo "$r_ip" | tr -d '\r ')
                is_valid_host "$r_ip" && break
                echo -e "  ${R}✖ Invalid Host/IP format!${NC}"
            done
            
            while true; do
-               echo -ne "  ${C}● Remote Listen Port [8888]: ${NC}"; read r_port
+               echo -ne "  ${C}● Remote Listen Port [8888]: ${NC}"; read -r r_port
                r_port=${r_port//$'\r'/}
                r_port=${r_port:-8888}
                if mt_valid_port "$r_port"; then break; else echo -e "  ${R}✖ Invalid port!${NC}"; fi
@@ -1980,7 +1995,7 @@ EOF
            
            fwd_ports=""
            while true; do
-               echo -ne "  ${C}● Forward Ports (e.g. 443,8080): ${NC}"; read fwd_ports
+               echo -ne "  ${C}● Forward Ports (e.g. 443,8080): ${NC}"; read -r fwd_ports
                fwd_ports=${fwd_ports//$'\r'/}
                if [ -n "$fwd_ports" ]; then mt_port_guard bind "$fwd_ports" "" "" "" "Paqet" || continue; fwd_ports="$MT_PORT_TCP"; fi
                if ! validate_paqet_ports "$fwd_ports"; then
@@ -2065,7 +2080,7 @@ EOF
            else
                echo -e "\n  ${R}✖ Failed to start! Checking logs...${NC}"
                journalctl -u "mpaqet@${t_name}" -n 5 --no-pager
-               echo -ne "  ${DIM}Press Enter...${NC}"; read dummy
+               echo -ne "  ${DIM}Press Enter...${NC}"; read -r dummy
            fi
            ;;
 
@@ -2075,7 +2090,7 @@ EOF
            echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
            for i in "${!configs[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
            echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
-           echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read del_idx
+           echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read -r del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r ')
            
            if [[ "$del_idx" == "all" ]]; then
@@ -2101,7 +2116,7 @@ EOF
 
            if [[ "$opt" == "4" ]]; then
                curr_key=$(grep "key:" "$sel_cfg" | awk -F'"' '{print $2}')
-               echo -ne "  ${C}●${NC} ${W}New Secret Key [Current: ${Y}${curr_key}${W}]: ${NC}"; read n_k
+               echo -ne "  ${C}●${NC} ${W}New Secret Key [Current: ${Y}${curr_key}${W}]: ${NC}"; read -r n_k
                n_k=$(echo "$n_k" | tr -dc 'a-zA-Z0-9_=-')
                if [ -n "$n_k" ]; then
                    sed -i "s|key:.*|key: \"$n_k\"|" "$sel_cfg"
@@ -2127,7 +2142,7 @@ EOF
 
            elif [[ "$opt" == "6" ]]; then
                curr_mtu=$(grep "mtu:" "$sel_cfg" | awk '{print $2}')
-               echo -ne "  ${C}●${NC} ${W}New MTU Size [576-1500] [Current: ${Y}${curr_mtu}${W}]: ${NC}"; read n_mtu
+               echo -ne "  ${C}●${NC} ${W}New MTU Size [576-1500] [Current: ${Y}${curr_mtu}${W}]: ${NC}"; read -r n_mtu
                n_mtu=$(echo "$n_mtu" | tr -dc '0-9')
                if [ -z "$n_mtu" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
@@ -2145,7 +2160,7 @@ EOF
 
            elif [[ "$opt" == "7" ]]; then
                curr_conn=$(grep "conn:" "$sel_cfg" | head -1 | awk '{print $2}')
-               echo -ne "  ${C}●${NC} ${W}New Connections Count [1-32] [Current: ${Y}${curr_conn}${W}]: ${NC}"; read n_c
+               echo -ne "  ${C}●${NC} ${W}New Connections Count [1-32] [Current: ${Y}${curr_conn}${W}]: ${NC}"; read -r n_c
                n_c=$(echo "$n_c" | tr -dc '0-9')
                if [ -z "$n_c" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
@@ -2159,7 +2174,7 @@ EOF
 
            elif [[ "$opt" == "8" ]]; then
                curr_block=$(grep "block:" "$sel_cfg" | awk -F'"' '{print $2}')
-               echo -ne "  ${C}●${NC} ${W}New Encryption Block [aes-128-gcm|aes-256|none] [Current: ${Y}${curr_block}${W}]: ${NC}"; read n_b
+               echo -ne "  ${C}●${NC} ${W}New Encryption Block [aes-128-gcm|aes-256|none] [Current: ${Y}${curr_block}${W}]: ${NC}"; read -r n_b
                n_b=$(echo "$n_b" | tr -dc 'a-zA-Z0-9-')
                if [ -z "$n_b" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
@@ -2192,7 +2207,7 @@ EOF
                t_tun_port=""
                [ -f "$meta_file" ] && t_tun_port=$(grep -m1 "^TUN_PORT=" "$meta_file" | cut -d'=' -f2 | tr -d '"')
 
-               echo -ne "  ${C}●${NC} ${W}New Forward Ports [Current: ${Y}${curr_ports}${W}] (e.g. 443,8080): ${NC}"; read n_ports
+               echo -ne "  ${C}●${NC} ${W}New Forward Ports [Current: ${Y}${curr_ports}${W}] (e.g. 443,8080): ${NC}"; read -r n_ports
                n_ports=$(echo "$n_ports" | tr -d '\r ' )
                if [ -z "$n_ports" ]; then
                    echo -e "  ${Y}● No changes made.${NC}"; sleep 1; continue
@@ -2255,7 +2270,7 @@ EOF
                fi
 
            elif [[ "$opt" == "10" ]]; then
-               echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix (Current: ${Y}${old_tname#pq_}${W}): ${NC}"; read new_suffix
+               echo -ne "  ${C}●${NC} ${W}New Tunnel Suffix (Current: ${Y}${old_tname#pq_}${W}): ${NC}"; read -r new_suffix
                new_suffix=$(echo "$new_suffix" | tr -dc 'a-zA-Z0-9')
                if [ -n "$new_suffix" ]; then
                    new_t_name="pq_${new_suffix}"

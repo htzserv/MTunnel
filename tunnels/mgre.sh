@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.3.4).
-MODULE_VERSION="1.4.3"
+# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.4.4).
+MODULE_VERSION="1.4.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -748,12 +748,11 @@ apply_tunnel() {
     ip link del "$T_NAME" >/dev/null 2>&1; ip link del "sit_$T_NAME" >/dev/null 2>&1
 
     local min_mtu max_mtu def_mtu
-    read -r min_mtu max_mtu def_mtu <<< "$(mgre_mtu_limits "$TUN_PROTO")"
+    read -r min_mtu max_mtu def_mtu <<< "$(mgre_effective_mtu_limits "$TUN_PROTO" "${ENCRYPT:-0}")"
     local eff_mtu="$CUSTOM_MTU"
     if ! is_uint "$eff_mtu"; then
-        eff_mtu="$def_mtu"; [ "$ENCRYPT" == "1" ] && eff_mtu=$((def_mtu - 64))
+        eff_mtu="$def_mtu"
     fi
-    [ "$ENCRYPT" != 1 ] || max_mtu=$((max_mtu-64))
     [ "$eff_mtu" -lt "$min_mtu" ] && eff_mtu="$min_mtu"
     [ "$eff_mtu" -gt "$max_mtu" ] && eff_mtu="$max_mtu"
 
@@ -1314,6 +1313,13 @@ mgre_mtu_limits() { # <proto> -> "min max default"
         *)         echo "700 1472 1436" ;;
     esac
 }
+mgre_effective_mtu_limits() {
+    local minimum maximum default
+    read -r minimum maximum default <<< "$(mgre_mtu_limits "$1")"
+    if [ "${2:-0}" = 1 ]; then maximum=$((maximum-64)); default=$((default-64)); fi
+    printf '%s %s %s\n' "$minimum" "$maximum" "$default"
+}
+
 
 # IPIP6->6 forwards to its single IPv6 core peer, so there is no IPv4 target list to choose from.
 mgre_target_label() {
@@ -2206,9 +2212,10 @@ while true; do
         11)
            select_tunnel_interactive || continue
            draw_mgre_header
-           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
-           read -r min_mtu max_mtu def_mtu <<< "$(mgre_mtu_limits "$TUN_PROTO")"
+           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; ENCRYPT=0; mt_source_conf "$SELECTED_CONF" 2>/dev/null
+           read -r min_mtu max_mtu def_mtu <<< "$(mgre_effective_mtu_limits "$TUN_PROTO" "${ENCRYPT:-0}")"
 
+           mss_overhead=40; [ "$TUN_PROTO" != ipip6to6 ] || mss_overhead=60
            act_mtu=""
            [ -d "/sys/class/net/$T_NAME" ] && act_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
            cur_mtu="${act_mtu:-${CUSTOM_MTU:-$def_mtu (Auto)}}"
@@ -2225,7 +2232,7 @@ while true; do
                ( umask 077; grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp" && echo "CUSTOM_MTU=" >> "${SELECTED_CONF}.tmp" ) || continue
                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
                apply_tunnel "$SELECTED_CONF"
-               echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - 40)).${NC}"; sleep 1.8
+               echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - mss_overhead)).${NC}"; sleep 1.8
            elif [ "$new_mtu" -ge "$min_mtu" ] && [ "$new_mtu" -le "$max_mtu" ] 2>/dev/null; then
                ( umask 077; grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp" && echo "CUSTOM_MTU=$new_mtu" >> "${SELECTED_CONF}.tmp" ) || continue
                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
@@ -2241,7 +2248,7 @@ while true; do
 
                # Check confirmed kernel value
                confirm_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
-               echo -e "  ${G}✔ MTU successfully locked to ${new_mtu} (Kernel Confirmed: ${confirm_mtu:-$new_mtu} | MSS: $((new_mtu - 40))).${NC}"; sleep 2
+               echo -e "  ${G}✔ MTU successfully locked to ${new_mtu} (Kernel Confirmed: ${confirm_mtu:-$new_mtu} | MSS: $((new_mtu - mss_overhead))).${NC}"; sleep 2
            else
                echo -e "  ${R}✖ Invalid MTU! Value must be between ${min_mtu} and ${max_mtu}.${NC}"; sleep 2.5
            fi ;;

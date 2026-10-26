@@ -1,10 +1,26 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.3).
-MODULE_VERSION="1.4.3"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.4).
+MODULE_VERSION="1.4.4"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"
 
+# SHA256 detects corruption; authenticity still depends on the trusted source.
+mt_bootstrap_verify_digest() {
+    local file="$1" manifest="$2" relative="$3" expected line hash name count=0
+    expected=''
+    [ -f "$manifest" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+        [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]] || return 1
+        hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
+        if [ "$name" = "$relative" ]; then expected="$hash"; count=$((count+1)); fi
+    done < "$manifest"
+    [ "$count" = 1 ] && [ "$(sha256sum "$file" | cut -d' ' -f1)" = "$expected" ] || {
+        echo "SHA256 verification failed: $relative" >&2; return 1;
+    }
+}
 # MTUNNEL_COMMON_LOADER -- installer bootstrap (also supports curl | bash --online).
 # Installers cannot assume a shared core has been installed yet, so fetch it
 # from the same selected source, or use a bundled local core when available.
@@ -58,12 +74,26 @@ mt_installer_load_common() {
             wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "${remote%/}/core/common.sh?t=$(date +%s)" && rc=0
         fi
         [[ "$rc" == 0 && -s "$tmp" ]] || { echo 'Unable to fetch the shared MTunnel core.' >&2; rm -f "$tmp"; return 1; }
+        local bootstrap_manifest="$tmp.sha256"
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 30 -o "$bootstrap_manifest" "${remote%/}/SHA256SUMS" 2>/dev/null || rm -f "$bootstrap_manifest"
+        else
+            wget -q --https-only --timeout=30 -O "$bootstrap_manifest" "${remote%/}/SHA256SUMS" 2>/dev/null || rm -f "$bootstrap_manifest"
+        fi
+        if [ -f "$bootstrap_manifest" ]; then
+            mt_bootstrap_verify_digest "$tmp" "$bootstrap_manifest" core/common.sh || { rm -f "$tmp" "$bootstrap_manifest"; return 1; }
+            rm -f "$bootstrap_manifest"
+        else echo 'Legacy source without SHA256SUMS; verify that the source is trusted.' >&2; fi
         candidate="$tmp"
     fi
     if ! bash -n "$candidate" 2>/dev/null; then
         [[ -z "${MT_INSTALLER_BOOTSTRAP_TEMP:-}" ]] || rm -f "$MT_INSTALLER_BOOTSTRAP_TEMP"
         unset MT_INSTALLER_BOOTSTRAP_TEMP
         return 1
+    fi
+    local local_manifest="$(dirname "$(dirname "$candidate")")/SHA256SUMS"
+    if [ -z "${MT_INSTALLER_BOOTSTRAP_TEMP:-}" ] && [ -f "$local_manifest" ]; then
+        mt_bootstrap_verify_digest "$candidate" "$local_manifest" core/common.sh || return 1
     fi
     # shellcheck source=core/common.sh
     if ! source "$candidate"; then
@@ -203,7 +233,7 @@ if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { r
 
 
 
-B='\033[1;37m'; G='\033[1;33m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[1;33m'; M='\033[1;33m'; W='\033[1;37m'; DIM='\033[0;37m'; NC='\033[0m'
+B='\033[1;37m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[0;37m'; NC='\033[0m'
 FR='\033[1;33m'
 
 draw_progress() {
@@ -495,7 +525,15 @@ installer_uninstall() {
     rm -f /usr/local/bin/mhealer_daemon.sh /usr/local/bin/mporter-{watchdog,iptables,obfs}.sh /etc/mhealer.conf
     rm -f /var/lock/mporter-state.lock /run/mporter-backends.tsv
     # Generic Gost/Realm installations may belong to another project: remove only when MPorter marked ownership.
-    if [ -f /etc/mporter/.owns_gost ]; then systemctl disable --now gost.service 2>/dev/null || true; rm -f /etc/systemd/system/gost.service /usr/local/bin/gost; rm -rf /etc/gost; fi
+    if [ -f /etc/mporter/.owns_haproxy ]; then
+                    systemctl disable --now haproxy.service >/dev/null 2>&1 || true
+                    if ! DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 purge -y haproxy; then
+                        echo 'HAProxy removal failed; MTunnel configs/ownership markers were retained. Retry after resolving the package error.' >&2
+                        return 1
+                    fi
+                    rm -rf /etc/haproxy /var/lib/haproxy
+                fi
+                if [ -f /etc/mporter/.owns_gost ]; then systemctl disable --now gost.service 2>/dev/null || true; rm -f /etc/systemd/system/gost.service /usr/local/bin/gost; rm -rf /etc/gost; fi
     if [ -f /etc/mporter/.owns_realm ]; then systemctl disable --now realm.service 2>/dev/null || true; rm -f /etc/systemd/system/realm.service /usr/local/bin/realm; rm -rf /etc/realm; fi
     rm -rf /run/mtunnel-healer
     systemctl stop mgre.service mxlan.service mporter.service mporter-watchdog.service 'mbackhaul@*' 'mrathole@*' 'mpaqet@*' 2>/dev/null || true
@@ -510,7 +548,9 @@ installer_uninstall() {
     done
     rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
     rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest
-    rm -f /usr/local/bin/mtunnel
+    rm -f /usr/local/bin/mtunnel /usr/bin/mmirror
+    rm -f /etc/sysctl.d/99-mtunnel-bbr.conf /etc/sysctl.d/99-mtunnel-doctor.conf
+    rm -f /etc/sysctl.d/99-mporter-ipv4.conf /etc/sysctl.d/99-mporter-ipv6.conf
     echo -e "\n  ${Y}✓ MTunnel was completely removed from this system.${NC}\n"
     return 0
 }
@@ -671,6 +711,7 @@ installer_main() {
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
         remote="${remote%/}"
         mkdir "$work/scripts" "$work/scripts/core" || return 1
+        mt_download "$(mt_cb_url "$remote/SHA256SUMS")" "$work/scripts/SHA256SUMS" 2>/dev/null || rm -f "$work/scripts/SHA256SUMS"
         if ! mt_download "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
             echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
@@ -694,6 +735,7 @@ installer_main() {
         source_dir="$work/scripts"
     fi
         [ -n "$source_dir" ] && [ -d "$source_dir" ] || { echo 'Script directory does not exist.' >&2; return 1; }
+    mt_verify_bundle_digests "$source_dir" || return 1
     mt_validate_shared_core "$source_dir/core/common.sh" || {
         echo 'Shared core is missing or invalid. Existing installation preserved.' >&2; return 1;
     }
@@ -732,6 +774,7 @@ installer_main() {
         fi
     done
     files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
+    [ ! -f "$source_dir/SHA256SUMS" ] || files+=("$source_dir/SHA256SUMS" "$root/root/mtunnel/SHA256SUMS")
     # Engines: install every one that exists at the source and is a valid ELF; a missing one is reported and
     # skipped (it can be added later from the main menu) instead of aborting the whole installation.
     local -a got_cores=() skipped_cores=() same_cores=()
@@ -788,6 +831,7 @@ installer_main() {
         fi
     done
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
+    [ -f "$source_dir/SHA256SUMS" ] || rm -f "$root/root/mtunnel/SHA256SUMS"
     if [ "$with_cores" == 1 ]; then
         local n_eng_total=6 n_eng_ok=0 n_eng_same=0 eng eng_same
         echo -e "\n  ${Y}● Engines report:${NC}"

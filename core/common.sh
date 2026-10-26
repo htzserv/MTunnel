@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.3.4, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.1, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.0"
-# Gold frame colour used by every double-line frame and menu tree connector.
-# Each module defines it with its palette; this default covers any caller that does not.
-: "${FR:=\033[1;33m}"
+MTUNNEL_RELEASE_VERSION="1.4.1"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -209,11 +206,11 @@ mt_validate_module_core_contract() {
 
 mt_ask_bind_host() {
     local choice host
-    echo -e "\n  ${FR}┌─[ SERVER LISTEN ADDRESS ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(0.0.0.0)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(::)${NC}"
-    echo -e "  ${FR}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Specific IP${NC}"
+    echo -e "\n  ${DIM}┌─[ SERVER LISTEN ADDRESS ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(0.0.0.0)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(::)${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Specific IP${NC}"
     echo -ne "  ${C}Select Address [1] ❯❯ ${NC}"; read -r choice
     case "${choice:-1}" in
         1) MT_BIND_HOST='0.0.0.0';;
@@ -470,9 +467,10 @@ _mt_fetch_raw() {
     else return 1; fi
 }
 
-# Download a resource from the selected source.
-# Release/version selection is intentionally permissive: no checksum manifest,
-# release-number gate, upgrade-only rule or downgrade block is applied here.
+# Download a resource from the selected source. mt_download is transport-only;
+# package callers MUST verify the SHA-256 from engines/manifest.txt or
+# prereqs/manifest.txt before installation. Script updates are validated by
+# syntax, role and shared-core API/layout checks instead of package manifests.
 # HTTPS and a non-empty response are still required so transport errors do not
 # replace a working installation with an empty file.
 mt_download() {
@@ -578,35 +576,6 @@ mt_valid_elf() {
     machine=$(od -An -tu2 -j18 -N2 "$file" | tr -d ' \n'); arch=$(uname -m)
     case "$arch:$machine" in x86_64:62|aarch64:183|arm64:183|armv7l:40|i686:3) return 0;; esac
     return 1
-}
-# ---- Local cache folders -------------------------------------------------------------------------
-# engines/ : engine binaries AND their original archives (the archive is the fallback when a binary is unusable)
-# prereqs/ : .deb packages (Ubuntu prerequisites)
-mt_engines_dir() { printf '%s\n' "${LOCAL_DIR:-/root/mtunnel}/engines"; }
-mt_prereqs_dir() { printf '%s\n' "${LOCAL_DIR:-/root/mtunnel}/prereqs"; }
-# Cache folder for one item: .deb -> prereqs, everything else (binaries, archives) -> engines.
-mt_cache_dir_for() { case "$1" in *.deb) mt_prereqs_dir;; *) mt_engines_dir;; esac; }
-# mt_local_engine <binary-name> <archive-name>: best local source for an engine.
-# engines/<binary> if it is a valid ELF, otherwise engines/<archive>; prints the path, returns 1 if neither.
-mt_local_engine() {
-    local dir; dir=$(mt_engines_dir)
-    if [ -f "$dir/$1" ] && mt_valid_elf "$dir/$1"; then printf '%s\n' "$dir/$1"; return 0; fi
-    if [ -n "${2:-}" ] && [ -f "$dir/$2" ] && { mt_valid_elf "$dir/$2" || mt_is_archive_file "$dir/$2"; }; then
-        printf '%s\n' "$dir/$2"; return 0
-    fi
-    return 1
-}
-# mt_engine_cache <downloaded-file> <url-or-name>: keep the ORIGINAL file (binary or archive) in engines/,
-# named as the server named it, so the next run can use it without downloading. .deb files and error pages are not cached.
-mt_engine_cache() {
-    local file="$1" name="${2%%\?*}" dir
-    name="${name##*/}"
-    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || return 0
-    case "$name" in *.deb) return 0;; esac
-    if mt_valid_elf "$file" || mt_is_archive_file "$file"; then
-        dir=$(mt_engines_dir); mkdir -p "$dir" 2>/dev/null && cp -f "$file" "$dir/$name" 2>/dev/null
-    fi
-    return 0
 }
 # mt_zip_extract_python <archive> <dest>
 # Safe ZIP extraction without unzip. Refuses the whole archive if any member is absolute, contains
@@ -877,16 +846,16 @@ mt_choose_fwd_targets() {
     local -a available=()
     mapfile -t available <<< "$candidates"
     while true; do
-        echo -e "\n  ${FR}┌─[ FORWARDING & LOAD BALANCER TARGETS ]${NC}"
-        echo -e "  ${FR}│${NC}"
+        echo -e "\n  ${DIM}┌─[ FORWARDING & LOAD BALANCER TARGETS ]${NC}"
+        echo -e "  ${DIM}│${NC}"
         for ((i=0; i<${#available[@]}; i++)); do
             ip="${available[$i]}"; label=vIP; [ "$i" != 0 ] || label='Core Peer'
             mark=''; grep -qxF "$ip" <<< "$selected" && mark=' [Selected]'
-            printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b %b(%s)%s%b\n' "$FR" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$C" "$ip" "$NC" "$DIM" "$label" "$mark" "$NC"
+            printf '  %b├─%b %b%-2s%b%b❯%b %b%s%b %b(%s)%s%b\n' "$DIM" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$C" "$ip" "$NC" "$DIM" "$label" "$mark" "$NC"
         done
-        echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${G}All IPs (Core Peer + All vIPs)${NC}"
-        echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel / Keep Current${NC}\n"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${G}All IPs (Core Peer + All vIPs)${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel / Keep Current${NC}\n"
         echo -ne "  ${C}●${NC} ${W}Select IP(s) [e.g. 2 or 2,3 | a: all | Enter: keep]: ${NC}"
         read -r choice || return 2
         if mt_parse_fwd_choice "$choice" "${available[@]}"; then rc=0; else rc=$?; fi
@@ -956,7 +925,6 @@ mt_update_core() {
         cp "$source" "$work/download" || { rm -rf "$work"; return 1; }
     else
         mt_download "$source" "$work/download" || { rm -rf "$work"; return 1; }
-        mt_engine_cache "$work/download" "$source"
     fi
     candidate="$work/download"
     if ! mt_valid_elf "$candidate"; then
@@ -1060,12 +1028,12 @@ mt_bbr_menu() {
     local opt
     while true; do
         clear 2>/dev/null || true
-        echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════╗${NC}"
-        printf "  ${FR}║${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${FR}║${NC}\n" "${MODULE_VERSION:-1.0.2}" "$(mt_bbr_status)" 21 ''
-        echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}\n"
-        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Enable BBR${NC}"
-        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Disable BBR${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+        echo -e "\n  ${B}╭────────────────────────────────────────────────────────────╮${NC}"
+        printf "  ${B}│${NC} ${W}MTunnel BBR v%s${NC} — Status: ${C}%s${NC}%*s${B}│${NC}\n" "${MODULE_VERSION:-1.0.2}" "$(mt_bbr_status)" 21 ''
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}\n"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Enable BBR${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Disable BBR${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt || return 0
         case "$opt" in 1) mt_bbr_state 1;; 2) mt_bbr_state 0;; 0|q|Q) return 0;; esac
     done
@@ -1099,9 +1067,9 @@ mt_healer_menu() {
     mt_valid_scope "$scope" || return 2
     while true; do
         clear 2>/dev/null || true
-        echo -e "\n  ${FR}┌─[ AUTO RECOVERY — ${scope^^} ]${NC}\n  ${FR}║${NC}"
-        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run Recovery Scan Now${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+        echo -e "\n  ${B}┌─[ AUTO RECOVERY — ${scope^^} ]${NC}\n  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run Recovery Scan Now${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt || return 0
         case "$opt" in
             1) if mt_healer_scan "$scope"; then echo -e "  ${G}● Recovery scan complete.${NC}"
@@ -1145,8 +1113,8 @@ mt_ask_bbr_on_create() {
 }
 mt_render_tunnel_system_tools() {
     local healer="$1" bbr="$2"
-    echo -e "  ${FR}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
-    echo -e "  ${FR}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${healer}${NC}${DIM}❯${NC} ${G}Autonomous Tunnel Healer${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}${bbr}${NC}${DIM}❯${NC} ${G}TCP BBR Accelerator${NC} ${DIM}(Entire Server)${NC}"
 }
 mt_monitor_wait() {
     local key='' rc=0
@@ -1161,11 +1129,11 @@ mt_tunnels_info_menu() {
     case "$kind" in gre|vxlan) extra_label='Live Traffic Monitor (RX/TX Rate)';; esac
     while true; do
         "$details" --no-pause
-        echo -e "\n  ${FR}┌─[ DETAILS ACTIONS ]${NC}"
-        echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
-        echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
+        echo -e "\n  ${DIM}┌─[ DETAILS ACTIONS ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}${extra_label}${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Tunnel Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"
         rc=0
         read -r choice || rc=$?
@@ -1242,10 +1210,10 @@ mt_choose_peer_host() {
     v6=$(get_local_ipv6); mt_valid_ipv6 "$v6" || v6=''
     if [ -n "$v4" ] && [ -n "$v6" ]; then
         echo -e "
-  ${FR}┌─[ PEER LINK ADDRESS ]${NC}"
-        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(${v4})${NC}"
-        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(${v6})${NC}"
-        echo -e "  ${FR}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Custom IP / Hostname${NC}"
+  ${DIM}┌─[ PEER LINK ADDRESS ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}IPv4${NC} ${DIM}(${v4})${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}IPv6${NC} ${DIM}(${v6})${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Custom IP / Hostname${NC}"
         mt_ask choice 'Select address [1]: ' || return 1
         case "${choice:-1}" in
             1) custom="$v4";;
@@ -1325,27 +1293,27 @@ mt_workspace_row() {
     max_label=$((cols - 12)); [ "$max_label" -lt 12 ] && max_label=12
     [ ${#label} -le "$max_label" ] || label="${label:0:$((max_label-1))}…"
     printf '  %b├─%b %b%-2s%b%b❯%b %b\033[1m%s%b%b\n' \
-        "$FR" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
+        "$DIM" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
 }
 
 mt_workspace_group() {
     local cols; cols=$(mt_term_cols)
     if [ "${2:-}" = first ]; then
-        printf '\n  %b┌─[ %s ]%b\n' "$FR" "$1" "$NC"
+        printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$1" "$NC"
     else
-        [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$FR" "$NC"
-        printf '  %b├─[ %s ]%b\n' "$FR" "$1" "$NC"
+        [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
+        printf '  %b├─[ %s ]%b\n' "$DIM" "$1" "$NC"
     fi
-    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$FR" "$NC"
+    [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$DIM" "$NC"
 }
 
 mt_workspace_footer() {
     # Keep option 0 *inside* the left-hand menu frame, visibly separated
     # from destructive actions such as Delete/Uninstall. Shared by all tunnels.
-    printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├────────────────────────────%b\n' "$FR" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
+    printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %b\033[1m%s%b\n\n' \
-        "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
+        "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
 }
 
 mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
@@ -1536,15 +1504,15 @@ mt_link_box() {
     inner_width=$((box_width - 2))
     text_width=$((inner_width - (pad * 2)))
     printf -v line '%*s' "$inner_width" ''
-    line="${line// /═}"
-    echo -e "  ${FR}╔${line}╗${NC}"
+    line="${line// /─}"
+    echo -e "  ${DIM}╭${line}╮${NC}"
     while [ -n "$text" ]; do
         chunk="${text:0:text_width}"
         text="${text:text_width}"
-        printf "  ${FR}║${NC}%*s${W}%-*s${NC}%*s${FR}║${NC}
+        printf "  ${DIM}│${NC}%*s${W}%-*s${NC}%*s${DIM}│${NC}
 " "$pad" '' "$text_width" "$chunk" "$pad" ''
     done
-    echo -e "  ${FR}╚${line}╝${NC}"
+    echo -e "  ${DIM}╰${line}╯${NC}"
 }
 
 mt_link_read() { # read flat metadata as data, never source it
@@ -1670,9 +1638,9 @@ mt_link_export() {
     fi
     link=$(mt_link_encode) || { echo 'Cannot export these settings safely.' >&2; return 1; }
     mt_workspace_screen
-    echo -e "\n  ${FR}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${FR}│${NC}"
+    echo -e "\n  ${DIM}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${DIM}│${NC}"
     mt_link_box "$link"
-    echo -e "  ${FR}│${NC}\n  ${FR}└─${NC} ${Y}Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
+    echo -e "  ${DIM}│${NC}\n  ${DIM}└─${NC} ${Y}Contains the tunnel secret. Share privately; this link is not encrypted.${NC}"
     mt_peer_copy_prompt "$link"
 }
 
@@ -1995,12 +1963,12 @@ mt_hdr_draw() {
             boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
         fi
         content_w=$((boxw - 2))
-        printf -v border '%*s' "$content_w" ''; border="${border// /═}"
-        printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
+        printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
         _mt_hdr_line() {
             local t="$1" w=$((content_w-2)) LC_CTYPE=C.UTF-8
             (( ${#t} > w )) && t="${t:0:w}"
-            printf "  ${FR}║${NC} %s%*s ${FR}║${NC}\033[K\n" "$t" "$((w-${#t}))" ''
+            printf "  ${B}│${NC} %s%*s ${B}│${NC}\033[K\n" "$t" "$((w-${#t}))" ''
         }
         _mt_hdr_line "${title} | ${s_ip}"
         _mt_hdr_line "IPv6 ${v6_txt}"
@@ -2011,7 +1979,7 @@ mt_hdr_draw() {
             local il iv; IFS='|' read -r il iv _ <<< "$c"
             [ -z "$il" ] || _mt_hdr_line "${il}: ${iv}"
         done
-        printf "  ${FR}╠%s╣${NC}\033[K\n" "$border"
+        printf "  ${B}├%s┤${NC}\033[K\n" "$border"
         if [ "${#rows[@]}" -eq 0 ]; then _mt_hdr_line "No tunnels configured."
         else
             local st name tag peer vip ping loss up fwd
@@ -2022,7 +1990,7 @@ mt_hdr_draw() {
                 _mt_hdr_line "${row_icon} ${name} [${tag}] | ${peer:-"---"} | Ping ${ping:-"---"} | Loss ${loss:-"---"}"
             done
         fi
-        printf '  %b╚%s╝%b\033[K\n' "$FR" "$border" "$NC"
+        printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
         unset -f _mt_hdr_line
         return 0
     fi
@@ -2048,20 +2016,20 @@ mt_hdr_draw() {
     (( w6 > total - 31 - 25 - 29 - 3 )) && w6=$(( total - 31 - 25 - 29 - 3 ))
     w4=$(( total - 31 - 25 - w6 - 3 ))
     v6_field=$(( w6 - 10 ))
-    printf -v border '%*s' "$total" ''; border="${border// /═}"
+    printf -v border '%*s' "$total" ''; border="${border// /─}"
 
-    printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
     # Row 1: title | IPv4 | IPv6 | BBR + module status
     local x_lbl="${x_label:0:8}" x_w
     x_w=$(( w4 - 15 - (${#x_lbl} + 1) )); (( x_w < 1 )) && x_w=1
-    printf "  ${FR}║${NC} ${W}%-29.29s${NC} ${FR}║${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${FR}║${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${FR}║${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}%s:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${B}│${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}%s:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
         "$title" "$s_ip" \
         "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
         "$x_lbl" "$x_col" "$x_w" "$x_w" "$x_val" "$NC"
-    printf "  ${FR}╠${border}╣${NC}\033[K\n"
+    printf "  ${B}├${border}┤${NC}\033[K\n"
     # Row 2: CPU/cores | RAM | Net down | Net up
-    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
         "$cpu_col" "$cpu_str" "$NC" "$core_label" \
         "$ram_col" "$ram_str" "$NC" \
         "$rx_col" "$((w6-9))" "$((w6-9))" "$MT_RX" "$NC" \
@@ -2069,8 +2037,8 @@ mt_hdr_draw() {
 
     # Optional row 3: engine specific facts (Core / Status / Peer Ping ...)
     if [ "${#info[@]}" -gt 0 ]; then
-        printf "  ${FR}╠${border}╣${NC}\033[K\n"
-        local sep="${FR}║${NC}" il0 iv0 ic0 il1 iv1 ic1 il2 iv2 ic2 il3 iv3 ic3
+        printf "  ${B}├${border}┤${NC}\033[K\n"
+        local sep="${B}│${NC}" il0 iv0 ic0 il1 iv1 ic1 il2 iv2 ic2 il3 iv3 ic3
         IFS='|' read -r il0 iv0 ic0 <<< "${info[0]:-}"; IFS='|' read -r il1 iv1 ic1 <<< "${info[1]:-}"
         IFS='|' read -r il2 iv2 ic2 <<< "${info[2]:-}"; IFS='|' read -r il3 iv3 ic3 <<< "${info[3]:-}"
         local cell0 cell1 cell2 cell3
@@ -2080,7 +2048,7 @@ mt_hdr_draw() {
         _mt_info_cell_set cell3 $((w4-2)) "$il3" "$iv3" "${ic3:-$W}"
         printf '  %b\033[K\n' "${sep}${cell0}${sep}${cell1}${sep}${cell2}${sep}${cell3}${sep}"
     fi
-    printf "  ${FR}╠${border}╣${NC}\033[K\n"
+    printf "  ${B}├${border}┤${NC}\033[K\n"
 
     local shown=0
     for line in "${rows[@]}"; do
@@ -2108,13 +2076,13 @@ mt_hdr_draw() {
                 if [ "$loss" -eq 0 ]; then loss_col="$G"; elif [ "$loss" -lt 30 ]; then loss_col="$Y"; else loss_col="$R"; fi
             fi
         fi
-        printf "  ${FR}║${NC} %b%s%b ${W}%-17.17s${NC} ${FR}║${NC} ${DIM}Peer:${NC} ${Y}%-*.*s${NC} ${FR}║${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${FR}║${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${FR}║${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${FR}║${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}FWD:${NC} %b%-8.8s%b%b ${FR}║${NC}\033[K\n" \
+        printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-*.*s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-8.8s%b%b ${B}│${NC}\033[K\n" \
             "$stat_col" "$stat_icon" "$NC" "$name_tag" "$peer_w" "$peer_w" "$peer" "$vip_col" "${vip:-OFF}" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "${up:----}" "$fwd_col" "${fwd:-OFF}" "$NC" "$fwd_warn"
     done
     if [ "$shown" -eq 0 ]; then
-        printf "  ${FR}║${NC}  ${DIM}● %-*.*s${NC}  ${FR}║${NC}\033[K\n" "$((total-6))" "$((total-6))" "No tunnels of this type are configured on this host."
+        printf "  ${B}│${NC}  ${DIM}● %-*.*s${NC}  ${B}│${NC}\033[K\n" "$((total-6))" "$((total-6))" "No tunnels of this type are configured on this host."
     fi
-    printf '  %b╚%s╝%b\033[K\n' "$FR" "$border" "$NC"
+    printf '  %b╰%s╯%b\033[K\n' "$B" "$border" "$NC"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2222,44 +2190,44 @@ mt_master_header_draw() {
         local tun_count=0
         boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 66 ] && boxw=66
         content_w=$((boxw - 2))
-        printf -v border '%*s' "$content_w" ''; border="${border// /═}"
+        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
         if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
             local _a _b _c _d _e _f _g _h
             while IFS='|' read -r _a _b _c _d _e _f _g _h; do [ -n "$_a" ] && tun_count=$((tun_count+1)); done < "$SECURE_TMP/.main_tun_stats"
         fi
-        printf "\033[K\n  ${FR}╔${border}╗${NC}\033[K\n"
-        compact_line="MDesign v${master_version} | ${s_ip}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="CPU ${cpu_str} | RAM ${ram_str}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="RX ${rx_speed} | TX ${tx_speed}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="BBR ${bbr_text} | IPv6 ${v6_text} | Tunnels ${tun_count} | Porter ${porter_text}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        printf "  ${FR}╚${border}╝${NC}\033[K\n"
+        printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
+        compact_line="MDesign v${master_version} | ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="CPU ${cpu_str} | RAM ${ram_str}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="RX ${rx_speed} | TX ${tx_speed}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="BBR ${bbr_text} | IPv6 ${v6_text} | Tunnels ${tun_count} | Porter ${porter_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        printf "  ${B}╰${border}╯${NC}\033[K\n"
         return 0
     fi
     if [ "$term_cols" -lt 124 ]; then
         boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
         content_w=$((boxw - 2))
-        printf -v border '%*s' "$content_w" ''; border="${border// /═}"
-        printf "\033[K\n  ${FR}╔${border}╗${NC}\033[K\n"
-        compact_line="MDesign v${master_version} | Local: ${s_ip}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        compact_line="Porter ${porter_text} | RX ${rx_speed} | TX ${tx_speed}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        printf "  ${FR}╠${border}╣${NC}\033[K\n"
+        printf -v border '%*s' "$content_w" ''; border="${border// /─}"
+        printf "\033[K\n  ${B}╭${border}╮${NC}\033[K\n"
+        compact_line="MDesign v${master_version} | Local: ${s_ip}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        compact_line="Porter ${porter_text} | RX ${rx_speed} | TX ${tx_speed}"; printf "  ${B}│${NC} %-*.*s ${B}│${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
+        printf "  ${B}├${border}┤${NC}\033[K\n"
         local cshown=0
         if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
             while IFS='|' read -r t_proto t_name t_remote t_vip t_ping t_loss t_dev t_fwd; do
                 [ -n "$t_proto" ] || continue; ((cshown++)); [ "$cshown" -gt 3 ] && break
                 local compact_loss="${t_loss:----}"; [[ "$t_loss" =~ ^[0-9]+$ ]] && compact_loss="${t_loss}%"
                 compact_line="${t_name} [${t_proto}] | ${t_remote} | Ping ${t_ping:-} | Loss ${compact_loss}"
-                printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}[K
+                printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
 " "$((content_w-2))" "$((content_w-2))" "$compact_line"
             done < "$SECURE_TMP/.main_tun_stats"
         fi
         if [ "$cshown" -eq 0 ]; then
             compact_line='No active tunnels configured.'
-            printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}[K
+            printf "  ${B}│${NC} %-*.*s ${B}│${NC}[K
 " "$((content_w-2))" "$((content_w-2))" "$compact_line"
         fi
-        printf "  ${FR}╚${border}╝${NC}[K
+        printf "  ${B}╰${border}╯${NC}[K
 "
         return 0
     fi
@@ -2293,23 +2261,23 @@ mt_master_header_draw() {
     w4=$(( total - 31 - 25 - w6 - 3 ))
     v6_field=$(( w6 - 10 ))
     printf -v border '%*s' "$total" ''
-    border="${border// /═}"
+    border="${border// /─}"
 
-    printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$B" "$border" "$NC"
     # Row 1: title 31 | IPv4 25 | IPv6 w6 | BBR + Porter w4
-    printf "  ${FR}║${NC} ${W}%-29.29s${NC} ${FR}║${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${FR}║${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${FR}║${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${FR}║${NC}\033[K\n" \
+    printf "  ${B}│${NC} ${W}%-29.29s${NC} ${B}│${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${B}│${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${B}│${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${B}│${NC}\033[K\n" \
         "MDesign Master Core v${master_version}" "$s_ip" \
         "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
         "$porter_col" "$porter_icon" "$NC" "$((w4-24))" "$((w4-24))" "$porter_text"
-    printf "  ${FR}╠${border}╣${NC}\033[K\n"
+    printf "  ${B}├${border}┤${NC}\033[K\n"
     # Row 2: CPU 31 | RAM 25 | Net ▼ w6 | Net ▲ w4
-    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+    printf "  ${B}│${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${B}│${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${B}│${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${B}│${NC}\033[K\n" \
         "$cpu_col" "$cpu_str" "$NC" "$core_label" \
         "$ram_col" "$ram_str" "$NC" \
         "$rx_col" "$((w6-9))" "$((w6-9))" "$rx_speed" "$NC" \
         "$tx_col" "$((w4-9))" "$((w4-9))" "$tx_speed" "$NC"
-    printf "  ${FR}╠${border}╣${NC}\033[K\n"
+    printf "  ${B}├${border}┤${NC}\033[K\n"
 
     local shown=0
     if [ -f "$SECURE_TMP/.main_tun_stats" ]; then
@@ -2356,15 +2324,15 @@ mt_master_header_draw() {
             fi
             [ ${#loss_disp} -gt 4 ] && loss_disp="${loss_disp:0:4}"
 
-            printf "  ${FR}║${NC} %b%s%b ${W}%-17.17s${NC} ${FR}║${NC} ${DIM}Peer:${NC} ${Y}%-*.*s${NC} ${FR}║${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${FR}║${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${FR}║${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${FR}║${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${FR}║${NC}\033[K\n" \
+            printf "  ${B}│${NC} %b%s%b ${W}%-17.17s${NC} ${B}│${NC} ${DIM}Peer:${NC} ${Y}%-*.*s${NC} ${B}│${NC} ${DIM}vIP:${NC}%b%-5.5s%b ${B}│${NC} ${DIM}Ping:${NC}${Y}%-5.5s${NC} ${B}│${NC} ${DIM}Loss:${NC}%b%-4.4s%b ${B}│${NC} ${DIM}Up:${NC} ${W}%-10.10s${NC} ${B}│${NC} ${DIM}FWD:${NC} %b%-9.9s%b ${B}│${NC}\033[K\n" \
                 "$stat_col" "$stat_icon" "$NC" "$name_tag" "$peer_w" "$peer_w" "$t_remote" "$vip_col" "$vip_stat" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "$if_uptime" "$fwd_col" "$fwd_str" "$NC"
         done < "$SECURE_TMP/.main_tun_stats"
     fi
 
     if [ "$shown" -eq 0 ]; then
-        printf "  ${FR}║${NC}  ${DIM}● %-*.*s${NC}  ${FR}║${NC}\033[K\n" "$((111+extra))" "$((111+extra))" "No active tunnels or fabrics deployed across the ecosystem."
+        printf "  ${B}│${NC}  ${DIM}● %-*.*s${NC}  ${B}│${NC}\033[K\n" "$((111+extra))" "$((111+extra))" "No active tunnels or fabrics deployed across the ecosystem."
     fi
-    printf "  ${FR}╚${border}╝${NC}\033[K\n"
+    printf "  ${B}╰${border}╯${NC}\033[K\n"
 }
 
 
@@ -2557,10 +2525,10 @@ mt_port_card() {
         [ -z "$cmd" ] || echo -e "  ${R}├─${NC} ${DIM}Command   ❯${NC} ${DIM}${cmd}${NC}"
         echo -e "  ${R}├─${NC} ${DIM}Running   ❯${NC} ${W}$(mt_pid_age "$first")${NC}${user:+ ${DIM}(user: ${user})${NC}}"
         case "$kind" in
-            mtunnel) echo -e "  ${R}║${NC}"; echo -e "  ${R}║${NC}  ${M}This is another MTunnel component — closing it takes that tunnel down.${NC}" ;;
-            docker)  echo -e "  ${R}║${NC}"; echo -e "  ${R}║${NC}  ${Y}Published by a Docker container. Stop the container (docker stop) instead.${NC}" ;;
+            mtunnel) echo -e "  ${R}│${NC}"; echo -e "  ${R}│${NC}  ${M}This is another MTunnel component — closing it takes that tunnel down.${NC}" ;;
+            docker)  echo -e "  ${R}│${NC}"; echo -e "  ${R}│${NC}  ${Y}Published by a Docker container. Stop the container (docker stop) instead.${NC}" ;;
         esac
-        [ "$prot" != 1 ] || { echo -e "  ${R}║${NC}"; echo -e "  ${R}║${NC}  ${R}Protected process (SSH / this session / init) — it cannot be closed from here.${NC}"; }
+        [ "$prot" != 1 ] || { echo -e "  ${R}│${NC}"; echo -e "  ${R}│${NC}  ${R}Protected process (SSH / this session / init) — it cannot be closed from here.${NC}"; }
     fi
     echo -e "  ${R}│${NC}"
 }
@@ -3102,5 +3070,5 @@ mt_reason_row() {
     l="Reason       : ${why}"
     pad=$(( 122 - ${#l} )); [ "$pad" -lt 0 ] && pad=0
     printf -v sp '%*s' "$pad" ''
-    echo -e "  ${FR}║${NC} ${R}Reason       :${NC} ${Y}${why}${NC}${sp} ${FR}║${NC}"
+    echo -e "  ${B}│${NC} ${R}Reason       :${NC} ${Y}${why}${NC}${sp} ${B}│${NC}"
 }

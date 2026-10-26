@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.3.4).
-MODULE_VERSION="1.4.0"
+# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.1).
+MODULE_VERSION="1.4.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -29,7 +29,6 @@ unset -f mt_load_common
 if [ "$EUID" != 0 ]; then echo "Run MTunnel Doctor with sudo." >&2; exit 1; fi
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 REPORT_DIR="$LOCAL_DIR/reports"
@@ -159,17 +158,17 @@ self_update_module() {
     fi
 
     if [ -z "$src_opt" ]; then
-        clear; echo -e "\n  ${FR}┌─[ OTA Update (MDoctor) ]${NC}"
-        echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
-        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-        echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}├─[ MANUAL OVERRIDES ]${NC}"
-        echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-        echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
-        echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+        clear; echo -e "\n  ${DIM}┌─[ OTA Update (MDoctor) ]${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+        echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
+        echo -e "  ${DIM}│${NC}"
+        echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
         echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
     fi
 
@@ -194,10 +193,10 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-    echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-    echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+    echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+    echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$MT_REL_PATH" "$INSTALL_PATH" "$0"; then
         rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
@@ -238,8 +237,8 @@ doc_group() {
     if [ "$DOC_PLAIN" = 1 ]; then
         printf '\n[%s]\n' "$title"
     else
-        printf '\n  %b┌─[ %s ]%b\n' "$FR" "$title" "$NC"
-        printf '  %b│%b\n' "$FR" "$NC"
+        printf '\n  %b┌─[ %s ]%b\n' "$DIM" "$title" "$NC"
+        printf '  %b│%b\n' "$DIM" "$NC"
     fi
 }
 
@@ -251,22 +250,22 @@ doc_row() {
         return
     fi
     color=$(_doc_status_color "$state"); icon=$(_doc_icon "$state")
-    printf '  %b├─%b %b%s%b %b%-27s%b %b%s%b\n' "$FR" "$NC" "$color" "$icon" "$NC" "$W" "$label" "$NC" "$color" "$value" "$NC"
+    printf '  %b├─%b %b%s%b %b%-27s%b %b%s%b\n' "$DIM" "$NC" "$color" "$icon" "$NC" "$W" "$label" "$NC" "$color" "$value" "$NC"
 }
 
 doc_info() {
     local label="$1" value="$2"
     if [ "$DOC_PLAIN" = 1 ]; then printf '  INFO %-27s %s\n' "$label" "$value"
-    else printf '  %b├─%b %b●%b %b%-27s%b %b%s%b\n' "$FR" "$NC" "$C" "$NC" "$W" "$label" "$NC" "$W" "$value" "$NC"; fi
+    else printf '  %b├─%b %b●%b %b%-27s%b %b%s%b\n' "$DIM" "$NC" "$C" "$NC" "$W" "$label" "$NC" "$W" "$value" "$NC"; fi
 }
 
 doc_note() {
-    if [ "$DOC_PLAIN" = 1 ]; then printf '  NOTE %s\n' "$*"; else printf '  %b│%b  %b%s%b\n' "$FR" "$NC" "$DIM" "$*" "$NC"; fi
+    if [ "$DOC_PLAIN" = 1 ]; then printf '  NOTE %s\n' "$*"; else printf '  %b│%b  %b%s%b\n' "$DIM" "$NC" "$DIM" "$*" "$NC"; fi
 }
 
 doc_footer() {
     [ "$DOC_PLAIN" = 1 ] && return
-    printf '  %b└────────────────────────────────────────────────────────────%b\n' "$FR" "$NC"
+    printf '  %b└────────────────────────────────────────────────────────────%b\n' "$DIM" "$NC"
 }
 
 doc_pause() {
@@ -451,10 +450,10 @@ doc_print_summary() {
     if [ "$DOC_PLAIN" = 1 ]; then
         printf '\nSUMMARY: %s | %s\n' "$verdict" "$DOC_LAST_SUMMARY"
     else
-        printf '\n  %b┌─[ DOCTOR RESULT ]%b\n' "$FR" "$NC"
-        printf '  %b│%b\n' "$FR" "$NC"
-        printf '  %b├─%b %b%-17s%b %b%s%b\n' "$FR" "$NC" "$color" "$verdict" "$NC" "$W" "$DOC_LAST_SUMMARY" "$NC"
-        printf '  %b└────────────────────────────────────────────────────────────%b\n' "$FR" "$NC"
+        printf '\n  %b┌─[ DOCTOR RESULT ]%b\n' "$DIM" "$NC"
+        printf '  %b│%b\n' "$DIM" "$NC"
+        printf '  %b├─%b %b%-17s%b %b%s%b\n' "$DIM" "$NC" "$color" "$verdict" "$NC" "$W" "$DOC_LAST_SUMMARY" "$NC"
+        printf '  %b└────────────────────────────────────────────────────────────%b\n' "$DIM" "$NC"
     fi
 }
 
@@ -485,7 +484,7 @@ doc_firewall_screen() {
     if command -v ss >/dev/null 2>&1; then
         while IFS= read -r line; do
             n=$((n+1)); [ "$n" -gt 18 ] && break
-            printf '  %b├─%b %b●%b %s\n' "$FR" "$NC" "$C" "$NC" "$line"
+            printf '  %b├─%b %b●%b %s\n' "$DIM" "$NC" "$C" "$NC" "$line"
         done < <(ss -H -lntup 2>/dev/null | awk '{printf "%-4s %-24s %s\n", $1, $5, $NF}')
         [ "$n" -gt 0 ] || doc_note 'No TCP/UDP listeners found.'
         [ "$n" -lt 18 ] || doc_note 'Preview limited to first 18 listeners.'
@@ -503,7 +502,7 @@ doc_services_screen() {
     doc_group 'FAILED UNIT DETAILS'
     while IFS= read -r line; do
         [ -n "$line" ] || continue; n=$((n+1)); [ "$n" -gt 15 ] && break
-        printf '  %b├─%b %b⚠%b %s\n' "$FR" "$NC" "$Y" "$NC" "$line"
+        printf '  %b├─%b %b⚠%b %s\n' "$DIM" "$NC" "$Y" "$NC" "$line"
     done < <(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1 " — " $4}')
     [ "$n" -gt 0 ] || doc_note 'No failed systemd units.'
     doc_footer; doc_print_summary; doc_pause
@@ -532,15 +531,15 @@ doc_safe_repair() {
     local choice mod ok=1
     while true; do
         draw_doctor_header
-        printf '\n  %b┌─[ SAFE REPAIR ACTIONS ]%b\n' "$FR" "$NC"
-        printf '  %b│%b\n' "$FR" "$NC"
-        printf '  %b├─%b %b1%b %b❯%b %bEnable & Persist IPv4 Forwarding%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-        printf '  %b├─%b %b2%b %b❯%b %bEnable & Persist IPv6 Forwarding%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
-        printf '  %b├─%b %b3%b %b❯%b %bLoad Tunnel Kernel Modules%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-        printf '  %b├─%b %b4%b %b❯%b %bReload systemd Unit Database%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-        printf '  %b│%b\n' "$FR" "$NC"
-        printf '  %b├────────────────────────────%b\n' "$FR" "$NC"
-        printf '  %b└─%b %b0%b %b❯%b %bReturn to Doctor%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+        printf '\n  %b┌─[ SAFE REPAIR ACTIONS ]%b\n' "$DIM" "$NC"
+        printf '  %b│%b\n' "$DIM" "$NC"
+        printf '  %b├─%b %b1%b %b❯%b %bEnable & Persist IPv4 Forwarding%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+        printf '  %b├─%b %b2%b %b❯%b %bEnable & Persist IPv6 Forwarding%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+        printf '  %b├─%b %b3%b %b❯%b %bLoad Tunnel Kernel Modules%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+        printf '  %b├─%b %b4%b %b❯%b %bReload systemd Unit Database%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+        printf '  %b│%b\n' "$DIM" "$NC"
+        printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"
+        printf '  %b└─%b %b0%b %b❯%b %bReturn to Doctor%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
         printf '  %bREPAIR ❯❯ %b' "$C" "$NC"; read -r choice
         case "$choice" in
             0|'') return 0;;
@@ -582,10 +581,10 @@ doc_export_report() {
         return 0
     fi
     draw_doctor_header
-    echo -e "\n  ${FR}┌─[ REPORT EXPORTED ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}Diagnostic report saved successfully.${NC}"
-    echo -e "  ${FR}└─${NC} ${C}${file}${NC}"
+    echo -e "\n  ${DIM}┌─[ REPORT EXPORTED ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${G}✔${NC} ${W}Diagnostic report saved successfully.${NC}"
+    echo -e "  ${DIM}└─${NC} ${C}${file}${NC}"
     doc_pause
 }
 
@@ -603,19 +602,19 @@ refresh_doctor_header_live() {
 
 render_doctor_menu() {
     draw_doctor_header
-    printf '\n  %b┌─[ MTUNNEL DOCTOR & DIAGNOSTICS ]%b\n' "$FR" "$NC"
-    printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─%b %b1%b %b❯%b %bRun Full Health Scan%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %b2%b %b❯%b %bNetwork & IPv6 Diagnostics%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b3%b %b❯%b %bFirewall & Port Diagnostics%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC"
-    printf '  %b├─%b %b4%b %b❯%b %bTunnel Engines & Core & Script Health%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
-    printf '  %b├─%b %b5%b %b❯%b %bSystem Services & Failed Units%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b6%b %b❯%b %bSafe Repair Actions%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %b7%b %b❯%b %bExport Diagnostic Report%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$W" "$NC"
-    printf '  %b├─%b %b8%b %b❯%b %bOTA Update%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(doc_update_badge)"
-    printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├────────────────────────────%b\n' "$FR" "$NC"
-    printf '  %b└─%b %b0%b %b❯%b %bReturn to Dashboard%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+    printf '\n  %b┌─[ MTUNNEL DOCTOR & DIAGNOSTICS ]%b\n' "$DIM" "$NC"
+    printf '  %b│%b\n' "$DIM" "$NC"
+    printf '  %b├─%b %b1%b %b❯%b %bRun Full Health Scan%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b2%b %b❯%b %bNetwork & IPv6 Diagnostics%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b3%b %b❯%b %bFirewall & Port Diagnostics%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC"
+    printf '  %b├─%b %b4%b %b❯%b %bTunnel Engines & Core & Script Health%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
+    printf '  %b├─%b %b5%b %b❯%b %bSystem Services & Failed Units%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b6%b %b❯%b %bSafe Repair Actions%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %b7%b %b❯%b %bExport Diagnostic Report%b\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$W" "$NC"
+    printf '  %b├─%b %b8%b %b❯%b %bOTA Update%b%s\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(doc_update_badge)"
+    printf '  %b│%b\n' "$DIM" "$NC"
+    printf '  %b├────────────────────────────%b\n' "$DIM" "$NC"
+    printf '  %b└─%b %b0%b %b❯%b %bReturn to Dashboard%b\n\n' "$DIM" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 
 case "${1:-}" in

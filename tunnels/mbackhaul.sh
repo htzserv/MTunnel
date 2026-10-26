@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.3.4).
-MODULE_VERSION="1.4.0"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.4.1).
+MODULE_VERSION="1.4.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -54,7 +54,6 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/mbackhaul"
 CONF_DIR="/etc/mbackhaul/tunnels"
 CERT_DIR="/etc/mbackhaul/certs"
@@ -63,7 +62,7 @@ SECURE_TMP="$LOCAL_DIR/tmp"
 
 # Never delete a pre-existing executable merely by opening this menu.
 
-mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/prereqs" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
+mkdir -p "$CONF_DIR" "$CERT_DIR" "$LOCAL_DIR/engines" "$LOCAL_DIR/tunnels" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$CONF_DIR" "$CERT_DIR" "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mbackhaul_in_menu" 2>/dev/null
 
@@ -297,17 +296,17 @@ self_update_module() {
     fi
 
     if [ -z "$src_opt" ]; then
-    clear; echo -e "\n  ${FR}┌─[ OTA Update (MBackhaul) ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─[ MANUAL OVERRIDES ]${NC}"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    clear; echo -e "\n  ${DIM}┌─[ OTA Update (MBackhaul) ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ AUTOMATIC MIRRORS ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─[ MANUAL OVERRIDES ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
     fi
     
@@ -332,10 +331,10 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-        echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
-        echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
-        echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        echo -e "\n  ${DIM}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
+        echo -e "  ${DIM}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+        echo -e "  ${DIM}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
         
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -394,18 +393,18 @@ apply_bbr_optimization() {
 
 bh_select_transport() {
     local choice
-    echo -e "\n  ${FR}┌─[ TRANSPORT PROTOCOL ]${NC}"
-    echo -e "  ${FR}│${NC}"
+    echo -e "\n  ${DIM}┌─[ TRANSPORT PROTOCOL ]${NC}"
+    echo -e "  ${DIM}│${NC}"
     local n label
     for n in 1 2 3 4 5 6 7; do
         case "$n" in
             1) label=TCP;; 2) label=TCPMUX;; 3) label=WSMUX;; 4) label='WSSMUX (TLS)';;
             5) label=WS;; 6) label='WSS (TLS)';; 7) label='UDP (UDP applications only)';;
         esac
-        printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "$n" "$NC" "$DIM" "$NC" "$W" "$label" "$NC"
+        printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "$n" "$NC" "$DIM" "$NC" "$W" "$label" "$NC"
     done
-    echo -e "  ${FR}│${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    echo -e "  ${DIM}│${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
     case "$choice" in
         1) BH_TRANSPORT=tcp;; 2) BH_TRANSPORT=tcpmux;; 3) BH_TRANSPORT=wsmux;;
         4) BH_TRANSPORT=wssmux;; 5) BH_TRANSPORT=ws;; 6) BH_TRANSPORT=wss;;
@@ -461,7 +460,7 @@ bh_validate_options() {
 bh_ask_option() {
     local key="$1" label="$2" value old="${BH_OPTS[$1]}"
     while true; do
-        echo -ne "  ${FR}├─${NC} ${W}$label [${old:-auto}; Enter: keep; -: auto/empty]${NC} ${C}❯❯ ${NC}"
+        echo -ne "  ${DIM}├─${NC} ${W}$label [${old:-auto}; Enter: keep; -: auto/empty]${NC} ${C}❯❯ ${NC}"
         read -r value || return 1; value="${value//$'\r'/}"
         [ -n "$value" ] || return 0
         [ "$value" != - ] || { value=""; [[ "$key" != MTU && "$key" != MSS && "$key" != RCVBUF && "$key" != SNDBUF ]] || value=0; }
@@ -475,8 +474,8 @@ bh_advanced_wizard() {
     local name="$1" role="$2" transport="$3" choice key
     bh_load_options "$CONF_DIR/$name.meta" || return 1
     BH_SETTINGS_FILE=""
-    echo -e "\n  ${FR}┌─[ ADVANCED TUNNEL SETTINGS ]${NC}"
-    echo -ne "  ${FR}├─${NC} ${W}Customize settings? [y/N]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
+    echo -e "\n  ${DIM}┌─[ ADVANCED TUNNEL SETTINGS ]${NC}"
+    echo -ne "  ${DIM}├─${NC} ${W}Customize settings? [y/N]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
     if [[ "${choice,,}" == y || "${choice,,}" == yes ]]; then
         bh_ask_option LOG 'Log level (trace/debug/info/warn/error)' || return 1
         if [ "$role" = 1 ]; then
@@ -492,7 +491,7 @@ bh_advanced_wizard() {
         fi
         [ "$transport" = udp ] || bh_ask_option KEEPALIVE 'TCP keepalive (seconds)' || return 1
         if [[ "$transport" == *mux ]]; then
-            echo -e "  ${FR}├─${NC} ${Y}Use matching MUX version/frame/buffer settings on both peers.${NC}"
+            echo -e "  ${DIM}├─${NC} ${Y}Use matching MUX version/frame/buffer settings on both peers.${NC}"
             [ "$role" != 1 ] || bh_ask_option MUX_CON 'Streams per MUX connection (1-1024)' || return 1
             bh_ask_option MUX_VERSION 'MUX version (1/2)' || return 1
             bh_ask_option MUX_FRAME 'Maximum MUX frame (bytes, 512-65535)' || return 1
@@ -501,25 +500,25 @@ bh_advanced_wizard() {
         fi
         if [[ "$transport" == tcp || "$transport" == tcpmux ]]; then
             bh_ask_option NODELAY 'TCP_NODELAY (true/false)' || return 1
-            echo -e "  ${FR}├─${NC} ${W}Link MTU derives TCP MSS = MTU - 60 (IPv6-safe); interface MTU is unchanged.${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}Link MTU derives TCP MSS = MTU - 60 (IPv6-safe); interface MTU is unchanged.${NC}"
             bh_ask_option MTU 'Link MTU (0: use MSS below; 1280-9000)' || return 1
             [ "${BH_OPTS[MTU]}" != 0 ] || bh_ask_option MSS 'TCP MSS (0: kernel default)' || return 1
             bh_ask_option RCVBUF 'Socket receive buffer (bytes; 0: kernel default)' || return 1
             bh_ask_option SNDBUF 'Socket send buffer (bytes; 0: kernel default)' || return 1
         fi
         if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == *mux ]]; then
-            echo -e "  ${FR}├─${NC} ${Y}PROXY protocol requires a compatible service at the destination.${NC}"
+            echo -e "  ${DIM}├─${NC} ${Y}PROXY protocol requires a compatible service at the destination.${NC}"
             bh_ask_option PROXY 'Send PROXY protocol header (true/false)' || return 1
         fi
         if [ "$role" = 2 ] && [[ "$transport" == ws* ]]; then bh_ask_option EDGE 'Optional WebSocket edge IP' || return 1; fi
         if [ "$role" = 1 ] && [[ "$transport" == wss || "$transport" == wssmux ]]; then
-            echo -e "  ${FR}├─${NC} ${W}TLS paths: leave both empty for a generated certificate.${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}TLS paths: leave both empty for a generated certificate.${NC}"
             # Both paths are collected together; validate the pair after collection.
-            echo -ne "  ${FR}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-generated}; -: generated]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
+            echo -ne "  ${DIM}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-generated}; -: generated]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
             if [ "$choice" = - ]; then BH_OPTS[TLS_CERT]=""; BH_OPTS[TLS_KEY]=""
             elif [ -n "$choice" ]; then
                 BH_OPTS[TLS_CERT]="$choice"
-                echo -ne "  ${FR}├─${NC} ${W}Private key path${NC} ${C}❯❯ ${NC}"; read -r choice || return 1; BH_OPTS[TLS_KEY]="$choice"
+                echo -ne "  ${DIM}├─${NC} ${W}Private key path${NC} ${C}❯❯ ${NC}"; read -r choice || return 1; BH_OPTS[TLS_KEY]="$choice"
             fi
         fi
     fi
@@ -652,7 +651,7 @@ bh_validate_package() {
 }
 
 install_core_from_source() {
-    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0 chosen_url=""
+    local src_choice="$1" triplet asset url kind=url source="" work item local_source="" need_zip=0
     triplet=$(case "$(uname -m)" in x86_64) echo amd64;; aarch64|arm64) echo arm64;; *) exit 1;; esac) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
     asset="backhaul_linux_${triplet}.tar.gz"
     local -a urls=()
@@ -693,13 +692,12 @@ install_core_from_source() {
             local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
             echo -e "  ${DIM}● Source: $source_host${NC}"
             if bh_download "$url" "$work/package"; then
-                if bh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
+                if bh_validate_package "$work/package"; then source="$work/package"; break
                 else echo 'Downloaded file is not a compatible Backhaul binary/archive.' >&2; fi
             fi
             [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
         done
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
-        mt_engine_cache "$source" "$chosen_url"
     fi
     if mt_update_core bh mbackhaul "$source" local; then
         [ -z "$work" ] || rm -rf "$work"
@@ -747,16 +745,16 @@ render_unified_update_menu() {
     core_v=$(mt_core_version)
     [ -n "$core_v" ] && [ "$core_v" != "not-installed" ] && core_tag=" ${G}(installed)${NC}"
     mt_workspace_screen
-    echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL — MBACKHAUL ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Install Script From Github${NC} ${DIM}(${gh_label})${NC}"
-    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install Script From Iranian Mirror${NC} ${DIM}(${mirror_label})${NC}"
-    echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
-    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+    echo -e "\n  ${DIM}┌─[ UPDATE & LOCAL INSTALL — MBACKHAUL ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Install Script From Github${NC} ${DIM}(${gh_label})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Install Script From Iranian Mirror${NC} ${DIM}(${mirror_label})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
 }
 unified_update_menu() {
     local opt
@@ -778,14 +776,14 @@ unified_update_menu() {
 }
 
 menu_install_core() {
-    echo -e "\n  ${FR}┌─[ INSTALL / UPDATE BACKHAUL CORE ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "\n  ${DIM}┌─[ INSTALL / UPDATE BACKHAUL CORE ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
 
@@ -797,16 +795,16 @@ check_first_run_core() {
         local first_prompt_flag="$CONF_DIR/.core_prompted"
         if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
-            echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
-            echo -e "  ${FR}║${NC}   ${R}● Backhaul Core binary is NOT installed on this machine!${NC}                  ${FR}║${NC}"
-            echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
-            echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
-            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
-            echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
-            echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
-            echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
-            echo -e "  ${FR}│${NC}"
-            echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -e "\n  ${B}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+            echo -e "  ${B}│${NC}   ${R}● Backhaul Core binary is NOT installed on this machine!${NC}                  ${B}│${NC}"
+            echo -e "  ${B}│${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${B}│${NC}"
+            echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────╯${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
+            echo -e "  ${DIM}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
+            echo -e "  ${DIM}│${NC}"
+            echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
@@ -873,11 +871,11 @@ bh_expanded_ports() {
 
 bh_choose_forwarder() {
     local choice current="${1:-backhaul}"
-    echo -e "\n  ${FR}┌─[ FORWARDING ENGINE ]${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Backhaul (Built-in TCP / UDP)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}iptables (TCP / UDP)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}MPorter (Select its TCP engine separately)${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}Select [Enter: ${current}, q: cancel] ❯❯ ${NC}"
+    echo -e "\n  ${DIM}┌─[ FORWARDING ENGINE ]${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Backhaul (Built-in TCP / UDP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}iptables (TCP / UDP)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}MPorter (Select its TCP engine separately)${NC}"
+    echo -ne "  ${DIM}└─${NC} ${C}Select [Enter: ${current}, q: cancel] ❯❯ ${NC}"
     read -r choice || return 1
     case "${choice//$'\r'/}" in
         1) BH_FORWARDER=backhaul;; 2) BH_FORWARDER=iptables;; 3) BH_FORWARDER=mporter;;
@@ -954,15 +952,15 @@ bh_prepare_backend() {
 bh_show_forwarder() {
     local name="$1" meta="$CONF_DIR/$1.meta" mode ip pair
     mode=$(bh_meta_value FORWARDER "$meta")
-    echo -e "  ${FR}├─${NC} ${W}Forwarder:${NC} ${C}${mode:-backhaul}${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}Forwarder:${NC} ${C}${mode:-backhaul}${NC}"
     [ "$mode" = mporter ] || return 0
     ip=$(bh_meta_value BACKEND_IP "$meta")
-    echo -e "  ${FR}├─${NC} ${W}MPorter Target IP:${NC} ${G}$ip${NC} ${DIM}(this server only)${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}MPorter Target IP:${NC} ${G}$ip${NC} ${DIM}(this server only)${NC}"
     local -a pairs=(); IFS=, read -ra pairs <<< "$(bh_meta_value BACKEND_PORTS "$meta")"
     for pair in "${pairs[@]}"; do
-        printf "  ${FR}├─${NC} ${W}%-5s${NC} ${DIM}❯${NC} ${G}%s:%s${NC} ${DIM}(TCP)${NC}\n" "${pair%:*}" "$ip" "${pair##*:}"
+        printf "  ${DIM}├─${NC} ${W}%-5s${NC} ${DIM}❯${NC} ${G}%s:%s${NC} ${DIM}(TCP)${NC}\n" "${pair%:*}" "$ip" "${pair##*:}"
     done
-    echo -e "  ${FR}└─${NC} ${W}Open MPorter > Add Port Mappings > Backhaul Targets; ports are matched automatically.${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}Open MPorter > Add Port Mappings > Backhaul Targets; ports are matched automatically.${NC}"
 }
 
 bh_forward_chain() {
@@ -1711,20 +1709,20 @@ show_tunnel_registry() {
             proto_display="${C}${TRANSPORT^^}${NC} ${DIM}(UDP: ${G}${udp_status}${DIM})${NC}"
         fi
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${B}╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
         local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
-        echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
-        echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
+        echo -e "  ${B}│${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${B}│${NC}"
+        echo -e "  ${B}├────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤${NC}"
         
         local l1="Link Port    : ${TUN_PORT}"; local r1="Latency: ${ping_val}"
         local pad1=$(( 122 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0; local sp1=$(printf '%*s' "$pad1" "")
-        echo -e "  ${FR}║${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${FR}║${NC}"
+        echo -e "  ${B}│${NC} ${M}Link Port    :${NC} ${W}${TUN_PORT}${NC}${sp1}${DIM}Latency:${NC} ${Y}${ping_val}${NC} ${B}│${NC}"
         
         local l2="Peer Target  : ${peer_text}"; local r2="Link State: ${stat_icon} ${stat_text}"
         local clean_r2=$(echo -e "$r2" | sed -r "s/\x1B\[[0-9;]*[a-zA-Z]//g")
         local pad2=$(( 122 - ${#l2} - ${#clean_r2} )); [ "$pad2" -lt 0 ] && pad2=0; local sp2=$(printf '%*s' "$pad2" "")
-        echo -e "  ${FR}║${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${FR}║${NC}"
+        echo -e "  ${B}│${NC} ${C}Peer Target  :${NC} ${W}${peer_text}${NC}${sp2}${DIM}Link State:${NC} ${stat_color}${stat_icon} ${stat_text}${NC} ${B}│${NC}"
         if [ "$st" != "ONLINE" ]; then
             mt_reason_row "$(mt_link_why "mbackhaul@${t_name}" "$([ "$ROLE" == "1" ] && echo 1 || echo 0)" "$([ "$ROLE" == "1" ] && echo "$TUN_PORT")" "$([ "$ROLE" != "1" ] && echo "$REMOTE_IP")" "$([ "$TRANSPORT" = udp ] && echo 1 || echo 0)")"
         fi
@@ -1733,21 +1731,21 @@ show_tunnel_registry() {
         local raw_r3="Protocol: ${TRANSPORT^^}"
         [ "$ROLE" == "1" ] && raw_r3="Protocol: ${TRANSPORT^^} (UDP: ${udp_status})"
         local pad3=$(( 122 - ${#l3} - ${#raw_r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${FR}║${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${proto_display} ${FR}║${NC}"
+        echo -e "  ${B}│${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${proto_display} ${B}│${NC}"
 
         local l4="Traffic Usage: RX $(format_total $rx) / TX $(format_total $tx)"
         local pad4=$(( 122 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; local sp4=$(printf '%*s' "$pad4" "")
-        echo -e "  ${FR}║${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp4} ${FR}║${NC}"
+        echo -e "  ${B}│${NC} ${DIM}Traffic Usage:${NC} ${G}RX $(format_total $rx)${NC} ${DIM}/${NC} ${Y}TX $(format_total $tx)${NC}${sp4} ${B}│${NC}"
         
         if [ "$ROLE" == "1" ]; then
             local p_str="${PORTS:0:100}"
             [ ${#PORTS} -gt 100 ] && p_str="${p_str}..."
             local l5="Port Mappings: ${p_str}"
             local pad5=$(( 122 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; local sp5=$(printf '%*s' "$pad5" "")
-            echo -e "  ${FR}║${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${FR}║${NC}"
+            echo -e "  ${B}│${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${B}│${NC}"
         fi
         
-        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
+        echo -e "  ${B}╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n"
         [ "$ROLE" != 1 ] || bh_show_forwarder "$t_name"
         ((count++))
     done
@@ -1773,10 +1771,10 @@ show_live_radar() {
 
     while true; do
         printf "\033[H"; draw_header
-        echo -e "\n  ${FR}┌─[ BACKHAUL TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
-        echo -e "  ${FR}╔══════════════════════╦════════════════╦══════════════════╦══════════════════╦════════════════════╦════════════════════╗${NC}"
-        printf "  ${FR}║${NC} ${W}%-20s${NC} ${FR}║${NC} ${W}%-14s${NC} ${FR}║${NC} ${C}%-16s${NC} ${FR}║${NC} ${M}%-16s${NC} ${FR}║${NC} ${DIM}%-18s${NC} ${FR}║${NC} ${DIM}%-18s${NC} ${FR}║${NC}\n" "TUNNEL NAME" "STATUS" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL RX" "∑ TOTAL TX"
-        echo -e "  ${FR}╠══════════════════════╬════════════════╬══════════════════╬══════════════════╬════════════════════╬════════════════════╣${NC}"
+        echo -e "\n  ${DIM}┌─[ BACKHAUL TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
+        echo -e "  ${B}╭──────────────────────┬────────────────┬──────────────────┬──────────────────┬────────────────────┬────────────────────╮${NC}"
+        printf "  ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} ${W}%-14s${NC} ${B}│${NC} ${C}%-16s${NC} ${B}│${NC} ${M}%-16s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC}\n" "TUNNEL NAME" "STATUS" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL RX" "∑ TOTAL TX"
+        echo -e "  ${B}├──────────────────────┼────────────────┼──────────────────┼──────────────────┼────────────────────┼────────────────────┤${NC}"
 
         local count=0
         for conf in "$CONF_DIR"/*.meta; do
@@ -1799,14 +1797,14 @@ show_live_radar() {
             local c_rx="${DIM}"; [ "$rx_s" -gt 0 ] && c_rx="${G}"
             local c_tx="${DIM}"; [ "$tx_s" -gt 0 ] && c_tx="${Y}"
 
-            printf "  ${FR}║${NC} ${W}%-20s${NC} ${FR}║${NC} %b%-14s%b ${FR}║${NC} %b%-16s%b ${FR}║${NC} %b%-16s%b ${FR}║${NC} ${DIM}%-18s${NC} ${FR}║${NC} ${DIM}%-18s${NC} ${FR}║${NC}\n" "$t_name" "$st_color" "$st_text" "$NC" "$c_rx" "$(format_speed $rx_s)" "$NC" "$c_tx" "$(format_speed $tx_s)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
+            printf "  ${B}│${NC} ${W}%-20s${NC} ${B}│${NC} %b%-14s%b ${B}│${NC} %b%-16s%b ${B}│${NC} %b%-16s%b ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC} ${DIM}%-18s${NC} ${B}│${NC}\n" "$t_name" "$st_color" "$st_text" "$NC" "$c_rx" "$(format_speed $rx_s)" "$NC" "$c_tx" "$(format_speed $tx_s)" "$NC" "$(format_total $r_new)" "$(format_total $t_new)"
             ((count++))
         done
 
         if [ "$count" -eq 0 ]; then
-            printf "  ${FR}║${NC} ${DIM}%-120s${NC} ${FR}║${NC}\n" "  No active Backhaul tunnels configured."
+            printf "  ${B}│${NC} ${DIM}%-120s${NC} ${B}│${NC}\n" "  No active Backhaul tunnels configured."
         fi
-        echo -e "  ${FR}╚══════════════════════╩════════════════╩══════════════════╩══════════════════╩════════════════════╩════════════════════╝${NC}"
+        echo -e "  ${B}╰──────────────────────┴────────────────┴──────────────────┴──────────────────┴────────────────────┴────────────────────╯${NC}"
         printf "\033[J"
         mt_monitor_wait 1 || break
     done
@@ -1817,12 +1815,12 @@ manage_cron() {
     local t_name="$1"
     local cron_script="$CONF_DIR/${t_name}_restart.sh"
     
-    echo -e "\n  ${FR}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "\n  ${DIM}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read cr_opt
 
     if [[ "$cr_opt" == "1" ]]; then
@@ -1861,14 +1859,14 @@ manage_cron() {
 
 uninstall_mbackhaul() {
     clear
-    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MBACKHAUL${NC}                 ${R}║${NC}"
-    echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
-    echo -e "  ${R}║${NC}   ● All active Backhaul tunnels & systemd units                            ${R}║${NC}"
-    echo -e "  ${R}║${NC}   ● All configurations, metadata & SSL certificates                        ${R}║${NC}"
-    echo -e "  ${R}║${NC}   ● All iptables traffic counters & crontabs                               ${R}║${NC}"
-    echo -e "  ${R}║${NC}   ● Backhaul core binaries (/usr/local/bin/bh) & mbackhaul module          ${R}║${NC}"
-    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "\n  ${R}╭────────────────────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${R}│${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MBACKHAUL${NC}                 ${R}│${NC}"
+    echo -e "  ${R}│${NC}   This will permanently stop and delete:                                   ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All active Backhaul tunnels & systemd units                            ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All configurations, metadata & SSL certificates                        ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● All iptables traffic counters & crontabs                               ${R}│${NC}"
+    echo -e "  ${R}│${NC}   ● Backhaul core binaries (/usr/local/bin/bh) & mbackhaul module          ${R}│${NC}"
+    echo -e "  ${R}╰────────────────────────────────────────────────────────────────────────────╯${NC}\n"
     
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
@@ -1923,11 +1921,11 @@ select_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
     
-    echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
+    echo -e "\n  ${B}╭────────────────── Select Tunnel to Manage ─────────────────╮${NC}"
     for i in "${!configs[@]}"; do
-        printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"
+        printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"
     done
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
@@ -2038,9 +2036,9 @@ mt_peer_ensure_core() {
     is_bh_core_valid && return 0
     local choice
     echo -e "\n  ${Y}● Backhaul Core is required before applying this Peer Code.${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
+    echo -e "  ${DIM}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     while true; do
         mt_live_readline choice "  ${C}Select Source ❯❯ ${NC}" || return 1
         choice="${choice//$'\r'/}"
@@ -2065,18 +2063,18 @@ mt_link_import() {
     if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1; fi
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
-    echo -e "\n  ${FR}┌─[ PEER SETUP PREVIEW ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
-    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
-    echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
+    echo -e "\n  ${DIM}┌─[ PEER SETUP PREVIEW ]${NC}"
+    echo -e "  ${DIM}│${NC}"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Peer" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[HOST]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Link port" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[LINK_PORT]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "Transport" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TRANSPORT]:-${MT_LINK_DATA[PROTO]:-KCP/TCP}}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "TCP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[TCP_PORTS]:-${MT_LINK_DATA[PORTS]:--}}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
+    printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$DIM" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
+    echo -e "  ${DIM}│${NC}"
+    echo -e "  ${DIM}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
     mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
@@ -2234,7 +2232,7 @@ while true; do
     case $opt in
         1) 
            bh_start_screen
-           echo -e "\n  ${FR}┌─[ DEPLOY NEW TUNNEL ]${NC}"
+           echo -e "\n  ${DIM}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
                echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read s_type
                s_type=$(echo "$s_type" | tr -d '\r')
@@ -2327,9 +2325,9 @@ while true; do
         2)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && continue
-           echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
-           for i in "${!configs[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
-           echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+           echo -e "\n  ${B}╭────────────────── Select Tunnel to Delete ─────────────────╮${NC}"
+           for i in "${!configs[@]}"; do printf "  ${B}│${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${B}│${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
+           echo -e "  ${B}╰────────────────────────────────────────────────────────────╯${NC}"
            echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
@@ -2399,7 +2397,7 @@ while true; do
                
            elif [[ "$opt" == "5" ]]; then
                bh_start_screen
-               echo -e "\n  ${FR}┌─[ TRANSPORT & ADVANCED SETTINGS ]${NC}"
+               echo -e "\n  ${DIM}┌─[ TRANSPORT & ADVANCED SETTINGS ]${NC}"
                echo -ne "  ${C}Change transport? [y/N; current: $TRANSPORT] ❯❯ ${NC}"; read -r change_transport
                if [[ "${change_transport,,}" == y || "${change_transport,,}" == yes ]]; then
                    bh_select_transport || continue; TRANSPORT="$BH_TRANSPORT"

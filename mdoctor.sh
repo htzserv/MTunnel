@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.5).
-MODULE_VERSION="1.4.5"
+# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.6).
+MODULE_VERSION="1.4.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -51,7 +51,7 @@ MT_REL_PATH="mdoctor.sh"   # repo/mirror path of this module (must match MOD_MAP
 MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
-UPDATE_CHECK_INTERVAL=900
+UPDATE_CHECK_INTERVAL=120
 read_with_refresh() {
     local prompt="$1" __resultvar="$2" redraw_func="$3" buffer="" char rc up now last_live=-1
     touch "$SECURE_TMP/.mdoctor_in_menu"
@@ -97,7 +97,7 @@ fetch_remote_version() {
     printf '%s\n' "$version"
 }
 
-check_update_bg() {
+check_update_bg_legacy() {
     local cb="" gh_ver="" mirror_ver="" latest_ver="" cand
     gh_ver=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/${MT_REL_PATH}${cb}")
     mirror_ver=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/${MT_REL_PATH}${cb}")
@@ -109,6 +109,12 @@ check_update_bg() {
     done
     [ -n "$latest_ver" ] && printf '%s\n' "$latest_ver" > "$SECURE_TMP/.mdoctor_remote_ver"
     return 0
+}
+
+check_update_bg() {
+    # Shared checker: GitHub and the mirror are asked in parallel, the highest version wins.
+    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "mdoctor.sh" "mdoctor"; return 0; fi
+    check_update_bg_legacy
 }
 
 update_watcher_loop() {

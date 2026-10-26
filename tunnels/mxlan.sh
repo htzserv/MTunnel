@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.4.5).
-MODULE_VERSION="1.4.5"
+# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.4.6).
+MODULE_VERSION="1.4.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -311,7 +311,7 @@ MAIN_PID=$$
 NEED_REFRESH=false
 trap '' SIGUSR1   # ignored: a signal must never interrupt typing in any prompt
 
-UPDATE_CHECK_INTERVAL=900
+UPDATE_CHECK_INTERVAL=120
 PING_CHECK_INTERVAL=15
 
 # Live header: repaint ONLY the header box in place (cursor saved/restored, nothing else touched).
@@ -405,7 +405,7 @@ fetch_remote_version() {
     printf '%s\n' "$version"
 }
 
-check_update_bg() {
+check_update_bg_legacy() {
     local cb=""
     local raw_url="${MTUNNEL_GITHUB_BASE}/tunnels/mxlan.sh${cb}"
     local mirror_url="${MTUNNEL_MIRROR_BASE}/tunnels/mxlan.sh${cb}"
@@ -428,8 +428,13 @@ check_update_bg() {
 }
 
 
+check_update_bg() {
+    # Shared checker: GitHub and the mirror are asked in parallel, the highest version wins.
+    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "tunnels/mxlan.sh" "mxlan"; return 0; fi
+    check_update_bg_legacy
+}
+
 update_watcher_loop() {
-    sleep 60
     while true; do
         check_update_bg
         sleep "$UPDATE_CHECK_INTERVAL"

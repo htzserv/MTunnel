@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.4.5, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.6, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.5"
+MTUNNEL_RELEASE_VERSION="1.4.6"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -171,8 +171,63 @@ mt_downgrade_blocked() {
 }
 # A different remote version is available, regardless of numeric direction.
 # This intentionally makes upgrades and downgrades symmetric.
+# True only when $1 is strictly NEWER than $2 (pure bash, no forks).
+mt_version_newer() {
+    local a="${1:-}" b="${2:-}" i x y
+    local -a A B
+    [[ "$a" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || return 1
+    [[ "$b" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || b=0
+    a="${a%%-*}"; b="${b%%-*}"
+    IFS=. read -ra A <<< "$a"; IFS=. read -ra B <<< "$b"
+    for ((i=0; i<${#A[@]} || i<${#B[@]}; i++)); do
+        x="${A[i]:-0}"; y="${B[i]:-0}"
+        [[ "$x" =~ ^[0-9]+$ ]] || x=0; [[ "$y" =~ ^[0-9]+$ ]] || y=0
+        (( 10#$x > 10#$y )) && return 0
+        (( 10#$x < 10#$y )) && return 1
+    done
+    return 1
+}
 mt_update_available() {
-    [ -n "${1:-}" ] && [ -n "${2:-}" ] && [ "$1" != "$2" ]
+    mt_version_newer "${1:-}" "${2:-}"
+}
+# Fetch only the head of a remote script and print its MODULE_VERSION (or MTUNNEL_RELEASE_VERSION).
+mt_remote_version_of() { # url
+    local url="$1" line v=''
+    local tmp; tmp=$(mktemp "${SECURE_TMP:-/tmp}/.rv.XXXXXX") || return 1
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 7 -o "$tmp" "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$tmp" --header="Range: bytes=0-4095" --timeout=7 "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    else rm -f "$tmp"; return 1; fi
+    local n=0
+    while IFS= read -r line && [ $((n++)) -lt 120 ]; do
+        line="${line%$'\r'}"
+        if [[ "$line" =~ ^(MODULE_VERSION|MTUNNEL_RELEASE_VERSION)=\"([0-9][0-9.]*)\"$ ]]; then v="${BASH_REMATCH[2]}"; break; fi
+    done < "$tmp"
+    rm -f "$tmp"
+    [ -n "$v" ] && printf '%s' "$v"
+}
+# Shared checker for every module: asks GitHub and the mirror IN PARALLEL, so a blocked
+# source never delays the other one. Writes <prefix>_remote_ver_github / _mirror / and the highest as _remote_ver.
+mt_check_update_both() { # rel_path prefix
+    local rel="$1" pfx="$2" dir="${SECURE_TMP:-/root/mtunnel/tmp}" gh mi best cand
+    local gf; gf=$(mktemp "$dir/.upg.XXXXXX") || return 1
+    local mf; mf=$(mktemp "$dir/.upm.XXXXXX") || { rm -f "$gf"; return 1; }
+    mt_remote_version_of "${MTUNNEL_GITHUB_BASE}/${rel}?t=${EPOCHSECONDS:-0}" > "$gf" 2>/dev/null &
+    local p1=$!
+    mt_remote_version_of "${MTUNNEL_MIRROR_BASE}/${rel}" > "$mf" 2>/dev/null &
+    local p2=$!
+    wait "$p1" "$p2" 2>/dev/null
+    gh=$(<"$gf"); mi=$(<"$mf"); rm -f "$gf" "$mf"
+    [ -n "$gh" ] && printf '%s\n' "$gh" > "$dir/.${pfx}_remote_ver_github"
+    [ -n "$mi" ] && printf '%s\n' "$mi" > "$dir/.${pfx}_remote_ver_mirror"
+    best=''
+    for cand in "$gh" "$mi"; do
+        [ -n "$cand" ] || continue
+        if [ -z "$best" ] || mt_version_newer "$cand" "$best"; then best="$cand"; fi
+    done
+    [ -n "$best" ] && printf '%s\n' "$best" > "$dir/.${pfx}_remote_ver"
+    return 0
 }
 # Legacy compatibility hook retained for older callers. Version direction is unrestricted.
 mt_retired_bundle_blocked() {
@@ -1311,17 +1366,21 @@ mt_ask() { # styled prompt + live header refresh while waiting for peer input
 
 mt_workspace_screen() { "$MT_HEADER"; }
 
-mt_term_cols() {
-    local c
-    c=$(tput cols 2>/dev/null || printf '%s' "${COLUMNS:-80}")
-    [[ "$c" =~ ^[0-9]+$ ]] || c=80
-    [ "$c" -ge 32 ] || c=32
-    printf '%s' "$c"
+mt_term_cols_set() { # sets MT_TERM_COLS; hits tput at most once per second
+    if [ "${MT_TERM_COLS_AT:-}" != "$SECONDS" ] || [ -z "${MT_TERM_COLS:-}" ]; then
+        MT_TERM_COLS_AT="$SECONDS"
+        local c="${COLUMNS:-}"
+        if ! [[ "$c" =~ ^[0-9]+$ ]]; then c=$(tput cols 2>/dev/null) || c=80; fi
+        [[ "$c" =~ ^[0-9]+$ ]] || c=80
+        [ "$c" -ge 32 ] || c=32
+        MT_TERM_COLS="$c"
+    fi
 }
+mt_term_cols() { mt_term_cols_set; printf '%s' "$MT_TERM_COLS"; }
 
 mt_workspace_row() {
     local cols max_label label="$2"
-    cols=$(mt_term_cols)
+    mt_term_cols_set; cols="$MT_TERM_COLS"
     max_label=$((cols - 12)); [ "$max_label" -lt 12 ] && max_label=12
     [ ${#label} -le "$max_label" ] || label="${label:0:$((max_label-1))}…"
     printf '  %b├─%b %b%-2s%b%b❯%b %b\033[1m%s%b%b\n' \
@@ -1329,7 +1388,7 @@ mt_workspace_row() {
 }
 
 mt_workspace_group() {
-    local cols; cols=$(mt_term_cols)
+    local cols; mt_term_cols_set; cols="$MT_TERM_COLS"
     if [ "${2:-}" = first ]; then
         printf '\n  %b┌─[ %s ]%b\n' "$FR" "$1" "$NC"
     else
@@ -1436,16 +1495,19 @@ mt_link_encode() {
             [ "$key" = SYNC_KEY ] && [ "${MT_LINK_DATA[SYNC_KEY]}" = "${MT_LINK_DATA[TUN_SECRET]:-}" ] && continue
             printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
           done | LC_ALL=C sort)
-    if mt_peer_key_ensure; then
-        command -v openssl >/dev/null 2>&1 || { echo 'OpenSSL required for encrypted Peer Links.' >&2; return 1; }
+    # No shared key is required any more. If a valid peer-link.key happens to exist the
+    # link is still encrypted (v3); otherwise a plain compressed v2 link is produced.
+    if mt_peer_key_file && command -v openssl >/dev/null 2>&1; then
         encoded=$(printf '%s\n' "$raw" | gzip -9n | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "file:$MT_PEER_SECRET_FILE" -a -A 2>/dev/null | tr '+/' '-_' | tr -d '=') || return 1
         [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
         checksum=$(printf '%s' "3/$MT_KIND/$encoded" | mt_peer_hmac) || return 1
         [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
         printf 'mtunnel://3/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
     else
-        echo 'A valid shared Peer Link key is required. Run mtunnel --peer-key-init on one server, transfer the key securely, then mtunnel --peer-key-import FILE on the other. Existing keys are never overwritten.' >&2
-        return 1
+        encoded=$(printf '%s\n' "$raw" | gzip -9n | base64 -w0 | tr '+/' '-_' | tr -d '=') || return 1
+        [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+        checksum=$(printf '%s' "2/$MT_KIND/$encoded" | sha256sum); checksum="${checksum:0:16}"
+        printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
     fi
 }
 
@@ -1461,11 +1523,6 @@ mt_link_decode() {
         mtunnel://3/*) ver=3; rest="${link#mtunnel://3/}";;
         *) return 1;;
     esac
-    if [ "$ver" != 3 ] && [ "${MTUNNEL_ALLOW_LEGACY_PEER_LINKS:-0}" != 1 ]; then
-        echo 'Unauthenticated legacy Peer Link rejected. Regenerate a v3 link, or explicitly set MTUNNEL_ALLOW_LEGACY_PEER_LINKS=1 for a trusted migration.' >&2
-        return 1
-    fi
-    [ "$ver" = 3 ] || echo 'WARNING: accepting an unencrypted, unauthenticated legacy Peer Link.' >&2
     kind="${rest%%/*}"; rest="${rest#*/}"
     [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
     [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
@@ -1473,7 +1530,7 @@ mt_link_decode() {
     [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
     if [ "$ver" = 3 ]; then
         [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
-        mt_peer_key_file || { echo 'Encrypted link: matching local /etc/mtunnel/peer-link.key is required.' >&2; return 1; }
+        mt_peer_key_file || { echo 'This link was encrypted (v3) by a server that has a peer-link.key; ask the sender to generate the link again (plain links need no key).' >&2; return 1; }
         actual=$(printf '%s' "3/$kind/$encoded" | mt_peer_hmac) || return 1
     elif [ "$ver" = 1 ]; then
         [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
@@ -1925,7 +1982,7 @@ mt_header_static_read() {
     read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
     if [ "$force" != force ] && [ -r "$f" ]; then
         IFS='|' read -r ts ip4 ip6 bbr porter < "$f"
-        if [[ "$ts" =~ ^[0-9]+$ ]] && [ $((now-ts)) -lt 60 ]; then
+        if [[ "$ts" =~ ^[0-9]+$ ]] && [ $((now-ts)) -lt 30 ]; then
             MT_STATIC_IP4="$ip4"; MT_STATIC_IP6="$ip6"; MT_STATIC_BBR="$bbr"; MT_STATIC_PORTER="$porter"; return 0
         fi
     fi
@@ -2026,7 +2083,7 @@ mt_hdr_draw() {
     [ -n "$x_col" ] || x_col="$DIM"
 
     local s_ip s_v6 bbr_cc bbr_col="$DIM" bbr_icon="○" bbr_text="OFF"
-    if [ -n "${HEADER_LIVE:-}" ]; then mt_header_static_read; else mt_header_static_read force; fi
+    mt_header_static_read
     s_ip="${MT_STATIC_IP4:0:16}"; s_v6="$MT_STATIC_IP6"; bbr_cc="$MT_STATIC_BBR"
     [ "$bbr_cc" = bbr ] && { bbr_col="$G"; bbr_icon="●"; bbr_text="ON"; }
     mt_sys_stats_read
@@ -2241,7 +2298,7 @@ mt_master_iface_uptime_cached() {
 }
 mt_master_header_draw() {
     local master_version="${1:-${MODULE_VERSION:-${MTUNNEL_RELEASE_VERSION:-unknown}}}"
-    if [ -n "${HEADER_LIVE:-}" ]; then mt_header_static_read; else mt_header_static_read force; fi
+    mt_header_static_read
     local s_ip="${MT_STATIC_IP4:0:16}" bbr_cc="$MT_STATIC_BBR"
 
     local porter_col="${DIM}" porter_icon="○" porter_text="OFF"

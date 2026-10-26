@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.5).
-MODULE_VERSION="1.4.5"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.6).
+MODULE_VERSION="1.4.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -86,7 +86,7 @@ trap 'NEED_REFRESH=true' SIGUSR1
 NEED_HDR=false
 trap 'NEED_HDR=true' SIGUSR2
 
-UPDATE_CHECK_INTERVAL=900
+UPDATE_CHECK_INTERVAL=120
 HDR_CHECK_INTERVAL=15
 MT_FAST_FIRST_DRAW=1
 read_with_refresh() {
@@ -155,7 +155,7 @@ fetch_remote_version() {
     printf '%s\n' "$version"
 }
 # Keeps the last known good value when a source is unreachable (no "Unknown" overwrite).
-check_update_bg() {
+check_update_bg_legacy() {
     local cb="" gh_ver="" mirror_ver="" latest_ver="" cand
     gh_ver=$(fetch_remote_version "${MTUNNEL_GITHUB_BASE}/tunnels/mpaqet.sh${cb}")
     mirror_ver=$(fetch_remote_version "${MTUNNEL_MIRROR_BASE}/tunnels/mpaqet.sh${cb}")
@@ -169,8 +169,13 @@ check_update_bg() {
     return 0
 }
 
+check_update_bg() {
+    # Shared checker: GitHub and the mirror are asked in parallel, the highest version wins.
+    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "tunnels/mpaqet.sh" "mpaqet"; return 0; fi
+    check_update_bg_legacy
+}
+
 update_watcher_loop() {
-    sleep 60
     local before after
     while true; do
         before=$(cat "$SECURE_TMP/.mpaqet_remote_ver" 2>/dev/null)

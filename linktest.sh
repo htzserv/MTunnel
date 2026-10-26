@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.5).
-MODULE_VERSION="1.4.5"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.6).
+MODULE_VERSION="1.4.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -102,7 +102,7 @@ check_requirements() {
 check_requirements
 
 # --- ASYNC BACKGROUND UPDATE CHECKER ---
-check_update_bg() {
+check_update_bg_legacy() {
     local cb="?t=$(date +%s)"
     local raw_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/linktest.sh${cb}"
     local mirror_url="https://c107328.parspack.net/c107328/MTunnel/linktest.sh${cb}"
@@ -117,6 +117,10 @@ check_update_bg() {
     fi
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.linktest_remote_ver"
+}
+check_update_bg() {
+    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "linktest.sh" "linktest"; return 0; fi
+    check_update_bg_legacy
 }
 check_update_bg &
 # ---------------------------------------

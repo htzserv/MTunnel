@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.5).
-MODULE_VERSION="1.4.5"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.6).
+MODULE_VERSION="1.4.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -114,6 +114,24 @@ mt_nano_edit() {
 }
 # ------------------------------------------------------------------------------
 fi
+# v1.4.6 helper: defined here only when an older installed shared core lacks it.
+if ! declare -F mt_version_newer >/dev/null 2>&1; then
+mt_version_newer() { # true only when $1 is strictly newer than $2 (pure bash)
+    local a="${1:-}" b="${2:-}" i x y
+    local -a A B
+    [[ "$a" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || return 1
+    [[ "$b" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || b=0
+    a="${a%%-*}"; b="${b%%-*}"
+    IFS=. read -ra A <<< "$a"; IFS=. read -ra B <<< "$b"
+    for ((i=0; i<${#A[@]} || i<${#B[@]}; i++)); do
+        x="${A[i]:-0}"; y="${B[i]:-0}"
+        [[ "$x" =~ ^[0-9]+$ ]] || x=0; [[ "$y" =~ ^[0-9]+$ ]] || y=0
+        (( 10#$x > 10#$y )) && return 0
+        (( 10#$x < 10#$y )) && return 1
+    done
+    return 1
+}
+fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
@@ -197,8 +215,8 @@ NEED_REFRESH=false
 NEED_LIVE_HEADER_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
 trap 'NEED_LIVE_HEADER_REFRESH=true' SIGUSR2
-UPDATE_CHECK_INTERVAL=900     # 15 min: low-resource background update cadence
-UPDATE_FIRST_CHECK_DELAY=45   # defer network activity until the UI has settled
+UPDATE_CHECK_INTERVAL=120     # 2 min: GitHub + mirror are both checked each round
+UPDATE_FIRST_CHECK_DELAY=0    # first check starts immediately (runs in the background, never blocks the UI)
 UPDATE_HEAD_BYTES=4095        # MODULE_VERSION sits in the first ~2.2 KB of every component (mporter is the largest offset)
 STATS_CHECK_INTERVAL=15
 # Shared-core fallbacks: a box whose /usr/lib/mtunnel/common.sh predates the socket snapshot keeps working.
@@ -219,50 +237,96 @@ component_local_version_for_watch() {
         sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$file" 2>/dev/null | head -n1
     fi
 }
-check_single_module_silent() {
-    local mod="$1" rel_path="${COMPONENT_MAP[$1]:-}" out_file="$SECURE_TMP/.chk_${1}"
-    local cur_v='' rem_v='' payload=''
-    rm -f "$out_file"
-    [ -n "$rel_path" ] || return 0
-    cur_v=$(component_local_version_for_watch "$mod"); [ -n "$cur_v" ] || cur_v='0.0.0'
-    # Per-file checks stay intentional (independent component versions are supported), but only the
-    # head of each file is transferred: a range request instead of downloading the whole script.
+UPD_SRC_GITHUB="$SECURE_TMP/.upd_src_github"      # first line status|ok/down, then module:remote_version
+UPD_SRC_MIRROR="$SECURE_TMP/.upd_src_mirror"
+UPD_NEW_GITHUB="$SECURE_TMP/.upd_new_github"      # module:current:remote  (only strictly NEWER versions)
+UPD_NEW_MIRROR="$SECURE_TMP/.upd_new_mirror"
+UPD_LAST_FILE="$SECURE_TMP/.upd_last"
+upd_clear() { : > "$UPDATE_FILE"; : > "$UPD_NEW_GITHUB"; : > "$UPD_NEW_MIRROR"; }
+upd_parse_version() { # file -> version of MODULE_VERSION / MTUNNEL_RELEASE_VERSION
+    local f="$1" line n=0
+    [ -s "$f" ] || return 1
+    while IFS= read -r line && [ $((n++)) -lt 150 ]; do
+        line="${line%$'\r'}"
+        if [[ "$line" =~ ^(MODULE_VERSION|MTUNNEL_RELEASE_VERSION)=\"([0-9][0-9.]*)\"$ ]]; then printf '%s' "${BASH_REMATCH[2]}"; return 0; fi
+    done < "$f"
+    return 1
+}
+# Fetch the head of every component from ONE source. One parallel curl when supported
+# (all files in a single process), otherwise a short sequential loop that gives up
+# after two consecutive network failures so a blocked source cannot stall anything.
+upd_fetch_source() { # base outfile
+    local base="${1%/}" out="$2" dir mod v rc=0 fails=0 got=0 line
+    dir=$(mktemp -d "$SECURE_TMP/.upd.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        payload=$(curl -fsSL -r "0-${UPDATE_HEAD_BYTES}" --connect-timeout 2 --max-time 5 "$REPO_SCRIPTS/$rel_path" 2>/dev/null) || payload=''
+        local -a args=(-sL -f --connect-timeout 4 --max-time 12 -r "0-${UPDATE_HEAD_BYTES}" --parallel --parallel-max 6)
+        for mod in "${UPDATE_COMPONENTS[@]}"; do args+=(-o "$dir/$mod" "$base/${COMPONENT_MAP[$mod]}"); done
+        curl "${args[@]}" >/dev/null 2>&1 || rc=$?
+        if [ "$rc" = 2 ]; then   # curl too old for --parallel
+            for mod in "${UPDATE_COMPONENTS[@]}"; do
+                curl -sL -f -r "0-${UPDATE_HEAD_BYTES}" --connect-timeout 4 --max-time 8 -o "$dir/$mod" "$base/${COMPONENT_MAP[$mod]}" >/dev/null 2>&1 \
+                    && fails=0 || { fails=$((fails+1)); [ "$fails" -ge 2 ] && break; }
+            done
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        payload=$(wget -qO- --header="Range: bytes=0-${UPDATE_HEAD_BYTES}" --timeout=5 "$REPO_SCRIPTS/$rel_path" 2>/dev/null) || payload=''
+        for mod in "${UPDATE_COMPONENTS[@]}"; do
+            wget -q --timeout=6 --header="Range: bytes=0-${UPDATE_HEAD_BYTES}" -O "$dir/$mod" "$base/${COMPONENT_MAP[$mod]}" >/dev/null 2>&1 \
+                && fails=0 || { fails=$((fails+1)); [ "$fails" -ge 2 ] && break; }
+        done
     fi
-    if [ "$mod" == common ]; then
-        rem_v=$(printf '%s\n' "$payload" | sed -n 's/^MTUNNEL_RELEASE_VERSION="\([0-9.]*\)"$/\1/p' | head -n1)
-    else
-        rem_v=$(printf '%s\n' "$payload" | sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' | head -n1)
-    fi
-    if [ -n "$rem_v" ] && mt_update_available "$rem_v" "$cur_v"; then
-        echo "${mod}:${cur_v}:${rem_v}" > "$out_file"
-    fi
+    : > "$out.new"
+    for mod in "${UPDATE_COMPONENTS[@]}"; do
+        v=$(upd_parse_version "$dir/$mod") || continue
+        printf '%s:%s\n' "$mod" "$v" >> "$out.new"; got=1
+    done
+    if [ "$got" = 1 ]; then line='status|ok'; else line='status|down'; fi
+    { printf '%s\n' "$line"; cat "$out.new"; } > "$out.tmp" && mv -f "$out.tmp" "$out"
+    rm -f "$out.new"; rm -rf "$dir"
+}
+upd_src_version() { # srcfile module
+    local m v
+    [ -r "$1" ] || return 1
+    while IFS=: read -r m v; do [ "$m" = "$2" ] && [ -n "$v" ] && { printf '%s' "$v"; return 0; }; done < "$1"
+    return 1
+}
+# Build UPDATE_FILE (module:current:best:sources) and the per-source "newer" lists.
+upd_rebuild_status() {
+    local mod cur gv mv best srcs
+    : > "$UPDATE_FILE.new"; : > "$UPD_NEW_GITHUB.new"; : > "$UPD_NEW_MIRROR.new"
+    for mod in "${UPDATE_COMPONENTS[@]}"; do
+        cur=$(component_local_version_for_watch "$mod"); [ -n "$cur" ] || cur='0.0.0'
+        gv=$(upd_src_version "$UPD_SRC_GITHUB" "$mod") || gv=''
+        mv=$(upd_src_version "$UPD_SRC_MIRROR" "$mod") || mv=''
+        best=''; srcs=''
+        if [ -n "$gv" ] && mt_version_newer "$gv" "$cur"; then
+            printf '%s:%s:%s\n' "$mod" "$cur" "$gv" >> "$UPD_NEW_GITHUB.new"; best="$gv"; srcs='GitHub'
+        fi
+        if [ -n "$mv" ] && mt_version_newer "$mv" "$cur"; then
+            printf '%s:%s:%s\n' "$mod" "$cur" "$mv" >> "$UPD_NEW_MIRROR.new"
+            if [ -z "$best" ]; then best="$mv"; srcs='Mirror'
+            elif mt_version_newer "$mv" "$best"; then best="$mv"; srcs='Mirror'
+            else srcs='GitHub+Mirror'; fi
+        fi
+        [ -z "$best" ] || printf '%s:%s:%s:%s\n' "$mod" "$cur" "$best" "$srcs" >> "$UPDATE_FILE.new"
+    done
+    mv -f "$UPD_NEW_GITHUB.new" "$UPD_NEW_GITHUB"; mv -f "$UPD_NEW_MIRROR.new" "$UPD_NEW_MIRROR"
+    mv -f "$UPDATE_FILE.new" "$UPDATE_FILE"
 }
 check_all_updates_round() {
-    local mod f before after
-    before=$(cat "$UPDATE_FILE" 2>/dev/null)
-    # Sequential requests are intentionally used on tiny VPSes: never create 11
-    # simultaneous curl/sed processes just to refresh the update badges.
-    for mod in "${UPDATE_COMPONENTS[@]}"; do
-        check_single_module_silent "$mod"
-    done
-    : > "$UPDATE_FILE.new"
-    for mod in "${UPDATE_COMPONENTS[@]}"; do
-        f="$SECURE_TMP/.chk_${mod}"
-        [ -s "$f" ] && cat "$f" >> "$UPDATE_FILE.new"
-        rm -f "$f"
-    done
-    mv -f "$UPDATE_FILE.new" "$UPDATE_FILE" 2>/dev/null
-    after=$(cat "$UPDATE_FILE" 2>/dev/null)
-    # Repaint the menus only when the set of available updates really changed
-    # (this used to fire every round, clearing and redrawing the screen every 30 s).
+    local before after p1 p2
+    before=$(cat "$UPDATE_FILE" "$UPD_SRC_GITHUB" "$UPD_SRC_MIRROR" 2>/dev/null)
+    # GitHub and the mirror are queried at the same time: a blocked source never delays the other.
+    upd_fetch_source "$REPO_SCRIPTS" "$UPD_SRC_GITHUB" & p1=$!
+    upd_fetch_source "$MIRROR_SCRIPTS" "$UPD_SRC_MIRROR" & p2=$!
+    wait "$p1" "$p2" 2>/dev/null
+    upd_rebuild_status
+    printf '%s\n' "${EPOCHSECONDS:-0}" > "$UPD_LAST_FILE" 2>/dev/null
+    after=$(cat "$UPDATE_FILE" "$UPD_SRC_GITHUB" "$UPD_SRC_MIRROR" 2>/dev/null)
+    # Repaint the menus only when something really changed.
     [ "$before" == "$after" ] || kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
 }
 update_watcher_loop() {
-    sleep "$UPDATE_FIRST_CHECK_DELAY"
+    [ "$UPDATE_FIRST_CHECK_DELAY" -le 0 ] || sleep "$UPDATE_FIRST_CHECK_DELAY"
     while true; do
         check_all_updates_round
         sleep "$UPDATE_CHECK_INTERVAL"
@@ -989,7 +1053,13 @@ ensure_module() {
     local mod="$1"
     local rel_path="${MOD_MAP[$mod]}"
     [ -z "$rel_path" ] && rel_path="${mod}.sh"
-    local target_file="$LOCAL_DIR/$rel_path"
+    local target_file="$LOCAL_DIR/$rel_path" installed_file="/usr/bin/$mod"
+    [ "$mod" != main ] || installed_file="$MTUNNEL_PATH"
+    # Fast path: the installed module is already identical to the cached copy, so skip the
+    # full re-validation (2x bash -n) and re-install that used to run on every menu entry.
+    if [ -x "$installed_file" ] && [ -s "$installed_file" ] && { [ ! -e "$target_file" ] || cmp -s "$installed_file" "$target_file"; }; then
+        return 0
+    fi
     mkdir -p "$(dirname "$target_file")" 2>/dev/null
     if [ -s "$target_file" ]; then deploy_cached_module "$mod" && return 0; fi
     if [ -s "/usr/bin/$mod" ]; then
@@ -1578,24 +1648,26 @@ render_ota_menu() {
     draw_main_header
     echo -e "\n  ${FR}┌─[ Update & Local Install ]${NC}"
     echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}R${NC} ${DIM}❯${NC} ${Y}Check for updates now${NC} ${DIM}(GitHub + Mirror)${NC}"
+    echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─[ INSTALL FULL PACKAGE ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}A${NC} ${DIM}❯${NC} ${C}Install Full Package from GitHub${NC} ${DIM}(scripts + engines + every .deb)${NC}"
     echo -e "  ${FR}├─${NC} ${W}B${NC} ${DIM}❯${NC} ${G}Install Full Package from Mirror${NC} ${DIM}(scripts + engines + every .deb)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─[ DOWNLOAD FROM OFFICIAL GITHUB ]${NC}"
+    echo -e "  ${FR}├─[ DOWNLOAD FROM OFFICIAL GITHUB ]${NC}  $(src_status_text github)"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Download Main Script${NC}$(module_update_badge main)"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Download Mirror Script${NC}$(module_update_badge mmirror)"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(src_summary_badge github)"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Download Main Script${NC}$(src_module_badge github main)"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Download Mirror Script${NC}$(src_module_badge github mmirror)"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
     echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${C}Download & Install Prerequisites${NC} ${DIM}(every .deb in prereqs)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─[ DOWNLOAD FROM IRANIAN MIRROR ]${NC}"
+    echo -e "  ${FR}├─[ DOWNLOAD FROM IRANIAN MIRROR ]${NC}  $(src_status_text mirror)"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(updates_summary_badge)"
-    echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Download Main Script${NC}$(module_update_badge main)"
-    echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Download Mirror Script${NC}$(module_update_badge mmirror)"
+    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Download Scripts${NC} ${DIM}(All Modules + Shared Core)${NC}$(src_summary_badge mirror)"
+    echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Download Main Script${NC}$(src_module_badge mirror main)"
+    echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${G}Download Mirror Script${NC}$(src_module_badge mirror mmirror)"
     echo -e "  ${FR}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Download Engines${NC} ${DIM}(BH, Rathole, Paqet, GOST, HAProxy)${NC}"
     echo -e "  ${FR}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${G}Download & Install Prerequisites${NC} ${DIM}(every .deb in prereqs)${NC}"
     echo -e "  ${FR}│${NC}"
@@ -1752,13 +1824,20 @@ ota_update_one_file() {
     rm -rf "$work"
 }
 show_ota_update_hub() {
-    local option base_scripts base_packages source_name act work file module rel target confirm new_ver current_v sync_rc url pid
+    local option base_scripts base_packages source_name act work file module rel target confirm new_ver current_v sync_rc url pid last=0
+    [ -r "$UPD_LAST_FILE" ] && read -r last < "$UPD_LAST_FILE"
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    if [ $(( ${EPOCHSECONDS:-0} - last )) -ge 15 ]; then { check_all_updates_round >/dev/null 2>&1 & } 2>/dev/null; fi
     while true; do
         render_ota_menu
         read_with_refresh "  ${C}OTA-HUB ❯❯ ${NC}" option render_ota_menu || return 0
         option="${option//[$' \r']/}"
         case "$option" in
             0|'') return 0;;
+            r|R)
+                echo -e "\n  ${C}⟳${NC} ${W}Checking GitHub and the mirror...${NC}"
+                check_all_updates_round >/dev/null 2>&1
+                continue;;
             1|2|3|4|5|6|7|8|9|10)
                 if [ "$option" -le 5 ]; then
                     base_scripts="$REPO_SCRIPTS"; base_packages="$REPO_SCRIPTS"; source_name='OFFICIAL GITHUB'
@@ -1772,7 +1851,7 @@ show_ota_update_hub() {
                         echo -e "\n  ${FR}┌─[ DOWNLOADING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
                         sync_rc=0; ota_group_install scripts "$base_scripts" "$base_packages" || sync_rc=$?
                         if [ "$sync_rc" == 0 ]; then
-                            : > "$UPDATE_FILE"
+                            upd_clear
                             echo -e "\n\n  ${G}● Scripts downloaded and installed. Press Enter to reload core...${NC}\n"
                             read -r confirm
                             reload_dashboard
@@ -1824,7 +1903,7 @@ show_ota_update_hub() {
                 echo -e "\n  ${FR}┌─[ INSTALLING FULL PACKAGE FROM ${source_name} ]${NC}\n"
                 sync_rc=0; ota_group_install all "$base_scripts" "$base_packages" || sync_rc=$?
                 if [ "$sync_rc" == 0 ]; then
-                    : > "$UPDATE_FILE"
+                    upd_clear
                     [ "${OTA_PKG_FAILED:-0}" != 1 ] || echo -e "\n  ${Y}● Some packages failed (reasons above); everything else was installed.${NC}"
                     echo -e "\n\n  ${G}● Scripts installed. Press Enter to reload core...${NC}\n"
                     read -r confirm
@@ -2105,44 +2184,67 @@ run_iperf3() {
     done
 }
 module_update_badge() {
-    local version
-    version=$(awk -F: -v mod="$1" '$1==mod {print $3;exit}' "$UPDATE_FILE" 2>/dev/null)
-    [ -z "$version" ] || printf ' %b' "${Y}(Update Available: v${version})${NC}"
+    local m c v rest
+    [ -r "$UPDATE_FILE" ] || return 0
+    while IFS=: read -r m c v rest; do
+        if [ "$m" = "$1" ] && [ -n "$v" ]; then printf ' %b' "${Y}(Update Available: v${v})${NC}"; return 0; fi
+    done < "$UPDATE_FILE"
     return 0
 }
 updates_summary_badge() {
+    local m c v rest n=0 first='' multi=0
     [ -s "$UPDATE_FILE" ] || return 0
-    local versions count version
-    versions=$(awk -F: 'NF>=3 && $3!="" {print $3}' "$UPDATE_FILE" 2>/dev/null | sort -Vu)
-    count=$(printf '%s
-' "$versions" | sed '/^$/d' | wc -l)
-    if [ "$count" -eq 1 ] 2>/dev/null; then
-        version=$(printf '%s
-' "$versions" | head -n1)
-        printf ' %b' "${Y}(Update Available: v${version})${NC}"
-    else
-        printf ' %b' "${Y}(Updates Available)${NC}"
-    fi
+    while IFS=: read -r m c v rest; do
+        [ -n "$v" ] || continue
+        n=$((n+1)); if [ -z "$first" ]; then first="$v"; elif [ "$first" != "$v" ]; then multi=1; fi
+    done < "$UPDATE_FILE"
+    [ "$n" -gt 0 ] || return 0
+    if [ "$multi" = 0 ]; then printf ' %b' "${Y}(Update Available: v${first})${NC}"
+    else printf ' %b' "${Y}(Updates Available)${NC}"; fi
 }
-use_peer_code() {
-    local link kind mod
-    draw_main_header
-    echo -e "\n  ${FR}┌─[ USE PEER CODE ]${NC}"
-    echo -e "  ${FR}│${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}Paste Peer Setup Link (q: back) ❯❯ ${NC}"; read -r link || return 0
-    link="${link//[$' \r\n\t']/}"
-    [[ "$link" == q || -z "$link" ]] && return 0
-    kind=$(printf '%s' "$link" | sed -n 's#^mtunnel://[123]/\([a-z]*\)/.*#\1#p')
-    case "$kind" in
-        gre) mod=mgre;; vxlan) mod=mxlan;; rathole) mod=mrathole;;
-        backhaul) mod=mbackhaul;; paqet) mod=mpaqet;;
-        *) echo -e "  ${R}✖ Not a valid peer link.${NC}"; read -r -p '  Press Enter to continue...' _; return 0;;
+# Per-source badges for the Update hub: each link shows the newer version it offers.
+src_newfile() { case "$1" in github) printf '%s' "$UPD_NEW_GITHUB";; *) printf '%s' "$UPD_NEW_MIRROR";; esac; }
+src_module_badge() { # github|mirror module
+    local f m c v; f=$(src_newfile "$1")
+    [ -r "$f" ] || return 0
+    while IFS=: read -r m c v; do
+        if [ "$m" = "$2" ] && [ -n "$v" ]; then printf ' %b' "${Y}(v${c} ➔ v${v})${NC}"; return 0; fi
+    done < "$f"
+    return 0
+}
+src_summary_badge() { # github|mirror
+    local f m c v n=0 first='' multi=0; f=$(src_newfile "$1")
+    [ -s "$f" ] || return 0
+    while IFS=: read -r m c v; do
+        [ -n "$v" ] || continue
+        n=$((n+1)); if [ -z "$first" ]; then first="$v"; elif [ "$first" != "$v" ]; then multi=1; fi
+    done < "$f"
+    [ "$n" -gt 0 ] || return 0
+    if [ "$multi" = 0 ]; then printf ' %b' "${Y}(${n} newer: v${first})${NC}"; else printf ' %b' "${Y}(${n} newer)${NC}"; fi
+}
+src_status_text() { # github|mirror
+    local f st=''; case "$1" in github) f="$UPD_SRC_GITHUB";; *) f="$UPD_SRC_MIRROR";; esac
+    if [ ! -r "$f" ]; then printf '%b' "${DIM}checking…${NC}"; return 0; fi
+    read -r st < "$f"
+    case "$st" in
+        status\|ok) printf '%b' "${G}reachable${NC}";;
+        *) printf '%b' "${R}unreachable${NC}";;
     esac
-    MT_PEER_LINK="$link" run_mod "$mod"
+}
+update_banner() { # one line under the header whenever ANY link has a newer version
+    local m c v s out=''
+    [ -s "$UPDATE_FILE" ] || return 0
+    while IFS=: read -r m c v s; do
+        [ -n "$v" ] || continue
+        out+="${m} v${v} (${s}); "
+    done < "$UPDATE_FILE"
+    [ -n "$out" ] || return 0
+    printf '  %b⬆ New version available:%b %s\n' "$Y" "$NC" "${out%; }"
 }
 render_main_menu() {
     draw_main_header
     printf '\n'
+    update_banner
     printf '  %b┌─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├─%b %bp%b %b❯%b %bUse Peer Code%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
@@ -2288,7 +2390,7 @@ mtunnel_cli() {
             src="$REPO_SCRIPTS"
             printf 'MTunnel %s: syncing all scripts from Official GitHub...\n' "$MODULE_VERSION"
             sync_script_bundle "$src" 0 || rc=$?
-            [ "$rc" -eq 0 ] && : > "$UPDATE_FILE"
+            [ "$rc" -eq 0 ] && upd_clear
             [ "$rc" -eq 0 ] && printf 'Sync completed successfully.\n' || printf 'Sync failed; previous scripts were preserved.\n' >&2
             return "$rc"
             ;;
@@ -2296,7 +2398,7 @@ mtunnel_cli() {
             src="$MIRROR_SCRIPTS"
             printf 'MTunnel %s: syncing all scripts from configured mirror...\n' "$MODULE_VERSION"
             sync_script_bundle "$src" 0 || rc=$?
-            [ "$rc" -eq 0 ] && : > "$UPDATE_FILE"
+            [ "$rc" -eq 0 ] && upd_clear
             [ "$rc" -eq 0 ] && printf 'Sync completed successfully.\n' || printf 'Sync failed; previous scripts were preserved.\n' >&2
             return "$rc"
             ;;

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.4.5).
-MODULE_VERSION="1.4.5"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.4.6).
+MODULE_VERSION="1.4.6"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -275,7 +275,7 @@ download_file() {
     mp_download "$1" "$2"
 }
 
-check_update_bg() {
+check_update_bg_legacy() {
     local cache="$SECURE_TMP/.mporter_remote_ver"
     if [ -f "$cache" ] && [ $(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) )) -lt 25 ]; then return 0; fi
     local cb="" remote_ver="" url tmp
@@ -288,6 +288,11 @@ check_update_bg() {
     done
     rm -f "$tmp"
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$cache"
+}
+
+check_update_bg() {
+    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "mporter.sh" "mporter"; return 0; fi
+    check_update_bg_legacy
 }
 
 self_update_module() {
@@ -2514,17 +2519,16 @@ setup_mporter_service
 MAIN_PID=$$
 NEED_REFRESH=false
 trap 'NEED_REFRESH=true' SIGUSR1
-MPORTER_UPDATE_CHECK_INTERVAL=300
-check_update_bg >/dev/null 2>&1 &
+MPORTER_UPDATE_CHECK_INTERVAL=120
 mporter_update_watcher() {
     local before after
     while true; do
-        sleep "$MPORTER_UPDATE_CHECK_INTERVAL"
         before=$(cat "$SECURE_TMP/.mporter_remote_ver" 2>/dev/null)
         check_update_bg >/dev/null 2>&1
         after=$(cat "$SECURE_TMP/.mporter_remote_ver" 2>/dev/null)
-        # repaint only when a newer version was actually found
+        # first check runs immediately; repaint only when a newer version was actually found
         [ "$before" == "$after" ] || kill -SIGUSR1 "$MAIN_PID" 2>/dev/null
+        sleep "$MPORTER_UPDATE_CHECK_INTERVAL"
     done
 }
 mporter_update_watcher &

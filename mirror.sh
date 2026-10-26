@@ -2,9 +2,9 @@
 
 # ==========================================================
 # MTunnel Ecosystem - MDesign Speed & Network Optimizer
-# Version: 1.4.4
+# Module version: see MODULE_VERSION below
 # ==========================================================
-MODULE_VERSION="1.4.4"
+MODULE_VERSION="1.4.5"
 
 set -o pipefail
 
@@ -36,34 +36,32 @@ fi
 # Tools Preparation
 # ----------------------------------------------------------
 
-mirror_update() {
-    local dashboard=/usr/bin/mtunnel
-    [ -x "$dashboard" ] || { echo 'MTunnel dashboard is missing; use install.sh to update.' >&2; return 1; }
-    printf 'Open MTunnel -> Update & Local Install -> Mirror (script).\n'
-    "$dashboard"
-}
-
 prepare_tools() {
-    local packages=() answer
-    command -v curl >/dev/null 2>&1 || packages+=(curl)
-    command -v dig >/dev/null 2>&1 || packages+=(dnsutils)
-    [ "${#packages[@]}" = 0 ] && return 0
-    printf 'Missing tools: %s\n' "${packages[*]}" >&2
-    read -r -p 'Install these packages with APT now? [y/N]: ' answer || return 1
-    [[ "$answer" = y || "$answer" = Y ]] || return 1
-    command -v apt-get >/dev/null 2>&1 || return 1
-    apt-get -o DPkg::Lock::Timeout=120 update &&
-        apt-get -o DPkg::Lock::Timeout=120 install -y "${packages[@]}"
+    local packages=()
+    command -v lsb_release >/dev/null 2>&1 || packages+=("lsb-release")
+    command -v curl        >/dev/null 2>&1 || packages+=("curl")
+    command -v dig         >/dev/null 2>&1 || packages+=("dnsutils")
+    # bc is no longer needed: all arithmetic below uses awk.
+
+    if [[ ${#packages[@]} -gt 0 ]]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            # Bounded so a dead mirror / broken DNS cannot freeze the menu before it is even drawn.
+            local apt_opts=(-o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10 -o Acquire::Retries=0)
+            echo -e "   ${C_GRAY}[*] Installing missing helper tools: ${packages[*]} ...${C_RESET}"
+            timeout 60  apt-get "${apt_opts[@]}" update -qq >/dev/null 2>&1 || true
+            timeout 120 apt-get "${apt_opts[@]}" install -y -qq "${packages[@]}" >/dev/null 2>&1 || true
+        fi
+    fi
 }
 
-prepare_tools || exit 1
+prepare_tools
 
 # ----------------------------------------------------------
 # System Detectors
 # ----------------------------------------------------------
 
-UBUNTU_CODENAME="$(. /etc/os-release; printf '%s' "${VERSION_CODENAME:-}")"
-UBUNTU_RELEASE="$(. /etc/os-release; printf '%s' "${VERSION_ID:-}")"
+UBUNTU_CODENAME="$(lsb_release -cs 2>/dev/null || true)"
+UBUNTU_RELEASE="$(lsb_release -rs 2>/dev/null || true)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo "amd64")"
 
 [[ -z "$UBUNTU_CODENAME" ]] && UBUNTU_CODENAME="jammy"
@@ -297,7 +295,7 @@ run_dns_benchmark() {
         T2="$(dig @"$ip2" google.com +time=2 +tries=1 +stats 2>/dev/null | awk '/Query time:/ {print $4; exit}')"
 
         if [[ "$T1" =~ ^[0-9]+([.][0-9]+)?$ && "$T2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            AVG_TIME="$(awk -v a="$T1" -v b="$T2" 'BEGIN {printf "%.1f", (a+b)/2}')"
+            AVG_TIME="$(awk -v a="$T1" -v b="$T2" 'BEGIN{printf "%.1f", (a+b)/2}' 2>/dev/null)"
             [[ -z "$AVG_TIME" ]] && AVG_TIME="$T1"
             echo -e "${C_GREEN}${AVG_TIME} ms${C_RESET}"
             PROVIDER_LATENCY["$name"]="$AVG_TIME"
@@ -392,15 +390,15 @@ run_mirror_benchmark() {
 
         printf "     ${C_CYAN}›${C_RESET} %-23s %-48s " "$display_name" "(${mirror_url})"
 
-        SPEED_BPS="$(curl -f -s -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
+        SPEED_BPS="$(curl -s -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
         SPEED_BPS_CLEAN="$(printf "%.0f" "${SPEED_BPS:-0}" 2>/dev/null || echo "0")"
 
         if [[ "$SPEED_BPS_CLEAN" =~ ^[0-9]+$ && "$SPEED_BPS_CLEAN" -gt 0 ]]; then
-            SPEED_KB="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.1f", n/1024}')"
-            SPEED_MBPS="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.2f", n*8/1000000}')"
+            SPEED_KB="$(awk -v b="$SPEED_BPS_CLEAN" 'BEGIN{printf "%.1f", b/1024}' 2>/dev/null || echo "0")"
+            SPEED_MBPS="$(awk -v b="$SPEED_BPS_CLEAN" 'BEGIN{printf "%.2f", (b*8)/1000000}' 2>/dev/null || echo "0")"
 
-            if (( $(awk -v n="$SPEED_KB" 'BEGIN {print (n>1024)}') )); then
-                SPEED_MB="$(awk -v n="$SPEED_KB" 'BEGIN {printf "%.2f", n/1024}')"
+            if awk -v v="$SPEED_KB" 'BEGIN{exit !(v>1024)}' 2>/dev/null; then
+                SPEED_MB="$(awk -v v="$SPEED_KB" 'BEGIN{printf "%.2f", v/1024}' 2>/dev/null)"
                 SPEED_TXT="${SPEED_MB} MB/s (${SPEED_MBPS} Mbps)"
             else
                 SPEED_TXT="${SPEED_KB} KB/s (${SPEED_MBPS} Mbps)"
@@ -493,7 +491,7 @@ run_auto_pilot() {
         T2="$(dig @"$ip2" google.com +time=2 +tries=1 +stats 2>/dev/null | awk '/Query time:/ {print $4; exit}')"
 
         if [[ "$T1" =~ ^[0-9]+([.][0-9]+)?$ && "$T2" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-            AVG_TIME="$(awk -v a="$T1" -v b="$T2" 'BEGIN {printf "%.1f", (a+b)/2}')"
+            AVG_TIME="$(awk -v a="$T1" -v b="$T2" 'BEGIN{printf "%.1f", (a+b)/2}' 2>/dev/null)"
             [[ -z "$AVG_TIME" ]] && AVG_TIME="$T1"
             AUTO_DNS_LATENCY["$name"]="$AVG_TIME"
             AUTO_DNS_P1["$name"]="$ip1"
@@ -541,15 +539,15 @@ run_auto_pilot() {
         mirror_url="${mirror_url%/}"
         test_file="${mirror_url}/dists/${UBUNTU_CODENAME}/Release"
 
-        SPEED_BPS="$(curl -f -s -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
+        SPEED_BPS="$(curl -s -L --connect-timeout 2 -m 5 -o /dev/null -w "%{speed_download}" "$test_file" 2>/dev/null)"
         SPEED_BPS_CLEAN="$(printf "%.0f" "${SPEED_BPS:-0}" 2>/dev/null || echo "0")"
 
         if [[ "$SPEED_BPS_CLEAN" =~ ^[0-9]+$ && "$SPEED_BPS_CLEAN" -gt 0 ]]; then
-            SPEED_KB="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.1f", n/1024}')"
-            SPEED_MBPS="$(awk -v n="$SPEED_BPS_CLEAN" 'BEGIN {printf "%.2f", n*8/1000000}')"
+            SPEED_KB="$(awk -v b="$SPEED_BPS_CLEAN" 'BEGIN{printf "%.1f", b/1024}' 2>/dev/null || echo "0")"
+            SPEED_MBPS="$(awk -v b="$SPEED_BPS_CLEAN" 'BEGIN{printf "%.2f", (b*8)/1000000}' 2>/dev/null || echo "0")"
 
-            if (( $(awk -v n="$SPEED_KB" 'BEGIN {print (n>1024)}') )); then
-                SPEED_MB="$(awk -v n="$SPEED_KB" 'BEGIN {printf "%.2f", n/1024}')"
+            if awk -v v="$SPEED_KB" 'BEGIN{exit !(v>1024)}' 2>/dev/null; then
+                SPEED_MB="$(awk -v v="$SPEED_KB" 'BEGIN{printf "%.2f", v/1024}' 2>/dev/null)"
                 SPEED_TXT="${SPEED_MB} MB/s (${SPEED_MBPS} Mbps)"
             else
                 SPEED_TXT="${SPEED_KB} KB/s (${SPEED_MBPS} Mbps)"
@@ -656,6 +654,83 @@ GLOBAL_MIRRORS_LIST=(
 )
 
 # ==========================================================
+# OTA Update (same sources as every other MTunnel module)
+# ==========================================================
+
+mm_load_common() {
+    local script_dir candidate
+    [[ -n "${MTUNNEL_CORE_API:-}" ]] && return 0
+    script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+    for candidate in "$script_dir/core/common.sh" "$script_dir/../core/common.sh" \
+                     /usr/lib/mtunnel/common.sh /root/mtunnel/core/common.sh; do
+        [[ -f "$candidate" && -r "$candidate" ]] || continue
+        # shellcheck disable=SC1090
+        source "$candidate" || return 1
+        [[ "${MTUNNEL_CORE_API:-}" == 1 && "${MTUNNEL_LAYOUT_REV:-}" == 2 ]] && return 0
+        return 1
+    done
+    return 1
+}
+
+mm_self_update() {
+    local src_opt dl_url tmp_file confirm new_ver
+    local rel_path="mirror.sh" INSTALL_PATH="/usr/bin/mmirror"
+    local LOCAL_DIR="${LOCAL_DIR:-/root/mtunnel}"
+    local SECURE_TMP="${SECURE_TMP:-$LOCAL_DIR/tmp}"
+    mkdir -p "$SECURE_TMP" 2>/dev/null; chmod 700 "$SECURE_TMP" 2>/dev/null
+    if ! mm_load_common; then
+        echo -e "   ${C_RED}[!] Shared core (core/common.sh) was not found or is incompatible.${C_RESET}"
+        echo -e "   ${C_GRAY}    Update this module from the main MTunnel menu instead.${C_RESET}"
+        return 1
+    fi
+    echo ""
+    echo -e "   ${C_WHITE}${C_BOLD}OTA UPDATE (Mirror module v${MODULE_VERSION})${C_RESET}"
+    echo ""
+    echo -e "     ${C_WHITE}${C_BOLD}1${C_RESET} ${C_CYAN}›${C_RESET} Official GitHub"
+    echo -e "     ${C_WHITE}${C_BOLD}2${C_RESET} ${C_CYAN}›${C_RESET} ParsPack Iranian Mirror"
+    echo -e "     ${C_WHITE}${C_BOLD}3${C_RESET} ${C_CYAN}›${C_RESET} Custom Direct Link (.sh URL)"
+    echo -e "     ${C_WHITE}${C_BOLD}4${C_RESET} ${C_CYAN}›${C_RESET} Manual Code Paste (editor)"
+    echo -e "     ${C_WHITE}${C_BOLD}0${C_RESET} ${C_CYAN}›${C_RESET} Cancel"
+    echo ""
+    echo -ne "   ${C_CYAN}${C_BOLD}Select Source >> ${C_RESET}"; read -r src_opt
+    [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
+    tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
+    if [[ "$src_opt" == 4 ]]; then
+        if ! mt_capture_manual_script "$tmp_file"; then
+            rm -f "$tmp_file"; echo -e "   ${C_RED}[!] Manual paste failed or was cancelled. Existing script preserved.${C_RESET}"; return 1
+        fi
+    else
+        case "$src_opt" in
+            1) dl_url="${MTUNNEL_GITHUB_BASE}/$rel_path";;
+            2) dl_url="${MTUNNEL_MIRROR_BASE}/$rel_path";;
+            3) echo -ne "   ${C_CYAN}[*]${C_RESET} Enter Direct Link: "; read -r dl_url;;
+        esac
+        dl_url="${dl_url//$'\r'/}"
+        [[ -n "$dl_url" ]] || { rm -f "$tmp_file"; return 0; }
+        echo -e "   ${C_GRAY}[*] Downloading update...${C_RESET}"
+        if ! mt_download "$dl_url" "$tmp_file"; then
+            rm -f "$tmp_file"; echo -e "   ${C_RED}[!] Download failed. Installed module preserved.${C_RESET}"; return 1
+        fi
+    fi
+    sed -i 's/\r$//' "$tmp_file"
+    if ! mt_validate_script "$tmp_file"; then
+        rm -f "$tmp_file"; echo -e "   ${C_RED}[!] Invalid Bash module. Installed module preserved.${C_RESET}"; return 1
+    fi
+    new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
+    echo ""
+    echo -e "   ${C_WHITE}Current version :${C_RESET} ${C_RED}v${MODULE_VERSION}${C_RESET}"
+    echo -e "   ${C_WHITE}Target version  :${C_RESET} ${C_GREEN}v${new_ver}${C_RESET}"
+    echo -ne "   ${C_CYAN}Proceed with overwrite? (y/n): ${C_RESET}"; read -r confirm
+    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "   ${C_ORANGE}[*] Update cancelled.${C_RESET}"; rm -f "$tmp_file"; return 0; }
+    if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
+        rm -f "$tmp_file"; echo -e "   ${C_RED}[!] Update failed. Previous module preserved.${C_RESET}"; return 1
+    fi
+    rm -f "$tmp_file"
+    echo -e "   ${C_GREEN}[+] Update applied. Restarting module...${C_RESET}"
+    exec "$INSTALL_PATH"
+}
+
+# ==========================================================
 # Main Menu Loop
 # ==========================================================
 
@@ -678,16 +753,15 @@ while true; do
     echo ""
     echo -e "   ${C_WHITE}${C_BOLD}SYSTEM OPERATIONS${C_RESET}"
     echo ""
+    echo -e "     ${C_WHITE}${C_BOLD}7${C_RESET} ${C_CYAN}›${C_RESET} ${C_GREEN}OTA Update${C_RESET} ${C_GRAY}(v${MODULE_VERSION})${C_RESET}"
     echo -e "     ${C_WHITE}${C_BOLD}0${C_RESET} ${C_CYAN}›${C_RESET} ${C_RED}Exit Terminal${C_RESET}"
     echo ""
     echo -e "   ${C_LINE}════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════${C_RESET}"
     echo ""
     echo -ne "   ${C_CYAN}${C_BOLD}CORE >> ${C_RESET}"
-    echo -e "     ${C_WHITE}${C_BOLD}7${C_RESET} ${C_CYAN}›${C_RESET} OTA Update (MTunnel update menu)"
     read -r choice
 
     case "$choice" in
-        7) mirror_update;;
         1)
             run_dns_benchmark "IRAN" "${IRAN_DNS_SERVERS[@]}"
             ret=$?
@@ -727,6 +801,11 @@ while true; do
             ;;
         6)
             run_auto_pilot "GLOBAL" GLOBAL_DNS_SERVERS GLOBAL_MIRRORS_LIST
+            echo ""
+            read -r -p "   Press Enter to return to menu..."
+            ;;
+        7)
+            mm_self_update
             echo ""
             read -r -p "   Press Enter to return to menu..."
             ;;

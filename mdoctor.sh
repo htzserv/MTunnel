@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.4).
-MODULE_VERSION="1.4.4"
+# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.5).
+MODULE_VERSION="1.4.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -511,14 +511,14 @@ doc_services_screen() {
 
 doc_persist_forwarding() {
     local v4="$1" v6="$2" file=/etc/sysctl.d/99-mtunnel-doctor.conf tmp
+    # Merge with what is already persisted so enabling IPv6 does not drop IPv4 (and vice versa).
+    if [ -r "$file" ]; then
+        grep -qE '^net\.ipv4\.ip_forward *= *1' "$file" 2>/dev/null && v4=1
+        grep -qE '^net\.ipv6\.conf\.all\.forwarding *= *1' "$file" 2>/dev/null && v6=1
+    fi
     tmp=$(mktemp "$SECURE_TMP/doctor-sysctl.XXXXXX") || return 1
     {
-        if [ -f "$file" ]; then
-            awk -v v4="$v4" -v v6="$v6" '
-                v4 == 1 && /^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=/ {next}
-                v6 == 1 && /^[[:space:]]*net\.ipv6\.conf\.all\.forwarding[[:space:]]*=/ {next}
-                {print}' "$file"
-        else echo '# Managed by MTunnel Doctor'; fi
+        echo '# Managed by MTunnel Doctor'
         [ "$v4" = 1 ] && echo 'net.ipv4.ip_forward = 1'
         [ "$v6" = 1 ] && echo 'net.ipv6.conf.all.forwarding = 1'
     } > "$tmp"

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.4).
-MODULE_VERSION="1.4.4"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.5).
+MODULE_VERSION="1.4.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -308,14 +308,15 @@ install_core_from_source() {
         *) return 0;;
     esac
     echo -e "  ${DIM}● Preparing MPaqet Core...${NC}"
-    local installed=0
-    mt_update_core "paqet" "mpaqet" "$dl_url" "$kind" && installed=1
-    if [ "$installed" = 0 ] && [ "$src_choice" = 2 ]; then
-        echo 'Mirror unavailable; trying the official release.' >&2
+    local core_ok=0
+    if mt_update_core "paqet" "mpaqet" "$dl_url" "$kind"; then core_ok=1
+    elif [ "$src_choice" = 2 ]; then
+        # Same behaviour as MBackhaul / MRathole: fall back to the official release when the mirror is unreachable.
+        echo -e "  ${Y}● Iranian mirror failed; trying the official GitHub release...${NC}"
         dl_url="https://github.com/hanselime/paqet/releases/download/v1.0.0-alpha.21/paqet-linux-${target}-v1.0.0-alpha.21.tar.gz"
-        mt_update_core paqet mpaqet "$dl_url" url && installed=1
+        if mt_update_core "paqet" "mpaqet" "$dl_url" url; then core_ok=1; fi
     fi
-    if [ "$installed" = 1 ]; then
+    if [ "$core_ok" = 1 ]; then
         echo -e "  ${G}✔ MPaqet Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else
@@ -407,7 +408,7 @@ menu_install_core() {
 check_first_run_core() {
     if ! is_paqet_core_valid; then
         local first_prompt_flag="$CONF_DIR/.core_prompted"
-        if ! is_paqet_core_valid; then
+        if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
             echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
             echo -e "  ${FR}║${NC}   ${R}● Paqet Core binary is NOT installed on this machine!${NC}                   ${FR}║${NC}"
@@ -422,7 +423,13 @@ check_first_run_core() {
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r ')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
-                if install_core_from_source "$init_opt"; then touch "$first_prompt_flag"; fi
+                # Remember the prompt only after a successful install, so a failed download is offered again next time.
+                if install_core_from_source "$init_opt"; then printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
+                else rm -f "$first_prompt_flag"; return 1; fi
+            elif [[ "$init_opt" = q || "$init_opt" = Q || -z "$init_opt" ]]; then
+                printf '%s\n' "$MODULE_VERSION" > "$first_prompt_flag"
+            else
+                return 1
             fi
         fi
     fi
@@ -521,8 +528,7 @@ zero_paqet_counters() {
 #   server: xt_recent list of sources hitting the tunnel port  -> client IP
 #   client: counter of packets coming from the server port      -> link liveness
 setup_paqet_probe() {
-    local name="$1" meta role port remote src_args=()
-    meta="$CONF_DIR/${name}.meta"
+    local name="$1" meta="$CONF_DIR/${name}.meta" role port remote src_args=()
     [ -f "$meta" ] || return 0
     role=$(grep -m1 '^ROLE=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
     port=$(grep -m1 '^TUN_PORT=' "$meta" | cut -d'=' -f2 | tr -d '"\r ')
@@ -539,11 +545,11 @@ setup_paqet_probe() {
         # Client-side liveness must be scoped to this instance's remote host as
         # well as the port. Several Paqet tunnels can legitimately use the
         # same server port on different remote servers.
-        if ! mt_valid_ipv4 "$remote"; then
+        if [ -n "$remote" ] && ! mt_valid_ipv4 "$remote" 2>/dev/null; then
+            # Older imports stored the hostname; filter on its resolved IPv4 instead of silently dropping the filter.
             remote=$(getent ahostsv4 "$remote" 2>/dev/null | awk 'NR==1{print $1}')
         fi
-        mt_valid_ipv4 "$remote" || { echo "Cannot scope Paqet probe for $name: unresolved IPv4 peer." >&2; return 1; }
-        src_args=(-s "$remote")
+        mt_valid_ipv4 "$remote" 2>/dev/null && src_args=(-s "$remote")
         iptables -w 5 -t mangle -C INPUT -p tcp "${src_args[@]}" --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1 || \
         iptables -w 5 -t mangle -A INPUT -p tcp "${src_args[@]}" --sport "$port" -m comment --comment "MPAQET_LINK_${name}" >/dev/null 2>&1
     fi
@@ -693,7 +699,7 @@ get_tunnel_profile() {
 set_meta_profile() {
     local t_name="$1" profile="$2" meta="$CONF_DIR/${t_name}.meta"
     [ ! -f "$meta" ] && return 0
-    if grep -q '^PROFILE=' "$meta"; then sed -i "s/^PROFILE=.*/PROFILE=$profile/" "$meta"; else echo "PROFILE=$profile" >> "$meta"; fi
+    if grep -q '^PROFILE=' "$meta"; then mt_set_conf_var "$meta" PROFILE "$profile"; else echo "PROFILE=$profile" >> "$meta"; fi
 }
 
 # A hand edit (MTU / conn) of a preset makes it a custom profile, so the label never lies.
@@ -790,7 +796,7 @@ choose_kcp_profile() {
 
 # Rewrites conn/tcpbuf/udpbuf, network.pcap.sockbuf and the whole kcp: block from the KCP_* globals.
 # Pure awk (no python). Unknown keys inside kcp:/pcap: (dshard, pshard, smuxkalive ...) are kept.
-# The result is read -r back and verified; on any failure the original file is left untouched and 1 is returned.
+# The result is read back and verified; on any failure the original file is left untouched and 1 is returned.
 write_kcp_settings() {
     local yaml="$1" key="$2" block="$3"
     local tmp="${yaml}.kcp.new" bak="$SECURE_TMP/$(basename "$yaml").bak"
@@ -935,7 +941,7 @@ log_link_verdict() {
 
 # Client IP as seen by the server: the xt_recent list filled by the MPAQET_PEER rule.
 # The busiest source in the last interval wins (scanner noise sends few packets); the list is
-# cleared after each read -r and the last answer is cached.
+# cleared after each read and the last answer is cached.
 get_server_peer_ip() {
     local name="$1" dir="${XT_RECENT_DIR:-/proc/net/xt_recent}" f cache best
     f="$dir/mpq_${name}"; cache="$SECURE_TMP/.mpaqet_peer_${name}"
@@ -962,7 +968,7 @@ get_server_peer_ip() {
     return 0
 }
 
-# Known failure modes are read -r from the service log of the last 45 seconds:
+# Known failure modes are read from the service log of the last 45 seconds:
 #   "send: Message too large"  -> MTU above what the NIC can send  (state MTU-ERR)
 #   5+ other [ERROR] lines     -> streams failing                  (state ERRORS)
 apply_log_health() {
@@ -1753,12 +1759,8 @@ mt_link_deploy_locked() {
     if ! write_kcp_settings "$tmp" "$key" "$block"; then rm -f "$tmp"; return 1; fi
     (umask 077; set -o noclobber; cat "$tmp" > "$yaml") 2>/dev/null || { rm -f "$tmp"; return 1; }; rm -f "$tmp"
     {
-        printf 'ROLE=%s\nTUN_PORT=%s\nREMOTE_IP=%s\nTCP_PORTS=%s\nPROFILE=%s\n' "$role" "$port" "$host" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[PROFILE]}"
+        printf 'ROLE=%s\nTUN_PORT=%s\nREMOTE_IP=%s\nTCP_PORTS=%s\nPROFILE=%s\n' "$role" "$port" "$([ "$role" = 2 ] && echo "$PQ_ROUTE_TARGET" || echo "$host")" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[PROFILE]}"
     } > "$meta"; chmod 600 "$meta"
-    if [ "$role" = 2 ]; then
-        # DNS names remain in the shared link; probe metadata uses the same IP as YAML.
-        sed -i "s/^REMOTE_IP=.*/REMOTE_IP=$PQ_ROUTE_TARGET/" "$meta"
-    fi
     if [ "$role" = 1 ]; then setup_paqet_counters "$name" "$port"
     else
         for p in "${MT_PQ_PORTS[@]}"; do setup_paqet_counters "$name" "$p"; done

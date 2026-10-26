@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.4.4).
-MODULE_VERSION="1.4.4"
+# MTunnel MXLAN — VXLAN/VXLAN6 tunnel management, MTU, peer protection, and forwarding (v1.4.5).
+MODULE_VERSION="1.4.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1935,15 +1935,15 @@ while true; do
                
                k="${TUN_SECRET:-key_${VNI_ID}}"
                echo -e "  ${DIM}● Sync Key automatically linked to Master Token.${NC}"
-               sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$SELECTED_CONF"
-               sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" MAX_IPS "$n"
+               set_conf_var "$SELECTED_CONF" SYNC_KEY "$k"
                apply_fabric "$SELECTED_CONF"
                echo -e "  ${G}● Virtual IPs synchronized successfully.${NC}"; sleep 1.5
            elif [[ "$vip_action" == "2" ]]; then
                if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
                echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${VX_NAME}]? (y/n): ${NC}"; read -r confirm_vip
                if [[ "$confirm_vip" == "y" ]]; then 
-                   sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$SELECTED_CONF"
+                   set_conf_var "$SELECTED_CONF" MAX_IPS "0"
                    apply_fabric "$SELECTED_CONF"
                    echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5
                fi
@@ -2016,12 +2016,14 @@ while true; do
                    echo -e "  ${R}● Collision detected with an existing fabric! Please use a different Token.${NC}"; sleep 2; continue
                fi
                
-               sed -i "s/^TUN_SECRET=.*/TUN_SECRET=$new_tok/" "$SELECTED_CONF"
-               sed -i "s/^VNI_ID=.*/VNI_ID=$new_vni/" "$SELECTED_CONF"
-               sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$SELECTED_CONF"
-               sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$new_tok/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" TUN_SECRET "$new_tok"
+               set_conf_var "$SELECTED_CONF" VNI_ID "$new_vni"
+               set_conf_var "$SELECTED_CONF" CORE_SUBNET "$new_core_sub"
+               set_conf_var "$SELECTED_CONF" SYNC_KEY "$new_tok"
                apply_fabric "$SELECTED_CONF"
                echo -e "  ${G}● Token updated. VNI: ${new_vni}, Subnet: ${new_core_sub}.x${NC}"; sleep 1.8
+           else
+               echo -e "  ${R}✖ Token cannot be empty (allowed characters: letters, digits, _ = -). Nothing changed.${NC}"; sleep 2
            fi ;;
 
         10)
@@ -2033,7 +2035,7 @@ while true; do
            if [ -n "$new_sub" ] && ! is_subnet3 "$new_sub"; then echo -e "  ${R}✖ Format must be X.Y.Z (e.g. 10.88.5).${NC}"; sleep 2; continue; fi
            if [ -n "$new_sub" ] && subnet_in_use "$new_sub" "$SELECTED_CONF"; then echo -e "  ${R}✖ ${new_sub}.x is already in use.${NC}"; sleep 2; continue; fi
            if [ -n "$new_sub" ]; then
-               sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" CORE_SUBNET "$new_sub"
                apply_fabric "$SELECTED_CONF"
                echo -e "  ${G}● Subnet base updated to ${new_sub}.x${NC}"; sleep 1.5
            fi ;;
@@ -2055,8 +2057,8 @@ while true; do
                    echo -e "  ${R}● Error: Fabric [${new_vx_name}] already exists!${NC}"; sleep 1.5; continue
                fi
                teardown_fabric "$SELECTED_CONF"
-               sed -i "s/^VX_NAME=.*/VX_NAME=$new_vx_name/" "$SELECTED_CONF"
-               sed -i "s/^BR_NAME=.*/BR_NAME=$new_br_name/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" VX_NAME "$new_vx_name"
+               set_conf_var "$SELECTED_CONF" BR_NAME "$new_br_name"
                mv "$SELECTED_CONF" "$CONF_DIR/${new_vx_name}.conf"
                SELECTED_CONF="$CONF_DIR/${new_vx_name}.conf"
                apply_fabric "$SELECTED_CONF"

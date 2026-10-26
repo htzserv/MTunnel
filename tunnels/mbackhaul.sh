@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.4.4).
-MODULE_VERSION="1.4.4"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.4.5).
+MODULE_VERSION="1.4.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -693,7 +693,7 @@ install_core_from_source() {
             local source_host="${url#https://}"; source_host="${source_host%%/*}"; source_host="${source_host##*@}"
             echo -e "  ${DIM}● Source: $source_host${NC}"
             if bh_download "$url" "$work/package"; then
-                if mt_verify_engine_package "$work/package" "$url" && bh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
+                if bh_validate_package "$work/package"; then source="$work/package"; chosen_url="$url"; break
                 else echo 'Downloaded file is not a compatible Backhaul binary/archive.' >&2; fi
             fi
             [ "$url" = "${urls[-1]}" ] || echo -e "  ${Y}● Trying the next download source...${NC}"
@@ -701,9 +701,7 @@ install_core_from_source() {
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
         mt_engine_cache "$source" "$chosen_url"
     fi
-    local verified_hash=''
-    [ -z "$work" ] || verified_hash=$(sha256sum "$source" | cut -d' ' -f1)
-    if mt_update_core bh mbackhaul "$source" local "$verified_hash"; then
+    if mt_update_core bh mbackhaul "$source" local; then
         [ -z "$work" ] || rm -rf "$work"
         echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"

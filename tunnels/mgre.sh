@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.4.4).
-MODULE_VERSION="1.4.4"
+# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.4.5).
+MODULE_VERSION="1.4.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -748,11 +748,12 @@ apply_tunnel() {
     ip link del "$T_NAME" >/dev/null 2>&1; ip link del "sit_$T_NAME" >/dev/null 2>&1
 
     local min_mtu max_mtu def_mtu
-    read -r min_mtu max_mtu def_mtu <<< "$(mgre_effective_mtu_limits "$TUN_PROTO" "${ENCRYPT:-0}")"
+    read -r min_mtu max_mtu def_mtu <<< "$(mgre_mtu_limits "$TUN_PROTO")"
     local eff_mtu="$CUSTOM_MTU"
     if ! is_uint "$eff_mtu"; then
-        eff_mtu="$def_mtu"
+        eff_mtu="$def_mtu"; [ "$ENCRYPT" == "1" ] && eff_mtu=$((def_mtu - 64))
     fi
+    [ "$ENCRYPT" != 1 ] || max_mtu=$((max_mtu-64))
     [ "$eff_mtu" -lt "$min_mtu" ] && eff_mtu="$min_mtu"
     [ "$eff_mtu" -gt "$max_mtu" ] && eff_mtu="$max_mtu"
 
@@ -1313,13 +1314,6 @@ mgre_mtu_limits() { # <proto> -> "min max default"
         *)         echo "700 1472 1436" ;;
     esac
 }
-mgre_effective_mtu_limits() {
-    local minimum maximum default
-    read -r minimum maximum default <<< "$(mgre_mtu_limits "$1")"
-    if [ "${2:-0}" = 1 ]; then maximum=$((maximum-64)); default=$((default-64)); fi
-    printf '%s %s %s\n' "$minimum" "$maximum" "$default"
-}
-
 
 # IPIP6->6 forwards to its single IPv6 core peer, so there is no IPv4 target list to choose from.
 mgre_target_label() {
@@ -1809,6 +1803,7 @@ mt_link_deploy_locked() {
     if [ "$MT_KIND" = gre ]; then
         grep -q "^TUN_ID=${MT_LINK_DATA[TUN_ID]}$" "$CONF_DIR"/*.conf 2>/dev/null && { echo 'Tunnel key already in use.' >&2; return 1; }
         read -r min max def <<< "$(mgre_mtu_limits "$proto")"
+        [ "${MT_LINK_DATA[ENCRYPT]:-0}" != 1 ] || max=$((max - 64))   # IPsec ESP overhead, same as apply_tunnel
     else
         grep -q "^VNI_ID=${MT_LINK_DATA[VNI_ID]}$" "$CONF_DIR"/*.conf 2>/dev/null && { echo 'VNI already in use.' >&2; return 1; }
         min=576; max=1450; [ "$proto" != ipv6 ] || max=1430
@@ -2083,16 +2078,16 @@ while true; do
                
                k=$TUN_SECRET
                echo -e "  ${DIM}● Sync Key automatically linked to Master Token.${NC}"
-               sed -i "s/^MAX_IPS=.*/MAX_IPS=$n/" "$SELECTED_CONF"
-               sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$k/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" MAX_IPS "$n"
+               set_conf_var "$SELECTED_CONF" SYNC_KEY "$k"
                apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● IPs synchronized successfully.${NC}"; sleep 1.5
            elif [[ "$vip_action" == "2" ]]; then
                if [[ "$MAX_IPS" == "0" || -z "$MAX_IPS" ]]; then echo -e "  ${Y}● No Virtual IPs found!${NC}"; sleep 1.5; continue; fi
                echo -ne "  ${R}● Delete all ${MAX_IPS} vIPs from [${T_NAME}]? (y/n): ${NC}"; read -r confirm_vip
                if [[ "$confirm_vip" == "y" ]]; then 
-                   sed -i "s/^MAX_IPS=.*/MAX_IPS=0/" "$SELECTED_CONF"
-                   sed -i "s/^SYNC_KEY=.*/SYNC_KEY=/" "$SELECTED_CONF"
+                   set_conf_var "$SELECTED_CONF" MAX_IPS "0"
+                   set_conf_var "$SELECTED_CONF" SYNC_KEY ""
                    apply_tunnel "$SELECTED_CONF"
                    echo -e "  ${G}● Virtual IPs purged.${NC}"; sleep 1.5
                fi
@@ -2160,13 +2155,15 @@ while true; do
                    echo -e "  ${R}● Collision detected with an existing tunnel! Please use a different Token.${NC}"; sleep 2; continue
                fi
 
-               sed -i "s/^TUN_SECRET=.*/TUN_SECRET=$new_tok/" "$SELECTED_CONF"
-               sed -i "s/^TUN_ID=.*/TUN_ID=$new_tun_id/" "$SELECTED_CONF"
-               sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_core_sub/" "$SELECTED_CONF"
-               sed -i "s/^SYNC_KEY=.*/SYNC_KEY=$new_tok/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" TUN_SECRET "$new_tok"
+               set_conf_var "$SELECTED_CONF" TUN_ID "$new_tun_id"
+               set_conf_var "$SELECTED_CONF" CORE_SUBNET "$new_core_sub"
+               set_conf_var "$SELECTED_CONF" SYNC_KEY "$new_tok"
                [ "$TUN_PROTO" == "ipip6to6" ] && set_conf_var "$SELECTED_CONF" CORE_V6 "$(mgre_gen_core_v6 "$new_tok")"
                apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● Token updated. Key: ${new_tun_id}, Subnet: ${new_core_sub}.x${NC}"; sleep 1.8
+           else
+               echo -e "  ${R}✖ Token cannot be empty (allowed characters: letters, digits, _ = -). Nothing changed.${NC}"; sleep 2
            fi ;;
 
         10)
@@ -2178,7 +2175,7 @@ while true; do
            if [ -n "$new_sub" ] && ! is_subnet3 "$new_sub"; then echo -e "  ${R}✖ Format must be X.Y.Z (e.g. 10.76.5).${NC}"; sleep 2; continue; fi
            if [ -n "$new_sub" ] && subnet_in_use "$new_sub" "$SELECTED_CONF"; then echo -e "  ${R}✖ ${new_sub}.x is already in use.${NC}"; sleep 2; continue; fi
            if [ -n "$new_sub" ]; then
-               sed -i "s/^CORE_SUBNET=.*/CORE_SUBNET=$new_sub/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" CORE_SUBNET "$new_sub"
                apply_tunnel "$SELECTED_CONF"
                echo -e "  ${G}● Subnet base updated to ${new_sub}.x${NC}"; sleep 1.5
            fi ;;
@@ -2202,7 +2199,7 @@ while true; do
 
                teardown_tunnel "$SELECTED_CONF"
 
-               sed -i "s/^T_NAME=.*/T_NAME=$new_t_name/" "$SELECTED_CONF"
+               set_conf_var "$SELECTED_CONF" T_NAME "$new_t_name"
                mv "$SELECTED_CONF" "$CONF_DIR/${new_t_name}.conf"
                SELECTED_CONF="$CONF_DIR/${new_t_name}.conf"
                apply_tunnel "$SELECTED_CONF"
@@ -2212,10 +2209,14 @@ while true; do
         11)
            select_tunnel_interactive || continue
            draw_mgre_header
-           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; ENCRYPT=0; mt_source_conf "$SELECTED_CONF" 2>/dev/null
-           read -r min_mtu max_mtu def_mtu <<< "$(mgre_effective_mtu_limits "$TUN_PROTO" "${ENCRYPT:-0}")"
+           CUSTOM_MTU=""; TYPE=""; TUN_PROTO=""; T_NAME=""; ENCRYPT="0"; mt_source_conf "$SELECTED_CONF" 2>/dev/null
+           read -r min_mtu max_mtu def_mtu <<< "$(mgre_mtu_limits "$TUN_PROTO")"
+           # Same arithmetic as apply_tunnel: IPsec ESP costs 64 bytes of MTU; IPv6-in-IPv6 needs a 60-byte MSS margin (others 40).
+           esp_oh=0; [ "$ENCRYPT" == "1" ] && esp_oh=64
+           mss_oh=40; [ "$TUN_PROTO" == "ipip6to6" ] && mss_oh=60
+           max_mtu=$((max_mtu - esp_oh)); def_mtu=$((def_mtu - esp_oh))
+           [ "$def_mtu" -ge "$min_mtu" ] || def_mtu="$min_mtu"
 
-           mss_overhead=40; [ "$TUN_PROTO" != ipip6to6 ] || mss_overhead=60
            act_mtu=""
            [ -d "/sys/class/net/$T_NAME" ] && act_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
            cur_mtu="${act_mtu:-${CUSTOM_MTU:-$def_mtu (Auto)}}"
@@ -2223,6 +2224,7 @@ while true; do
            echo -e "\n  ${FR}┌─[ MTU & TCP MSS CONFIGURATION: ${W}${T_NAME}${DIM} ]${NC}"
            echo -e "  ${FR}│${NC} Current Live MTU : ${Y}${cur_mtu}${NC}"
            echo -e "  ${FR}│${NC} Valid Range      : ${W}${min_mtu} - ${max_mtu}${NC}"
+           [ "$esp_oh" -eq 0 ] || echo -e "  ${FR}│${NC} IPsec ESP        : ${Y}-${esp_oh} bytes already deducted from the range${NC}"
            echo -e "  ${FR}│${NC} Profiles         : ${W}1437${NC} (Default IR) | ${W}1361${NC} (Iran Broadband) | ${W}900-1200${NC} (Heavy Fragmentation)"
            echo -e "  ${FR}└─${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter New MTU (${min_mtu}-${max_mtu}) [Enter for Default]: ${NC}"; read -r new_mtu
@@ -2232,7 +2234,7 @@ while true; do
                ( umask 077; grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp" && echo "CUSTOM_MTU=" >> "${SELECTED_CONF}.tmp" ) || continue
                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
                apply_tunnel "$SELECTED_CONF"
-               echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - mss_overhead)).${NC}"; sleep 1.8
+               echo -e "  ${G}● MTU reset to Default ($def_mtu). MSS Clamping set to $((def_mtu - mss_oh)).${NC}"; sleep 1.8
            elif [ "$new_mtu" -ge "$min_mtu" ] && [ "$new_mtu" -le "$max_mtu" ] 2>/dev/null; then
                ( umask 077; grep -v "^CUSTOM_MTU=" "$SELECTED_CONF" > "${SELECTED_CONF}.tmp" && echo "CUSTOM_MTU=$new_mtu" >> "${SELECTED_CONF}.tmp" ) || continue
                mv "${SELECTED_CONF}.tmp" "$SELECTED_CONF" && chmod 600 "$SELECTED_CONF"
@@ -2248,7 +2250,7 @@ while true; do
 
                # Check confirmed kernel value
                confirm_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
-               echo -e "  ${G}✔ MTU successfully locked to ${new_mtu} (Kernel Confirmed: ${confirm_mtu:-$new_mtu} | MSS: $((new_mtu - mss_overhead))).${NC}"; sleep 2
+               echo -e "  ${G}✔ MTU successfully locked to ${new_mtu} (Kernel Confirmed: ${confirm_mtu:-$new_mtu} | MSS: $((new_mtu - mss_oh))).${NC}"; sleep 2
            else
                echo -e "  ${R}✖ Invalid MTU! Value must be between ${min_mtu} and ${max_mtu}.${NC}"; sleep 2.5
            fi ;;

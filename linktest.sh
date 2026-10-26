@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.4).
-MODULE_VERSION="1.4.4"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.5).
+MODULE_VERSION="1.4.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -109,11 +109,11 @@ check_update_bg() {
     local remote_ver=""
     
     if command -v curl >/dev/null 2>&1; then
-        remote_ver=$(curl -fSL --range 0-4095 -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL --range 0-4095 -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(curl -fSL -r 0-4095 -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(curl -fSL -r 0-4095 -H "Cache-Control: no-cache" --connect-timeout 3 --max-time 5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     elif command -v wget >/dev/null 2>&1; then
-        remote_ver=$(wget -qO- --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
-        [ -z "$remote_ver" ] && remote_ver=$(wget -qO- --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        remote_ver=$(wget -qO-  --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=5 "$raw_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
+        [ -z "$remote_ver" ] && remote_ver=$(wget -qO-  --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=5 "$mirror_url" 2>/dev/null | grep -m1 '^MODULE_VERSION=' | cut -d'"' -f2)
     fi
     
     [ -n "$remote_ver" ] && echo "$remote_ver" > "$SECURE_TMP/.linktest_remote_ver"
@@ -152,7 +152,9 @@ self_update_module() {
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
     tmp_file=$(mktemp "$SECURE_TMP/update.XXXXXX") || return 1
     if [ "$src_opt" == 4 ]; then
-        mt_capture_manual_script "$tmp_file" || { rm -f "$tmp_file"; return 1; }
+        if ! mt_capture_manual_script "$tmp_file"; then
+            rm -f "$tmp_file"; echo -e "  ${R}✖ Manual paste failed. Installed module preserved.${NC}"; return 1
+        fi
     else
         case "$src_opt" in
             1) dl_url="https://raw.githubusercontent.com/htzserv/MTunnel/main/$rel_path";;
@@ -905,20 +907,18 @@ run_mtu_discovery() {
     echo -ne "  ${C}●${NC} ${W}Target Peer IP Address: ${NC}"; read -r target_ip
     target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
     [ -z "$target_ip" ] && return
-    target_ip=$(mt_normalize_host "$target_ip")
-    mt_valid_ipv4 "$target_ip" || mt_valid_ipv6 "$target_ip" || { echo 'Enter an IPv4 or IPv6 address.' >&2; return 1; }
-    local family=-4 overhead=28
-    if [[ "$target_ip" == *:* ]]; then family=-6; overhead=48; fi
 
     echo -e "\n  ${FR}╔══════════╦══════════════╦═════════════╦══════════════╦═════════════════╗${NC}"
     printf "  ${FR}║${NC} ${W}%-8s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-15s${NC} ${FR}║${NC}\n" "MTU SIZE" "PAYLOAD" "PACKET LOSS" "PING (MS)" "STATUS"
     echo -e "  ${FR}╠══════════╬══════════════╬═════════════╬══════════════╬═════════════════╣${NC}"
 
-    local test_sizes=("1472:1500" "1400:1428" "1350:1378" "1300:1328" "1280:1308" "1200:1228" "1100:1128" "1000:1028")
-    for test in "${test_sizes[@]}"; do
-        local mtu="${test##*:}"
-        local payload=$((mtu-overhead))
-        local ping_out=$(ping "$family" -c 4 -W 1 -M do -s "$payload" "$target_ip" 2>&1)
+    # IPv4 overhead = 20 (IP) + 8 (ICMP) = 28; IPv6 overhead = 40 + 8 = 48 and needs ping -6.
+    local overhead=28 ping_family=(-4)
+    if [[ "$target_ip" == *:* ]]; then overhead=48; ping_family=(-6); fi
+    local test_mtus=(1500 1428 1378 1328 1308 1228 1128 1028)
+    for mtu in "${test_mtus[@]}"; do
+        local payload=$((mtu - overhead))
+        local ping_out=$(ping "${ping_family[@]}" -c 4 -W 1 -M do -s "$payload" "$target_ip" 2>&1)
         local loss="100%"
         local avg_ping="---"
         local st_badge="${R}FAILED${NC}"
@@ -978,27 +978,21 @@ while true; do
            for p in $(echo "$p_in" | tr ',' ' '); do
                mt_valid_port "$p" || { echo -e "  ${R}SKIP${NC} '$p' is not a valid port number."; continue; }
                LISTEN_PORT="$p" python3 -c "
-import socket, os, selectors
+import socket, os
 port = int(os.environ['LISTEN_PORT'])
-selector = selectors.DefaultSelector()
-for family, address in ((socket.AF_INET, '0.0.0.0'), (socket.AF_INET6, '::')):
-    s = socket.socket(family, socket.SOCK_STREAM)
-    try:
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if family == socket.AF_INET6:
-            s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-        s.bind((address, port))
-        s.listen(1024)
-        selector.register(s, selectors.EVENT_READ)
-    except OSError as exc:
-        s.close()
-        print(f'{address}:{port}: {exc}', flush=True)
-if not selector.get_map():
-    raise SystemExit(1)
+try:
+    s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)   # accept IPv4 and IPv6
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('::', port))
+except OSError:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)      # host without IPv6
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('0.0.0.0', port))
+s.listen(1024)
 while True:
-    for key, _ in selector.select():
-        c, _ = key.fileobj.accept()
-        c.close()
+    c, _ = s.accept()
+    c.close()
 " &
                listener_pid=$!; LISTENER_PIDS+=("$listener_pid")
                sleep 0.1

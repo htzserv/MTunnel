@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.4.1, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.2, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.1"
+MTUNNEL_RELEASE_VERSION="1.4.2"
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -1342,6 +1342,27 @@ mt_workspace_pause() {
     mt_live_readline _pause_input "  ${DIM}Press Enter to continue...${NC}" || true
 }
 
+# Generate once on one server; import that exact key on its peer over a secure channel.
+# Hard-link publication fails atomically if an existing file or symlink is present.
+mt_peer_key_setup() (
+    umask 077
+    local action="$1" source_file="${2:-}" keyfile="${MTUNNEL_PEER_LINK_KEY_FILE:-/etc/mtunnel/peer-link.key}" raw dir stage
+    [ ! -e "$keyfile" ] && [ ! -L "$keyfile" ] || { echo 'Peer key already exists; refusing to overwrite it.' >&2; return 1; }
+    case "$action" in
+        generate) raw=$(openssl rand -hex 32) || return 1;;
+        import) [ -f "$source_file" ] && [ ! -L "$source_file" ] || return 1
+                raw=$(cat -- "$source_file") || return 1;;
+        *) return 1;;
+    esac
+    [[ "$raw" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Peer key must be 32 bytes encoded as 64 hex characters.' >&2; return 1; }
+    dir=$(dirname -- "$keyfile")
+    mkdir -p -- "$dir" || return 1
+    stage=$(mktemp "$dir/.peer-key.XXXXXX") || return 1
+    trap 'rm -f -- "$stage"' EXIT
+    printf '%s\n' "$raw" > "$stage" && chmod 600 "$stage" && ln -T -- "$stage" "$keyfile" || return 1
+    printf 'Peer key saved to %s. Transfer it only over a secure channel; do not paste it into a Peer Link.\n' "$keyfile"
+)
+
 mt_peer_key_file() {
     local keyfile="${MTUNNEL_PEER_LINK_KEY_FILE:-/etc/mtunnel/peer-link.key}" raw mode
     [[ -f "$keyfile" && -r "$keyfile" && ! -L "$keyfile" ]] || return 1
@@ -1359,7 +1380,7 @@ mt_peer_hmac() {
 }
 mt_link_encode() {
     mt_link_validate || return 1
-    local raw encoded checksum key ver=2
+    local raw encoded checksum key
     raw=$(for key in "${!MT_LINK_DATA[@]}"; do
             [ "$key" = SYNC_KEY ] && [ "${MT_LINK_DATA[SYNC_KEY]}" = "${MT_LINK_DATA[TUN_SECRET]:-}" ] && continue
             printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
@@ -1372,16 +1393,8 @@ mt_link_encode() {
         [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
         printf 'mtunnel://3/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
     else
-        if [ -n "${MTUNNEL_PEER_LINK_KEY_FILE:-}" ] || [ -e /etc/mtunnel/peer-link.key ]; then
-            echo 'Configured Peer Link key is invalid or insecurely permissioned; refusing plaintext fallback.' >&2
-            return 1
-        fi
-        # Preserve compatibility until operators provision the same out-of-band
-        # encryption key on BOTH peers; legacy v2 is neither secret nor authenticated.
-        echo 'WARNING: Peer Link is NOT encrypted. Protect it as a password.' >&2
-        encoded=$(printf '%s\n' "$raw" | gzip -9n | base64 -w0 | tr '+/' '-_' | tr -d '=')
-        checksum=$(printf '%s' "2/$MT_KIND/$encoded" | sha256sum); checksum="${checksum:0:16}"
-        printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
+        echo 'A valid shared Peer Link key is required. Run mtunnel --peer-key-init on one server, transfer the key securely, then mtunnel --peer-key-import FILE on the other. Existing keys are never overwritten.' >&2
+        return 1
     fi
 }
 
@@ -1397,6 +1410,11 @@ mt_link_decode() {
         mtunnel://3/*) ver=3; rest="${link#mtunnel://3/}";;
         *) return 1;;
     esac
+    if [ "$ver" != 3 ] && [ "${MTUNNEL_ALLOW_LEGACY_PEER_LINKS:-0}" != 1 ]; then
+        echo 'Unauthenticated legacy Peer Link rejected. Regenerate a v3 link, or explicitly set MTUNNEL_ALLOW_LEGACY_PEER_LINKS=1 for a trusted migration.' >&2
+        return 1
+    fi
+    [ "$ver" = 3 ] || echo 'WARNING: accepting an unencrypted, unauthenticated legacy Peer Link.' >&2
     kind="${rest%%/*}"; rest="${rest#*/}"
     [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
     [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }

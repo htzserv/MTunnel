@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.1).
-MODULE_VERSION="1.4.1"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.2).
+MODULE_VERSION="1.4.2"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 
@@ -421,22 +421,32 @@ installer_main() {
         while IFS= read -r line || [ -n "$line" ]; do
             line="${line//$'\r'/}"
             if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]]; then
-                mf_name="${BASH_REMATCH[2]}"
+                hash="${BASH_REMATCH[1],,}"; mf_name="${BASH_REMATCH[2]}"
                 [[ "$mf_name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
-                core_hash["$mf_name"]="${BASH_REMATCH[1],,}"
+                core_hash["$mf_name"]="$hash"
             fi
         done < "$mf"
         for name in bh rathole paqet gost haproxy realm; do
-            hash="${core_hash[$name]:-}"
-            [ -n "$hash" ] || { echo "Missing SHA-256 manifest entry for engine: $name" >&2; return 1; }
+            local archive_name='' engine_source
             path="engines/$name"
+            if [ "$name" = gost ] && [ -z "${core_hash[gost]:-}" ]; then
+                archive_name=gost-linux-amd64-2.11.5.gz
+                path="engines/$archive_name"
+            fi
+            hash="${core_hash[${archive_name:-$name}]:-}"
+            [ -n "$hash" ] || { echo "Missing SHA-256 manifest entry for engine: $name" >&2; return 1; }
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/engines" || return 1
                 mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || { echo "Could not fetch $path" >&2; return 1; }
             fi
             [ "$(sha256sum "$source_dir/$path" | awk '{print $1}')" = "$hash" ] || { echo "SHA-256 mismatch: $path" >&2; return 1; }
-            mt_valid_elf "$source_dir/$path" || { echo "Missing or incompatible optional core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
-            files+=("$source_dir/$path" "$root/usr/local/bin/$name" "$source_dir/$path" "$root/usr/bin/$name" "$source_dir/$path" "$root/root/mtunnel/$path")
+            engine_source="$source_dir/$path"
+            if [ -n "$archive_name" ]; then
+                engine_source="$work/$name"
+                gzip -dc -- "$source_dir/$path" > "$engine_source" || { echo "Invalid archive: $path" >&2; return 1; }
+            fi
+            mt_valid_elf "$engine_source" || { echo "Missing or incompatible core: $name. Omit --with-cores to install scripts only." >&2; return 1; }
+            files+=("$engine_source" "$root/usr/local/bin/$name" "$engine_source" "$root/usr/bin/$name" "$engine_source" "$root/root/mtunnel/engines/$name")
         done
     fi
     local -a owned_candidates=()

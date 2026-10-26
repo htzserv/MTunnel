@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.1).
-MODULE_VERSION="1.4.1"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v1.4.2).
+MODULE_VERSION="1.4.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

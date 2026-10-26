@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.1).
-MODULE_VERSION="1.4.1"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.2).
+MODULE_VERSION="1.4.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -876,6 +876,12 @@ mt_install_debs() {
         pkg=$(dpkg-deb -f "$deb" Package 2>/dev/null); ver=$(dpkg-deb -f "$deb" Version 2>/dev/null); arch=$(dpkg-deb -f "$deb" Architecture 2>/dev/null)
         if [ -z "$pkg" ] || [ -z "$ver" ]; then echo -e "  ${R}✖ Not a valid .deb: ${deb##*/}${NC}" >&2; rc=1; continue; fi
         if [ "$arch" != all ] && [ "$arch" != "$sys_arch" ]; then echo -e "  ${R}✖ Wrong architecture (${arch}, system is ${sys_arch}): ${deb##*/}${NC}" >&2; rc=1; continue; fi
+        # These alternative sysusers providers conflict with Ubuntu's systemd.
+        # Also reject stale bundles instead of partially installing their contents.
+        case "$pkg" in opensysusers|systemd-standalone-sysusers)
+            echo "Unsupported alternative sysusers provider: $pkg. Remove it from the bundle." >&2
+            return 1;;
+        esac
         inst=$(dpkg-query -W -f='${Status}|${Version}' "$pkg" 2>/dev/null || true)
         if [ "${inst%%|*}" == 'install ok installed' ] && ! dpkg --compare-versions "${inst#*|}" lt "$ver"; then
             skipped_n=$((skipped_n+1)); continue
@@ -887,7 +893,9 @@ mt_install_debs() {
         local -a dpkg_cmd=(env DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold)
         local -A lasts=()
         if ! "${dpkg_cmd[@]}" "${todo[@]}" >"$log" 2>&1; then
-            if grep -qiE 'lock|frontend' "$log"; then mt_apt_force_unlock; fi
+            if grep -qiE 'lock|frontend' "$log"; then
+                mt_apt_wait_unlocked || { rm -f "$log"; return 1; }
+            fi
             if "${dpkg_cmd[@]}" "${todo[@]}" >"$log" 2>&1; then installed_n=${#todo[@]}
             else
                 # The batch failed: go package by package and repeat while a pass makes progress, so a package
@@ -967,18 +975,19 @@ mt_apt_lock_holders() {
         done
     done | sort -u
 }
-# Forced: stop apt timers and unattended-upgrades, terminate whatever still holds a lock, then repair
-# any half-finished dpkg run. MTunnel's own shell is never touched.
-mt_apt_force_unlock() {
-    systemctl stop apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service >/dev/null 2>&1 || true
-    local i pid
-    for i in 1 2 3; do
-        [ -n "$(mt_apt_lock_holders)" ] || break
-        for pid in $(mt_apt_lock_holders); do [ "$pid" == "$$" ] || kill -TERM "$pid" 2>/dev/null; done
+# Wait without interrupting package managers or changing automatic-update timers.
+# A concurrent lock acquisition after this check is still handled by dpkg/APT.
+mt_apt_wait_unlocked() {
+    local limit="${MTUNNEL_APT_LOCK_TIMEOUT:-120}" start=$SECONDS
+    [[ "$limit" =~ ^[0-9]{1,5}$ ]] || { echo 'Invalid APT lock timeout.' >&2; return 1; }
+    limit=$((10#$limit))
+    while [ -n "$(mt_apt_lock_holders)" ]; do
+        if (( SECONDS - start >= limit )); then
+            echo 'Package manager is busy; retry after the running update finishes. No processes were stopped.' >&2
+            return 1
+        fi
         sleep 1
-        for pid in $(mt_apt_lock_holders); do [ "$pid" == "$$" ] || kill -KILL "$pid" 2>/dev/null; done
     done
-    DEBIAN_FRONTEND=noninteractive dpkg --configure -a >/dev/null 2>&1 || true
 }
 # unzip is installed before an install-from-link. Silent when it is already there; otherwise installed
 # behind MTunnel's own progress bar. If apt is unavailable the python3 fallback in the shared core takes over.
@@ -999,7 +1008,7 @@ mt_ensure_unzip() {
         return 1
     fi
     local log="$SECURE_TMP/.unzip_install.log" pid rc=0
-    mt_apt_force_unlock
+    mt_apt_wait_unlocked || return 1
     (
         DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 update -q || exit $?
         DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -y -q unzip
@@ -2133,6 +2142,13 @@ show_local_install() {
 mtunnel_cli() {
     local cmd="${1:-}" src rc=0 local_path
     case "$cmd" in
+        --peer-key-init)
+            mt_peer_key_setup generate
+            return $?;;
+        --peer-key-import)
+            [ "$#" = 2 ] || { echo 'Usage: mtunnel --peer-key-import FILE' >&2; return 1; }
+            mt_peer_key_setup import "$2"
+            return $?;;
         --version|-V)
             printf 'MTunnel %s\n' "$MODULE_VERSION"
             return 0
@@ -2188,6 +2204,8 @@ Usage: mtunnel [option]
   --sync            Sync all scripts from Official GitHub
   --sync-mirror     Sync all scripts from configured mirror
   --local PATH      Install/switch to a local bundle or archive
+  --peer-key-init    Create a new Peer Link key (never overwrites)
+  --peer-key-import FILE  Import the same key on the second server
   --version         Show MTunnel version
 
 Version direction is unrestricted. Upgrade and downgrade are both allowed;

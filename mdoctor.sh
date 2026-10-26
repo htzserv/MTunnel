@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.7).
-MODULE_VERSION="1.4.7"
+# MTunnel Doctor — system, network, firewall, and module diagnostics with repair tools (v1.4.8).
+MODULE_VERSION="1.4.8"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

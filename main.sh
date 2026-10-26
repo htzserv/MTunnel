@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.7).
-MODULE_VERSION="1.4.7"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.8).
+MODULE_VERSION="1.4.8"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -2240,6 +2240,31 @@ update_banner() { # one line under the header whenever ANY link has a newer vers
     done < "$UPDATE_FILE"
     [ -n "$out" ] || return 0
     printf '  %b⬆ New version available:%b %s\n' "$Y" "$NC" "${out%; }"
+}
+# Menu "p": paste a Peer Code once; the matching module (gre/vxlan/rathole/backhaul/paqet) is opened
+# by the code's own type and imports it directly (modules read MT_PEER_LINK on start-up).
+use_peer_code() {
+    local link kind mod rc=0
+    draw_main_header
+    echo -e "\n  ${FR}┌─[ USE PEER CODE ]${NC}\n"
+    echo -ne "  ${C}●${NC} ${W}Paste Peer Code (q: back): ${NC}"
+    read -r link || return 0
+    link="${link//$'\r'/}"
+    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
+    case "$link" in ''|q|Q) return 0;; esac
+    if [[ "$link" =~ ^mtunnel://[0-9]+/([a-z]+)/ ]]; then kind="${BASH_REMATCH[1]}"; else kind=''; fi
+    case "$kind" in
+        gre) mod=mgre;;
+        vxlan) mod=mxlan;;
+        rathole) mod=mrathole;;
+        backhaul) mod=mbackhaul;;
+        paqet) mod=mpaqet;;
+        *) echo -e "\n  ${R}✖ This is not a valid Peer Code. No changes made.${NC}"; ota_pause; return 0;;
+    esac
+    export MT_PEER_LINK="$link"
+    run_mod "$mod" || rc=$?
+    unset MT_PEER_LINK
+    return "$rc"
 }
 render_main_menu() {
     draw_main_header

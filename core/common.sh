@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.4.7, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.8, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.7"
+MTUNNEL_RELEASE_VERSION="1.4.8"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -2044,29 +2044,38 @@ mt_hdr_draw() {
         content_w=$((boxw - 2))
         printf -v border '%*s' "$content_w" ''; border="${border// /═}"
         printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
-        _mt_hdr_line() {
-            local t="$1" w=$((content_w-2)) LC_CTYPE=C.UTF-8
-            (( ${#t} > w )) && t="${t:0:w}"
-            printf "  ${FR}║${NC} %s%*s ${FR}║${NC}\033[K\n" "$t" "$((w-${#t}))" ''
+        _mt_hdr_line() { # plain text (used for width/truncation) + optional coloured twin with identical visible text
+            local t="$1" c="${2:-}" w=$((content_w-2)) LC_CTYPE=C.UTF-8
+            if (( ${#t} > w )); then t="${t:0:w}"; c=''; fi
+            [ -n "$c" ] || c="$t"
+            printf "  ${FR}║${NC} %b%*s ${FR}║${NC}\033[K\n" "$c" "$((w-${#t}))" ''
         }
-        _mt_hdr_line "${title} | ${s_ip}"
-        _mt_hdr_line "IPv6 ${v6_txt}"
-        _mt_hdr_line "CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text}"
-        [ -z "$x_label" ] || _mt_hdr_line "${x_label} ${x_val} | RX ${MT_RX} | TX ${MT_TX}"
+        local v6_c="$DIM"; [ -z "$s_v6" ] || v6_c="$M"
+        _mt_hdr_line "${title} | ${s_ip}" "${W}${title}${NC} ${DIM}|${NC} ${M}${s_ip}${NC}"
+        _mt_hdr_line "IPv6 ${v6_txt}" "${DIM}IPv6${NC} ${v6_c}${v6_txt}${NC}"
+        _mt_hdr_line "CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text}" "${DIM}CPU${NC} ${cpu_col}${cpu_str}${NC} ${DIM}| RAM${NC} ${ram_col}${ram_str}${NC} ${DIM}| BBR${NC} ${bbr_col}${bbr_text}${NC}"
+        [ -z "$x_label" ] || _mt_hdr_line "${x_label} ${x_val} | RX ${MT_RX} | TX ${MT_TX}" "${DIM}${x_label}${NC} ${x_col}${x_val}${NC} ${DIM}| RX${NC} ${rx_col}${MT_RX}${NC} ${DIM}| TX${NC} ${tx_col}${MT_TX}${NC}"
         local c
         for c in "${info[@]}"; do
-            local il iv; IFS='|' read -r il iv _ <<< "$c"
-            [ -z "$il" ] || _mt_hdr_line "${il}: ${iv}"
+            local il iv ic; IFS='|' read -r il iv ic <<< "$c"
+            [ -z "$il" ] || _mt_hdr_line "${il}: ${iv}" "${DIM}${il}:${NC} ${ic:-$W}${iv}${NC}"
         done
         printf "  ${FR}╠%s╣${NC}\033[K\n" "$border"
-        if [ "${#rows[@]}" -eq 0 ]; then _mt_hdr_line "No tunnels configured."
+        if [ "${#rows[@]}" -eq 0 ]; then _mt_hdr_line "No tunnels configured." "${DIM}No tunnels configured.${NC}"
         else
             local st name tag peer vip ping loss up fwd
             for line in "${rows[@]}"; do
                 IFS='|' read -r st name tag peer vip ping loss up fwd <<< "$line"
                 [[ "$loss" =~ ^[0-9]+$ ]] && loss="${loss}%"
-                local row_icon='○'; [ "$st" = 1 ] && row_icon='●'
-                _mt_hdr_line "${row_icon} ${name} [${tag}] | ${peer:-"---"} | Ping ${ping:-"---"} | Loss ${loss:-"---"}"
+                local row_icon='○' icon_c="$R" ping_c="$G" loss_c="$DIM" loss_n
+                [ "$st" = 1 ] && { row_icon='●'; icon_c="$G"; }
+                [ -n "$ping" ] && [ "$ping" != "---" ] || ping_c="$DIM"
+                loss_n="${loss%\%}"
+                if [[ "$loss_n" =~ ^[0-9]+$ ]]; then
+                    if [ "$loss_n" -eq 0 ]; then loss_c="$G"; elif [ "$loss_n" -ge 20 ]; then loss_c="$R"; else loss_c="$Y"; fi
+                fi
+                _mt_hdr_line "${row_icon} ${name} [${tag}] | ${peer:-"---"} | Ping ${ping:-"---"} | Loss ${loss:-"---"}" \
+                    "${icon_c}${row_icon}${NC} ${W}${name}${NC} ${DIM}[${NC}${M}${tag}${NC}${DIM}]${NC} ${DIM}|${NC} ${C}${peer:-"---"}${NC} ${DIM}| Ping${NC} ${ping_c}${ping:-"---"}${NC} ${DIM}| Loss${NC} ${loss_c}${loss:-"---"}${NC}"
             done
         fi
         printf '  %b╚%s╝%b\033[K\n' "$FR" "$border" "$NC"

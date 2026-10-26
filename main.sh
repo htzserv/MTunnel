@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.6).
-MODULE_VERSION="1.4.6"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.7).
+MODULE_VERSION="1.4.7"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -2357,13 +2357,6 @@ show_local_install() {
 mtunnel_cli() {
     local cmd="${1:-}" src rc=0 local_path
     case "$cmd" in
-        --peer-key-init)
-            mt_peer_key_setup generate
-            return $?;;
-        --peer-key-import)
-            [ "$#" = 2 ] || { echo 'Usage: mtunnel --peer-key-import FILE' >&2; return 1; }
-            mt_peer_key_setup import "$2"
-            return $?;;
         --version|-V)
             printf 'MTunnel %s\n' "$MODULE_VERSION"
             return 0
@@ -2419,8 +2412,6 @@ Usage: mtunnel [option]
   --sync            Sync all scripts from Official GitHub
   --sync-mirror     Sync all scripts from configured mirror
   --local PATH      Install/switch to a local bundle or archive
-  --peer-key-init    Generate shared Peer Link key (never overwrites)
-  --peer-key-import FILE  Import the same key on the other server
   --version         Show MTunnel version
 
 Version direction is unrestricted. Upgrade and downgrade are both allowed;

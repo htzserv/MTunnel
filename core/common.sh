@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.4.6, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.7, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.6"
+MTUNNEL_RELEASE_VERSION="1.4.7"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -1433,61 +1433,6 @@ mt_workspace_pause() {
     mt_live_readline _pause_input "  ${DIM}Press Enter to continue...${NC}" || true
 }
 
-# Generate once on one server; import that exact key on its peer over a secure channel.
-# Hard-link publication fails atomically if an existing file or symlink is present.
-mt_peer_key_setup() (
-    umask 077
-    local action="$1" source_file="${2:-}" keyfile="${MTUNNEL_PEER_LINK_KEY_FILE:-/etc/mtunnel/peer-link.key}" raw dir stage
-    [ ! -e "$keyfile" ] && [ ! -L "$keyfile" ] || { echo 'Peer key already exists; refusing to overwrite it.' >&2; return 1; }
-    case "$action" in
-        generate) raw=$(openssl rand -hex 32) || return 1;;
-        import) [ -f "$source_file" ] && [ ! -L "$source_file" ] || return 1
-                raw=$(cat -- "$source_file") || return 1;;
-        *) return 1;;
-    esac
-    [[ "$raw" =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'Peer key must be 32 bytes encoded as 64 hex characters.' >&2; return 1; }
-    dir=$(dirname -- "$keyfile")
-    mkdir -p -- "$dir" || return 1
-    stage=$(mktemp "$dir/.peer-key.XXXXXX") || return 1
-    trap 'rm -f -- "$stage"' EXIT
-    printf '%s\n' "$raw" > "$stage" && chmod 600 "$stage" && ln -T -- "$stage" "$keyfile" || return 1
-    printf 'Peer key saved to %s. Transfer it only over a secure channel; do not paste it into a Peer Link.\n' "$keyfile"
-)
-
-mt_peer_key_file() {
-    local keyfile="${MTUNNEL_PEER_LINK_KEY_FILE:-/etc/mtunnel/peer-link.key}" raw mode
-    [[ -f "$keyfile" && -r "$keyfile" && ! -L "$keyfile" ]] || return 1
-    mode=$(stat -c %a "$keyfile" 2>/dev/null) || return 1
-    # No permissions for group/other, key must be 32 random bytes represented as hex.
-    (( (8#$mode & 0077) == 0 )) || return 1
-    raw=$(cat "$keyfile")
-    [[ "$raw" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
-    MT_PEER_SECRET_FILE="$keyfile"
-    MT_PEER_MAC_KEY=$(printf 'mtunnel-v3-hmac:%s' "$raw" | sha256sum)
-    MT_PEER_MAC_KEY="${MT_PEER_MAC_KEY%% *}"
-}
-# Offer to create the shared Peer Link key when none exists yet (never overwrites an existing key).
-mt_peer_key_ensure() {
-    local keyfile="${MTUNNEL_PEER_LINK_KEY_FILE:-/etc/mtunnel/peer-link.key}" ans=''
-    mt_peer_key_file && return 0
-    if [ -e "$keyfile" ] || [ -L "$keyfile" ]; then
-        echo -e "  ${R}✖ $keyfile exists but is not a valid key (needs 64 hex chars, mode 600, not a symlink). It was not touched.${NC}" >&2
-        return 1
-    fi
-    [ -t 0 ] || return 1
-    echo -e "\n  ${Y}● No shared Peer Link key exists on this server yet.${NC}" >&2
-    echo -e "  ${DIM}Both servers must use the SAME key. Create it here once, then copy${NC}" >&2
-    echo -e "  ${DIM}${keyfile} to the other server over a secure channel (scp) and${NC}" >&2
-    echo -e "  ${DIM}import it there with: mtunnel --peer-key-import FILE${NC}" >&2
-    echo -ne "  ${C}Create the key now? [Y/n]: ${NC}" >&2
-    read -r ans || return 1
-    case "${ans:-y}" in y|Y|yes|YES) ;; *) return 1;; esac
-    mt_peer_key_setup generate >&2 || return 1
-    mt_peer_key_file
-}
-mt_peer_hmac() {
-    openssl dgst -sha256 -mac HMAC -macopt "hexkey:$MT_PEER_MAC_KEY" -r 2>/dev/null | awk '{print $1}'
-}
 mt_link_encode() {
     mt_link_validate || return 1
     local raw encoded checksum key
@@ -1495,20 +1440,10 @@ mt_link_encode() {
             [ "$key" = SYNC_KEY ] && [ "${MT_LINK_DATA[SYNC_KEY]}" = "${MT_LINK_DATA[TUN_SECRET]:-}" ] && continue
             printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
           done | LC_ALL=C sort)
-    # No shared key is required any more. If a valid peer-link.key happens to exist the
-    # link is still encrypted (v3); otherwise a plain compressed v2 link is produced.
-    if mt_peer_key_file && command -v openssl >/dev/null 2>&1; then
-        encoded=$(printf '%s\n' "$raw" | gzip -9n | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "file:$MT_PEER_SECRET_FILE" -a -A 2>/dev/null | tr '+/' '-_' | tr -d '=') || return 1
-        [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
-        checksum=$(printf '%s' "3/$MT_KIND/$encoded" | mt_peer_hmac) || return 1
-        [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
-        printf 'mtunnel://3/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
-    else
-        encoded=$(printf '%s\n' "$raw" | gzip -9n | base64 -w0 | tr '+/' '-_' | tr -d '=') || return 1
-        [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
-        checksum=$(printf '%s' "2/$MT_KIND/$encoded" | sha256sum); checksum="${checksum:0:16}"
-        printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
-    fi
+    encoded=$(printf '%s\n' "$raw" | gzip -9n | base64 -w0 | tr '+/' '-_' | tr -d '=') || return 1
+    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    checksum=$(printf '%s' "2/$MT_KIND/$encoded" | sha256sum); checksum="${checksum:0:16}"
+    printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
 }
 
 mt_link_decode() {
@@ -1520,7 +1455,7 @@ mt_link_decode() {
     case "$link" in
         mtunnel://1/*) ver=1; rest="${link#mtunnel://1/}";;
         mtunnel://2/*) ver=2; rest="${link#mtunnel://2/}";;
-        mtunnel://3/*) ver=3; rest="${link#mtunnel://3/}";;
+        mtunnel://3/*) echo 'Unsupported old link format. Ask the sender to generate the Peer Code again.' >&2; return 1;;
         *) return 1;;
     esac
     kind="${rest%%/*}"; rest="${rest#*/}"
@@ -1528,11 +1463,7 @@ mt_link_decode() {
     [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
     encoded="${rest%.*}"; checksum="${rest##*.}"
     [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
-    if [ "$ver" = 3 ]; then
-        [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
-        mt_peer_key_file || { echo 'This link was encrypted (v3) by a server that has a peer-link.key; ask the sender to generate the link again (plain links need no key).' >&2; return 1; }
-        actual=$(printf '%s' "3/$kind/$encoded" | mt_peer_hmac) || return 1
-    elif [ "$ver" = 1 ]; then
+    if [ "$ver" = 1 ]; then
         [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
         actual=$(printf '%s' "1/$kind/$encoded" | sha256sum); actual="${actual%% *}"
     else
@@ -1541,9 +1472,7 @@ mt_link_decode() {
     fi
     [ "$actual" = "$checksum" ] || { echo 'Setup link checksum failed.' >&2; return 1; }
     padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) return 1;; esac
-    if [ "$ver" = 3 ]; then
-        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null | openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass "file:$MT_PEER_SECRET_FILE" 2>/dev/null | gunzip 2>/dev/null) || return 1
-    elif [ "$ver" = 1 ]; then
+    if [ "$ver" = 1 ]; then
         raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || return 1
         canonical=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
         [ "$canonical" = "$encoded" ] || return 1 # rejects NULs/noncanonical/trailing newlines
@@ -1556,8 +1485,8 @@ mt_link_decode() {
         mt_link_field_valid "$key" "$val" || return 1
         MT_LINK_DATA[$key]="$val"
     done <<< "$raw"
-    # v2/v3 links omit SYNC_KEY when it equals the tunnel secret; restore it here.
-    if [[ "$ver" = 2 || "$ver" = 3 ]] && [[ ! -v MT_LINK_DATA[SYNC_KEY] ]] && [[ -v MT_LINK_DATA[TUN_SECRET] ]]; then MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[TUN_SECRET]}"; fi
+    # v2 links omit SYNC_KEY when it equals the tunnel secret; restore it here.
+    if [ "$ver" = 2 ] && [[ ! -v MT_LINK_DATA[SYNC_KEY] ]] && [[ -v MT_LINK_DATA[TUN_SECRET] ]]; then MT_LINK_DATA[SYNC_KEY]="${MT_LINK_DATA[TUN_SECRET]}"; fi
     mt_link_validate
 }
 
@@ -1766,7 +1695,7 @@ mt_link_export() {
     mt_workspace_screen
     echo -e "\n  ${FR}┌─[ PEER CODE (valid for 7 days) ]${NC}\n  ${FR}│${NC}"
     mt_link_box "$link"
-    echo -e "  ${FR}│${NC}\n  ${FR}└─${NC} ${Y}Encrypted with your shared Peer Link key. Share it privately; the peer must hold the same key.${NC}"
+    echo -e "  ${FR}│${NC}\n  ${FR}└─${NC} ${Y}Share this code privately with the peer server.${NC}"
     mt_peer_copy_prompt "$link"
 }
 

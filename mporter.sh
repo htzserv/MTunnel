@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.4.6).
-MODULE_VERSION="1.4.6"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.4.7).
+MODULE_VERSION="1.4.7"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

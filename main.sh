@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.8).
-MODULE_VERSION="1.4.8"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.9).
+MODULE_VERSION="1.4.9"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -259,18 +259,18 @@ upd_fetch_source() { # base outfile
     local base="${1%/}" out="$2" dir mod v rc=0 fails=0 got=0 line
     dir=$(mktemp -d "$SECURE_TMP/.upd.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        local -a args=(-sL -f --connect-timeout 4 --max-time 12 -r "0-${UPDATE_HEAD_BYTES}" --parallel --parallel-max 6)
-        for mod in "${UPDATE_COMPONENTS[@]}"; do args+=(-o "$dir/$mod" "$base/${COMPONENT_MAP[$mod]}"); done
+        local -a args=(-sL -f -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' --connect-timeout 4 --max-time 12 -r "0-${UPDATE_HEAD_BYTES}" --parallel --parallel-max 6)
+        for mod in "${UPDATE_COMPONENTS[@]}"; do args+=(-o "$dir/$mod" "$(mt_cb_url "$base/${COMPONENT_MAP[$mod]}")"); done
         curl "${args[@]}" >/dev/null 2>&1 || rc=$?
         if [ "$rc" = 2 ]; then   # curl too old for --parallel
             for mod in "${UPDATE_COMPONENTS[@]}"; do
-                curl -sL -f -r "0-${UPDATE_HEAD_BYTES}" --connect-timeout 4 --max-time 8 -o "$dir/$mod" "$base/${COMPONENT_MAP[$mod]}" >/dev/null 2>&1 \
+                curl -sL -f -H 'Cache-Control: no-cache' -r "0-${UPDATE_HEAD_BYTES}" --connect-timeout 4 --max-time 8 -o "$dir/$mod" "$(mt_cb_url "$base/${COMPONENT_MAP[$mod]}")" >/dev/null 2>&1 \
                     && fails=0 || { fails=$((fails+1)); [ "$fails" -ge 2 ] && break; }
             done
         fi
     elif command -v wget >/dev/null 2>&1; then
         for mod in "${UPDATE_COMPONENTS[@]}"; do
-            wget -q --timeout=6 --header="Range: bytes=0-${UPDATE_HEAD_BYTES}" -O "$dir/$mod" "$base/${COMPONENT_MAP[$mod]}" >/dev/null 2>&1 \
+            wget -q --timeout=6 --header="Range: bytes=0-${UPDATE_HEAD_BYTES}" --header="Cache-Control: no-cache" -O "$dir/$mod" "$(mt_cb_url "$base/${COMPONENT_MAP[$mod]}")" >/dev/null 2>&1 \
                 && fails=0 || { fails=$((fails+1)); [ "$fails" -ge 2 ] && break; }
         done
     fi

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.4.8).
-MODULE_VERSION="1.4.8"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.4.9).
+MODULE_VERSION="1.4.9"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

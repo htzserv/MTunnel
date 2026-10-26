@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.4.8).
-MODULE_VERSION="1.4.8"
+# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.4.9).
+MODULE_VERSION="1.4.9"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

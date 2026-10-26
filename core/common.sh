@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.4.8, API 1, layout revision 2.
+# MTunnel shared core — release 1.4.9, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.4.8"
+MTUNNEL_RELEASE_VERSION="1.4.9"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -195,9 +195,9 @@ mt_remote_version_of() { # url
     local url="$1" line v=''
     local tmp; tmp=$(mktemp "${SECURE_TMP:-/tmp}/.rv.XXXXXX") || return 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL -r 0-4095 --connect-timeout 3 --max-time 7 -o "$tmp" "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        curl -fsSL -r 0-4095 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' --connect-timeout 3 --max-time 7 -o "$tmp" "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO "$tmp" --header="Range: bytes=0-4095" --timeout=7 "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+        wget -qO "$tmp" --header="Range: bytes=0-4095" --header="Cache-Control: no-cache" --timeout=7 "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
     else rm -f "$tmp"; return 1; fi
     local n=0
     while IFS= read -r line && [ $((n++)) -lt 120 ]; do
@@ -213,9 +213,9 @@ mt_check_update_both() { # rel_path prefix
     local rel="$1" pfx="$2" dir="${SECURE_TMP:-/root/mtunnel/tmp}" gh mi best cand
     local gf; gf=$(mktemp "$dir/.upg.XXXXXX") || return 1
     local mf; mf=$(mktemp "$dir/.upm.XXXXXX") || { rm -f "$gf"; return 1; }
-    mt_remote_version_of "${MTUNNEL_GITHUB_BASE}/${rel}?t=${EPOCHSECONDS:-0}" > "$gf" 2>/dev/null &
+    mt_remote_version_of "$(mt_cb_url "${MTUNNEL_GITHUB_BASE}/${rel}")" > "$gf" 2>/dev/null &
     local p1=$!
-    mt_remote_version_of "${MTUNNEL_MIRROR_BASE}/${rel}" > "$mf" 2>/dev/null &
+    mt_remote_version_of "$(mt_cb_url "${MTUNNEL_MIRROR_BASE}/${rel}")" > "$mf" 2>/dev/null &
     local p2=$!
     wait "$p1" "$p2" 2>/dev/null
     gh=$(<"$gf"); mi=$(<"$mf"); rm -f "$gf" "$mf"

@@ -4,7 +4,7 @@
 # MTunnel Ecosystem - MDesign Speed & Network Optimizer
 # Module version: see MODULE_VERSION below
 # ==========================================================
-MODULE_VERSION="1.4.8"
+MODULE_VERSION="1.4.9"
 
 set -o pipefail
 

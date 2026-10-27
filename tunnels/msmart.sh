@@ -1,6 +1,7 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v1.5.0).
-MODULE_VERSION="1.5.0"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v15.0.1).
+MODULE_VERSION="15.0.1"
+MODULE_BUILD="2026102701"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 SMART_API_REV=1
@@ -43,12 +44,98 @@ UPDATE_CHECK_INTERVAL=600
 mkdir -p "$SMART_DIR" "$GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SMART_DIR" "$GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 
-# Smart uses the same dashboard/update language as the tunnel engines (MGRE/MXLAN/etc.).
+# Smart update status is build-aware. Module versions may stay on the same release
+# line while a hotfix is published, so MODULE_BUILD is compared when versions match.
+SMART_UPD_GH="$SECURE_TMP/.msmart_update_github"
+SMART_UPD_MIR="$SECURE_TMP/.msmart_update_mirror"
+SMART_UPD_LOCK="$SECURE_TMP/.msmart_update.lock"
+SMART_UPD_REFRESH_AGE=90
+
+smart_fetch_remote_meta() { # url -> version|build
+    local url="$1" tmp line ver='' build='0' n=0
+    tmp=$(mktemp "$SECURE_TMP/.msmart-meta.XXXXXX") || return 1
+    url=$(mt_cb_url "$url")
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -r 0-8191 -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+            --connect-timeout 3 --max-time 8 -o "$tmp" "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$tmp" --header='Range: bytes=0-8191' --header='Cache-Control: no-cache' \
+            --timeout=8 "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    else
+        rm -f "$tmp"; return 1
+    fi
+    while IFS= read -r line && [ $((n++)) -lt 180 ]; do
+        line="${line%$'\r'}"
+        if [[ "$line" =~ ^MODULE_VERSION=\"([0-9][0-9.]*)\"$ ]]; then ver="${BASH_REMATCH[1]}"; fi
+        if [[ "$line" =~ ^MODULE_BUILD=\"?([0-9]+)\"?$ ]]; then build="${BASH_REMATCH[1]}"; fi
+        [ -n "$ver" ] && [ "$build" != 0 ] && break
+    done < "$tmp"
+    rm -f "$tmp"
+    [[ "$ver" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+    [[ "$build" =~ ^[0-9]+$ ]] || build=0
+    printf '%s|%s\n' "$ver" "$build"
+}
+
+smart_meta_newer() { # remote_ver remote_build
+    local rv="${1:-}" rb="${2:-0}"
+    mt_version_newer "$rv" "$MODULE_VERSION" 2>/dev/null && return 0
+    [ "$rv" = "$MODULE_VERSION" ] || return 1
+    [[ "$rb" =~ ^[0-9]+$ && "$MODULE_BUILD" =~ ^[0-9]+$ ]] || return 1
+    ((10#$rb > 10#$MODULE_BUILD))
+}
+
+smart_write_update_state() { # state-file rc meta
+    local file="$1" rc="$2" meta="${3:-}" now tmp ver='' build='0'
+    now=$(date +%s 2>/dev/null || echo 0)
+    tmp=$(mktemp "$SECURE_TMP/.msmart-state.XXXXXX") || return 1
+    if [ "$rc" -eq 0 ] && [[ "$meta" == *'|'* ]]; then
+        IFS='|' read -r ver build <<< "$meta"
+        printf 'ok|%s|%s|%s\n' "$ver" "${build:-0}" "$now" > "$tmp"
+    else
+        printf 'down|||%s\n' "$now" > "$tmp"
+    fi
+    mv -f "$tmp" "$file"
+}
+
 smart_check_update_bg() {
-    if declare -F mt_check_update_both >/dev/null 2>&1; then
-        mt_check_update_both "tunnels/msmart.sh" "msmart"
+    local gtmp mtmp gp mp gr=1 mr=1
+    exec 8>"$SMART_UPD_LOCK" || return 1
+    flock -n 8 || return 0
+    gtmp=$(mktemp "$SECURE_TMP/.msmart-gh.XXXXXX") || return 1
+    mtmp=$(mktemp "$SECURE_TMP/.msmart-mi.XXXXXX") || { rm -f "$gtmp"; return 1; }
+    smart_fetch_remote_meta "${MTUNNEL_GITHUB_BASE}/tunnels/msmart.sh" > "$gtmp" 2>/dev/null & gp=$!
+    smart_fetch_remote_meta "${MTUNNEL_MIRROR_BASE}/tunnels/msmart.sh" > "$mtmp" 2>/dev/null & mp=$!
+    wait "$gp"; gr=$?
+    wait "$mp"; mr=$?
+    smart_write_update_state "$SMART_UPD_GH" "$gr" "$(cat "$gtmp" 2>/dev/null)"
+    smart_write_update_state "$SMART_UPD_MIR" "$mr" "$(cat "$mtmp" 2>/dev/null)"
+    rm -f "$gtmp" "$mtmp"
+    # Remove legacy version-only caches so stale data cannot paint the badge.
+    rm -f "$SECURE_TMP/.msmart_remote_ver" "$SECURE_TMP/.msmart_remote_ver_github" "$SECURE_TMP/.msmart_remote_ver_mirror"
+}
+
+smart_update_select() {
+    local file st rv rb ts src bestv='' bestb=0 bestsrc='' any=0 newest=0
+    SMART_UPD_ANY_OK=0; SMART_UPD_AVAILABLE=0; SMART_UPD_VERSION=''; SMART_UPD_BUILD=0; SMART_UPD_SOURCES=''; SMART_UPD_LAST=0
+    for src in GitHub Mirror; do
+        [ "$src" = GitHub ] && file="$SMART_UPD_GH" || file="$SMART_UPD_MIR"
+        [ -s "$file" ] || continue
+        IFS='|' read -r st rv rb ts < "$file"
+        [[ "$ts" =~ ^[0-9]+$ ]] && ((ts > SMART_UPD_LAST)) && SMART_UPD_LAST=$ts
+        [ "$st" = ok ] || continue
+        SMART_UPD_ANY_OK=1
+        smart_meta_newer "$rv" "${rb:-0}" || continue
+        if [ "$newest" -eq 0 ] || mt_version_newer "$rv" "$bestv" 2>/dev/null || { [ "$rv" = "$bestv" ] && [[ "${rb:-0}" =~ ^[0-9]+$ ]] && ((10#${rb:-0} > 10#$bestb)); }; then
+            bestv="$rv"; bestb="${rb:-0}"; bestsrc="$src"; newest=1
+        elif [ "$rv" = "$bestv" ] && [ "${rb:-0}" = "$bestb" ]; then
+            bestsrc+="+$src"
+        fi
+    done
+    if [ "$newest" -eq 1 ]; then
+        SMART_UPD_AVAILABLE=1; SMART_UPD_VERSION="$bestv"; SMART_UPD_BUILD="$bestb"; SMART_UPD_SOURCES="$bestsrc"
     fi
 }
+
 smart_update_watcher_loop() {
     while true; do smart_check_update_bg; sleep "$UPDATE_CHECK_INTERVAL"; done
 }
@@ -58,11 +145,19 @@ if [[ "${1:-}" != --* ]]; then
 fi
 
 smart_update_badge() {
-    local rv file="$SECURE_TMP/.msmart_remote_ver"
-    [ -f "$file" ] || return 0
-    rv=$(tr -d '\r\n ' < "$file")
-    if mt_update_available "$rv" "$MODULE_VERSION" 2>/dev/null; then
-        printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
+    smart_update_select
+    if [ "$SMART_UPD_AVAILABLE" -eq 1 ]; then
+        if [ "$SMART_UPD_VERSION" = "$MODULE_VERSION" ] && [ "$SMART_UPD_BUILD" -gt 0 ] 2>/dev/null; then
+            printf ' %b(Update: v%s build %s)%b' "$Y" "$SMART_UPD_VERSION" "$SMART_UPD_BUILD" "$NC"
+        else
+            printf ' %b(Update Available: v%s)%b' "$Y" "$SMART_UPD_VERSION" "$NC"
+        fi
+    elif [ "$SMART_UPD_ANY_OK" -eq 1 ]; then
+        printf ' %b(Up to date)%b' "$DIM" "$NC"
+    elif [ -s "$SMART_UPD_GH" ] || [ -s "$SMART_UPD_MIR" ]; then
+        printf ' %b(Update check unavailable)%b' "$R" "$NC"
+    else
+        printf ' %b(Checking...)%b' "$DIM" "$NC"
     fi
 }
 
@@ -150,18 +245,56 @@ smart_local_install() {
     cp -f -- "$path" "$tmp" || { rm -f "$tmp"; return 1; }
     smart_install_update_file "$tmp"; local rc=$?; rm -f "$tmp"; return "$rc"
 }
+smart_update_source_text() { # state-file label
+    local file="$1" label="$2" st rv rb ts age now suffix
+    [ -s "$file" ] || { printf '%s%s: checking...%s' "$DIM" "$label" "$NC"; return; }
+    IFS='|' read -r st rv rb ts < "$file"
+    if [ "$st" != ok ]; then printf '%s%s: unavailable%s' "$R" "$label" "$NC"; return; fi
+    if smart_meta_newer "$rv" "${rb:-0}"; then
+        suffix="v${MODULE_VERSION}"
+        [ "${MODULE_BUILD:-0}" -gt 0 ] 2>/dev/null && suffix+=" b${MODULE_BUILD}"
+        suffix+=" → v${rv}"
+        [ "${rb:-0}" -gt 0 ] 2>/dev/null && suffix+=" b${rb}"
+        printf '%s%s: %s%s' "$Y" "$label" "$suffix" "$NC"
+    else
+        suffix="v${rv}"
+        [ "${rb:-0}" -gt 0 ] 2>/dev/null && suffix+=" b${rb}"
+        printf '%s%s: %s • current%s' "$DIM" "$label" "$suffix" "$NC"
+    fi
+}
+
+smart_update_refresh_now() {
+    local now age newest=0 st rv rb ts
+    now=$(date +%s 2>/dev/null || echo 0)
+    for f in "$SMART_UPD_GH" "$SMART_UPD_MIR"; do
+        [ -s "$f" ] || { newest=0; break; }
+        IFS='|' read -r st rv rb ts < "$f"
+        [[ "$ts" =~ ^[0-9]+$ ]] || { newest=0; break; }
+        ((ts > newest)) && newest=$ts
+    done
+    age=$((now-newest))
+    if [ "$newest" -eq 0 ] || [ "$age" -ge "$SMART_UPD_REFRESH_AGE" ]; then
+        echo -e "  ${C}⟳${NC} ${W}Refreshing update status...${NC}"
+        smart_check_update_bg
+    fi
+}
+
 smart_update_menu() {
-    local opt gh='version unavailable' mir='version unavailable' v
+    local opt
+    smart_update_refresh_now
     while true; do
-        [ -f "$SECURE_TMP/.msmart_remote_ver_github" ] && { v=$(tr -d '\r\n ' < "$SECURE_TMP/.msmart_remote_ver_github"); gh="v${v}"; mt_update_available "$v" "$MODULE_VERSION" 2>/dev/null && gh="v${MODULE_VERSION} → v${v}"; }
-        [ -f "$SECURE_TMP/.msmart_remote_ver_mirror" ] && { v=$(tr -d '\r\n ' < "$SECURE_TMP/.msmart_remote_ver_mirror"); mir="v${v}"; mt_update_available "$v" "$MODULE_VERSION" 2>/dev/null && mir="v${MODULE_VERSION} → v${v}"; }
         smart_header
-        mt_workspace_group 'UPDATE & LOCAL INSTALL — MSMART' first
-        mt_workspace_row 1 "Install Script From Github (${gh})" "$C"
-        mt_workspace_row 2 "Install Script From Iranian Mirror (${mir})" "$G"
+        mt_workspace_group 'UPDATE STATUS — MSMART' first
+        mt_workspace_row '' "Local: v${MODULE_VERSION} • build ${MODULE_BUILD}" "$W"
+        mt_workspace_row '' "$(smart_update_source_text "$SMART_UPD_GH" GitHub)" "$C"
+        mt_workspace_row '' "$(smart_update_source_text "$SMART_UPD_MIR" Mirror)" "$G"
+        mt_workspace_group 'UPDATE & LOCAL INSTALL — MSMART'
+        mt_workspace_row 1 'Install Script From Github' "$C"
+        mt_workspace_row 2 'Install Script From Iranian Mirror' "$G"
         mt_workspace_row 3 'Install Script From Direct Link' "$Y"
         mt_workspace_row 4 'Paste Script Code Manually' "$M"
         mt_workspace_row 5 'Install Local msmart.sh' "$W"
+        mt_workspace_row 6 'Refresh Update Status Now' "$C"
         mt_workspace_footer 'Return to Smart Menu'
         echo -ne "  ${C}MSMART UPDATE ❯❯ ${NC}"; read -r opt
         case "$opt" in
@@ -170,11 +303,13 @@ smart_update_menu() {
             3) smart_self_update 3; smart_pause;;
             4) smart_self_update 4; smart_pause;;
             5) smart_local_install; smart_pause;;
+            6) smart_check_update_bg; smart_pause;;
             0|q|Q) return 0;;
             *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
         esac
     done
 }
+
 smart_local_ipv4() {
     local ip
     ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')
@@ -438,7 +573,7 @@ def reap_process(proc, seconds=20):
     t=threading.Timer(seconds,_stop); t.daemon=True; t.start()
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version='MTunnelSmart/1.5.0'
+    server_version='MTunnelSmart/'+module_version
     def log_message(self,*a): return
     def sendj(self,code,obj):
         data=json.dumps(obj,separators=(',',':')).encode()
@@ -1515,7 +1650,7 @@ case "${1:-}" in
     --pair-window-cleanup) smart_pair_window_cleanup; exit $?;;
     --agent-daemon) smart_agent_daemon; exit $?;;
     --watchdog-once) smart_watchdog_once; exit $?;;
-    --version|-V) echo "MTunnel Smart $MODULE_VERSION"; exit 0;;
+    --version|-V) echo "MTunnel Smart $MODULE_VERSION build $MODULE_BUILD"; exit 0;;
     --pair-decode) smart_pair_decode "${2:-}" && printf 'IPv6=%s\nPort=%s\nFingerprint=%s\nExpires=%s\n' "$PAIR_IP6" "$PAIR_PORT" "$PAIR_FP" "$PAIR_EXPIRES"; exit $?;;
     --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-groups|--pair-window-cleanup]'; exit 0;;
 esac

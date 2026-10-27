@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.5.0, API 1, layout revision 2.
+# MTunnel shared core — release 15.0.1, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.5.0"
+MTUNNEL_RELEASE_VERSION="15.0.1"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -219,14 +219,14 @@ mt_check_update_both() { # rel_path prefix
     local p2=$!
     wait "$p1" "$p2" 2>/dev/null
     gh=$(<"$gf"); mi=$(<"$mf"); rm -f "$gf" "$mf"
-    [ -n "$gh" ] && printf '%s\n' "$gh" > "$dir/.${pfx}_remote_ver_github"
-    [ -n "$mi" ] && printf '%s\n' "$mi" > "$dir/.${pfx}_remote_ver_mirror"
+    if [ -n "$gh" ]; then printf '%s\n' "$gh" > "$dir/.${pfx}_remote_ver_github"; else rm -f "$dir/.${pfx}_remote_ver_github"; fi
+    if [ -n "$mi" ]; then printf '%s\n' "$mi" > "$dir/.${pfx}_remote_ver_mirror"; else rm -f "$dir/.${pfx}_remote_ver_mirror"; fi
     best=''
     for cand in "$gh" "$mi"; do
         [ -n "$cand" ] || continue
         if [ -z "$best" ] || mt_version_newer "$cand" "$best"; then best="$cand"; fi
     done
-    [ -n "$best" ] && printf '%s\n' "$best" > "$dir/.${pfx}_remote_ver"
+    if [ -n "$best" ]; then printf '%s\n' "$best" > "$dir/.${pfx}_remote_ver"; else rm -f "$dir/.${pfx}_remote_ver"; fi
     return 0
 }
 # Legacy compatibility hook retained for older callers. Version direction is unrestricted.

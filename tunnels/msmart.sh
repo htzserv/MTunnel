@@ -1,7 +1,7 @@
 #!/bin/bash
 # MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v15.0.1).
 MODULE_VERSION="15.0.1"
-MODULE_BUILD="2026102705"
+MODULE_BUILD="2026102708"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 SMART_API_REV=1
@@ -44,12 +44,23 @@ UPDATE_CHECK_INTERVAL=600
 mkdir -p "$SMART_DIR" "$GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SMART_DIR" "$GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 
-# Smart update status is build-aware. Module versions may stay on the same release
-# line while a hotfix is published, so MODULE_BUILD is compared when versions match.
 SMART_UPD_GH="$SECURE_TMP/.msmart_update_github"
 SMART_UPD_MIR="$SECURE_TMP/.msmart_update_mirror"
 SMART_UPD_LOCK="$SECURE_TMP/.msmart_update.lock"
 SMART_UPD_REFRESH_AGE=90
+
+smart_set_conf_var() {
+    local file="$1" key="$2" val="$3"
+    [ -f "$file" ] || return 1
+    ( umask 077; grep -v "^${key}=" "$file" > "${file}.tmp" 2>/dev/null || true; printf '%s=%s\n' "$key" "$val" >> "${file}.tmp" ) || return 1
+    mv -f "${file}.tmp" "$file" && chmod 600 "$file" 2>/dev/null
+}
+
+smart_pick_index() {
+    local in="$1" cnt="$2"
+    [[ "$in" =~ ^[0-9]+$ ]] && [ "$in" -ge 1 ] && [ "$in" -le "$cnt" ] || return 1
+    echo $((in - 1))
+}
 
 smart_fetch_remote_meta() { # url -> version|build
     local url="$1" tmp line ver='' build='0' n=0
@@ -110,7 +121,6 @@ smart_check_update_bg() {
     smart_write_update_state "$SMART_UPD_GH" "$gr" "$(cat "$gtmp" 2>/dev/null)"
     smart_write_update_state "$SMART_UPD_MIR" "$mr" "$(cat "$mtmp" 2>/dev/null)"
     rm -f "$gtmp" "$mtmp"
-    # Remove legacy version-only caches so stale data cannot paint the badge.
     rm -f "$SECURE_TMP/.msmart_remote_ver" "$SECURE_TMP/.msmart_remote_ver_github" "$SECURE_TMP/.msmart_remote_ver_mirror"
 }
 
@@ -163,9 +173,10 @@ smart_update_badge() {
 
 smart_pause() { mt_workspace_pause; }
 smart_header_state() {
-    local gd groups=0 paired='UNPAIRED' pair_col="$Y" agent='OFF' agent_col="$DIM"
-    local watchdog='OFF' watchdog_col="$DIM" ports=0 peer4='---' active='' label='' score='' svc count=0
+    local gd groups=0 tunnels=0 paired='UNPAIRED' pair_col="$Y" agent='OFF' agent_col="$DIM"
+    local watchdog='OFF' watchdog_col="$DIM" ports=0 peer4='---' active='' label='' score='' svc count=0 tcnt=0
     local primary_gid='' primary_label='' primary_score='' primary_state=0
+    local row_count=0 r_gid r_label r_score r_state r_ping r_loss r_id
     MT_HDR_ROWS=''
     if [ -s "$SMART_DIR/peer.conf" ]; then
         paired='PAIRED'; pair_col="$G"
@@ -177,23 +188,35 @@ smart_header_state() {
     for gd in "$GROUP_DIR"/*; do
         [ -d "$gd" ] || continue
         groups=$((groups+1))
+        if [ -s "$gd/candidates.tsv" ]; then
+            tcnt=$(wc -l < "$gd/candidates.tsv" 2>/dev/null || echo 0)
+            [[ "$tcnt" =~ ^[0-9]+$ ]] && tunnels=$((tunnels+tcnt))
+        fi
         svc=$(mt_link_read "$gd/group.conf" SERVICE_PORTS 2>/dev/null || true)
         if [ -n "$svc" ]; then
             count=$(awk -F, '{print NF}' <<< "$svc" 2>/dev/null || echo 0)
             [[ "$count" =~ ^[0-9]+$ ]] && ports=$((ports+count))
         fi
         active=$(cat "$gd/active.state" 2>/dev/null || true)
-        IFS='|' read -r _ label score <<< "$active"
-        # Show only one group summary in the main Smart dashboard. Prefer an active group.
+        IFS='|' read -r r_id label score <<< "$active"
+        r_gid=$(basename "$gd"); r_label="${label:-OFF}"; r_score="${score:-DOWN}"
+        r_state=0; [ -n "$label" ] && r_state=1
+        r_ping='---'; r_loss='---'
+        if [ -n "$r_id" ] && [ -s "$gd/ranking.tsv" ]; then
+            IFS='|' read -r r_ping r_loss <<< "$(awk -F'|' -v i="$r_id" '$1==i{print $11"ms|"$12;exit}' "$gd/ranking.tsv" 2>/dev/null)"
+            [ -n "$r_ping" ] || r_ping='---'
+            [ -n "$r_loss" ] || r_loss='---'
+        fi
+        if [ "$row_count" -lt 3 ]; then
+            row_count=$((row_count+1))
+            MT_HDR_ROWS+="${r_state}|${r_gid}|SMART|${peer4}|${r_label:0:12}|${r_ping}|${r_loss}|${r_score}|T:${svc:0:9}"$'\n'
+        fi
         if [ -z "$primary_gid" ] || { [ "$primary_state" -eq 0 ] && [ -n "$label" ]; }; then
-            primary_gid=$(basename "$gd"); primary_label="${label:-OFF}"; primary_score="${score:-DOWN}"
-            primary_state=0; [ -n "$label" ] && primary_state=1
+            primary_gid="$r_gid"; primary_label="$r_label"; primary_score="$r_score"
+            primary_state="$r_state"
         fi
     done
-    if [ "$groups" -gt 0 ]; then
-        MT_HDR_ROWS+="${primary_state}|${primary_gid:-SmartGroup}|SMART|${peer4}|${primary_label:-OFF}|---|---|${primary_score:-DOWN}|${primary_label:-OFF}"
-    fi
-    SMART_HDR_GROUPS="$groups"; SMART_HDR_ACTIVE="${primary_label:-OFF}"
+    SMART_HDR_GROUPS="$groups"; SMART_HDR_TUNNELS="$tunnels"; SMART_HDR_ACTIVE="${primary_label:-OFF}"
     SMART_HDR_PAIRED="$paired"; SMART_HDR_PAIR_COL="$pair_col"
     SMART_HDR_AGENT="$agent"; SMART_HDR_AGENT_COL="$agent_col"; SMART_HDR_WATCHDOG="$watchdog"; SMART_HDR_WATCHDOG_COL="$watchdog_col"
     SMART_HDR_PORTS="$ports"
@@ -203,11 +226,13 @@ smart_header() {
     smart_header_state
     MT_HDR_EMPTY_TEXT="No Smart groups are configured on this host."
     local group_col="$DIM"; [ "$SMART_HDR_GROUPS" -gt 0 ] 2>/dev/null && group_col="$G"
-    mt_hdr_draw "MSmart Core v${MODULE_VERSION}" "Groups|${SMART_HDR_GROUPS}|${group_col}" \
+    local tun_col="$DIM"; [ "$SMART_HDR_TUNNELS" -gt 0 ] 2>/dev/null && tun_col="$C"
+    mt_hdr_draw "MSmart Core v${MODULE_VERSION}" \
+        "Groups|${SMART_HDR_GROUPS}|${group_col}" \
+        "Tunnels|${SMART_HDR_TUNNELS}|${tun_col}" \
         "Active|${SMART_HDR_ACTIVE:-OFF}|$([ "${SMART_HDR_ACTIVE:-OFF}" != OFF ] && printf '%s' "$G" || printf '%s' "$DIM")" \
         "Pair|${SMART_HDR_PAIRED}|${SMART_HDR_PAIR_COL}" \
-        "Watchdog|${SMART_HDR_WATCHDOG}|${SMART_HDR_WATCHDOG_COL}" \
-        "Ports|${SMART_HDR_PORTS}|${C}"
+        "Ports|${SMART_HDR_PORTS}|${Y}"
 }
 
 smart_install_update_file() { # candidate path
@@ -252,22 +277,30 @@ smart_local_install() {
     cp -f -- "$path" "$tmp" || { rm -f "$tmp"; return 1; }
     smart_install_update_file "$tmp"; local rc=$?; rm -f "$tmp"; return "$rc"
 }
-smart_update_source_text() { # state-file label
-    local file="$1" label="$2" st rv rb ts age now suffix
-    [ -s "$file" ] || { printf '%s%s: checking...%s' "$DIM" "$label" "$NC"; return; }
+smart_update_source_plain() { # state-file label -> plain text, no ANSI escapes
+    local file="$1" label="$2" st rv rb ts suffix
+    [ -s "$file" ] || { printf '%s: checking...' "$label"; return; }
     IFS='|' read -r st rv rb ts < "$file"
-    if [ "$st" != ok ]; then printf '%s%s: unavailable%s' "$R" "$label" "$NC"; return; fi
+    if [ "$st" != ok ]; then printf '%s: unavailable' "$label"; return; fi
     if smart_meta_newer "$rv" "${rb:-0}"; then
         suffix="v${MODULE_VERSION}"
         [ "${MODULE_BUILD:-0}" -gt 0 ] 2>/dev/null && suffix+=" b${MODULE_BUILD}"
-        suffix+=" → v${rv}"
+        suffix+=" -> v${rv}"
         [ "${rb:-0}" -gt 0 ] 2>/dev/null && suffix+=" b${rb}"
-        printf '%s%s: %s%s' "$Y" "$label" "$suffix" "$NC"
+        printf '%s: %s • UPDATE AVAILABLE' "$label" "$suffix"
     else
         suffix="v${rv}"
         [ "${rb:-0}" -gt 0 ] 2>/dev/null && suffix+=" b${rb}"
-        printf '%s%s: %s • current%s' "$DIM" "$label" "$suffix" "$NC"
+        printf '%s: %s • current' "$label" "$suffix"
     fi
+}
+
+smart_update_source_color() { # state-file
+    local file="$1" st rv rb ts
+    [ -s "$file" ] || { printf '%s' "$DIM"; return; }
+    IFS='|' read -r st rv rb ts < "$file"
+    [ "$st" = ok ] || { printf '%s' "$R"; return; }
+    if smart_meta_newer "$rv" "${rb:-0}"; then printf '%s' "$Y"; else printf '%s' "$G"; fi
 }
 
 smart_update_refresh_now() {
@@ -287,29 +320,31 @@ smart_update_refresh_now() {
 }
 
 smart_update_menu() {
-    local opt
+    local opt gh_txt mi_txt gh_col mi_col
     smart_update_refresh_now
     while true; do
         smart_header
-        mt_workspace_group 'UPDATE STATUS — MSMART' first
-        mt_workspace_row '' "Local: v${MODULE_VERSION} • build ${MODULE_BUILD}" "$W"
-        mt_workspace_row '' "$(smart_update_source_text "$SMART_UPD_GH" GitHub)" "$C"
-        mt_workspace_row '' "$(smart_update_source_text "$SMART_UPD_MIR" Mirror)" "$G"
-        mt_workspace_group 'FULL MTUNNEL PACKAGE — REQUIRED FOR SMART'
-        mt_workspace_row A 'Install Full Package from GitHub' "$C" 'scripts + tunnel cores + prerequisites'
-        mt_workspace_row B 'Install Full Package from Mirror' "$G" 'scripts + tunnel cores + prerequisites'
-        mt_workspace_group 'UPDATE & LOCAL INSTALL — MSMART'
-        mt_workspace_row 1 'Install Script From Github' "$C"
-        mt_workspace_row 2 'Install Script From Iranian Mirror' "$G"
-        mt_workspace_row 3 'Install Script From Direct Link' "$Y"
-        mt_workspace_row 4 'Paste Script Code Manually' "$M"
-        mt_workspace_row 5 'Install Local msmart.sh' "$W"
-        mt_workspace_row 6 'Refresh Update Status Now' "$C"
-        mt_workspace_footer 'Return to Smart Menu'
-        echo -ne "  ${C}MSMART UPDATE ❯❯ ${NC}"; read -r opt
+        gh_txt=$(smart_update_source_plain "$SMART_UPD_GH" GitHub)
+        mi_txt=$(smart_update_source_plain "$SMART_UPD_MIR" Mirror)
+        gh_col=$(smart_update_source_color "$SMART_UPD_GH")
+        mi_col=$(smart_update_source_color "$SMART_UPD_MIR")
+
+        echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL ]${NC}"
+        echo -e "  ${FR}│${NC} ${DIM}Local:${NC} ${W}v${MODULE_VERSION}${NC} ${DIM}• build ${MODULE_BUILD}${NC}"
+        echo -e "  ${FR}│${NC} ${gh_col}${gh_txt}${NC}"
+        echo -e "  ${FR}│${NC} ${mi_col}${mi_txt}${NC}"
+        echo -e "  ${FR}│${NC}"
+        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Update MSmart from GitHub${NC}"
+        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Update MSmart from Mirror${NC}"
+        echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Install MSmart from Direct Link${NC}"
+        echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Paste MSmart Code Manually${NC}"
+        echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Install Local msmart.sh${NC}"
+        echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Refresh Update Status${NC}"
+        echo -e "  ${FR}│${NC}"
+        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Smart Menu${NC}"
+        echo -ne "\n  ${C}MSMART UPDATE ❯❯ ${NC}"; read -r opt
+        opt="${opt// /}"; opt="${opt//$'\\r'/}"
         case "$opt" in
-            a|A) smart_install_full_package github; smart_pause;;
-            b|B) smart_install_full_package mirror; smart_pause;;
             1) smart_self_update 1; smart_pause;;
             2) smart_self_update 2; smart_pause;;
             3) smart_self_update 3; smart_pause;;
@@ -322,6 +357,7 @@ smart_update_menu() {
     done
 }
 
+
 smart_local_ipv4() {
     local ip
     ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')
@@ -330,7 +366,6 @@ smart_local_ipv4() {
 }
 smart_local_ipv6() {
     local ip
-    # Prefer the source address selected by the default IPv6 route; fall back to a stable global address.
     ip=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1);exit}}')
     if ! { [ -n "$ip" ] && mt_valid_ipv6 "$ip" && [[ "${ip,,}" != fe80:* ]]; }; then
         ip=$(ip -6 -o addr show scope global 2>/dev/null | grep -vE 'temporary|deprecated|tentative' | awk '{split($4,a,"/");print a[1];exit}')
@@ -439,15 +474,18 @@ SMART_DEP_SOURCE=""
 
 smart_dependency_source_menu() {
     local choice
-    [ -n "$SMART_DEP_SOURCE" ] && return 0
+    SMART_DEP_SOURCE=""
     smart_header
-    echo -e "\n  ${FR}┌─[ SMART PREREQUISITE DOWNLOAD SOURCE ]${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}MTunnel GitHub${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}MTunnel Mirror${NC}"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Official Project GitHubs${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Cancel"
+    echo -e "\n  ${FR}┌─[ SMART PREREQUISITE SOURCE ]${NC}"
+    echo -e "  ${FR}│${NC} ${DIM}Only Smart-required engines and prerequisite packages are installed.${NC}"
+    echo -e "  ${FR}│${NC} ${DIM}Tunnel scripts and the rest of the MTunnel bundle are not downloaded here.${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}MTunnel GitHub${NC} ${DIM}(engines/ + prereqs/)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}MTunnel Mirror${NC} ${DIM}(engines/ + prereqs/)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Official Sources${NC} ${DIM}(engine releases + OS packages)${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
     while true; do
-        echo -ne "  ${C}Download Source ❯❯ ${NC}"; read -r choice || return 1
+        echo -ne "  ${C}Prerequisite Source ❯❯ ${NC}"; read -r choice || return 1
         choice="${choice//$'\r'/}"
         case "$choice" in
             1) SMART_DEP_SOURCE=mtunnel; break;;
@@ -458,130 +496,253 @@ smart_dependency_source_menu() {
         esac
     done
     export SMART_DEP_SOURCE
-    echo -e "  ${DIM}● Selected prerequisite source: ${W}${SMART_DEP_SOURCE}${NC}"
 }
 
 smart_core_installed_backhaul() { [ -x /usr/local/bin/bh ] || [ -x /usr/bin/bh ]; }
 smart_core_installed_rathole() { [ -x /usr/local/bin/rathole ] || [ -x /usr/bin/rathole ]; }
 
-smart_install_tunnel_cores() {
-    local src="$1" tool failed=0
-    if ! smart_core_installed_backhaul; then
-        tool=$(command -v mbackhaul 2>/dev/null || true); [ -n "$tool" ] || tool=/usr/bin/mbackhaul
-        [ -x "$tool" ] || { echo -e "  ${R}✖ MBackhaul module is not installed.${NC}"; failed=1; }
-        if [ "$failed" -eq 0 ]; then
-            echo -e "  ${Y}● Installing Backhaul Core from ${W}$src${NC}..."
-            "$tool" --install-core-smart "$src" || failed=1
-        fi
-    fi
-    if ! smart_core_installed_rathole; then
-        tool=$(command -v mrathole 2>/dev/null || true); [ -n "$tool" ] || tool=/usr/bin/mrathole
-        [ -x "$tool" ] || { echo -e "  ${R}✖ MRathole module is not installed.${NC}"; failed=1; }
-        if [ -x "$tool" ]; then
-            echo -e "  ${Y}● Installing Rathole Core from ${W}$src${NC}..."
-            "$tool" --install-core-smart "$src" || failed=1
-        fi
-    fi
-    smart_core_installed_backhaul || failed=1
-    smart_core_installed_rathole || failed=1
-    [ "$failed" -eq 0 ]
+smart_modules_missing() {
+    local n
+    for n in mgre mxlan mbackhaul mrathole; do
+        command -v "$n" >/dev/null 2>&1 || printf '%s\n' "$n"
+    done
 }
 
-smart_full_package_missing() {
-    local name miss=()
-    for name in mtunnel mgre mxlan mbackhaul mrathole mpaqet mporter linktest mdoctor mmirror; do
-        command -v "$name" >/dev/null 2>&1 || miss+=("$name")
+smart_runtime_missing() {
+    local miss=() n
+    for n in python3 openssl iperf3 ping iptables ip ss flock gzip base64 sha256sum; do
+        command -v "$n" >/dev/null 2>&1 || miss+=("$n")
     done
     smart_core_installed_backhaul || miss+=("backhaul-core")
     smart_core_installed_rathole || miss+=("rathole-core")
-    for name in python3 openssl iperf3 ping iptables ip ss flock; do
-        command -v "$name" >/dev/null 2>&1 || miss+=("$name")
-    done
     printf '%s\n' "${miss[@]}"
 }
 
-smart_full_package_ready() {
-    [ -z "$(smart_full_package_missing)" ]
+smart_prereqs_ready() {
+    [ -z "$(smart_modules_missing)" ] && [ -z "$(smart_runtime_missing)" ]
 }
 
-smart_install_full_package() { # github|mirror
-    local src="$1" cmd rc
-    cmd=$(command -v mtunnel 2>/dev/null || true)
-    [ -x "$cmd" ] || { echo -e "  ${R}✖ MTunnel main core is not installed.${NC}"; return 1; }
-    case "$src" in
-        github) echo -e "  ${C}⟳${NC} ${W}Installing the complete MTunnel package from GitHub...${NC}"; "$cmd" --full-package-github; rc=$?;;
-        mirror) echo -e "  ${C}⟳${NC} ${W}Installing the complete MTunnel package from Mirror...${NC}"; "$cmd" --full-package-mirror; rc=$?;;
-        *) return 2;;
-    esac
-    [ "$rc" -eq 0 ] || return "$rc"
-    if ! smart_full_package_ready; then
-        echo -e "  ${R}✖ Full package finished, but Smart requirements are still incomplete:${NC}"
-        smart_full_package_missing | sed 's/^/    - /'
-        return 1
-    fi
-    echo -e "  ${G}✓ Full MTunnel package and Smart prerequisites are ready.${NC}"
-}
-
-smart_full_package_gate() {
-    local missing choice
-    smart_full_package_ready && return 0
-    missing=$(smart_full_package_missing | paste -sd ', ' -)
-    smart_header
-    echo -e "\n  ${FR}┌─[ FULL PACKAGE REQUIRED ]${NC}"
-    echo -e "  ${FR}│${NC} ${Y}Before Smart Tunnel can run, install the complete MTunnel package on THIS server.${NC}"
-    echo -e "  ${FR}│${NC} ${DIM}Do the same on the other server before pairing.${NC}"
-    echo -e "  ${FR}│${NC} ${DIM}Missing: ${W}${missing:-unknown}${NC}"
-    echo -e "  ${FR}├─${NC} ${W}A${NC} ${DIM}❯${NC} ${C}Install Full Package from GitHub${NC}"
-    echo -e "  ${FR}├─${NC} ${W}B${NC} ${DIM}❯${NC} ${G}Install Full Package from Mirror${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
-    echo -ne "  ${C}FULL PACKAGE ❯❯ ${NC}"; read -r choice
-    case "$choice" in
-        a|A) smart_install_full_package github || { smart_pause; return 1; };;
-        b|B) smart_install_full_package mirror || { smart_pause; return 1; };;
+smart_repo_base() {
+    case "$1" in
+        mtunnel) printf '%s\n' "$MTUNNEL_GITHUB_BASE";;
+        mirror) printf '%s\n' "$MTUNNEL_MIRROR_BASE";;
         *) return 1;;
     esac
-    # The full package may have replaced msmart itself. Restart into the freshly installed copy.
-    exec /usr/bin/msmart
 }
 
-smart_install_system_packages() {
-    local missing=("$@")
-    [ ${#missing[@]} -eq 0 ] && return 0
-    echo -e "  ${Y}● Installing Smart system prerequisites: ${missing[*]}${NC}"
-    command -v apt-get >/dev/null 2>&1 || { echo 'Required Smart system packages are missing and apt-get is unavailable.' >&2; return 1; }
-    DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}" >/dev/null 2>&1
+smart_repo_manifest() { # base sub out
+    local base="$1" sub="$2" out="$3" tmp line hash name n=0
+    tmp=$(mktemp "$SECURE_TMP/.smart-manifest.XXXXXX") || return 1
+    mt_download "$(mt_cb_url "${base%/}/${sub}/manifest.txt")" "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+    : > "$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line//$'\r'/}"
+        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
+        if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]]; then
+            hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ^[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
+            hash='-'; name="${BASH_REMATCH[1]}"
+        else
+            continue
+        fi
+        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
+        case "$sub" in
+            engines) [[ "$name" != *.deb ]] || continue;;
+            prereqs) [[ "$name" == *.deb ]] || continue;;
+            *) continue;;
+        esac
+        printf '%s|%s\n' "$hash" "$name" >> "$out"; n=$((n+1))
+    done < "$tmp"
+    rm -f "$tmp"
+    [ "$n" -gt 0 ]
+}
+
+smart_repo_manifest_name() { # manifest regex
+    local mf="$1" re="$2"
+    awk -F'|' -v r="$re" '$2 ~ r {print $2}' "$mf" 2>/dev/null | sort -V | tail -n1
+}
+
+smart_repo_download_item() { # base sub name manifest dest
+    local base="$1" sub="$2" name="$3" mf="$4" dest="$5" hash got
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || return 1
+    hash=$(awk -F'|' -v n="$name" '$2==n{print $1;exit}' "$mf")
+    [ -n "$hash" ] || return 1
+    mt_download "$(mt_cb_url "${base%/}/${sub}/$name")" "$dest" || return 1
+    if [ "$hash" != '-' ]; then
+        got=$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')
+        [ "$got" = "$hash" ] || { rm -f "$dest"; echo "Checksum mismatch: $name" >&2; return 1; }
+    fi
+    return 0
+}
+
+smart_engine_assets() { # echoes backhaul_asset|rathole_asset
+    local bh rh
+    case "$(uname -m)" in
+        x86_64) bh='backhaul_linux_amd64.tar.gz'; rh='rathole-x86_64-unknown-linux-gnu.zip';;
+        aarch64|arm64) bh='backhaul_linux_arm64.tar.gz'; rh='rathole-aarch64-unknown-linux-musl.zip';;
+        *) return 1;;
+    esac
+    printf '%s|%s\n' "$bh" "$rh"
+}
+
+smart_install_engines_from_repo() { # mtunnel|mirror
+    local src="$1" base mf stage assets bh_asset rh_asset bh_name rh_name rc=0
+    base=$(smart_repo_base "$src") || return 1
+    mf=$(mktemp "$SECURE_TMP/.smart-engines-mf.XXXXXX") || return 1
+    smart_repo_manifest "$base" engines "$mf" || { rm -f "$mf"; echo -e "  ${R}✖ engines/manifest.txt is missing or invalid at the selected source.${NC}"; return 1; }
+    assets=$(smart_engine_assets) || { rm -f "$mf"; echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
+    IFS='|' read -r bh_asset rh_asset <<< "$assets"
+    stage=$(mktemp -d "$SECURE_TMP/smart-engines.XXXXXX") || { rm -f "$mf"; return 1; }
+
+    if ! smart_core_installed_backhaul; then
+        bh_name=$(smart_repo_manifest_name "$mf" "^${bh_asset}$")
+        if [ -z "$bh_name" ] && [ "$(uname -m)" = x86_64 ]; then bh_name=$(smart_repo_manifest_name "$mf" '^bh$'); fi
+        if [ -z "$bh_name" ]; then
+            echo -e "  ${R}✖ Required Backhaul engine is not present in engines/.${NC}"; rc=1
+        else
+            echo -e "  ${C}⟳${NC} ${W}Backhaul:${NC} engines/${bh_name}"
+            if smart_repo_download_item "$base" engines "$bh_name" "$mf" "$stage/$bh_name" && mt_update_core bh mbackhaul "$stage/$bh_name" local; then
+                echo -e "  ${G}✔ Backhaul Core ready.${NC}"
+            else
+                echo -e "  ${R}✖ Backhaul Core install failed.${NC}"; rc=1
+            fi
+        fi
+    else
+        echo -e "  ${G}✔ Backhaul Core already installed.${NC}"
+    fi
+
+    if ! smart_core_installed_rathole; then
+        rh_name=$(smart_repo_manifest_name "$mf" "^${rh_asset}$")
+        if [ -z "$rh_name" ] && [ "$(uname -m)" = x86_64 ]; then rh_name=$(smart_repo_manifest_name "$mf" '^rathole$'); fi
+        if [ -z "$rh_name" ]; then
+            echo -e "  ${R}✖ Required Rathole engine is not present in engines/.${NC}"; rc=1
+        else
+            echo -e "  ${C}⟳${NC} ${W}Rathole:${NC} engines/${rh_name}"
+            if smart_repo_download_item "$base" engines "$rh_name" "$mf" "$stage/$rh_name" && mt_update_core rathole mrathole "$stage/$rh_name" local; then
+                echo -e "  ${G}✔ Rathole Core ready.${NC}"
+            else
+                echo -e "  ${R}✖ Rathole Core install failed.${NC}"; rc=1
+            fi
+        fi
+    else
+        echo -e "  ${G}✔ Rathole Core already installed.${NC}"
+    fi
+    rm -rf "$stage"; rm -f "$mf"
+    return "$rc"
+}
+
+smart_missing_package_prefixes() {
+    local out=()
+    command -v python3 >/dev/null 2>&1 || out+=(python3)
+    command -v openssl >/dev/null 2>&1 || out+=(openssl)
+    if ! command -v iperf3 >/dev/null 2>&1; then out+=(libiperf0 iperf3); fi
+    command -v ping >/dev/null 2>&1 || out+=(iputils-ping)
+    command -v iptables >/dev/null 2>&1 || out+=(iptables)
+    { command -v ip >/dev/null 2>&1 && command -v ss >/dev/null 2>&1; } || out+=(iproute2)
+    command -v flock >/dev/null 2>&1 || out+=(util-linux)
+    command -v gzip >/dev/null 2>&1 || out+=(gzip)
+    { command -v base64 >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; } || out+=(coreutils)
+    printf '%s\n' "${out[@]}"
+}
+
+smart_install_prereq_debs_from_repo() { # mtunnel|mirror
+    local src="$1" base mf stage arch prefix name rc=0
+    local -a prefixes=() debs=()
+    mapfile -t prefixes < <(smart_missing_package_prefixes)
+    [ ${#prefixes[@]} -gt 0 ] || { echo -e "  ${G}✔ System prerequisites already installed.${NC}"; return 0; }
+    command -v dpkg >/dev/null 2>&1 && command -v dpkg-deb >/dev/null 2>&1 || { echo -e "  ${R}✖ dpkg/dpkg-deb is required to install prereqs/*.deb.${NC}"; return 1; }
+    base=$(smart_repo_base "$src") || return 1
+    mf=$(mktemp "$SECURE_TMP/.smart-prereqs-mf.XXXXXX") || return 1
+    smart_repo_manifest "$base" prereqs "$mf" || { rm -f "$mf"; echo -e "  ${R}✖ prereqs/manifest.txt is missing or invalid at the selected source.${NC}"; return 1; }
+    stage=$(mktemp -d "$SECURE_TMP/smart-prereqs.XXXXXX") || { rm -f "$mf"; return 1; }
+    arch=$(dpkg --print-architecture 2>/dev/null || true)
+    [ -n "$arch" ] || arch=amd64
+    for prefix in "${prefixes[@]}"; do
+        name=$(smart_repo_manifest_name "$mf" "^${prefix}_.*_(${arch}|all)\\.deb$")
+        if [ -z "$name" ]; then
+            echo -e "  ${R}✖ prereqs/: no compatible package found for ${prefix}.${NC}"; rc=1; continue
+        fi
+        echo -e "  ${C}⟳${NC} ${W}${prefix}:${NC} prereqs/${name}"
+        if smart_repo_download_item "$base" prereqs "$name" "$mf" "$stage/$name" && dpkg-deb --info "$stage/$name" >/dev/null 2>&1; then
+            debs+=("$stage/$name")
+        else
+            echo -e "  ${R}✖ Invalid or failed prerequisite: ${name}${NC}"; rc=1
+        fi
+    done
+    if [ ${#debs[@]} -gt 0 ]; then
+        echo -e "  ${Y}● Installing selected prerequisite packages...${NC}"
+        DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" >/dev/null 2>&1 || rc=1
+    fi
+    rm -rf "$stage"; rm -f "$mf"
+    return "$rc"
+}
+
+smart_install_official_prereqs() {
+    local missing=() assets bh_asset rh_asset tmp rc=0
+    mapfile -t missing < <(smart_missing_package_prefixes)
+    if [ ${#missing[@]} -gt 0 ]; then
+        command -v apt-get >/dev/null 2>&1 || { echo -e "  ${R}✖ apt-get is unavailable for Official Sources.${NC}"; return 1; }
+        local -a pkgs=(); local p
+        for p in "${missing[@]}"; do
+            case "$p" in libiperf0) pkgs+=(libiperf0);; *) pkgs+=("$p");; esac
+        done
+        echo -e "  ${Y}● Installing OS prerequisites from the distribution repositories...${NC}"
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${pkgs[@]}" >/dev/null 2>&1 || rc=1
+    fi
+    assets=$(smart_engine_assets) || return 1; IFS='|' read -r bh_asset rh_asset <<< "$assets"
+    if ! smart_core_installed_backhaul; then
+        tmp=$(mktemp "$SECURE_TMP/backhaul.XXXXXX") || return 1
+        echo -e "  ${C}⟳${NC} ${W}Backhaul:${NC} official GitHub release"
+        if mt_download "https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$bh_asset" "$tmp" && mt_update_core bh mbackhaul "$tmp" local; then :; else rc=1; fi
+        rm -f "$tmp"
+    fi
+    if ! smart_core_installed_rathole; then
+        tmp=$(mktemp "$SECURE_TMP/rathole.XXXXXX") || return 1
+        echo -e "  ${C}⟳${NC} ${W}Rathole:${NC} official GitHub release"
+        if mt_download "https://github.com/rathole-org/rathole/releases/download/v0.5.0/$rh_asset" "$tmp" && mt_update_core rathole mrathole "$tmp" local; then :; else rc=1; fi
+        rm -f "$tmp"
+    fi
+    return "$rc"
+}
+
+smart_install_smart_prerequisites() { # mtunnel|mirror|official
+    local src="$1" mods rc=0
+    mods=$(smart_modules_missing | paste -sd ', ' -)
+    if [ -n "$mods" ]; then
+        echo -e "  ${R}✖ Required tunnel modules are missing: ${W}$mods${NC}"
+        echo -e "  ${DIM}Prerequisites does not download scripts. Install/update the MTunnel script bundle first.${NC}"
+        return 1
+    fi
+    case "$src" in
+        mtunnel|mirror)
+            smart_install_prereq_debs_from_repo "$src" || rc=1
+            smart_install_engines_from_repo "$src" || rc=1
+            ;;
+        official)
+            smart_install_official_prereqs || rc=1
+            ;;
+        *) return 2;;
+    esac
+    if smart_prereqs_ready; then
+        echo -e "\n  ${G}✓ Smart prerequisites are ready.${NC}"
+        return 0
+    fi
+    echo -e "\n  ${R}✖ Some Smart requirements are still missing:${NC}"
+    smart_runtime_missing | sed 's/^/    - /'
+    return 1
 }
 
 smart_ensure_agent_dependencies() {
-    local missing=() need=0
-    command -v python3 >/dev/null 2>&1 || missing+=(python3)
-    command -v openssl >/dev/null 2>&1 || missing+=(openssl)
-    command -v iperf3 >/dev/null 2>&1 || missing+=(iperf3)
-    command -v ping >/dev/null 2>&1 || missing+=(iputils-ping)
-    command -v iptables >/dev/null 2>&1 || missing+=(iptables)
-    smart_core_installed_backhaul || need=1
-    smart_core_installed_rathole || need=1
-    [ ${#missing[@]} -eq 0 ] && [ "$need" -eq 0 ] && return 0
-    smart_dependency_source_menu || return 1
-    smart_install_system_packages "${missing[@]}" || return 1
-    smart_install_tunnel_cores "$SMART_DEP_SOURCE" || return 1
+    smart_prereqs_ready && return 0
+    echo -e "  ${R}✖ Smart prerequisites are incomplete. Open option 1: Prerequisites & Pair Setup.${NC}"
+    return 1
 }
 
 smart_ensure_controller_dependencies() {
-    local missing=() need=0
-    command -v python3 >/dev/null 2>&1 || missing+=(python3)
-    command -v iperf3 >/dev/null 2>&1 || missing+=(iperf3)
-    command -v ping >/dev/null 2>&1 || missing+=(iputils-ping)
-    command -v ss >/dev/null 2>&1 || missing+=(iproute2)
-    command -v flock >/dev/null 2>&1 || missing+=(util-linux)
-    command -v iptables >/dev/null 2>&1 || missing+=(iptables)
-    smart_core_installed_backhaul || need=1
-    smart_core_installed_rathole || need=1
-    [ ${#missing[@]} -eq 0 ] && [ "$need" -eq 0 ] && return 0
-    smart_dependency_source_menu || return 1
-    smart_install_system_packages "${missing[@]}" || return 1
-    smart_install_tunnel_cores "$SMART_DEP_SOURCE" || return 1
+    smart_prereqs_ready && return 0
+    echo -e "  ${R}✖ Smart prerequisites are incomplete. Open option 1: Prerequisites & Pair Setup.${NC}"
+    return 1
 }
 
 smart_install_agent_service() {
@@ -643,7 +804,7 @@ def local6():
     except Exception: pass
     return 'Unknown'
 def info():
-    required=['mgre','mxlan','mbackhaul','mrathole','mpaqet','mporter','linktest','mdoctor','mmirror','python3','iperf3','ping','iptables','ip','ss','flock']
+    required=['mgre','mxlan','mbackhaul','mrathole','python3','openssl','iperf3','ping','iptables','ip','ss','flock','gzip','base64','sha256sum']
     missing=[x for x in required if shutil.which(x) is None]
     bh=os.path.isfile('/usr/local/bin/bh') or os.path.isfile('/usr/bin/bh')
     rat=os.path.isfile('/usr/local/bin/rathole') or os.path.isfile('/usr/bin/rathole')
@@ -651,6 +812,7 @@ def info():
     if not rat: missing.append('rathole-core')
     return {'version':module_version,'api_rev':api_rev,'ipv4':local4(),'ipv6':local6(),
             'backhaul_core':bh,'rathole_core':rat,'iperf3':shutil.which('iperf3') is not None,
+            'smart_ready':not missing,'smart_missing':','.join(missing),
             'full_package_ready':not missing,'full_package_missing':','.join(missing)}
 def valid_ip(v):
     try: ipaddress.ip_address(v); return True
@@ -667,7 +829,6 @@ PAIR_COMMENT='MTUNNEL_SMART_PAIR'
 PAIRED_COMMENT='MTUNNEL_SMART_PAIRED'
 
 def ensure_agent_firewall(pair_open=False, controller=None):
-    # Put a dedicated gate at the top of INPUT so an earlier generic ACCEPT rule cannot expose the Agent.
     try:
         subprocess.run(['iptables','-N',CHAIN],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
     except Exception:
@@ -693,7 +854,6 @@ def restore_agent_firewall():
         raise SystemExit('MTunnel Smart Agent firewall gate could not be installed')
 
 def restrict_agent_firewall(src):
-    # Pairing is reached over Foreign IPv4, so pin the management chain to the actual controller source.
     try:
         ip=ipaddress.ip_address(src)
         if ip.version != 4: return False
@@ -780,6 +940,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 msg=(p.stdout+'\n'+p.stderr).strip()[-5000:]
                 return self.sendj(200 if p.returncode==0 else 500,{'ok':p.returncode==0,'rc':p.returncode,'output':msg})
             except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
+        if action=='smart_ports':
+            kind=str(data.get('kind','')); name=str(data.get('name','')); ports=str(data.get('ports',''))
+            mods={'backhaul':'/usr/bin/mbackhaul','rathole':'/usr/bin/mrathole'}
+            exe=mods.get(kind)
+            if not exe or not os.path.isfile(exe) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',name) or not re.fullmatch(r'[0-9A-Za-z_.,:=-]{1,2048}',ports):
+                return self.sendj(400,{'ok':False,'error':'invalid smart_ports request'})
+            try:
+                p=subprocess.run([exe,'--smart-ports',name,ports],capture_output=True,text=True,timeout=60)
+                msg=(p.stdout+'\n'+p.stderr).strip()[-5000:]
+                return self.sendj(200 if p.returncode==0 else 500,{'ok':p.returncode==0,'rc':p.returncode,'output':msg})
+            except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
         if action=='iperf_start':
             bind=str(data.get('bind','')); p=int(data.get('port',5201) or 5201)
             if not valid_ip(bind) or not (1<=p<=65535): return self.sendj(400,{'ok':False,'error':'invalid iperf bind'})
@@ -854,7 +1025,7 @@ smart_foreign_setup() {
     echo -e "  ${FR}│${NC} ${W}Open Smart Tunnel on the Iran server too.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}This server becomes the Foreign Agent. After pairing, management is done from Iran.${NC}"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
-    smart_full_package_ready || { echo -e "  ${R}✖ Full MTunnel package is incomplete on Foreign. Use Update & Local Install → A/B first.${NC}"; smart_pause; return 1; }
+    smart_prereqs_ready || { echo -e "  ${R}✖ Smart prerequisites are incomplete on Foreign. Run option 1 first.${NC}"; smart_pause; return 1; }
     local ip4 ip6 secret expires fp code
     ip4=$(smart_local_ipv4); ip6=$(smart_local_ipv6)
     if [ ! -s "$SMART_DIR/agent.crt" ] || [ ! -s "$SMART_DIR/agent.key" ]; then
@@ -867,12 +1038,8 @@ smart_foreign_setup() {
     secret=$(smart_random_hex 32); expires=$(($(date +%s)+900))
     printf '%s\n' "$secret" > "$SMART_DIR/pair.secret"; printf '%s\n' "$expires" > "$SMART_DIR/pair.expires"
     chmod 600 "$SMART_DIR/pair.secret" "$SMART_DIR/pair.expires"
-    # Keep the current controller session alive until a new controller completes pairing.
     smart_install_agent_service || { echo 'Could not install Agent service.' >&2; smart_pause; return 1; }
     systemctl restart mtunnel-smart-agent.service || { echo 'Could not start Agent service.' >&2; smart_pause; return 1; }
-    # The Agent rebuilds its dedicated INPUT gate on startup. During the 15-minute pair window
-    # that chain allows pairing; after pairing it accepts only the pinned Iran IPv4 and drops the rest.
-    # Broad access is temporary: successful pairing pins the rule to the Iran source IP.
     if command -v systemd-run >/dev/null 2>&1 && systemd-run --quiet --collect --unit="mtunnel-smart-pair-window-$(date +%s)" --on-active=16m "$INSTALL_PATH" --pair-window-cleanup >/dev/null 2>&1; then
         :
     else
@@ -893,7 +1060,7 @@ smart_foreign_setup() {
 }
 smart_pair_controller() {
     smart_header
-    smart_full_package_ready || { echo -e "  ${R}✖ Full MTunnel package is not ready on Iran. Use Update & Local Install → A/B first.${NC}"; smart_pause; return 1; }
+    smart_prereqs_ready || { echo -e "  ${R}✖ Smart prerequisites are incomplete on Iran. Run option 1 first.${NC}"; smart_pause; return 1; }
     echo -e "\n  ${FR}┌─[ IRAN CONTROLLER PAIRING ]${NC}"
     echo -e "  ${FR}│${NC} ${DIM}The Foreign server must already be in Smart Tunnel → Foreign Server.${NC}"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
@@ -907,7 +1074,7 @@ smart_pair_controller() {
     if [ "$ok" != 1 ]; then echo -e "  ${R}✖ Pairing failed:${NC} $(smart_json_field "$response" error)"; smart_pause; return 1; fi
     token=$(smart_json_field "$response" token); rv4=$(smart_json_field "$response" ipv4); rv6=$(smart_json_field "$response" ipv6); v=$(smart_json_field "$response" version); api=$(smart_json_field "$response" api_rev)
     [ "$api" = "$SMART_API_REV" ] || { echo -e "  ${R}✖ Foreign Agent API is incompatible (remote: ${api:-unknown}, required: $SMART_API_REV). Update Foreign MSmart and generate a new Pair Code.${NC}"; smart_pause; return 1; }
-    [ "$(smart_json_field "$response" full_package_ready)" = 1 ] || { echo -e "  ${R}✖ Foreign full package is incomplete:${NC} $(smart_json_field "$response" full_package_missing)"; echo -e "  ${Y}Run Smart → Update & Local Install → A/B on Foreign, then generate a new Pair Code.${NC}"; smart_pause; return 1; }
+    [ "$(smart_json_field "$response" smart_ready)" = 1 ] || { echo -e "  ${R}✖ Foreign Smart prerequisites are incomplete:${NC} $(smart_json_field "$response" smart_missing)"; echo -e "  ${Y}Run option 1 on Foreign, install prerequisites, then generate a new Pair Code.${NC}"; smart_pause; return 1; }
     [[ "$token" =~ ^[A-Za-z0-9_-]{20,256}$ ]] || { echo 'Agent returned an invalid session token.' >&2; smart_pause; return 1; }
     if [ "$PAIR_IP6" != Unknown ] && [ "$rv6" != Unknown ] && [ "$PAIR_IP6" != "$rv6" ]; then
         echo -e "  ${R}✖ Foreign IPv6 changed since Pair Code generation. Generate a new Pair Code.${NC}"; smart_pause; return 1
@@ -936,16 +1103,20 @@ EOF
 smart_info() {
     smart_header
     if ! smart_peer_load; then echo -e "\n  ${Y}● This server is not paired as an Iran Controller.${NC}"; smart_pause; return; fi
-    local l4 l6 response ok
+    local l4 l6 response ok r_ver r_api
     l4=$(smart_local_ipv4); l6=$(smart_local_ipv6); response=$(smart_agent_call '{"action":"info"}' || true); ok=$(smart_json_field "$response" ok)
-    echo -e "\n  ${FR}┌─[ SMART PEER STATUS ]${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Iran IPv4${NC}       ${DIM}❯${NC} ${C}$l4${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Iran IPv6${NC}       ${DIM}❯${NC} ${C}$l6${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Foreign IPv4${NC}    ${DIM}❯${NC} ${C}$SMART_F4${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Foreign IPv6${NC}    ${DIM}❯${NC} ${C}${SMART_F6:-Unknown}${NC}"
-    echo -e "  ${FR}├─${NC} ${W}Agent${NC}           ${DIM}❯${NC} $([ "$ok" = 1 ] && echo -e "${G}ONLINE${NC}" || echo -e "${R}OFFLINE${NC}")"
-    echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}"
-    [ "$ok" = 1 ] || echo -e "  ${R}$(smart_json_field "$response" error)${NC}"
+    r_ver=$(smart_json_field "$response" version); r_api=$(smart_json_field "$response" api_rev)
+    echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${FR}║${NC} ${C}▼ SMART PEER & CONTROLLER STATUS${NC}                                                           ${FR}║${NC}"
+    echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
+    printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${C}%-69s${NC} ${FR}║${NC}\n" "Iran IPv4" "$l4"
+    printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${C}%-69s${NC} ${FR}║${NC}\n" "Iran IPv6" "$l6"
+    printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${C}%-69s${NC} ${FR}║${NC}\n" "Foreign IPv4" "$SMART_F4"
+    printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${C}%-69s${NC} ${FR}║${NC}\n" "Foreign IPv6" "${SMART_F6:-Unknown}"
+    printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${Y}%-69s${NC} ${FR}║${NC}\n" "Agent Port" "$SMART_PORT"
+    printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} %b%-69s%b ${FR}║${NC}\n" "Agent Status" "$([ "$ok" = 1 ] && printf "$G" || printf "$R")" "$([ "$ok" = 1 ] && echo "ONLINE (v${r_ver:-?} • API ${r_api:-?})" || echo "OFFLINE")" "$NC"
+    echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
+    [ "$ok" = 1 ] || echo -e "  ${R}✖ Error: $(smart_json_field "$response" error)${NC}"
     smart_pause
 }
 smart_local_ping_probe() { # host -> reachable|avg|loss
@@ -1041,7 +1212,7 @@ smart_unique_fabric_ids() { # avail ids -> keep at most one mGRE-family and one 
     done
     printf '%s' "$out"
 }
-smart_all_ids() { # all compatible, but Smart owns one mGRE + one VXLAN fabric per group
+smart_all_ids() {
     local avail="$1" ids
     ids=$(awk -F'|' '{printf "%s%s",sep,$1;sep=","}' <<< "$avail")
     smart_unique_fabric_ids "$avail" "$ids"
@@ -1060,8 +1231,8 @@ smart_recommended_ids() {
     done
     printf '%s' "$out"
 }
-smart_validate_service_ports() {
-    local s="${1// /}" p; local -A seen=(); local -a _sp=(); SMART_SERVICE_PORTS=''
+smart_validate_service_ports() { # ports [ignore_listening_flag]
+    local s="${1// /}" ignore_listen="${2:-0}" p; local -A seen=(); local -a _sp=(); SMART_SERVICE_PORTS=''
     [ -z "$s" ] && return 1
     [[ "$s" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
     IFS=, read -ra _sp <<< "$s"
@@ -1070,10 +1241,39 @@ smart_validate_service_ports() {
         mt_valid_port "$p" || return 1
         p=$((10#$p))
         [ -z "${seen[$p]:-}" ] || return 1
-        if ss -lntH 2>/dev/null | awk -v want="$p" '{n=split($4,a,":"); if (a[n]==want) found=1} END{exit !found}'; then return 1; fi
+        if [ "$ignore_listen" != 1 ]; then
+            if ss -lntH 2>/dev/null | awk -v want="$p" '{n=split($4,a,":"); if (a[n]==want) found=1} END{exit !found}'; then return 1; fi
+        fi
         seen[$p]=1
         SMART_SERVICE_PORTS+="${SMART_SERVICE_PORTS:+,}$p"
     done
+}
+smart_merge_csv_ports() { # existing_csv add_csv
+    local cur="$1" add="$2" p out=''
+    local -A seen=()
+    for p in ${cur//,/ } ${add//,/ }; do
+        [[ "$p" =~ ^[0-9]+$ ]] || continue
+        p=$((10#$p))
+        mt_valid_port "$p" || continue
+        [ -z "${seen[$p]:-}" ] || continue
+        seen[$p]=1
+        out+="${out:+,}$p"
+    done
+    printf '%s' "$out"
+}
+smart_remove_csv_ports() { # existing_csv rem_csv
+    local cur="$1" rem="$2" p out=''
+    local -A drop=()
+    for p in ${rem//,/ }; do
+        [[ "$p" =~ ^[0-9]+$ ]] && drop[$((10#$p))]=1
+    done
+    for p in ${cur//,/ }; do
+        [[ "$p" =~ ^[0-9]+$ ]] || continue
+        p=$((10#$p))
+        [ -z "${drop[$p]:-}" ] || continue
+        out+="${out:+,}$p"
+    done
+    printf '%s' "$out"
 }
 smart_pick_port() { # base [excluded-comma-list]; prints free tcp port
     local base="$1" excluded="${2:-}" p i
@@ -1241,6 +1441,15 @@ PY
     response=$(smart_agent_call "$body" 75 || true)
     [ "$(smart_json_field "$response" ok)" = 1 ]
 }
+smart_remote_smart_ports() { # kind name ports
+    local body response
+    body=$(K="$1" N="$2" P="$3" python3 - <<'PY'
+import json,os; print(json.dumps({'action':'smart_ports','kind':os.environ['K'],'name':os.environ['N'],'ports':os.environ['P']},separators=(',',':')))
+PY
+)
+    response=$(smart_agent_call "$body" 60 || true)
+    [ "$(smart_json_field "$response" ok)" = 1 ]
+}
 smart_delete_local() { # kind name
     case "$1" in
         gre) /usr/bin/mgre --delete-one "$2";;
@@ -1384,7 +1593,6 @@ smart_apply_active_forwarding() { # groupdir ranking-file
     fi
     current_kind=$(awk -F'|' -v i="$current" '$1==i{print $3;exit}' "$gd/candidates.tsv")
     [ -z "$previous" ] || previous_kind=$(awk -F'|' -v i="$previous" '$1==i{print $3;exit}' "$gd/candidates.tsv")
-    # Native proxy engines cannot bind the same public ports simultaneously. All other transitions are make-before-break.
     if [ -n "$previous" ] && [[ "$current_kind" =~ ^(rathole|backhaul)$ ]] && [[ "$previous_kind" =~ ^(rathole|backhaul)$ ]]; then
         smart_forward_one "$gd" "$previous" off || true
         if ! smart_forward_one "$gd" "$current" on; then
@@ -1416,10 +1624,8 @@ PY
 )
             resp=$(smart_agent_call "$body" || true); lat=$(smart_json_field "$resp" avg_ms); loss=$(smart_json_field "$resp" loss); jit=$(smart_json_field "$resp" jitter_ms); target=127.0.0.1; target_port="$benchp"
             if [ "$kind" = backhaul ]; then
-                # Foreign loopback:5201 is remapped by Backhaul to this unique local benchmark port.
                 up=$(smart_iperf_speed_backhaul "$benchp" normal); down=$(smart_iperf_speed_backhaul "$benchp" reverse)
             else
-                # Rathole exposes the same benchmark port on both ends.
                 up=$(smart_iperf_speed_rathole "$benchp" normal); down=$(smart_iperf_speed_rathole "$benchp" reverse)
             fi
         else
@@ -1431,7 +1637,6 @@ PY
         if awk -v u="$up" -v d="$down" 'BEGIN{exit !(u<=0 && d<=0)}'; then status=DOWN; fi
         printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|0\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$status" "$lat" "$loss" "$jit" "$up" "$down" >> "$tmp"
     done < "$cand"
-    # recompute max speed robustly after all samples
     maxs=$(awk -F'|' 'BEGIN{m=0}$10=="UP"{s=($14+$15)/2;if(s>m)m=s}END{print m}' "$tmp")
     : > "$out"
     while IFS='|' read -r id label kind proto path name inner linkp benchp status lat loss jit up down _; do
@@ -1475,19 +1680,26 @@ PY
 smart_show_ranking_file() {
     local f="$1" rank=0 id label kind proto path name inner linkp benchp status lat loss jit up down score
     [ -s "$f" ] || { echo -e "  ${Y}● No benchmark result yet.${NC}"; return 1; }
-    echo -e "\n  ${FR}┌─[ SMART TUNNEL RANKING ]${NC}"
-    printf '  %-3s %-27s %-8s %-8s %-8s %-9s %-9s %-7s\n' '#' 'Tunnel' 'Path' 'Ping' 'Loss' 'Up Mbps' 'Dn Mbps' 'Score'
+    echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${FR}║${NC} ${C}▼ SMART TUNNEL RANKING & PERFORMANCE${NC}                                                       ${FR}║${NC}"
+    echo -e "  ${FR}╠════╦═══════════════════════════╦══════════════════╦══════════╦════════╦══════════╦═════════╣${NC}"
+    printf "  ${FR}║${NC} ${DIM}%-2s${NC} ${FR}║${NC} ${DIM}%-25s${NC} ${FR}║${NC} ${DIM}%-16s${NC} ${FR}║${NC} ${DIM}%-8s${NC} ${FR}║${NC} ${DIM}%-6s${NC} ${FR}║${NC} ${DIM}%-8s${NC} ${FR}║${NC} ${DIM}%-7s${NC} ${FR}║${NC}\n" "#" "TUNNEL" "PATH" "PING" "LOSS" "UP/DN" "SCORE"
+    echo -e "  ${FR}╠════╬═══════════════════════════╬══════════════════╬══════════╬════════╬══════════╬═════════╣${NC}"
     while IFS='|' read -r id label kind proto path name inner linkp benchp status lat loss jit up down score; do
-        rank=$((rank+1)); printf '  %-3s %-27.27s %-8s %-8s %-8s %-9s %-9s %-7s\n' "$rank" "$label" "$path" "${lat}ms" "${loss}%" "$up" "$down" "$score"
+        rank=$((rank+1))
+        local st_col="$G"
+        [ "$status" = UP ] || st_col="$R"
+        printf "  ${FR}║${NC} ${Y}%-2s${NC} ${FR}║${NC} ${W}%-25.25s${NC} ${FR}║${NC} ${C}%-16.16s${NC} ${FR}║${NC} ${Y}%-8.8s${NC} ${FR}║${NC} %-6.6s ${FR}║${NC} %-8.8s ${FR}║${NC} %b%-7.7s%b ${FR}║${NC}\n" "$rank" "$label" "${path//↔/<->}" "${lat}ms" "${loss}%" "${up}/${down}" "$st_col" "$score" "$NC"
     done < "$f"
+    echo -e "  ${FR}╚════╩═══════════════════════════╩══════════════════╩══════════╩════════╩══════════╩═════════╝${NC}"
 }
 smart_create_group() {
     smart_peer_load || { echo -e "  ${R}✖ Pair the Foreign server first.${NC}"; smart_pause; return 1; }
-    smart_full_package_ready || { echo -e "  ${R}✖ Full MTunnel package is incomplete on Iran. Use Update & Local Install → A/B first.${NC}"; smart_pause; return 1; }
+    smart_prereqs_ready || { echo -e "  ${R}✖ Smart prerequisites are incomplete on Iran. Run option 1 first.${NC}"; smart_pause; return 1; }
     local l4 l6 response ok f6 lbh=0 rbh=0 lrat=0 rrat=0 avail choice ids services gid gd rec id line label kind proto path base secret hash num core corev6 links local_link remote_link inner lname rname linkport benchport ports status
     l4=$(smart_local_ipv4); l6=$(smart_local_ipv6); response=$(smart_agent_call '{"action":"info"}' || true); ok=$(smart_json_field "$response" ok)
     [ "$ok" = 1 ] || { echo -e "  ${R}✖ Foreign Agent is offline: $(smart_json_field "$response" error)${NC}"; smart_pause; return 1; }
-    [ "$(smart_json_field "$response" full_package_ready)" = 1 ] || { echo -e "  ${R}✖ Foreign full package is incomplete: $(smart_json_field "$response" full_package_missing)${NC}"; echo -e "  ${Y}Install Full Package A/B on Foreign before building tunnels.${NC}"; smart_pause; return 1; }
+    [ "$(smart_json_field "$response" smart_ready)" = 1 ] || { echo -e "  ${R}✖ Foreign Smart prerequisites are incomplete: $(smart_json_field "$response" smart_missing)${NC}"; echo -e "  ${Y}Run option 1 on Foreign before building tunnels.${NC}"; smart_pause; return 1; }
     f6=$(smart_json_field "$response" ipv6); [ "$f6" != Unknown ] || f6="$SMART_F6"
     if { [ -x /usr/local/bin/bh ] || [ -x /usr/bin/bh ]; }; then lbh=1; fi
     if { [ -x /usr/local/bin/rathole ] || [ -x /usr/bin/rathole ]; }; then lrat=1; fi
@@ -1523,10 +1735,9 @@ smart_create_group() {
         echo -e "  ${DIM}Selected fabric set: $ids${NC}"
     fi
     while true; do
-        echo -ne "
-  ${C}●${NC} ${W}Service TCP ports [example: 443,8443,2053]: ${NC}"; read -r services
+        echo -ne "\n  ${C}●${NC} ${W}Service TCP ports [example: 443,8443,2053]: ${NC}"; read -r services
         smart_validate_service_ports "$services" && { services="$SMART_SERVICE_PORTS"; break; }
-        echo -e "  ${R}✖ Enter one or more comma-separated TCP ports.${NC}"
+        echo -e "  ${R}✖ Enter one or more comma-separated free TCP ports.${NC}"
     done
     gid="sg$(date +%m%d%H%M)-$(smart_random_hex 2)"; gd="$GROUP_DIR/$gid"; mkdir -p "$gd"; chmod 700 "$gd"
     cat > "$gd/group.conf" <<EOF
@@ -1543,6 +1754,7 @@ IRAN_TO_FOREIGN_V6=$SMART_I_TO_F6
 FOREIGN_TO_IRAN_V6=$SMART_F_TO_I6
 WATCHDOG=1
 EOF
+    chmod 600 "$gd/group.conf"
     : > "$gd/candidates.tsv"; : > "$gd/names.tsv"
     echo -e "\n  ${C}Creating selected tunnels on Foreign + Iran...${NC}"
     for id in ${ids//,/ }; do
@@ -1631,7 +1843,7 @@ smart_schedule_rebenchmark() { # groupdir
     fi
     nohup sh -c 'sleep 30; exec "$1" --benchmark-group "$2"' sh "$INSTALL_PATH" "$gid" >/dev/null 2>&1 &
 }
-smart_recovery_score() { # latency loss jitter -> provisional health-only score, capped below a fully benchmarked candidate
+smart_recovery_score() { # latency loss jitter -> provisional health-only score
     python3 - "$1" "$2" "$3" <<'PY'
 import sys
 lat,loss,jit=map(float,sys.argv[1:4])
@@ -1647,6 +1859,10 @@ smart_watchdog_group_locked() { # gid; caller owns process-level flock --close
     f="$gd/ranking.tsv"; baseline="$gd/baseline.tsv"; [ -s "$f" ] || return 0
     tmp="$gd/.ranking.live"; : > "$tmp"
     while IFS='|' read -r id label kind proto path name inner linkp benchp status blat loss jit up down current_score; do
+        if [ -s "$gd/delete-tunnel.${id}.pending" ]; then
+            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|DOWN|%s|%s|%s|%s|%s|0\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$blat" "$loss" "$jit" "$up" "$down" >> "$tmp"
+            continue
+        fi
         base_lat=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$baseline" 2>/dev/null || true)
         base_score=$(awk -F'|' -v i="$id" '$1==i{print $3;exit}' "$baseline" 2>/dev/null || true)
         [[ "$base_lat" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_lat="$blat"
@@ -1695,242 +1911,498 @@ smart_watchdog_once() {
         flock -n -o "$gd/.smart.lock" "$INSTALL_PATH" --watchdog-group "$gid" >/dev/null 2>&1 || true
     done
 }
-smart_conf_set() { # file key value (atomic)
-    local file="$1" key="$2" value="$3" tmp
-    [[ "$key" =~ ^[A-Z0-9_]+$ ]] || return 1
-    [ -f "$file" ] || return 1
-    tmp=$(mktemp "${file}.tmp.XXXXXX") || return 1
-    awk -v k="$key" -v v="$value" 'BEGIN{done=0} index($0,k"=")==1 {if(!done){print k"="v;done=1} next} {print} END{if(!done)print k"="v}' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-    chmod --reference="$file" "$tmp" 2>/dev/null || chmod 600 "$tmp"
-    mv -f "$tmp" "$file"
-}
-smart_group_dirs() {
-    local gd
-    for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && printf '%s\n' "$gd"; done
-}
-smart_select_group() { # sets SMART_SELECTED_GD / SMART_SELECTED_GID
-    local -a groups=(); local gd i sel
-    while IFS= read -r gd; do [ -n "$gd" ] && groups+=("$gd"); done < <(smart_group_dirs)
-    [ ${#groups[@]} -gt 0 ] || { echo -e "\n  ${Y}● No Smart groups.${NC}"; return 1; }
-    echo -e "\n  ${FR}┌─[ SELECT SMART GROUP ]${NC}"
+
+# ======================================================================
+# [ GRE-STYLE INTERACTIVE SELECTORS, LISTS, PORT MANAGER & DELETION ]
+# ======================================================================
+smart_select_group_interactive() {
+    smart_header
+    local -a groups=()
+    local gd i sel idx gid active_lbl svc tcnt
+    for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && groups+=("$gd"); done
+    [ ${#groups[@]} -gt 0 ] || { echo -e "\n  ${R}● No Smart groups configured yet!${NC}"; sleep 1.5; return 1; }
+
+    if [ ${#groups[@]} -eq 1 ]; then
+        SELECTED_GROUP_DIR="${groups[0]}"
+        return 0
+    fi
+
+    echo -e "\n  ${FR}╔═══════════════════════════════ Select Smart Tunnel Group ══════════════════════════════════╗${NC}"
     for i in "${!groups[@]}"; do
-        local gid active ports count
         gid=$(basename "${groups[$i]}")
-        active=$(cut -d'|' -f2 "${groups[$i]}/active.state" 2>/dev/null || true); [ -n "$active" ] || active='OFF'
-        ports=$(smart_conf_get "${groups[$i]}/group.conf" SERVICE_PORTS); count=0
-        [ -n "$ports" ] && count=$(awk -F, '{print NF}' <<< "$ports")
-        printf '  %b├─%b %b%-2s%b %b❯%b %-22s %bActive:%b %-22s %bPorts:%b %s\n' "$FR" "$NC" "$W" "$((i+1))" "$NC" "$DIM" "$NC" "$gid" "$DIM" "$NC" "$active" "$DIM" "$NC" "$count"
+        active_lbl=$(cut -d'|' -f2 "${groups[$i]}/active.state" 2>/dev/null || true)
+        svc=$(smart_conf_get "${groups[$i]}/group.conf" SERVICE_PORTS)
+        tcnt=$(wc -l < "${groups[$i]}/candidates.tsv" 2>/dev/null || echo 0)
+        printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-18.18s${NC} ${DIM}| Active:${NC} ${G}%-20.20s${NC} ${DIM}| Tunnels:${NC} ${C}%-2s${NC} ${DIM}| Ports:${NC} ${Y}%-14.14s${NC} ${FR}║${NC}\n" "$((i+1))" "$gid" "${active_lbl:-OFF}" "$tcnt" "${svc:-None}"
     done
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
-    echo -ne "  ${C}Select group ❯❯ ${NC}"; read -r sel
-    [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le ${#groups[@]} ] || return 1
-    SMART_SELECTED_GD="${groups[$((sel-1))]}"; SMART_SELECTED_GID=$(basename "$SMART_SELECTED_GD")
-    return 0
+    echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo -ne "  ${C}●${NC} ${W}Select Group [1-${#groups[@]}] or 'q': ${NC}"; read -r sel
+    sel="${sel// /}"; sel="${sel//$'\r'/}"
+    [[ "$sel" == "q" || "$sel" == "Q" || -z "$sel" ]] && return 1
+    if idx=$(smart_pick_index "$sel" "${#groups[@]}"); then
+        SELECTED_GROUP_DIR="${groups[$idx]}"
+        return 0
+    fi
+    echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1
+    return 1
 }
-smart_list_groups() {
-    mt_workspace_screen; smart_header
-    local gd found=0 gid active aid alabel ascore ports candidates up down
-    echo -e "\n  ${FR}┌─[ SMART GROUPS ]${NC}"
-    for gd in "$GROUP_DIR"/*; do
-        [ -d "$gd" ] || continue; found=1; gid=$(basename "$gd")
-        active=$(cat "$gd/active.state" 2>/dev/null || true); IFS='|' read -r aid alabel ascore <<< "$active"
-        ports=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS); candidates=$(awk 'END{print NR+0}' "$gd/candidates.tsv" 2>/dev/null || echo 0)
-        up=$(awk -F'|' '$10=="UP"{n++} END{print n+0}' "$gd/ranking.tsv" 2>/dev/null || echo 0); down=$((candidates-up)); [ "$down" -ge 0 ] || down=0
-        echo -e "  ${FR}├─${NC} ${W}${gid}${NC}"
-        echo -e "  ${FR}│${NC}   ${DIM}Active${NC}  ${G}${alabel:-OFF}${NC} ${DIM}${ascore:+(score $ascore)}${NC}"
-        echo -e "  ${FR}│${NC}   ${DIM}Tunnels${NC} ${W}${candidates}${NC} ${DIM}(UP ${up} / DOWN ${down})${NC}"
-        echo -e "  ${FR}│${NC}   ${DIM}Ports${NC}   ${C}${ports:--}${NC}"
+
+smart_list_overview() {
+    smart_header
+    local -a groups=()
+    local gd gid svc ir4 kh4 ir6 kh6 wd active_line act_id act_lbl act_score
+    local id label kind proto path name inner linkp benchp status lat loss jit up down score
+    for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && groups+=("$gd"); done
+    if [ ${#groups[@]} -eq 0 ]; then
+        echo -e "\n  ${R}● No Smart groups configured yet!${NC}"
+        smart_pause
+        return
+    fi
+
+    echo -e "\n  ${Y}● Smart Groups, Tunnels & Ports Overview:${NC}"
+    for gd in "${groups[@]}"; do
+        gid=$(basename "$gd")
+        svc=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS)
+        ir4=$(smart_conf_get "$gd/group.conf" IRAN_IPV4)
+        kh4=$(smart_conf_get "$gd/group.conf" FOREIGN_IPV4)
+        ir6=$(smart_conf_get "$gd/group.conf" IRAN_IPV6)
+        kh6=$(smart_conf_get "$gd/group.conf" FOREIGN_IPV6)
+        wd=$(smart_conf_get "$gd/group.conf" WATCHDOG)
+        active_line=$(cat "$gd/active.state" 2>/dev/null || true)
+        IFS='|' read -r act_id act_lbl act_score <<< "$active_line"
+
+        local left_p="▼ Group: ${gid}"
+        local right_p="Watchdog: $([ "$wd" = 1 ] && echo ON || echo OFF)"
+        local pad=$(( 90 - 9 - ${#gid} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0
+        local sp; sp=$(printf '%*s' "$pad" "")
+
+        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
+        echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
+
+        local act_str="${act_lbl:-OFF} (Score: ${act_score:-0})"
+        local ep4_str="${ir4:-?} -> ${kh4:-?}"
+        local l1="Active Tunnel: ${act_str:0:32}"
+        local r1="IPv4 Path: ${ep4_str:0:32}"
+        local pad1=$(( 90 - ${#l1} - ${#r1} )); [ "$pad1" -lt 0 ] && pad1=0
+        local sp1; sp1=$(printf '%*s' "$pad1" "")
+        echo -e "  ${FR}║${NC} ${G}Active Tunnel:${NC} ${W}${act_str:0:32}${NC}${sp1}${DIM}IPv4 Path:${NC} ${W}${ep4_str:0:32}${NC} ${FR}║${NC}"
+
+        local ports_str="${svc:-None}"
+        local l2="Service Ports: ${ports_str:0:74}"
+        local pad2=$(( 90 - ${#l2} )); [ "$pad2" -lt 0 ] && pad2=0
+        local sp2; sp2=$(printf '%*s' "$pad2" "")
+        echo -e "  ${FR}║${NC} ${Y}Service Ports:${NC} ${W}${ports_str:0:74}${NC}${sp2} ${FR}║${NC}"
+
+        echo -e "  ${FR}╠════╦═══════════════════════════╦════════════════╦══════════════╦════════╦══════════╦═══════╣${NC}"
+        printf "  ${FR}║${NC} ${DIM}%-2s${NC} ${FR}║${NC} ${DIM}%-25s${NC} ${FR}║${NC} ${DIM}%-14s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-6s${NC} ${FR}║${NC} ${DIM}%-8s${NC} ${FR}║${NC} ${DIM}%-5s${NC} ${FR}║${NC}\n" "ID" "TUNNEL TYPE" "IFACE / UNIT" "TARGET/PORT" "PING" "UP/DN" "STATE"
+        echo -e "  ${FR}╠════╬═══════════════════════════╬════════════════╬══════════════╬════════╬══════════╬═══════╣${NC}"
+
+        local source_file="$gd/ranking.tsv"
+        [ -s "$source_file" ] || source_file="$gd/candidates.tsv"
+        if [ -s "$source_file" ]; then
+            while IFS='|' read -r id label kind proto path name inner linkp benchp status lat loss jit up down score; do
+                local endpoint_disp="${inner:-}"
+                [ -n "$endpoint_disp" ] || endpoint_disp="L:${linkp:-?}"
+                local lat_disp="${lat:+${lat}ms}"; [ -z "$lat" ] && lat_disp="---"
+                local spd_disp="${up:-0}/${down:-0}"
+                local st_col="$G" st_txt="$status"
+                [ "$status" = UP ] || st_col="$R"
+                local lbl_disp="$label"
+                if [ "$id" = "$act_id" ]; then
+                    lbl_disp="★ $label"
+                    st_txt="ACTV"
+                    st_col="$G"
+                fi
+                printf "  ${FR}║${NC} ${Y}%-2s${NC} ${FR}║${NC} ${W}%-25.25s${NC} ${FR}║${NC} ${C}%-14.14s${NC} ${FR}║${NC} ${DIM}%-12.12s${NC} ${FR}║${NC} ${Y}%-6.6s${NC} ${FR}║${NC} %-8.8s ${FR}║${NC} %b%-5.5s%b ${FR}║${NC}\n" \
+                    "$id" "$lbl_disp" "${name:----}" "$endpoint_disp" "$lat_disp" "$spd_disp" "$st_col" "$st_txt" "$NC"
+            done < "$source_file"
+        else
+            printf "  ${FR}║${NC} ${DIM}%-90s${NC} ${FR}║${NC}\n" "No tunnels remain in this group."
+        fi
+        echo -e "  ${FR}╚════╩═══════════════════════════╩════════════════╩══════════════╩════════╩══════════╩═══════╝${NC}\n"
     done
-    [ "$found" = 1 ] || echo -e "  ${FR}├─${NC} ${DIM}No Smart groups created.${NC}"
-    echo -e "  ${FR}└────────────────────────────────────────────────────────────────────${NC}"
     smart_pause
 }
-smart_list_tunnels() {
-    mt_workspace_screen; smart_header
-    local gd gid found=0 line id label kind proto path name inner linkp benchp status score active_id
-    echo -e "\n  ${FR}┌─[ SMART TUNNELS ]${NC}"
-    for gd in "$GROUP_DIR"/*; do
-        [ -d "$gd" ] || continue; found=1; gid=$(basename "$gd"); active_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
-        echo -e "  ${FR}├─${NC} ${W}${gid}${NC}"
-        if [ -s "$gd/candidates.tsv" ]; then
-            while IFS='|' read -r id label kind proto path name inner linkp benchp status; do
-                score=$(awk -F'|' -v i="$id" '$1==i{print $16;exit}' "$gd/ranking.tsv" 2>/dev/null || true)
-                local ranked_status; ranked_status=$(awk -F'|' -v i="$id" '$1==i{print $10;exit}' "$gd/ranking.tsv" 2>/dev/null || true); [ -z "$ranked_status" ] || status="$ranked_status"
-                [ "$id" = "$active_id" ] && printf '  %b│%b   %b★ %-3s%b %-29s %b%-8s%b %-13s %bscore:%b %s\n' "$FR" "$NC" "$G" "$id" "$NC" "$label" "$C" "${status:-?}" "$NC" "$path" "$DIM" "$NC" "${score:--}" || printf '  %b│%b     %-3s %-29s %b%-8s%b %-13s %bscore:%b %s\n' "$FR" "$NC" "$id" "$label" "$DIM" "${status:-?}" "$NC" "$path" "$DIM" "$NC" "${score:--}"
-            done < "$gd/candidates.tsv"
-        else
-            echo -e "  ${FR}│${NC}   ${DIM}No tunnels.${NC}"
+
+smart_sync_group_ports_locked() { # gid new_ports_csv; caller owns .smart.lock
+    local gid="$1" new_ports="$2" gd="$GROUP_DIR/$1" old_ports active_id id label kind proto path name inner linkp benchp status rname p
+    local active_was_on=0 rollback_failed=0 i
+    local -a rollback_names=() rollback_specs=()
+    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 2
+    [ -d "$gd" ] && [ -s "$gd/group.conf" ] || return 2
+    if [ -n "$new_ports" ]; then
+        smart_validate_service_ports "$new_ports" 1 || return 2
+        new_ports="$SMART_SERVICE_PORTS"
+    else
+        new_ports=''
+    fi
+    old_ports=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS)
+    [ "$new_ports" != "$old_ports" ] || return 0
+
+    # Only newly-added ports must be free; existing ports may be held by the current active forwarder.
+    for p in ${new_ports//,/ }; do
+        [[ ",${old_ports}," == *",${p},"* ]] && continue
+        if ss -lntH 2>/dev/null | awk -v want="$p" '{n=split($4,a,":"); if (a[n]==want) found=1} END{exit !found}'; then
+            echo "Port $p is already listening on this server." >&2
+            return 3
         fi
     done
-    [ "$found" = 1 ] || echo -e "  ${FR}├─${NC} ${DIM}No Smart groups created.${NC}"
-    echo -e "  ${FR}└────────────────────────────────────────────────────────────────────${NC}"
-    smart_pause
-}
-smart_list_ports() {
-    mt_workspace_screen; smart_header
-    local gd gid ports active
-    echo -e "\n  ${FR}┌─[ SMART PORTS ]${NC}"
-    local found=0
-    for gd in "$GROUP_DIR"/*; do
-        [ -d "$gd" ] || continue; found=1; gid=$(basename "$gd"); ports=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS); active=$(cut -d'|' -f2 "$gd/active.state" 2>/dev/null || true)
-        echo -e "  ${FR}├─${NC} ${W}${gid}${NC} ${DIM}→ Active:${NC} ${G}${active:-OFF}${NC}"
-        echo -e "  ${FR}│${NC}   ${C}TCP${NC} ${DIM}❯${NC} ${W}${ports:--}${NC}"
-    done
-    [ "$found" = 1 ] || echo -e "  ${FR}├─${NC} ${DIM}No Smart groups created.${NC}"
-    echo -e "  ${FR}└────────────────────────────────────────────────────────────────────${NC}"
-    smart_pause
-}
-smart_ports_parse_basic() { # input -> SMART_EDIT_PORTS
-    local s="${1// /}" p; local -A seen=(); local -a arr=(); SMART_EDIT_PORTS=''
-    [ -n "$s" ] || return 1; [[ "$s" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
-    IFS=, read -ra arr <<< "$s"
-    for p in "${arr[@]}"; do mt_valid_port "$p" || return 1; p=$((10#$p)); [ -z "${seen[$p]:-}" ] || continue; seen[$p]=1; SMART_EDIT_PORTS+="${SMART_EDIT_PORTS:+,}$p"; done
-}
-smart_refresh_group_ports() { # groupdir
-    local gd="$1" active
-    active=$(cat "$gd/forwarding.state" 2>/dev/null || true); [ -n "$active" ] || active=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
-    [ -z "$active" ] || smart_forward_one "$gd" "$active" on
-}
-smart_add_ports() {
-    mt_workspace_screen; smart_header; smart_select_group || { smart_pause; return; }
-    local gd="$SMART_SELECTED_GD" current add p merged
-    current=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS)
-    echo -e "\n  ${FR}┌─[ ADD PORTS — ${SMART_SELECTED_GID} ]${NC}"
-    echo -e "  ${FR}├─${NC} Current: ${W}${current:--}${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}TCP ports to add (comma-separated): ${NC}"; read -r add
-    smart_ports_parse_basic "$add" || { echo -e "  ${R}✖ Invalid ports.${NC}"; smart_pause; return; }
-    add="$SMART_EDIT_PORTS"; merged="$current"
-    for p in ${add//,/ }; do
-        [[ ",$current," == *",$p,"* ]] && continue
-        if ss -lntH 2>/dev/null | awk -v want="$p" '{n=split($4,a,":"); if(a[n]==want) found=1} END{exit !found}'; then echo -e "  ${R}✖ Port $p is already in use by another listener.${NC}"; smart_pause; return; fi
-        merged+="${merged:+,}$p"
-    done
-    [ "$merged" != "$current" ] || { echo -e "  ${Y}● No new ports to add.${NC}"; smart_pause; return; }
-    smart_conf_set "$gd/group.conf" SERVICE_PORTS "$merged" || { echo -e "  ${R}✖ Could not save ports.${NC}"; smart_pause; return; }
-    if ! smart_refresh_group_ports "$gd"; then smart_conf_set "$gd/group.conf" SERVICE_PORTS "$current" >/dev/null 2>&1 || true; smart_refresh_group_ports "$gd" >/dev/null 2>&1 || true; echo -e "  ${R}✖ Forwarder rejected the new port set; rolled back.${NC}"; smart_pause; return; fi
-    echo -e "  ${G}✔ Ports updated:${NC} ${W}$merged${NC}"; smart_pause
-}
-smart_remove_ports() {
-    mt_workspace_screen; smart_header; smart_select_group || { smart_pause; return; }
-    local gd="$SMART_SELECTED_GD" current rem p out='' count=0
-    current=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS); [ -n "$current" ] || { echo -e "  ${Y}● This group has no service ports.${NC}"; smart_pause; return; }
-    echo -e "\n  ${FR}┌─[ REMOVE PORTS — ${SMART_SELECTED_GID} ]${NC}"
-    echo -e "  ${FR}├─${NC} Current: ${W}$current${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}TCP ports to remove (comma-separated): ${NC}"; read -r rem
-    smart_ports_parse_basic "$rem" || { echo -e "  ${R}✖ Invalid ports.${NC}"; smart_pause; return; }; rem="$SMART_EDIT_PORTS"
-    for p in ${current//,/ }; do [[ ",$rem," == *",$p,"* ]] && continue; out+="${out:+,}$p"; count=$((count+1)); done
-    [ "$out" != "$current" ] || { echo -e "  ${Y}● None of those ports belong to this group.${NC}"; smart_pause; return; }
-    [ "$count" -gt 0 ] || { echo -e "  ${R}✖ A Smart group must keep at least one service port. Delete the group if you want to remove everything.${NC}"; smart_pause; return; }
-    smart_conf_set "$gd/group.conf" SERVICE_PORTS "$out" || { echo -e "  ${R}✖ Could not save ports.${NC}"; smart_pause; return; }
-    if ! smart_refresh_group_ports "$gd"; then smart_conf_set "$gd/group.conf" SERVICE_PORTS "$current" >/dev/null 2>&1 || true; smart_refresh_group_ports "$gd" >/dev/null 2>&1 || true; echo -e "  ${R}✖ Forwarder rejected the new port set; rolled back.${NC}"; smart_pause; return; fi
-    echo -e "  ${G}✔ Ports updated:${NC} ${W}$out${NC}"; smart_pause
-}
-smart_delete_tunnel_locked() { # gid candidate-id
-    local gid="$1" tid="$2" gd="$GROUP_DIR/$1" row kind lname rname active failed=0 tmp f
-    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$tid" =~ ^[0-9]+$ ]] || return 2
-    [ -d "$gd" ] || return 0
-    row=$(awk -F'|' -v i="$tid" '$1==i{print;exit}' "$gd/candidates.tsv" 2>/dev/null); [ -n "$row" ] || return 0
-    kind=$(awk -F'|' -v i="$tid" '$1==i{print $2;exit}' "$gd/names.tsv" 2>/dev/null)
-    lname=$(awk -F'|' -v i="$tid" '$1==i{print $3;exit}' "$gd/names.tsv" 2>/dev/null)
-    rname=$(awk -F'|' -v i="$tid" '$1==i{print $4;exit}' "$gd/names.tsv" 2>/dev/null)
-    if [ -z "$kind" ]; then IFS='|' read -r _ _ kind _ _ lname _ <<< "$row"; rname="$lname"; fi
-    active=$(cat "$gd/forwarding.state" 2>/dev/null || true)
-    if [ "$active" = "$tid" ]; then smart_forward_one "$gd" "$tid" off >/dev/null 2>&1 || true; : > "$gd/forwarding.state"; fi
-    [ -z "$rname" ] || smart_delete_remote "$kind" "$rname" >/dev/null 2>&1 || failed=1
-    [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || failed=1
-    [ "$failed" -eq 0 ] || return 1
-    for f in candidates.tsv names.tsv ranking.tsv baseline.tsv; do
-        [ -f "$gd/$f" ] || continue; tmp="$gd/.${f}.tmp.$$"; awk -F'|' -v i="$tid" '$1!=i' "$gd/$f" > "$tmp" && mv -f "$tmp" "$gd/$f"; chmod 600 "$gd/$f" 2>/dev/null || true
-    done
-    rm -f "$gd/hysteresis.state" "$gd/active.state"
-    if [ -s "$gd/ranking.tsv" ]; then smart_hysteresis_order "$gd" "$gd/ranking.tsv"; smart_apply_active_forwarding "$gd" "$gd/ranking.tsv" || true
-    else : > "$gd/active.state"; : > "$gd/forwarding.state"; fi
+
+    active_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
+    if [ -n "$active_id" ]; then
+        smart_forward_one "$gd" "$active_id" off || { echo 'Could not safely disable current forwarding.' >&2; return 1; }
+        active_was_on=1
+    fi
+
+    # Rathole's Foreign-side client must receive the same port set. Track every successful
+    # remote update so the transaction can be rolled back if a later step fails.
+    if [ -s "$gd/candidates.tsv" ]; then
+        while IFS='|' read -r id label kind proto path name inner linkp benchp status; do
+            [ "$kind" = rathole ] || continue
+            rname=$(awk -F'|' -v i="$id" '$1==i{print $4;exit}' "$gd/names.tsv" 2>/dev/null || true)
+            [ -n "$rname" ] || rname="$name"
+            local old_spec="$benchp${old_ports:+,$old_ports}"
+            local new_spec="$benchp${new_ports:+,$new_ports}"
+            if ! smart_remote_smart_ports rathole "$rname" "$new_spec"; then
+                echo "Foreign Rathole port sync failed for $rname; rolling back." >&2
+                for ((i=${#rollback_names[@]}-1; i>=0; i--)); do
+                    smart_remote_smart_ports rathole "${rollback_names[$i]}" "${rollback_specs[$i]}" >/dev/null 2>&1 || rollback_failed=1
+                done
+                [ "$active_was_on" -eq 0 ] || smart_forward_one "$gd" "$active_id" on >/dev/null 2>&1 || rollback_failed=1
+                [ "$rollback_failed" -eq 0 ] || echo 'Warning: port rollback was incomplete; retry after peer connectivity is restored.' >&2
+                return 1
+            fi
+            rollback_names+=("$rname"); rollback_specs+=("$old_spec")
+        done < "$gd/candidates.tsv"
+    fi
+
+    if ! smart_set_conf_var "$gd/group.conf" SERVICE_PORTS "$new_ports"; then
+        for ((i=${#rollback_names[@]}-1; i>=0; i--)); do
+            smart_remote_smart_ports rathole "${rollback_names[$i]}" "${rollback_specs[$i]}" >/dev/null 2>&1 || rollback_failed=1
+        done
+        [ "$active_was_on" -eq 0 ] || smart_forward_one "$gd" "$active_id" on >/dev/null 2>&1 || rollback_failed=1
+        echo 'Could not save the new service-port set; rolled back.' >&2
+        return 1
+    fi
+
+    if [ "$active_was_on" -eq 1 ] && ! smart_forward_one "$gd" "$active_id" on; then
+        smart_set_conf_var "$gd/group.conf" SERVICE_PORTS "$old_ports" >/dev/null 2>&1 || rollback_failed=1
+        for ((i=${#rollback_names[@]}-1; i>=0; i--)); do
+            smart_remote_smart_ports rathole "${rollback_names[$i]}" "${rollback_specs[$i]}" >/dev/null 2>&1 || rollback_failed=1
+        done
+        smart_forward_one "$gd" "$active_id" on >/dev/null 2>&1 || rollback_failed=1
+        echo 'New port forwarding could not be activated; previous port set restored.' >&2
+        [ "$rollback_failed" -eq 0 ] || echo 'Warning: rollback was incomplete; inspect the active tunnel before retrying.' >&2
+        return 1
+    fi
     return 0
 }
-smart_delete_tunnel_menu() {
-    mt_workspace_screen; smart_header; smart_select_group || { smart_pause; return; }
-    local gd="$SMART_SELECTED_GD" gid="$SMART_SELECTED_GID" active_id id label kind proto path name inner linkp benchp status sel confirm
-    [ -s "$gd/candidates.tsv" ] || { echo -e "  ${Y}● No tunnels in this group.${NC}"; smart_pause; return; }
-    active_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
-    echo -e "\n  ${FR}┌─[ DELETE TUNNEL — ${gid} ]${NC}"
-    while IFS='|' read -r id label kind proto path name inner linkp benchp status; do
-        if [ "$id" = "$active_id" ]; then echo -e "  ${FR}├─${NC} ${R}${id}${NC} ${DIM}❯${NC} ${W}${label}${NC} ${G}[ACTIVE]${NC}"
-        else echo -e "  ${FR}├─${NC} ${W}${id}${NC} ${DIM}❯${NC} ${label}"; fi
-    done < "$gd/candidates.tsv"
-    echo -ne "  ${FR}└─${NC} ${C}Tunnel ID to delete: ${NC}"; read -r sel
-    [[ "$sel" =~ ^[0-9]+$ ]] && awk -F'|' -v i="$sel" '$1==i{f=1} END{exit !f}' "$gd/candidates.tsv" || { echo -e "  ${R}✖ Invalid tunnel ID.${NC}"; smart_pause; return; }
-    echo -ne "  ${R}Type DELETE to remove this tunnel from Iran + Foreign: ${NC}"; read -r confirm; [ "$confirm" = DELETE ] || return
-    if flock -x -w 45 -o "$gd/.smart.lock" "$INSTALL_PATH" --delete-tunnel "$gid" "$sel"; then echo -e "  ${G}✔ Tunnel deleted.${NC}"; else echo -e "  ${R}✖ Delete failed; group state was retained for retry.${NC}"; fi
-    smart_pause
+
+smart_sync_group_ports() { # groupdir new_ports_csv; serialize against watchdog/benchmark/delete
+    local gd="$1" new_ports="$2" gid
+    [ -d "$gd" ] || return 1
+    gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 2
+    flock -x -w 120 -o "$gd/.smart.lock" "$INSTALL_PATH" --sync-ports "$gid" "$new_ports"
 }
-smart_delete_group_menu() {
-    mt_workspace_screen; smart_header; smart_select_group || { smart_pause; return; }
-    local confirm gd="$SMART_SELECTED_GD" gid="$SMART_SELECTED_GID"
-    echo -e "\n  ${R}┌─[ DELETE SMART GROUP ]${NC}"
-    echo -e "  ${R}├─${NC} Group: ${W}$gid${NC}"
-    echo -e "  ${R}├─${NC} This removes every tunnel in the group from Iran + Foreign."
-    echo -ne "  ${R}└─${NC} Type ${W}DELETE${NC}${R} to continue: ${NC}"; read -r confirm; [ "$confirm" = DELETE ] || return
-    if flock -x -w 60 -o "$gd/.smart.lock" "$INSTALL_PATH" --delete-group "$gid"; then echo -e "  ${G}✔ Smart group deleted.${NC}"; else echo -e "  ${R}✖ Cleanup did not finish. State was retained so you can retry.${NC}"; fi
-    smart_pause
-}
-smart_manage_menu() {
-    local opt
+
+smart_manage_ports() {
+    smart_select_group_interactive || return
+    local gd="$SELECTED_GROUP_DIR" gid
+    gid=$(basename "$gd")
+    local pf_opt cur_ports in_ports merged_ports active_lbl
+
     while true; do
-        mt_workspace_screen; smart_header
-        mt_workspace_group 'GROUPS & TUNNELS' first
-        mt_workspace_row 1 'List Groups' "$C"
-        mt_workspace_row 2 'List Tunnels' "$G"
-        mt_workspace_row 3 'Delete Tunnel' "$R"
-        mt_workspace_row 4 'Delete Group' "$R"
-        mt_workspace_footer 'Back to MSmart'
-        echo -ne "  ${C}MANAGE ❯❯ ${NC}"; read -r opt
-        case "$opt" in 1) smart_list_groups;; 2) smart_list_tunnels;; 3) smart_delete_tunnel_menu;; 4) smart_delete_group_menu;; 0|q|Q) break;; *) sleep 1;; esac
+        cur_ports=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS)
+        active_lbl=$(cut -d'|' -f2 "$gd/active.state" 2>/dev/null || true)
+        smart_header
+        echo -e "\n  ${FR}┌─[ SMART PORT MANAGER: ${W}${gid}${DIM} ]${NC}"
+        echo -e "  ${FR}│${NC} ${DIM}Current TCP Ports:${NC} ${Y}${cur_ports:-None}${NC}"
+        echo -e "  ${FR}│${NC} ${DIM}Active Tunnel    :${NC} ${G}${active_lbl:-OFF}${NC}"
+        echo -e "  ${FR}│${NC}"
+        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add New Ports (Keep Existing)${NC}"
+        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Delete / Remove Specific Ports${NC}"
+        echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
+        echo -e "  ${FR}│${NC}"
+        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
+        echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
+        pf_opt="${pf_opt// /}"; pf_opt="${pf_opt//$'\r'/}"
+
+        case "$pf_opt" in
+            1)
+                echo -ne "  ${C}●${NC} ${W}Add TCP Ports (e.g. 8080,2083) [Enter to cancel]: ${NC}"; read -r in_ports
+                in_ports="${in_ports// /}"; [ -n "$in_ports" ] || continue
+                if ! smart_validate_service_ports "$in_ports" 0; then
+                    echo -e "  ${R}✖ Invalid port(s) or port is already bound by another service.${NC}"; sleep 1.8; continue
+                fi
+                merged_ports=$(smart_merge_csv_ports "$cur_ports" "$SMART_SERVICE_PORTS")
+                echo -e "  ${C}⟳${NC} Updating group ports and syncing active forwarder..."
+                if smart_sync_group_ports "$gd" "$merged_ports"; then
+                    echo -e "  ${G}✔ Ports added. Active TCP Ports: ${merged_ports}${NC}"
+                else
+                    echo -e "  ${Y}⚠ Ports saved (${merged_ports}), but active forwarder reported a warning.${NC}"
+                fi
+                sleep 1.8
+                ;;
+            2)
+                [ -n "$cur_ports" ] || { echo -e "  ${Y}● No ports to remove.${NC}"; sleep 1.5; continue; }
+                echo -ne "  ${C}●${NC} ${W}Remove TCP Ports (Current: ${Y}${cur_ports}${W}): ${NC}"; read -r in_ports
+                in_ports="${in_ports// /}"; [ -n "$in_ports" ] || continue
+                merged_ports=$(smart_remove_csv_ports "$cur_ports" "$in_ports")
+                echo -e "  ${C}⟳${NC} Removing selected ports and syncing active forwarder..."
+                if smart_sync_group_ports "$gd" "$merged_ports"; then
+                    echo -e "  ${G}✔ Ports removed. Remaining TCP Ports: ${merged_ports:-None}${NC}"
+                else
+                    echo -e "  ${Y}⚠ Ports updated (${merged_ports}), but active forwarder reported a warning.${NC}"
+                fi
+                sleep 1.8
+                ;;
+            3)
+                echo -ne "  ${C}●${NC} ${W}New TCP Ports (Current: ${Y}${cur_ports:-None}${W}): ${NC}"; read -r in_ports
+                in_ports="${in_ports// /}"; [ -n "$in_ports" ] || continue
+                if ! smart_validate_service_ports "$in_ports" 1; then
+                    echo -e "  ${R}✖ Invalid TCP port list.${NC}"; sleep 1.8; continue
+                fi
+                merged_ports="$SMART_SERVICE_PORTS"
+                echo -e "  ${C}⟳${NC} Replacing ports and syncing active forwarder..."
+                if smart_sync_group_ports "$gd" "$merged_ports"; then
+                    echo -e "  ${G}✔ Ports replaced. Active TCP Ports: ${merged_ports}${NC}"
+                else
+                    echo -e "  ${Y}⚠ Ports replaced (${merged_ports}), but active forwarder reported a warning.${NC}"
+                fi
+                sleep 1.8
+                ;;
+            0|q|Q) return 0 ;;
+            *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1 ;;
+        esac
     done
 }
-smart_ports_menu() {
-    local opt
+
+smart_mark_tunnel_delete_pending() { # groupdir candidate-id remote-ok local-ok
+    local gd="$1" target_id="$2" rok="$3" lok="$4" f tmp
+    for f in candidates.tsv ranking.tsv; do
+        [ -s "$gd/$f" ] || continue
+        tmp="$gd/.${f}.delete.$$"
+        awk -F'|' -v OFS='|' -v i="$target_id" '
+            $1==i { $10="DOWN"; if (NF>=16) $16=0 }
+            { print }
+        ' "$gd/$f" > "$tmp" && mv -f "$tmp" "$gd/$f"
+        chmod 600 "$gd/$f" 2>/dev/null || true
+    done
+    printf 'id=%s\ntime=%s\nremote_ok=%s\nlocal_ok=%s\n' "$target_id" "$(date +%s)" "$rok" "$lok" > "$gd/delete-tunnel.${target_id}.pending"
+    chmod 600 "$gd/delete-tunnel.${target_id}.pending" 2>/dev/null || true
+}
+
+smart_delete_single_tunnel_locked() { # gid candidate_id; caller owns .smart.lock
+    local gid="$1" target_id="$2" gd="$GROUP_DIR/$1"
+    local active_id id label kind proto path lname inner linkp benchp status rname cand_line name_line
+    local remote_ok=1 local_ok=1 was_active=0 f tmp
+    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$target_id" =~ ^[0-9]+$ ]] || return 2
+    [ -d "$gd" ] && [ -s "$gd/candidates.tsv" ] || return 1
+    cand_line=$(awk -F'|' -v i="$target_id" '$1==i{print;exit}' "$gd/candidates.tsv" 2>/dev/null || true)
+    [ -n "$cand_line" ] || return 0
+    IFS='|' read -r id label kind proto path lname inner linkp benchp status <<< "$cand_line"
+    name_line=$(awk -F'|' -v i="$target_id" '$1==i{print;exit}' "$gd/names.tsv" 2>/dev/null || true)
+    if [ -n "$name_line" ]; then IFS='|' read -r _ _ lname rname <<< "$name_line"; else rname="$lname"; fi
+
+    active_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
+    if [ "$target_id" = "$active_id" ]; then
+        was_active=1
+        smart_forward_one "$gd" "$target_id" off || { echo 'Could not disable the active tunnel before deletion.' >&2; return 1; }
+        : > "$gd/active.state"; : > "$gd/forwarding.state"
+    fi
+
+    [ -z "$rname" ] || smart_delete_remote "$kind" "$rname" >/dev/null 2>&1 || remote_ok=0
+    [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || local_ok=0
+
+    if [ "$remote_ok" -eq 1 ] && [ "$local_ok" -eq 1 ]; then
+        for f in candidates.tsv names.tsv ranking.tsv baseline.tsv; do
+            [ -e "$gd/$f" ] || continue
+            tmp="$gd/.${f}.delete.$$"
+            awk -F'|' -v i="$target_id" '$1!=i' "$gd/$f" > "$tmp" && mv -f "$tmp" "$gd/$f"
+            chmod 600 "$gd/$f" 2>/dev/null || true
+        done
+        rm -f "$gd/delete-tunnel.${target_id}.pending"
+    else
+        smart_mark_tunnel_delete_pending "$gd" "$target_id" "$remote_ok" "$local_ok"
+        echo "Tunnel cleanup is incomplete (Foreign=$remote_ok Iran=$local_ok); state retained for retry." >&2
+    fi
+
+    # If the deleted/partially-deleted tunnel was active, keep it out of service and fail over.
+    if [ "$was_active" -eq 1 ]; then
+        if [ -s "$gd/ranking.tsv" ]; then
+            smart_hysteresis_order "$gd" "$gd/ranking.tsv"
+            smart_apply_active_forwarding "$gd" "$gd/ranking.tsv" >/dev/null 2>&1 || true
+        else
+            : > "$gd/switch.state"
+        fi
+    fi
+    [ "$remote_ok" -eq 1 ] && [ "$local_ok" -eq 1 ]
+}
+
+smart_delete_single_tunnel() { # groupdir candidate_id; serialize against watchdog/benchmark/ports
+    local gd="$1" target_id="$2" gid
+    [ -d "$gd" ] || return 1
+    gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 2
+    flock -x -w 120 -o "$gd/.smart.lock" "$INSTALL_PATH" --delete-tunnel "$gid" "$target_id"
+}
+
+smart_menu_delete_tunnels() {
+    smart_select_group_interactive || return
+    local gd="$SELECTED_GROUP_DIR" gid
+    gid=$(basename "$gd")
+
     while true; do
-        mt_workspace_screen; smart_header
-        mt_workspace_group 'PORTS & FORWARDING' first
-        mt_workspace_row 1 'List Group Ports' "$C"
-        mt_workspace_row 2 'Add TCP Ports' "$G"
-        mt_workspace_row 3 'Remove TCP Ports' "$R"
-        mt_workspace_footer 'Back to MSmart'
-        echo -ne "  ${C}PORTS ❯❯ ${NC}"; read -r opt
-        case "$opt" in 1) smart_list_ports;; 2) smart_add_ports;; 3) smart_remove_ports;; 0|q|Q) break;; *) sleep 1;; esac
+        smart_header
+        if [ ! -s "$gd/candidates.tsv" ]; then
+            echo -e "\n  ${Y}● No tunnels left in group [${gid}].${NC}"
+            echo -ne "  ${Y}Delete the empty group [${gid}] as well? (y/n): ${NC}"; read -r ans
+            if [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]]; then
+                rm -rf -- "$gd"
+                echo -e "  ${G}✔ Empty group [${gid}] removed.${NC}"
+                sleep 1.5
+            fi
+            return
+        fi
+
+        local active_id; active_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
+        local -a c_ids=() c_labels=() c_names=()
+        local n=0 id label kind proto path name inner linkp benchp status sel confirm idx
+
+        echo -e "\n  ${R}┌─[ DELETE TUNNELS IN GROUP: ${W}${gid}${R} ]${NC}"
+        while IFS='|' read -r id label kind proto path name inner linkp benchp status; do
+            n=$((n+1))
+            c_ids+=("$id"); c_labels+=("$label"); c_names+=("$name")
+            local act_tag=""
+            [ "$id" = "$active_id" ] && act_tag=" ${G}[ACTIVE]${NC}"
+            [ -s "$gd/delete-tunnel.${id}.pending" ] && act_tag+=" ${Y}[DELETE PENDING]${NC}"
+            local st_col="$G"; [ "$status" = UP ] || st_col="$R"
+            echo -e "  ${W}${n}${NC} ${DIM}❯${NC} ${Y}${name}${NC} ${DIM}|${NC} ${C}${label}${NC} ${DIM}(${path})${NC} ${DIM}|${NC} ${st_col}${status}${NC}${act_tag}"
+        done < "$gd/candidates.tsv"
+        echo -e "  ${W}a${NC} ${DIM}❯${NC} Delete ALL tunnels in this group"
+        echo -e "  ${W}q${NC} ${DIM}❯${NC} Back"
+        echo -ne "\n  ${C}Select tunnel to delete ❯❯ ${NC}"; read -r sel
+        sel="${sel// /}"; sel="${sel//$'\r'/}"
+        [[ "$sel" == "q" || "$sel" == "Q" || -z "$sel" ]] && return
+
+        if [[ "$sel" == "a" || "$sel" == "A" ]]; then
+            echo -ne "  ${R}Delete ALL ${n} tunnels in group [${gid}]? Type 'yes' to confirm: ${NC}"; read -r confirm
+            [ "$confirm" == "yes" ] || continue
+            local del_fail=0
+            for id in "${c_ids[@]}"; do
+                smart_delete_single_tunnel "$gd" "$id" || del_fail=1
+            done
+            if [ "$del_fail" -eq 0 ]; then
+                echo -e "  ${G}✔ All tunnels in group [${gid}] deleted.${NC}"
+            else
+                echo -e "  ${Y}⚠ Some tunnel cleanup is pending. Retry Delete Tunnels after peer connectivity is restored.${NC}"
+            fi
+            sleep 1.5
+            continue
+        fi
+
+        idx=$(smart_pick_index "$sel" "$n") || { echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; continue; }
+        local target_id="${c_ids[$idx]}"
+        local target_lbl="${c_labels[$idx]}"
+        local target_name="${c_names[$idx]}"
+        echo -ne "  ${R}Delete tunnel [${target_name} - ${target_lbl}]? Type 'yes' to confirm: ${NC}"; read -r confirm
+        [ "$confirm" == "yes" ] || continue
+        if smart_delete_single_tunnel "$gd" "$target_id"; then
+            echo -e "  ${G}✔ Tunnel [${target_name}] deleted successfully.${NC}"
+        else
+            echo -e "  ${Y}⚠ Tunnel [${target_name}] cleanup is pending; it has been removed from active service and will not be selected by Watchdog.${NC}"
+        fi
+        sleep 1.5
+    done
+}
+
+smart_menu_delete_groups() {
+    while true; do
+        smart_header
+        local -a groups=()
+        local gd gid n=0 active_lbl svc tcnt sel confirm idx
+        for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && groups+=("$gd"); done
+        if [ ${#groups[@]} -eq 0 ]; then
+            echo -e "\n  ${Y}● No Smart groups configured.${NC}\n"
+            smart_pause
+            return
+        fi
+
+        echo -e "\n  ${R}┌─[ DELETE SMART GROUPS ]${NC}"
+        for gd in "${groups[@]}"; do
+            n=$((n+1))
+            gid=$(basename "$gd")
+            active_lbl=$(cut -d'|' -f2 "$gd/active.state" 2>/dev/null || true)
+            svc=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS)
+            tcnt=$(wc -l < "$gd/candidates.tsv" 2>/dev/null || echo 0)
+            echo -e "  ${W}${n}${NC} ${DIM}❯${NC} ${Y}${gid}${NC} ${DIM}| Active:${NC} ${G}${active_lbl:-OFF}${NC} ${DIM}| Tunnels:${NC} ${C}${tcnt}${NC} ${DIM}| Ports:${NC} ${W}${svc:-None}${NC}"
+        done
+        echo -e "  ${W}a${NC} ${DIM}❯${NC} Delete ALL Smart groups"
+        echo -e "  ${W}q${NC} ${DIM}❯${NC} Back"
+        echo -ne "\n  ${C}Select group to delete ❯❯ ${NC}"; read -r sel
+        sel="${sel// /}"; sel="${sel//$'\r'/}"
+        [[ "$sel" == "q" || "$sel" == "Q" || -z "$sel" ]] && return
+
+        if [[ "$sel" == "a" || "$sel" == "A" ]]; then
+            echo -ne "  ${R}Delete ALL ${n} Smart groups and their tunnels on Iran & Foreign? Type 'yes' to confirm: ${NC}"; read -r confirm
+            [ "$confirm" == "yes" ] || continue
+            echo -e "  ${C}⟳${NC} Deleting all Smart groups and cleaning up both servers..."
+            if smart_delete_groups; then
+                echo -e "  ${G}✔ All ${n} Smart groups deleted successfully.${NC}"
+            else
+                echo -e "  ${Y}⚠ Some group state was retained because remote cleanup could not complete.${NC}"
+            fi
+            sleep 1.8
+            continue
+        fi
+
+        idx=$(smart_pick_index "$sel" "$n") || { echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; continue; }
+        gd="${groups[$idx]}"
+        gid=$(basename "$gd")
+        echo -ne "  ${R}Delete group [${gid}] and all its tunnels? Type 'yes' to confirm: ${NC}"; read -r confirm
+        [ "$confirm" == "yes" ] || continue
+        echo -e "  ${C}⟳${NC} Deleting group [${gid}] on Foreign & Iran..."
+        if flock -x -w 60 -o "$gd/.smart.lock" "$INSTALL_PATH" --delete-group "$gid"; then
+            echo -e "  ${G}✔ Group [${gid}] deleted successfully.${NC}"
+        else
+            echo -e "  ${Y}⚠ Cleanup had warnings on Foreign or Iran. Check connectivity and retry if needed.${NC}"
+        fi
+        # Disable watchdog timer if no groups remain
+        local left=0
+        for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && { left=1; break; }; done
+        if [ "$left" -eq 0 ]; then
+            systemctl disable --now mtunnel-smart-watchdog.timer >/dev/null 2>&1 || true
+            rm -f "$WATCH_SERVICE" "$WATCH_TIMER"
+            systemctl daemon-reload >/dev/null 2>&1 || true
+        fi
+        sleep 1.8
     done
 }
 
 smart_benchmark_menu() {
+    smart_select_group_interactive || return
+    local gd="$SELECTED_GROUP_DIR"
+    smart_benchmark_group "$gd"
     smart_header
-    local -a groups=(); local gd i sel
-    for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && groups+=("$gd"); done
-    [ ${#groups[@]} -gt 0 ] || { echo -e "\n  ${Y}● No Smart groups.${NC}"; smart_pause; return; }
-    echo -e "\n  ${FR}┌─[ BENCHMARK / RANKING ]${NC}"
-    for i in "${!groups[@]}"; do echo -e "  ${FR}├─${NC} ${W}$((i+1))${NC} ${DIM}❯${NC} $(basename "${groups[$i]}")"; done
-    echo -ne "  ${C}Select: ${NC}"; read -r sel
-    [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le ${#groups[@]} ] || return
-    gd="${groups[$((sel-1))]}"; smart_benchmark_group "$gd"; smart_header; smart_show_ranking_file "$gd/ranking.tsv"; smart_pause
+    smart_show_ranking_file "$gd/ranking.tsv"
+    smart_pause
 }
 smart_prerequisites_screen() {
     smart_header
-    echo -e "\n  ${FR}┌─[ PREREQUISITES ]${NC}"
-    echo -e "  ${FR}│${NC} ${W}Please open this same Smart Tunnel menu on both servers.${NC}"
-    echo -e "  ${FR}│${NC} ${Y}0. FIRST install the complete MTunnel package on BOTH servers.${NC}"
-    echo -e "  ${FR}│${NC}    ${DIM}Update & Local Install → ${W}A${NC}${DIM} (GitHub) or ${W}B${NC}${DIM} (Mirror).${NC}"
-    echo -e "  ${FR}│${NC}    ${DIM}This installs all tunnel scripts, engines/cores and prerequisite packages before Smart starts.${NC}"
-    echo -e "  ${FR}│${NC} 1. Choose the role of each server below."
-    echo -e "  ${FR}│${NC} 2. Foreign generates the ${M}Pair Code${NC}."
-    echo -e "  ${FR}│${NC} 3. Iran asks only for ${W}Foreign IPv4 + Pair Code${NC}."
-    echo -e "  ${FR}│${NC} ${DIM}The Pair Code carries Foreign IPv6, Agent port, TLS fingerprint and a one-time secret.${NC}"
-    echo -e "  ${FR}│${NC} ${DIM}After pairing, all Smart management is performed from Iran; Foreign stays automatic.${NC}"
+    echo -e "\n  ${FR}┌─[ PREREQUISITES & PAIR SETUP ]${NC}"
+    echo -e "  ${FR}│${NC} ${W}Run this option on BOTH Iran and Foreign before pairing.${NC}"
+    echo -e "  ${FR}│${NC} ${DIM}Smart installs only what it needs:${NC}"
+    echo -e "  ${FR}│${NC}   ${C}engines/${NC}  ${DIM}→ Backhaul + Rathole engine for this CPU${NC}"
+    echo -e "  ${FR}│${NC}   ${C}prereqs/${NC}  ${DIM}→ only missing Smart system packages${NC}"
+    echo -e "  ${FR}│${NC} ${DIM}No tunnel scripts or unrelated engines are downloaded here.${NC}"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}"
-    [ "${1:-}" = nopause ] || smart_pause
 }
 smart_setup_flow() {
     local role
-    smart_prerequisites_screen nopause
-    smart_full_package_gate || { smart_pause; return 1; }
+    smart_prerequisites_screen
+    smart_dependency_source_menu || return 0
+    echo -e "\n  ${C}⟳${NC} ${W}Checking and installing Smart prerequisites...${NC}"
+    smart_install_smart_prerequisites "$SMART_DEP_SOURCE" || { smart_pause; return 1; }
     echo -e "\n  ${FR}┌─[ SERVER ROLE ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Iran Server / Controller${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Foreign Server / Agent${NC}"
@@ -1942,34 +2414,35 @@ smart_setup_flow() {
         *) return 0;;
     esac
 }
-render_msmart_menu() {
-    mt_workspace_screen
-    smart_header
-    mt_workspace_group 'PROVISION & PAIR' first
-    mt_workspace_row 1 'Prerequisites & Pair Setup' "$Y"
-    mt_workspace_row 2 'Create Smart Tunnel Group' "$G"
-    mt_workspace_group 'EDIT & MANAGE'
-    mt_workspace_row 3 'Groups & Tunnels' "$C"
-    mt_workspace_row 4 'Ports & Forwarding' "$G"
-    mt_workspace_group 'MONITOR & SYSTEM'
-    mt_workspace_row 5 'Benchmark / Ranking' "$M"
-    mt_workspace_row 6 'Peer Status' "$C"
-    mt_workspace_row 7 'Update & Local Install' "$G" "$(smart_update_badge)"
-    mt_workspace_footer 'Return to Main Core'
-}
 smart_menu() {
     local opt
     while true; do
-        render_msmart_menu
-        echo -ne "  ${C}MSMART ❯❯ ${NC}"; read -r opt
+        smart_header
+        echo -e "\n  ${FR}┌─[ PROVISION & MANAGE ]${NC}"
+        echo -e "  ${FR}│${NC}"
+        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}Prerequisites & Pair Setup${NC}"
+        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Create Smart Tunnel Group${NC}"
+        echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Groups, Tunnels & Ports${NC}"
+        echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${G}Ports & Forwarding${NC}"
+        echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Benchmark & Ranking${NC}"
+        echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}Peer & Agent Status${NC}"
+        echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}Update & Local Install${NC}$(smart_update_badge)"
+        echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC}"
+        echo -e "  ${FR}└─${NC} ${W}9${NC} ${DIM}❯${NC} ${R}Delete Smart Groups${NC}"
+        echo -e "  ${FR}────────────────────────────${NC}"
+        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}"
+        echo -ne "\n  ${C}MSMART ❯❯ ${NC}"; read -r opt
+        opt="${opt// /}"; opt="${opt//$'\\r'/}"
         case "$opt" in
             1) smart_setup_flow;;
             2) smart_create_group;;
-            3) smart_manage_menu;;
-            4) smart_ports_menu;;
+            3) smart_list_overview;;
+            4) smart_manage_ports;;
             5) smart_benchmark_menu;;
             6) smart_info;;
             7) smart_update_menu;;
+            8) smart_menu_delete_tunnels;;
+            9) smart_menu_delete_groups;;
             0|q|Q) break;;
             *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
         esac
@@ -2024,7 +2497,8 @@ smart_delete_groups() {
 case "${1:-}" in
     --benchmark-group) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || exit 2; smart_benchmark_group_locked "$GROUP_DIR/$2"; exit $?;;
     --watchdog-group) smart_peer_load || exit 0; smart_watchdog_group_locked "${2:-}"; exit $?;;
-    --delete-tunnel) smart_delete_tunnel_locked "${2:-}" "${3:-}"; exit $?;;
+    --sync-ports) smart_sync_group_ports_locked "${2:-}" "${3:-}"; exit $?;;
+    --delete-tunnel) smart_delete_single_tunnel_locked "${2:-}" "${3:-}"; exit $?;;
     --delete-group) smart_delete_group_locked "${2:-}"; exit $?;;
     --delete-groups) smart_delete_groups; exit $?;;
     --pair-window-cleanup) smart_pair_window_cleanup; exit $?;;
@@ -2032,6 +2506,6 @@ case "${1:-}" in
     --watchdog-once) smart_watchdog_once; exit $?;;
     --version|-V) echo "MTunnel Smart $MODULE_VERSION build $MODULE_BUILD"; exit 0;;
     --pair-decode) smart_pair_decode "${2:-}" && printf 'IPv6=%s\nPort=%s\nFingerprint=%s\nExpires=%s\n' "$PAIR_IP6" "$PAIR_PORT" "$PAIR_FP" "$PAIR_EXPIRES"; exit $?;;
-    --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-tunnel GID ID|--delete-groups|--pair-window-cleanup]'; exit 0;;
+    --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-group GID|--delete-groups|--pair-window-cleanup]'; exit 0;;
 esac
 smart_menu

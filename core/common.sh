@@ -2062,7 +2062,9 @@ mt_hdr_draw() {
             [ -z "$il" ] || _mt_hdr_line "${il}: ${iv}" "${DIM}${il}:${NC} ${ic:-$W}${iv}${NC}"
         done
         printf "  ${FR}╠%s╣${NC}\033[K\n" "$border"
-        if [ "${#rows[@]}" -eq 0 ]; then _mt_hdr_line "No tunnels configured." "${DIM}No tunnels configured.${NC}"
+        if [ "${#rows[@]}" -eq 0 ]; then
+            local empty_text="${MT_HDR_EMPTY_TEXT:-No tunnels configured.}"
+            _mt_hdr_line "$empty_text" "${DIM}${empty_text}${NC}"
         else
             local st name tag peer vip ping loss up fwd
             for line in "${rows[@]}"; do
@@ -2169,7 +2171,8 @@ mt_hdr_draw() {
             "$stat_col" "$stat_icon" "$NC" "$name_tag" "$peer_w" "$peer_w" "$peer" "$vip_col" "${vip:-OFF}" "$NC" "$live_ping" "$loss_col" "$loss_disp" "$NC" "${up:----}" "$fwd_col" "${fwd:-OFF}" "$NC" "$fwd_warn"
     done
     if [ "$shown" -eq 0 ]; then
-        printf "  ${FR}║${NC}  ${DIM}● %-*.*s${NC}  ${FR}║${NC}\033[K\n" "$((total-6))" "$((total-6))" "No tunnels of this type are configured on this host."
+        local empty_text="${MT_HDR_EMPTY_TEXT:-No tunnels of this type are configured on this host.}"
+        printf "  ${FR}║${NC}  ${DIM}● %-*.*s${NC}  ${FR}║${NC}\033[K\n" "$((total-6))" "$((total-6))" "$empty_text"
     fi
     printf '  %b╚%s╝%b\033[K\n' "$FR" "$border" "$NC"
 }

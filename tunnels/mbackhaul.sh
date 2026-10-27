@@ -1102,6 +1102,16 @@ bh_activate_config() {
 case "${1:-}" in
     --apply-forwarder) bh_apply_forwarder "${2:-}"; exit $?;;
     --clear-forwarder) bh_clear_forwarder "${2:-}"; exit $?;;
+    --delete-one)
+        bh_n="${2:-}"; [[ "$bh_n" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 2
+        [ -f "$CONF_DIR/$bh_n.meta" ] || exit 0
+        systemctl disable --now "mbackhaul@$bh_n" >/dev/null 2>&1 || true
+        clean_bh_counters "$bh_n"
+        if command -v crontab >/dev/null 2>&1; then
+            cron_tmp="$SECURE_TMP/crontab.$$"; crontab -l 2>/dev/null | grep -v "mbackhaul@${bh_n}" > "$cron_tmp"; crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+        fi
+        bh_delete_forwarder "$bh_n" || exit 1
+        rm -f "$CONF_DIR/$bh_n.meta" "$CONF_DIR/$bh_n.toml" "$CONF_DIR/${bh_n}_restart.sh"; exit 0;;
     --delete-all)
         # Delete every Backhaul tunnel (units, forwarders, counters, cron, configs) but keep this script and the bh core.
         bh_rc=0
@@ -1959,7 +1969,7 @@ select_tunnel() {
     return 0
 }
 
-if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ]; then check_first_run_core; fi
+if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ] && [ "${1:-}" != "--deploy-peer-stdin" ]; then check_first_run_core; fi
 apply_bbr_optimization
 setup_systemd_service
 
@@ -2231,10 +2241,12 @@ render_mbackhaul_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
-if [ "${1:-}" = "--deploy-peer-link" ]; then
+if [ "${1:-}" = "--deploy-peer-link" ] || [ "${1:-}" = "--deploy-peer-stdin" ]; then
     is_bh_core_valid || { echo "Backhaul core is missing or invalid on this server." >&2; exit 3; }
-    [ -n "${2:-}" ] || { echo "Missing Peer Link." >&2; exit 2; }
-    mt_link_decode "$2" || { echo "Invalid Peer Link." >&2; exit 2; }
+    if [ "${1:-}" = "--deploy-peer-stdin" ]; then IFS= read -r mt_peer_arg; else mt_peer_arg="${2:-}"; fi
+    [ -n "$mt_peer_arg" ] || { echo "Missing Peer Link." >&2; exit 2; }
+    mt_link_decode "$mt_peer_arg" || { echo "Invalid Peer Link." >&2; exit 2; }
+    unset mt_peer_arg
     mt_link_deploy
     exit $?
 fi

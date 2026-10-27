@@ -2261,10 +2261,13 @@ use_peer_code() {
 render_main_menu() {
     draw_main_header
     printf '\n'
-    printf '  %b┌─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$FR" "$NC"
+    printf '  %b┌─[ PAIRING & SMART AUTOMATION ]%b\n' "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├─%b %bp%b %b❯%b %bUse Peer Code%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %bs%b %b❯%b %bSmart Tunnel / Auto Failover%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge msmart)"
+    printf '  %b│%b\n' "$FR" "$NC"
+    printf '  %b├─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$FR" "$NC"
+    printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├─%b %b1%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
     printf '  %b├─%b %b2%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
     printf '  %b├─%b %b3%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
@@ -2492,7 +2495,12 @@ while true; do
                 /usr/bin/mgre --teardown-all 2>/dev/null || true
                 /usr/bin/mxlan --teardown-all 2>/dev/null || true
                 if command -v iptables >/dev/null 2>&1; then
+                    while iptables -D INPUT -p tcp --dport 29876 -j MTUNNEL_SMART 2>/dev/null; do :; done
+                    iptables -F MTUNNEL_SMART 2>/dev/null || true
+                    iptables -X MTUNNEL_SMART 2>/dev/null || true
+                    # Compatibility cleanup for pre-hardening Smart rules.
                     while iptables -D INPUT -p tcp --dport 29876 -m comment --comment MTUNNEL_SMART_AGENT -j ACCEPT 2>/dev/null; do :; done
+                    while iptables -D INPUT -p tcp --dport 29876 -m comment --comment MTUNNEL_SMART_AGENT_PAIRED -j ACCEPT 2>/dev/null; do :; done
                 fi
                 for bin in iptables ip6tables; do
                     command -v "$bin" >/dev/null 2>&1 || continue

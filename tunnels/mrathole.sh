@@ -1212,6 +1212,16 @@ if [ "${1:-}" == --counters ]; then
     mt_setup_counter_pair RAT "$2" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
     exit $?
 fi
+if [ "${1:-}" == --delete-one ]; then
+    rat_n="${2:-}"; [[ "$rat_n" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 2
+    [ -d "$CONF_DIR/$rat_n" ] || exit 0
+    clean_rat_counters "$rat_n"
+    systemctl disable --now "mrathole@$rat_n" >/dev/null 2>&1 || true
+    if command -v crontab >/dev/null 2>&1; then
+        cron_tmp="$SECURE_TMP/crontab.$$"; crontab -l 2>/dev/null | grep -v "mrathole@${rat_n}" > "$cron_tmp"; crontab "$cron_tmp" 2>/dev/null; rm -f "$cron_tmp"
+    fi
+    rm -rf "$CONF_DIR/$rat_n"; exit 0
+fi
 if [ "${1:-}" == --delete-all ]; then
     # Delete every Rathole tunnel (units, counters, cron, configs) but keep this script and the rathole core.
     for dir in "$CONF_DIR"/*; do
@@ -1243,7 +1253,7 @@ for dir in "$CONF_DIR"/*; do
     mt_setup_counter_pair RAT "$(basename "$dir")" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
 done
 
-if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ]; then check_first_run_core; fi
+if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ] && [ "${1:-}" != "--deploy-peer-stdin" ]; then check_first_run_core; fi
 setup_systemd
 
 show_tunnels_info() {
@@ -1505,10 +1515,12 @@ render_mrathole_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
-if [ "${1:-}" = "--deploy-peer-link" ]; then
+if [ "${1:-}" = "--deploy-peer-link" ] || [ "${1:-}" = "--deploy-peer-stdin" ]; then
     is_rathole_core_valid || { echo "Rathole core is missing or invalid on this server." >&2; exit 3; }
-    [ -n "${2:-}" ] || { echo "Missing Peer Link." >&2; exit 2; }
-    mt_link_decode "$2" || { echo "Invalid Peer Link." >&2; exit 2; }
+    if [ "${1:-}" = "--deploy-peer-stdin" ]; then IFS= read -r mt_peer_arg; else mt_peer_arg="${2:-}"; fi
+    [ -n "$mt_peer_arg" ] || { echo "Missing Peer Link." >&2; exit 2; }
+    mt_link_decode "$mt_peer_arg" || { echo "Invalid Peer Link." >&2; exit 2; }
+    unset mt_peer_arg
     mt_link_deploy
     exit $?
 fi

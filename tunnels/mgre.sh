@@ -1624,6 +1624,10 @@ case "$1" in
         [ -d "$CONF_DIR" ] && find "$CONF_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
         rm -f "$WD_LOG"
         exit 0 ;;
+    --delete-one)
+        mgre_del="${2:-}"; [[ "$mgre_del" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 2
+        mgre_conf="$CONF_DIR/$mgre_del.conf"; [ -f "$mgre_conf" ] || exit 0
+        teardown_tunnel "$mgre_conf"; mgre_rc=$?; rm -f "$mgre_conf"; rebuild_guard; exit "$mgre_rc" ;;
     --apply)    apply_all_tunnels; exit $? ;;
     --apply-one) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]+$ ]] && [ -f "$CONF_DIR/$2.conf" ] || exit 1; apply_tunnel "$CONF_DIR/$2.conf"; exit $? ;;
     --smart-forward) mgre_smart_forward "${2:-}" "${3:-}" "${4:-off}"; exit $? ;;
@@ -1920,9 +1924,11 @@ render_mgre_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
-if [ "${1:-}" = "--deploy-peer-link" ]; then
-    [ -n "${2:-}" ] || { echo "Missing Peer Link." >&2; exit 2; }
-    mt_link_decode "$2" || { echo "Invalid Peer Link." >&2; exit 2; }
+if [ "${1:-}" = "--deploy-peer-link" ] || [ "${1:-}" = "--deploy-peer-stdin" ]; then
+    if [ "${1:-}" = "--deploy-peer-stdin" ]; then IFS= read -r mt_peer_arg; else mt_peer_arg="${2:-}"; fi
+    [ -n "$mt_peer_arg" ] || { echo "Missing Peer Link." >&2; exit 2; }
+    mt_link_decode "$mt_peer_arg" || { echo "Invalid Peer Link." >&2; exit 2; }
+    unset mt_peer_arg
     mt_link_deploy
     exit $?
 fi

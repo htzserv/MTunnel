@@ -3,6 +3,7 @@
 MODULE_VERSION="1.5.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
+SMART_API_REV=1
 umask 077
 # MTUNNEL_COMMON_LOADER -- common API 1, required by this module.
 mt_load_common() {
@@ -21,6 +22,11 @@ mt_load_common() {
 mt_load_common || exit 1
 unset -f mt_load_common
 
+for _mt_fn in mt_hdr_draw mt_workspace_group mt_workspace_row mt_workspace_footer mt_workspace_pause mt_validate_script mt_install_script mt_check_update_both mt_update_available mt_download mt_link_read; do
+    declare -F "$_mt_fn" >/dev/null 2>&1 || { echo "MTunnel: shared core is missing required helper: $_mt_fn" >&2; exit 1; }
+done
+unset _mt_fn
+
 [ "$EUID" -eq 0 ] || { echo 'Run MTunnel Smart with sudo.' >&2; exit 1; }
 
 B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'; FR='\033[1;33m'
@@ -31,15 +37,143 @@ IPERF_PORT=5201
 AGENT_SERVICE=/etc/systemd/system/mtunnel-smart-agent.service
 WATCH_SERVICE=/etc/systemd/system/mtunnel-smart-watchdog.service
 WATCH_TIMER=/etc/systemd/system/mtunnel-smart-watchdog.timer
-mkdir -p "$SMART_DIR" "$GROUP_DIR" /root/mtunnel/tmp 2>/dev/null
-chmod 700 "$SMART_DIR" "$GROUP_DIR" 2>/dev/null
+SECURE_TMP=/root/mtunnel/tmp
+INSTALL_PATH=/usr/bin/msmart
+UPDATE_CHECK_INTERVAL=600
+mkdir -p "$SMART_DIR" "$GROUP_DIR" "$SECURE_TMP" 2>/dev/null
+chmod 700 "$SMART_DIR" "$GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 
-smart_pause() { local _; echo -ne "\n  ${DIM}Press Enter to continue...${NC}"; read -r _ || true; }
+# Smart uses the same dashboard/update language as the tunnel engines (MGRE/MXLAN/etc.).
+smart_check_update_bg() {
+    if declare -F mt_check_update_both >/dev/null 2>&1; then
+        mt_check_update_both "tunnels/msmart.sh" "msmart"
+    fi
+}
+smart_update_watcher_loop() {
+    while true; do smart_check_update_bg; sleep "$UPDATE_CHECK_INTERVAL"; done
+}
+if [[ "${1:-}" != --* ]]; then
+    smart_update_watcher_loop & WATCHER_PID=$!
+    trap '[ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true' EXIT
+fi
+
+smart_update_badge() {
+    local rv file="$SECURE_TMP/.msmart_remote_ver"
+    [ -f "$file" ] || return 0
+    rv=$(tr -d '\r\n ' < "$file")
+    if mt_update_available "$rv" "$MODULE_VERSION" 2>/dev/null; then
+        printf ' %b(Update Available: v%s)%b' "$Y" "$rv" "$NC"
+    fi
+}
+
+smart_pause() { mt_workspace_pause; }
+smart_header_state() {
+    local gd groups=0 paired='UNPAIRED' pair_col="$Y" agent='OFF' agent_col="$DIM"
+    local watchdog='OFF' watchdog_col="$DIM" ports=0 peer4='---' active label score st svc count=0
+    MT_HDR_ROWS=''
+    if [ -s "$SMART_DIR/peer.conf" ]; then
+        paired='PAIRED'; pair_col="$G"
+        peer4=$(mt_link_read "$SMART_DIR/peer.conf" FOREIGN_IPV4 2>/dev/null || true)
+        [ -n "$peer4" ] || peer4='---'
+    fi
+    if systemctl is-active --quiet mtunnel-smart-agent.service 2>/dev/null; then agent='ON'; agent_col="$G"; fi
+    if systemctl is-active --quiet mtunnel-smart-watchdog.timer 2>/dev/null; then watchdog='ON'; watchdog_col="$G"; fi
+    for gd in "$GROUP_DIR"/*; do
+        [ -d "$gd" ] || continue
+        groups=$((groups+1))
+        svc=$(mt_link_read "$gd/group.conf" SERVICE_PORTS 2>/dev/null || true)
+        if [ -n "$svc" ]; then
+            count=$(awk -F, '{print NF}' <<< "$svc" 2>/dev/null || echo 0)
+            [[ "$count" =~ ^[0-9]+$ ]] && ports=$((ports+count))
+        fi
+        [ "$groups" -le 3 ] || continue
+        active=$(cat "$gd/active.state" 2>/dev/null || true)
+        IFS='|' read -r _ label score <<< "$active"
+        st=0; [ -n "$label" ] && st=1
+        MT_HDR_ROWS+="${st}|$(basename "$gd")|AUTO|${peer4}|${label:-OFF}|---|---|${score:-DOWN}|${label:+ACTIVE}"$'\n'
+    done
+    MT_HDR_ROWS="${MT_HDR_ROWS%$'\n'}"
+    SMART_HDR_GROUPS="$groups"; SMART_HDR_PAIRED="$paired"; SMART_HDR_PAIR_COL="$pair_col"
+    SMART_HDR_AGENT="$agent"; SMART_HDR_AGENT_COL="$agent_col"; SMART_HDR_WATCHDOG="$watchdog"; SMART_HDR_WATCHDOG_COL="$watchdog_col"
+    SMART_HDR_PORTS="$ports"
+}
 smart_header() {
-    clear
-    echo -e "  ${FR}╔══════════════════════════════════════════════════════════════════════╗${NC}"
-    printf '  %b║%b %-68s %b║%b\n' "$FR" "$NC" "MTunnel Smart Tunnel & Failover | v${MODULE_VERSION}" "$FR" "$NC"
-    echo -e "  ${FR}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+    smart_header_state
+    MT_HDR_EMPTY_TEXT="No Smart groups are configured on this host."
+    local group_col="$DIM"; [ "$SMART_HDR_GROUPS" -gt 0 ] 2>/dev/null && group_col="$G"
+    mt_hdr_draw "MSmart Core v${MODULE_VERSION}" "Groups|${SMART_HDR_GROUPS}|${group_col}" \
+        "Pair|${SMART_HDR_PAIRED}|${SMART_HDR_PAIR_COL}" \
+        "Agent|${SMART_HDR_AGENT}|${SMART_HDR_AGENT_COL}" \
+        "Watchdog|${SMART_HDR_WATCHDOG}|${SMART_HDR_WATCHDOG_COL}" \
+        "Ports|${SMART_HDR_PORTS}|${C}"
+}
+
+smart_install_update_file() { # candidate path
+    local candidate="$1" new_ver confirm
+    mt_validate_script "$candidate" || { echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; }
+    new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate" | head -n1)
+    [[ "$new_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo -e "  ${R}✖ MODULE_VERSION was not found.${NC}"; return 1; }
+    mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver" || return 1
+    echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+    echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${Y}v${MODULE_VERSION}${NC}"
+    echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
+    echo -ne "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+    [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled.${NC}"; return 0; }
+    mt_install_script "$candidate" "tunnels/msmart.sh" "$INSTALL_PATH" "$0" || { echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1; }
+    if systemctl is-active --quiet mtunnel-smart-agent.service 2>/dev/null; then
+        systemctl restart mtunnel-smart-agent.service >/dev/null 2>&1 || echo -e "  ${Y}⚠ Agent service could not be restarted automatically.${NC}"
+    fi
+    echo -e "  ${G}✔ MSmart updated successfully. Restarting module...${NC}"
+    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
+    exec "$INSTALL_PATH"
+}
+smart_self_update() { # 1 github, 2 mirror, 3 direct, 4 manual
+    local src="$1" url tmp
+    tmp=$(mktemp "$SECURE_TMP/msmart-update.XXXXXX") || return 1
+    case "$src" in
+        1) url="${MTUNNEL_GITHUB_BASE}/tunnels/msmart.sh";;
+        2) url="${MTUNNEL_MIRROR_BASE}/tunnels/msmart.sh";;
+        3) echo -ne "  ${C}●${NC} ${W}Direct .sh URL: ${NC}"; read -r url;;
+        4) mt_capture_manual_script "$tmp" || { rm -f "$tmp"; return 1; }; smart_install_update_file "$tmp"; rm -f "$tmp"; return $?;;
+        *) rm -f "$tmp"; return 1;;
+    esac
+    echo -e "  ${C}⟳${NC} ${W}Downloading MSmart update...${NC}"
+    mt_download "$url" "$tmp" || { rm -f "$tmp"; echo -e "  ${R}✖ Download failed.${NC}"; return 1; }
+    smart_install_update_file "$tmp"; local rc=$?; rm -f "$tmp"; return "$rc"
+}
+smart_local_install() {
+    local path tmp
+    echo -ne "  ${C}●${NC} ${W}Local msmart.sh path [${LOCAL_DIR:-/root/mtunnel}/tunnels/msmart.sh]: ${NC}"; read -r path
+    path="${path:-${LOCAL_DIR:-/root/mtunnel}/tunnels/msmart.sh}"
+    [ -f "$path" ] || { echo -e "  ${R}✖ File not found: $path${NC}"; return 1; }
+    tmp=$(mktemp "$SECURE_TMP/msmart-local.XXXXXX") || return 1
+    cp -f -- "$path" "$tmp" || { rm -f "$tmp"; return 1; }
+    smart_install_update_file "$tmp"; local rc=$?; rm -f "$tmp"; return "$rc"
+}
+smart_update_menu() {
+    local opt gh='version unavailable' mir='version unavailable' v
+    while true; do
+        [ -f "$SECURE_TMP/.msmart_remote_ver_github" ] && { v=$(tr -d '\r\n ' < "$SECURE_TMP/.msmart_remote_ver_github"); gh="v${v}"; mt_update_available "$v" "$MODULE_VERSION" 2>/dev/null && gh="v${MODULE_VERSION} → v${v}"; }
+        [ -f "$SECURE_TMP/.msmart_remote_ver_mirror" ] && { v=$(tr -d '\r\n ' < "$SECURE_TMP/.msmart_remote_ver_mirror"); mir="v${v}"; mt_update_available "$v" "$MODULE_VERSION" 2>/dev/null && mir="v${MODULE_VERSION} → v${v}"; }
+        smart_header
+        mt_workspace_group 'UPDATE & LOCAL INSTALL — MSMART' first
+        mt_workspace_row 1 "Install Script From Github (${gh})" "$C"
+        mt_workspace_row 2 "Install Script From Iranian Mirror (${mir})" "$G"
+        mt_workspace_row 3 'Install Script From Direct Link' "$Y"
+        mt_workspace_row 4 'Paste Script Code Manually' "$M"
+        mt_workspace_row 5 'Install Local msmart.sh' "$W"
+        mt_workspace_footer 'Return to Smart Menu'
+        echo -ne "  ${C}MSMART UPDATE ❯❯ ${NC}"; read -r opt
+        case "$opt" in
+            1) smart_self_update 1; smart_pause;;
+            2) smart_self_update 2; smart_pause;;
+            3) smart_self_update 3; smart_pause;;
+            4) smart_self_update 4; smart_pause;;
+            5) smart_local_install; smart_pause;;
+            0|q|Q) return 0;;
+            *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
+        esac
+    done
 }
 smart_local_ipv4() {
     local ip
@@ -116,13 +250,15 @@ try:
 except Exception: pass
 PY
 }
-smart_https_call() { # host port fingerprint token path body
-    SMART_HOST="$1" SMART_PORT="$2" SMART_FP="$3" SMART_TOKEN="$4" SMART_PATH="$5" SMART_BODY="$6" python3 - <<'PY'
+smart_https_call() { # host port fingerprint token path body [timeout-seconds]
+    local call_timeout="${7:-15}"
+    SMART_HOST="$1" SMART_PORT="$2" SMART_FP="$3" SMART_TOKEN="$4" SMART_PATH="$5" SMART_BODY="$6" SMART_TIMEOUT="$call_timeout" python3 - <<'PY'
 import hashlib,http.client,json,os,ssl,sys
 host=os.environ['SMART_HOST']; port=int(os.environ['SMART_PORT']); expected=os.environ['SMART_FP'].lower().replace(':','')
+timeout=max(3,min(240,int(os.environ.get('SMART_TIMEOUT','15'))))
 ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
 try:
-    c=http.client.HTTPSConnection(host,port,timeout=12,context=ctx)
+    c=http.client.HTTPSConnection(host,port,timeout=timeout,context=ctx)
     c.connect()
     cert=c.sock.getpeercert(binary_form=True)
     got=hashlib.sha256(cert).hexdigest()
@@ -147,9 +283,10 @@ smart_peer_load() {
     SMART_PORT=$(smart_conf_get "$f" PORT); SMART_FP=$(smart_conf_get "$f" FINGERPRINT); SMART_TOKEN=$(smart_conf_get "$f" TOKEN)
     mt_valid_ipv4 "$SMART_F4" && mt_valid_port "$SMART_PORT" && [[ "$SMART_FP" =~ ^[0-9a-f]{64}$ && "$SMART_TOKEN" =~ ^[A-Za-z0-9_-]{20,256}$ ]] || return 1
 }
-smart_agent_call() { # JSON body
+smart_agent_call() { # JSON body [timeout-seconds]
+    local call_timeout="${2:-15}"
     smart_peer_load || { echo '{"ok":false,"error":"not paired"}'; return 1; }
-    smart_https_call "$SMART_F4" "$SMART_PORT" "$SMART_FP" "$SMART_TOKEN" /v1/action "$1"
+    smart_https_call "$SMART_F4" "$SMART_PORT" "$SMART_FP" "$SMART_TOKEN" /v1/action "$1" "$call_timeout"
 }
 smart_ensure_agent_dependencies() {
     local missing=()
@@ -157,6 +294,7 @@ smart_ensure_agent_dependencies() {
     command -v openssl >/dev/null 2>&1 || missing+=(openssl)
     command -v iperf3 >/dev/null 2>&1 || missing+=(iperf3)
     command -v ping >/dev/null 2>&1 || missing+=(iputils-ping)
+    command -v iptables >/dev/null 2>&1 || missing+=(iptables)
     [ ${#missing[@]} -eq 0 ] && return 0
     echo -e "  ${Y}● Installing Smart prerequisites: ${missing[*]}${NC}"
     command -v apt-get >/dev/null 2>&1 || { echo 'python3 and openssl are required.' >&2; return 1; }
@@ -170,6 +308,7 @@ smart_ensure_controller_dependencies() {
     command -v iperf3 >/dev/null 2>&1 || missing+=(iperf3)
     command -v ping >/dev/null 2>&1 || missing+=(iputils-ping)
     command -v ss >/dev/null 2>&1 || missing+=(iproute2)
+    command -v flock >/dev/null 2>&1 || missing+=(util-linux)
     [ ${#missing[@]} -eq 0 ] && return 0
     echo -e "  ${Y}● Installing Smart prerequisites: ${missing[*]}${NC}"
     command -v apt-get >/dev/null 2>&1 || { echo 'Required Smart benchmark tools are missing and apt-get is unavailable.' >&2; return 1; }
@@ -199,9 +338,9 @@ EOF
     systemctl daemon-reload && systemctl enable mtunnel-smart-agent.service >/dev/null 2>&1
 }
 smart_agent_daemon() {
-    exec python3 - "$SMART_DIR" "$AGENT_PORT" <<'PY'
-import http.server,ssl,json,os,sys,subprocess,secrets,time,hmac,socket,statistics,ipaddress,re
-base=sys.argv[1]; port=int(sys.argv[2])
+    exec python3 - "$SMART_DIR" "$AGENT_PORT" "$MODULE_VERSION" "$SMART_API_REV" <<'PY'
+import http.server,ssl,json,os,sys,subprocess,secrets,time,hmac,socket,statistics,ipaddress,re,threading,signal
+base=sys.argv[1]; port=int(sys.argv[2]); module_version=sys.argv[3]; api_rev=int(sys.argv[4])
 cert=os.path.join(base,'agent.crt'); key=os.path.join(base,'agent.key')
 
 def readf(name):
@@ -236,13 +375,68 @@ def local6():
     except Exception: pass
     return 'Unknown'
 def info():
-    return {'version':'1.5.0','ipv4':local4(),'ipv6':local6(),
+    return {'version':module_version,'api_rev':api_rev,'ipv4':local4(),'ipv6':local6(),
             'backhaul_core':os.path.isfile('/usr/local/bin/bh') or os.path.isfile('/usr/bin/bh'),
             'rathole_core':os.path.isfile('/usr/local/bin/rathole') or os.path.isfile('/usr/bin/rathole'),
             'iperf3':bool(subprocess.run(['sh','-c','command -v iperf3 >/dev/null 2>&1']).returncode==0)}
 def valid_ip(v):
     try: ipaddress.ip_address(v); return True
     except Exception: return False
+
+def ipt(args):
+    try:
+        return subprocess.run(['iptables',*args],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3).returncode==0
+    except Exception:
+        return False
+
+CHAIN='MTUNNEL_SMART'
+PAIR_COMMENT='MTUNNEL_SMART_PAIR'
+PAIRED_COMMENT='MTUNNEL_SMART_PAIRED'
+
+def ensure_agent_firewall(pair_open=False, controller=None):
+    # Put a dedicated gate at the top of INPUT so an earlier generic ACCEPT rule cannot expose the Agent.
+    try:
+        subprocess.run(['iptables','-N',CHAIN],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3)
+    except Exception:
+        return False
+    if not ipt(['-L',CHAIN]): return False
+    while ipt(['-D','INPUT','-p','tcp','--dport',str(port),'-j',CHAIN]): pass
+    if not ipt(['-I','INPUT','1','-p','tcp','--dport',str(port),'-j',CHAIN]): return False
+    if not ipt(['-F',CHAIN]): return False
+    if pair_open and not ipt(['-A',CHAIN,'-m','comment','--comment',PAIR_COMMENT,'-j','ACCEPT']): return False
+    if controller:
+        try:
+            ip=ipaddress.ip_address(controller)
+            if ip.version==4 and not ipt(['-A',CHAIN,'-s',controller,'-m','comment','--comment',PAIRED_COMMENT,'-j','ACCEPT']): return False
+        except Exception:
+            return False
+    return ipt(['-A',CHAIN,'-j','DROP'])
+
+def restore_agent_firewall():
+    exp=readf('pair.expires'); pair_open=False
+    if exp.isdigit() and int(exp)>=int(time.time()) and readf('pair.secret'):
+        pair_open=True
+    if not ensure_agent_firewall(pair_open, readf('controller.ipv4')):
+        raise SystemExit('MTunnel Smart Agent firewall gate could not be installed')
+
+def restrict_agent_firewall(src):
+    # Pairing is reached over Foreign IPv4, so pin the management chain to the actual controller source.
+    try:
+        ip=ipaddress.ip_address(src)
+        if ip.version != 4: return False
+    except Exception:
+        return False
+    if not ensure_agent_firewall(False, src): return False
+    writef('controller.ipv4',src)
+    return True
+
+def reap_process(proc, seconds=20):
+    def _stop():
+        if proc.poll() is None:
+            try: os.killpg(proc.pid, signal.SIGTERM)
+            except Exception: pass
+    t=threading.Timer(seconds,_stop); t.daemon=True; t.start()
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version='MTunnelSmart/1.5.0'
     def log_message(self,*a): return
@@ -267,6 +461,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not secret or not exp or not exp.isdigit() or int(exp)<int(time.time()): return self.sendj(403,{'ok':False,'error':'pair code expired'})
             if not hmac.compare_digest(secret,supplied):
                 time.sleep(.35); return self.sendj(403,{'ok':False,'error':'pair code rejected'})
+            if not restrict_agent_firewall(self.client_address[0]): return self.sendj(500,{'ok':False,'error':'agent firewall pinning failed'})
             token=secrets.token_urlsafe(36); writef('session.token',token)
             for n in ('pair.secret','pair.expires'):
                 try: os.remove(os.path.join(base,n))
@@ -295,7 +490,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not exe or not os.path.isfile(exe) or not link.startswith('mtunnel://2/'+kind+'/') or len(link)>32768:
                 return self.sendj(400,{'ok':False,'error':'invalid deploy request'})
             try:
-                p=subprocess.run([exe,'--deploy-peer-link',link],capture_output=True,text=True,timeout=180)
+                p=subprocess.run([exe,'--deploy-peer-stdin'],input=link+'\n',capture_output=True,text=True,timeout=180)
+                msg=(p.stdout+'\n'+p.stderr).strip()[-5000:]
+                return self.sendj(200 if p.returncode==0 else 500,{'ok':p.returncode==0,'rc':p.returncode,'output':msg})
+            except subprocess.TimeoutExpired:
+                return self.sendj(504,{'ok':False,'error':'deploy timed out after 180s'})
+            except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
+        if action=='delete':
+            kind=str(data.get('kind','')); name=str(data.get('name',''))
+            mods={'gre':'/usr/bin/mgre','vxlan':'/usr/bin/mxlan','backhaul':'/usr/bin/mbackhaul','rathole':'/usr/bin/mrathole'}
+            exe=mods.get(kind)
+            if not exe or not os.path.isfile(exe) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',name):
+                return self.sendj(400,{'ok':False,'error':'invalid delete request'})
+            try:
+                p=subprocess.run([exe,'--delete-one',name],capture_output=True,text=True,timeout=60)
                 msg=(p.stdout+'\n'+p.stderr).strip()[-5000:]
                 return self.sendj(200 if p.returncode==0 else 500,{'ok':p.returncode==0,'rc':p.returncode,'output':msg})
             except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
@@ -305,7 +513,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if subprocess.run(['sh','-c','command -v iperf3 >/dev/null 2>&1']).returncode: return self.sendj(409,{'ok':False,'error':'iperf3 unavailable'})
             try:
                 proc=subprocess.Popen(['iperf3','-s','-1','-B',bind,'-p',str(p)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
-                time.sleep(.25)
+                reap_process(proc,20)
+                time.sleep(.35)
                 if proc.poll() is not None: return self.sendj(500,{'ok':False,'error':'iperf3 server failed to bind'})
                 return self.sendj(200,{'ok':True,'pid':proc.pid})
             except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
@@ -320,13 +529,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 time.sleep(.12)
             return self.sendj(200,{'ok':True,'avg_ms':round(statistics.mean(vals),2) if vals else 9999,'jitter_ms':round(statistics.pstdev(vals),2) if len(vals)>1 else 0,'loss':fail*20})
         return self.sendj(400,{'ok':False,'error':'unsupported action'})
+ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(certfile=cert,keyfile=key)
 class Server(http.server.ThreadingHTTPServer):
     allow_reuse_address=True
+    daemon_threads=True
+    request_queue_size=32
+    gate=threading.BoundedSemaphore(32)
+    def get_request(self):
+        sock,addr=super().get_request()
+        sock.settimeout(8)
+        try:
+            return ctx.wrap_socket(sock,server_side=True,do_handshake_on_connect=False),addr
+        except Exception:
+            sock.close(); raise
+    def process_request(self,request,client_address):
+        if not self.gate.acquire(blocking=False):
+            try: request.close()
+            except Exception: pass
+            return
+        try: super().process_request(request,client_address)
+        except Exception:
+            self.gate.release(); raise
+    def process_request_thread(self,request,client_address):
+        try:
+            request.settimeout(8)
+            request.do_handshake()
+            super().process_request_thread(request,client_address)
+        except Exception:
+            try: request.close()
+            except Exception: pass
+        finally:
+            self.gate.release()
+restore_agent_firewall()
 srv=Server(('0.0.0.0',port),Handler)
-ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(certfile=cert,keyfile=key)
-srv.socket=ctx.wrap_socket(srv.socket,server_side=True)
 srv.serve_forever()
 PY
+}
+smart_pair_window_cleanup() {
+    local exp now chain=MTUNNEL_SMART
+    exp=$(cat "$SMART_DIR/pair.expires" 2>/dev/null || true); now=$(date +%s)
+    if [[ "$exp" =~ ^[0-9]+$ ]] && [ "$exp" -gt "$now" ]; then return 0; fi
+    rm -f "$SMART_DIR/pair.secret" "$SMART_DIR/pair.expires"
+    if command -v iptables >/dev/null 2>&1; then
+        while iptables -D "$chain" -m comment --comment MTUNNEL_SMART_PAIR -j ACCEPT 2>/dev/null; do :; done
+        iptables -C "$chain" -j DROP >/dev/null 2>&1 || iptables -A "$chain" -j DROP >/dev/null 2>&1 || true
+    fi
 }
 smart_foreign_setup() {
     smart_header
@@ -346,11 +593,17 @@ smart_foreign_setup() {
     [[ "$fp" =~ ^[0-9a-f]{64}$ ]] || { echo 'Could not fingerprint Agent certificate.' >&2; smart_pause; return 1; }
     secret=$(smart_random_hex 32); expires=$(($(date +%s)+900))
     printf '%s\n' "$secret" > "$SMART_DIR/pair.secret"; printf '%s\n' "$expires" > "$SMART_DIR/pair.expires"
-    chmod 600 "$SMART_DIR/pair.secret" "$SMART_DIR/pair.expires"; rm -f "$SMART_DIR/session.token"
+    chmod 600 "$SMART_DIR/pair.secret" "$SMART_DIR/pair.expires"
+    # Keep the current controller session alive until a new controller completes pairing.
     smart_install_agent_service || { echo 'Could not install Agent service.' >&2; smart_pause; return 1; }
     systemctl restart mtunnel-smart-agent.service || { echo 'Could not start Agent service.' >&2; smart_pause; return 1; }
-    if command -v iptables >/dev/null 2>&1; then
-        iptables -C INPUT -p tcp --dport "$AGENT_PORT" -m comment --comment MTUNNEL_SMART_AGENT -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport "$AGENT_PORT" -m comment --comment MTUNNEL_SMART_AGENT -j ACCEPT 2>/dev/null || true
+    # The Agent rebuilds its dedicated INPUT gate on startup. During the 15-minute pair window
+    # that chain allows pairing; after pairing it accepts only the pinned Iran IPv4 and drops the rest.
+    # Broad access is temporary: successful pairing pins the rule to the Iran source IP.
+    if command -v systemd-run >/dev/null 2>&1 && systemd-run --quiet --collect --unit="mtunnel-smart-pair-window-$(date +%s)" --on-active=16m "$INSTALL_PATH" --pair-window-cleanup >/dev/null 2>&1; then
+        :
+    else
+        nohup sh -c 'sleep 960; exec /usr/bin/msmart --pair-window-cleanup' >/dev/null 2>&1 &
     fi
     code=$(smart_pair_encode "$ip6" "$AGENT_PORT" "$fp" "$secret" "$expires") || { smart_pause; return 1; }
     smart_header
@@ -371,7 +624,7 @@ smart_pair_controller() {
     echo -e "\n  ${FR}┌─[ IRAN CONTROLLER PAIRING ]${NC}"
     echo -e "  ${FR}│${NC} ${DIM}The Foreign server must already be in Smart Tunnel → Foreign Server.${NC}"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
-    local foreign4 code response ok token rv4 rv6 v
+    local foreign4 code response ok token rv4 rv6 v api
     while true; do echo -ne "  ${C}●${NC} ${W}Foreign IPv4: ${NC}"; read -r foreign4; foreign4="${foreign4// /}"; mt_valid_ipv4 "$foreign4" && break; echo -e "  ${R}✖ Invalid IPv4.${NC}"; done
     echo -ne "  ${C}●${NC} ${W}Pair Code: ${NC}"; read -r code
     smart_pair_decode "$code" || { echo -e "\n  ${R}✖ Invalid or expired Pair Code.${NC}"; smart_pause; return 1; }
@@ -379,7 +632,8 @@ smart_pair_controller() {
     response=$(smart_https_call "$foreign4" "$PAIR_PORT" "$PAIR_FP" '' /v1/pair "{\"secret\":\"$PAIR_SECRET\"}") || true
     ok=$(smart_json_field "$response" ok)
     if [ "$ok" != 1 ]; then echo -e "  ${R}✖ Pairing failed:${NC} $(smart_json_field "$response" error)"; smart_pause; return 1; fi
-    token=$(smart_json_field "$response" token); rv4=$(smart_json_field "$response" ipv4); rv6=$(smart_json_field "$response" ipv6); v=$(smart_json_field "$response" version)
+    token=$(smart_json_field "$response" token); rv4=$(smart_json_field "$response" ipv4); rv6=$(smart_json_field "$response" ipv6); v=$(smart_json_field "$response" version); api=$(smart_json_field "$response" api_rev)
+    [ "$api" = "$SMART_API_REV" ] || { echo -e "  ${R}✖ Foreign Agent API is incompatible (remote: ${api:-unknown}, required: $SMART_API_REV). Update Foreign MSmart and generate a new Pair Code.${NC}"; smart_pause; return 1; }
     [[ "$token" =~ ^[A-Za-z0-9_-]{20,256}$ ]] || { echo 'Agent returned an invalid session token.' >&2; smart_pause; return 1; }
     if [ "$PAIR_IP6" != Unknown ] && [ "$rv6" != Unknown ] && [ "$PAIR_IP6" != "$rv6" ]; then
         echo -e "  ${R}✖ Foreign IPv6 changed since Pair Code generation. Generate a new Pair Code.${NC}"; smart_pause; return 1
@@ -392,6 +646,7 @@ PORT=$PAIR_PORT
 FINGERPRINT=$PAIR_FP
 TOKEN=$token
 AGENT_VERSION=$v
+AGENT_API=$api
 PAIRED_AT=$(date +%s)
 EOF
     chmod 600 "$SMART_DIR/peer.conf"
@@ -399,7 +654,8 @@ EOF
     echo -e "\n  ${G}✓ Servers paired successfully${NC}\n"
     echo -e "  ${DIM}Foreign IPv4:${NC} ${W}$foreign4${NC}"
     echo -e "  ${DIM}Foreign IPv6:${NC} ${W}$rv6${NC}"
-    echo -e "  ${DIM}Agent version:${NC} ${W}${v:-unknown}${NC}"
+    echo -e "  ${DIM}Agent version:${NC} ${W}${v:-unknown}${NC} ${DIM}(API ${api})${NC}"
+    [ "$v" = "$MODULE_VERSION" ] || echo -e "  ${Y}⚠ Module versions differ, but Smart API is compatible (Iran $MODULE_VERSION / Foreign ${v:-unknown}).${NC}"
     echo -e "\n  ${G}From now on all Smart Tunnel management is done on the Iran server.${NC}"
     smart_pause
 }
@@ -507,7 +763,7 @@ smart_recommended_ids() {
     printf '%s' "$out"
 }
 smart_validate_service_ports() {
-    local s="${1// /}" p; local -A seen=(); SMART_SERVICE_PORTS=''
+    local s="${1// /}" p; local -A seen=(); local -a _sp=(); SMART_SERVICE_PORTS=''
     [ -z "$s" ] && return 1
     [[ "$s" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
     IFS=, read -ra _sp <<< "$s"
@@ -666,20 +922,51 @@ smart_deploy_remote() { # kind link
 import json,os; print(json.dumps({'action':'deploy','kind':os.environ['K'],'link':os.environ['L']},separators=(',',':')))
 PY
 )
-    response=$(smart_agent_call "$body" || true)
+    response=$(smart_agent_call "$body" 210 || true)
     [ "$(smart_json_field "$response" ok)" = 1 ] || { echo "$(smart_json_field "$response" output)$(smart_json_field "$response" error)" >&2; return 1; }
 }
 smart_deploy_local() { # kind link
-    case "$1" in gre) /usr/bin/mgre --deploy-peer-link "$2";; vxlan) /usr/bin/mxlan --deploy-peer-link "$2";; backhaul) /usr/bin/mbackhaul --deploy-peer-link "$2";; rathole) /usr/bin/mrathole --deploy-peer-link "$2";; *) return 1;; esac
+    case "$1" in
+        gre) printf '%s\n' "$2" | /usr/bin/mgre --deploy-peer-stdin;;
+        vxlan) printf '%s\n' "$2" | /usr/bin/mxlan --deploy-peer-stdin;;
+        backhaul) printf '%s\n' "$2" | /usr/bin/mbackhaul --deploy-peer-stdin;;
+        rathole) printf '%s\n' "$2" | /usr/bin/mrathole --deploy-peer-stdin;;
+        *) return 1;;
+    esac
 }
-smart_ping_stats() { # host -> avg|loss|jitter
-    local host="$1" out line loss avg jit cmd=(ping -c 5 -W 1)
-    [[ "$host" == *:* ]] && cmd=(ping -6 -c 5 -W 1)
+smart_delete_remote() { # kind name
+    local body response
+    body=$(K="$1" N="$2" python3 - <<'PY'
+import json,os; print(json.dumps({'action':'delete','kind':os.environ['K'],'name':os.environ['N']},separators=(',',':')))
+PY
+)
+    response=$(smart_agent_call "$body" 75 || true)
+    [ "$(smart_json_field "$response" ok)" = 1 ]
+}
+smart_delete_local() { # kind name
+    case "$1" in
+        gre) /usr/bin/mgre --delete-one "$2";;
+        vxlan) /usr/bin/mxlan --delete-one "$2";;
+        backhaul) /usr/bin/mbackhaul --delete-one "$2";;
+        rathole) /usr/bin/mrathole --delete-one "$2";;
+        *) return 1;;
+    esac
+}
+smart_ping_stats() { # host [count] -> avg|loss|jitter
+    local host="$1" count="${2:-5}" out line loss avg jit _min _max _rest cmd
+    [[ "$count" =~ ^[1-9][0-9]?$ ]] || count=5
+    cmd=(ping -c "$count" -W 1)
+    [[ "$host" == *:* ]] && cmd=(ping -6 -c "$count" -W 1)
     out=$("${cmd[@]}" "$host" 2>/dev/null || true)
     loss=$(grep -oE '[0-9]+(\.[0-9]+)?% packet loss' <<< "$out" | head -1 | cut -d% -f1); loss="${loss:-100}"
     line=$(grep -E '(^|=)[[:space:]]*[0-9.]+/[0-9.]+/[0-9.]+/[0-9.]+' <<< "$out" | tail -1)
-    if [ -n "$line" ]; then IFS=/ read -r _ avg _ jit _ <<< "${line#*= }"; else avg=9999; jit=9999; fi
-    printf '%s|%s|%s\n' "${avg:-9999}" "$loss" "${jit:-9999}"
+    if [ -n "$line" ]; then
+        IFS=/ read -r _min avg _max jit _rest <<< "${line#*= }"
+        jit="${jit%% *}"
+    else avg=9999; jit=9999; fi
+    [[ "$avg" =~ ^[0-9]+([.][0-9]+)?$ ]] || avg=9999
+    [[ "$jit" =~ ^[0-9]+([.][0-9]+)?$ ]] || jit=9999
+    printf '%s|%s|%s\n' "$avg" "$loss" "$jit"
 }
 smart_iperf_speed() { # target direction -> Mbps; prepares server on foreign
     local target="$1" reverse="$2" body resp out
@@ -690,9 +977,9 @@ PY
 )
     resp=$(smart_agent_call "$body" || true); [ "$(smart_json_field "$resp" ok)" = 1 ] || { echo 0; return; }
     sleep .2
-    local -a args=(-c "$target" -p "$IPERF_PORT" -t 2 -J)
+    local -a args=(-c "$target" -p "$IPERF_PORT" -t 4 -O 1 -J)
     [ "$reverse" = reverse ] && args+=(-R)
-    out=$(iperf3 "${args[@]}" 2>/dev/null || true)
+    out=$(timeout 15 iperf3 "${args[@]}" 2>/dev/null || true)
     IPERF_JSON="$out" python3 - <<'PY'
 import json,os
 try:
@@ -709,8 +996,8 @@ PY
 )
     resp=$(smart_agent_call "$body" || true); [ "$(smart_json_field "$resp" ok)" = 1 ] || { echo 0; return; }
     sleep .2
-    local -a args=(-c 127.0.0.1 -p "$port" -t 2 -J); [ "$reverse" = reverse ] && args+=(-R)
-    out=$(iperf3 "${args[@]}" 2>/dev/null || true)
+    local -a args=(-c 127.0.0.1 -p "$port" -t 4 -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
+    out=$(timeout 15 iperf3 "${args[@]}" 2>/dev/null || true)
     IPERF_JSON="$out" python3 - <<'PY'
 import json,os
 try:
@@ -789,20 +1076,31 @@ smart_forward_one() { # groupdir candidate-id on|off
     esac
 }
 smart_apply_active_forwarding() { # groupdir ranking-file
-    local gd="$1" rank="$2" state="$gd/forwarding.state" current previous=''
+    local gd="$1" rank="$2" state="$gd/forwarding.state" current previous='' current_kind='' previous_kind=''
     current=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
     [ -s "$state" ] && previous=$(cat "$state" 2>/dev/null || true)
     [ "$current" != "$previous" ] || return 0
-    if [ -n "$previous" ]; then smart_forward_one "$gd" "$previous" off || true; fi
-    if [ -z "$current" ]; then : > "$state"; chmod 600 "$state"; return 0; fi
-    if ! smart_forward_one "$gd" "$current" on; then
-        [ -z "$previous" ] || smart_forward_one "$gd" "$previous" on >/dev/null 2>&1 || true
-        return 1
+    if [ -z "$current" ]; then
+        [ -z "$previous" ] || smart_forward_one "$gd" "$previous" off || true
+        : > "$state"; chmod 600 "$state"; return 0
+    fi
+    current_kind=$(awk -F'|' -v i="$current" '$1==i{print $3;exit}' "$gd/candidates.tsv")
+    [ -z "$previous" ] || previous_kind=$(awk -F'|' -v i="$previous" '$1==i{print $3;exit}' "$gd/candidates.tsv")
+    # Native proxy engines cannot bind the same public ports simultaneously. All other transitions are make-before-break.
+    if [ -n "$previous" ] && [[ "$current_kind" =~ ^(rathole|backhaul)$ ]] && [[ "$previous_kind" =~ ^(rathole|backhaul)$ ]]; then
+        smart_forward_one "$gd" "$previous" off || true
+        if ! smart_forward_one "$gd" "$current" on; then
+            smart_forward_one "$gd" "$previous" on >/dev/null 2>&1 || true
+            return 1
+        fi
+    else
+        if ! smart_forward_one "$gd" "$current" on; then return 1; fi
+        [ -z "$previous" ] || smart_forward_one "$gd" "$previous" off || true
     fi
     printf '%s\n' "$current" > "$state"; chmod 600 "$state"
 }
-smart_benchmark_group() { # groupdir
-    local gd="$1" cand="$gd/candidates.tsv" out="$gd/ranking.tsv" tmp="$gd/.bench.tmp" id label kind proto path name inner linkp benchp status lat loss jit up down score maxs=0 stats target body resp
+smart_benchmark_group_locked() { # groupdir; caller owns the process-level lock
+    local gd="$1" cand="$gd/candidates.tsv" out="$gd/ranking.tsv" tmp="$gd/.bench.tmp" id label kind proto path name inner linkp benchp status lat loss jit up down score maxs=0 stats target target_port body resp
     [ -s "$cand" ] || return 1
     : > "$tmp"
     echo -e "\n  ${C}Starting benchmark (sequential; no simultaneous speed tests)...${NC}"
@@ -844,8 +1142,19 @@ PY
     done < "$tmp"
     rm -f "$tmp"
     sort -t'|' -k16,16nr "$out" -o "$out"
+    awk -F'|' '{print $1"|"$11"|"$16}' "$out" > "$gd/.baseline.tmp" && mv -f "$gd/.baseline.tmp" "$gd/baseline.tsv"
+    chmod 600 "$gd/baseline.tsv" 2>/dev/null || true
     smart_hysteresis_order "$gd" "$out"
-    smart_apply_active_forwarding "$gd" "$out"
+    local forward_rc=0
+    smart_apply_active_forwarding "$gd" "$out" || forward_rc=$?
+    rm -f "$gd/.rebench.pending" 2>/dev/null || true
+    return "$forward_rc"
+}
+smart_benchmark_group() { # groupdir; use flock --close so children never inherit the lock fd
+    local gd="$1" gid
+    [ -d "$gd" ] || return 1
+    gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
+    flock -x -w 300 -o "$gd/.smart.lock" "$INSTALL_PATH" --benchmark-group "$gid"
 }
 smart_iperf_speed_backhaul() { # local mapped port direction
     local port="$1" reverse="$2" body resp out
@@ -856,8 +1165,8 @@ PY
 )
     resp=$(smart_agent_call "$body" || true); [ "$(smart_json_field "$resp" ok)" = 1 ] || { echo 0; return; }
     sleep .2
-    local -a args=(-c 127.0.0.1 -p "$port" -t 2 -J); [ "$reverse" = reverse ] && args+=(-R)
-    out=$(iperf3 "${args[@]}" 2>/dev/null || true)
+    local -a args=(-c 127.0.0.1 -p "$port" -t 4 -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
+    out=$(timeout 15 iperf3 "${args[@]}" 2>/dev/null || true)
     IPERF_JSON="$out" python3 - <<'PY'
 import json,os
 try:
@@ -928,7 +1237,7 @@ IRAN_TO_FOREIGN_V6=$SMART_I_TO_F6
 FOREIGN_TO_IRAN_V6=$SMART_F_TO_I6
 WATCHDOG=1
 EOF
-    : > "$gd/candidates.tsv"
+    : > "$gd/candidates.tsv"; : > "$gd/names.tsv"
     echo -e "\n  ${C}Creating selected tunnels on Foreign + Iran...${NC}"
     for id in ${ids//,/ }; do
         line=$(awk -F'|' -v x="$id" '$1==x{print;exit}' <<< "$avail"); IFS='|' read -r id label kind proto path <<< "$line"
@@ -952,9 +1261,17 @@ EOF
             links=$(smart_network_links "$kind" "$proto" "$base" "$secret" "$num" "$core" "$corev6" "$l4" "$l6" "$SMART_F4" "$f6") || true
             IFS='|' read -r local_link remote_link inner lname rname <<< "$links"
         fi
-        if [ -z "$remote_link" ] || ! smart_deploy_remote "$kind" "$remote_link"; then echo -e "      ${R}✖ Foreign side failed${NC}"; else
+        [ -z "$lname" ] || [ -z "$rname" ] || printf '%s|%s|%s|%s\n' "$id" "$kind" "$lname" "$rname" >> "$gd/names.tsv"
+        if [ -z "$remote_link" ] || ! smart_deploy_remote "$kind" "$remote_link"; then
+            echo -e "      ${R}✖ Foreign side failed${NC}"
+        else
             echo -e "      ${G}✓ Foreign side${NC}"
-            if smart_deploy_local "$kind" "$local_link" >/dev/null 2>&1; then status=UP; echo -e "      ${G}✓ Iran side${NC}"; else echo -e "      ${R}✖ Iran side failed${NC}"; fi
+            if smart_deploy_local "$kind" "$local_link" >/dev/null 2>&1; then
+                status=UP; echo -e "      ${G}✓ Iran side${NC}"
+            else
+                echo -e "      ${R}✖ Iran side failed — rolling back Foreign side${NC}"
+                [ -z "$rname" ] || smart_delete_remote "$kind" "$rname" >/dev/null 2>&1 || true
+            fi
         fi
         printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$lname" "$inner" "$linkport" "$benchport" "$status" >> "$gd/candidates.tsv"
     done
@@ -996,33 +1313,80 @@ WantedBy=timers.target
 EOF
     systemctl daemon-reload >/dev/null 2>&1; systemctl enable --now mtunnel-smart-watchdog.timer >/dev/null 2>&1 || true
 }
-smart_watchdog_once() {
-    smart_peer_load || return 0
-    local gd f tmp id label kind proto path name inner linkp benchp status blat loss jit up down base_score live_score pstat est unit loss_now jit_now lat
-    for gd in "$GROUP_DIR"/*; do
-        [ -d "$gd" ] || continue; [ "$(smart_conf_get "$gd/group.conf" WATCHDOG)" = 1 ] || continue; f="$gd/ranking.tsv"; [ -s "$f" ] || continue
-        tmp="$gd/.ranking.live"; : > "$tmp"
-        while IFS='|' read -r id label kind proto path name inner linkp benchp status blat loss jit up down base_score; do
-            status=DOWN; live_score=0
-            if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
-                unit="mbackhaul@$name"; [ "$kind" = rathole ] && unit="mrathole@$name"
-                if systemctl is-active --quiet "$unit" 2>/dev/null && ss -tn state established 2>/dev/null | grep -Eq ":${linkp}([[:space:]]|$)"; then status=UP; live_score="$base_score"; fi
-            else
-                pstat=$(smart_ping_stats "$inner"); IFS='|' read -r lat loss_now jit_now <<< "$pstat"
-                if awk -v l="$loss_now" 'BEGIN{exit !(l<100)}'; then
-                    status=UP; live_score=$(python3 - "$base_score" "$blat" "$lat" "$loss_now" <<'PY'
+smart_schedule_rebenchmark() { # groupdir
+    local gd="$1" gid unit
+    [ -d "$gd" ] || return 1
+    gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
+    ( set -o noclobber; : > "$gd/.rebench.pending" ) 2>/dev/null || return 0
+    chmod 600 "$gd/.rebench.pending" 2>/dev/null || true
+    unit="mtunnel-smart-rebench-${gid}-$(date +%s)"
+    if command -v systemd-run >/dev/null 2>&1 && systemd-run --quiet --collect --unit="$unit" --on-active=30s "$INSTALL_PATH" --benchmark-group "$gid" >/dev/null 2>&1; then
+        return 0
+    fi
+    nohup sh -c 'sleep 30; exec "$1" --benchmark-group "$2"' sh "$INSTALL_PATH" "$gid" >/dev/null 2>&1 &
+}
+smart_recovery_score() { # latency loss jitter -> provisional health-only score, capped below a fully benchmarked candidate
+    python3 - "$1" "$2" "$3" <<'PY'
 import sys
-base,old,now,loss=map(float,sys.argv[1:]); penalty=max(0,now-old)*.18+loss*1.5; print(round(max(0,base-penalty),1))
+lat,loss,jit=map(float,sys.argv[1:4])
+score=55.0-min(lat,500.0)*0.05-loss*1.2-max(0.0,jit-10.0)*0.08
+print(round(max(5.0,min(55.0,score)),1))
 PY
-)
-                    blat="$lat"; loss="$loss_now"; jit="$jit_now"
+}
+smart_watchdog_group_locked() { # gid; caller owns process-level flock --close
+    local gid="$1" gd="$GROUP_DIR/$1" f baseline tmp id label kind proto path name inner linkp benchp status blat loss jit up down current_score base_score live_score pstat unit loss_now jit_now lat base_lat needs_rebench=0
+    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
+    [ -d "$gd" ] || return 0
+    [ "$(smart_conf_get "$gd/group.conf" WATCHDOG)" = 1 ] || return 0
+    f="$gd/ranking.tsv"; baseline="$gd/baseline.tsv"; [ -s "$f" ] || return 0
+    tmp="$gd/.ranking.live"; : > "$tmp"
+    while IFS='|' read -r id label kind proto path name inner linkp benchp status blat loss jit up down current_score; do
+        base_lat=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$baseline" 2>/dev/null || true)
+        base_score=$(awk -F'|' -v i="$id" '$1==i{print $3;exit}' "$baseline" 2>/dev/null || true)
+        [[ "$base_lat" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_lat="$blat"
+        [[ "$base_score" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_score="$current_score"
+        status=DOWN; live_score=0
+        if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
+            unit="mbackhaul@$name"; [ "$kind" = rathole ] && unit="mrathole@$name"
+            if systemctl is-active --quiet "$unit" 2>/dev/null && ss -tn state established 2>/dev/null | grep -Eq ":${linkp}([[:space:]]|$)"; then
+                status=UP
+                if awk -v b="${base_score:-0}" 'BEGIN{exit !(b<=0)}'; then
+                    live_score=40; needs_rebench=1
+                else
+                    live_score="$base_score"
                 fi
             fi
-            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$status" "$blat" "$loss" "$jit" "$up" "$down" "$live_score" >> "$tmp"
-        done < "$f"
-        sort -t'|' -k10,10r -k16,16nr "$tmp" -o "$tmp"; mv -f "$tmp" "$f"; chmod 600 "$f"
-        smart_hysteresis_order "$gd" "$f"
-        smart_apply_active_forwarding "$gd" "$f" || true
+        else
+            pstat=$(smart_ping_stats "$inner" 2); IFS='|' read -r lat loss_now jit_now <<< "$pstat"
+            if awk -v l="$loss_now" 'BEGIN{exit !(l<100)}'; then
+                status=UP
+                if awk -v b="${base_score:-0}" 'BEGIN{exit !(b<=0)}'; then
+                    live_score=$(smart_recovery_score "$lat" "$loss_now" "$jit_now"); needs_rebench=1
+                else
+                    live_score=$(python3 - "$base_score" "$base_lat" "$lat" "$loss_now" "$jit_now" <<'PY'
+import sys
+base,old,now,loss,jit=map(float,sys.argv[1:]); penalty=max(0,now-old)*.18+loss*1.5+max(0,jit-10)*.08; print(round(max(0,base-penalty),1))
+PY
+)
+                fi
+                blat="$lat"; loss="$loss_now"; jit="$jit_now"
+            fi
+        fi
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$status" "$blat" "$loss" "$jit" "$up" "$down" "$live_score" >> "$tmp"
+    done < "$f"
+    sort -t'|' -k10,10r -k16,16nr "$tmp" -o "$tmp"; mv -f "$tmp" "$f"; chmod 600 "$f"
+    smart_hysteresis_order "$gd" "$f"
+    smart_apply_active_forwarding "$gd" "$f" || true
+    [ "$needs_rebench" -eq 0 ] || smart_schedule_rebenchmark "$gd" || true
+}
+smart_watchdog_once() {
+    smart_peer_load || return 0
+    local gd gid
+    for gd in "$GROUP_DIR"/*; do
+        [ -d "$gd" ] || continue
+        gid=$(basename "$gd")
+        [ "$(smart_conf_get "$gd/group.conf" WATCHDOG)" = 1 ] || continue
+        flock -n -o "$gd/.smart.lock" "$INSTALL_PATH" --watchdog-group "$gid" >/dev/null 2>&1 || true
     done
 }
 smart_list_groups() {
@@ -1072,39 +1436,87 @@ smart_setup_flow() {
     esac
 }
 smart_menu() {
+    local opt
     while true; do
         smart_header
-        echo -e "\n  ${FR}┌─[ SMART TUNNEL ]${NC}"
-        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}Prerequisites & Pair Setup${NC}"
-        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Create Smart Tunnel Group${NC}"
-        echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} Peer Status"
-        echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} Benchmark / Ranking"
-        echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} Smart Groups / Active Tunnel"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back\n"
-        echo -ne "  ${C}SMART ❯❯ ${NC}"; read -r opt
-        case "$opt" in 1) smart_setup_flow;; 2) smart_create_group;; 3) smart_info;; 4) smart_benchmark_menu;; 5) smart_list_groups;; 0|q|Q) break;; esac
+        mt_workspace_group 'PAIR & PROVISION' first
+        mt_workspace_row 1 'Prerequisites & Pair Setup' "$Y"
+        mt_workspace_row 2 'Create Smart Tunnel Group' "$G"
+        mt_workspace_group 'CONTROL & OBSERVABILITY'
+        mt_workspace_row 3 'Peer Status' "$C"
+        mt_workspace_row 4 'Benchmark / Ranking' "$M"
+        mt_workspace_row 5 'Smart Groups / Active Tunnel' "$G"
+        mt_workspace_group 'SYSTEM & MAINTENANCE'
+        mt_workspace_row 6 'Update & Local Install' "$G" "$(smart_update_badge)"
+        mt_workspace_footer 'Return to Main Core'
+        echo -ne "  ${C}MSMART ❯❯ ${NC}"; read -r opt
+        case "$opt" in
+            1) smart_setup_flow;;
+            2) smart_create_group;;
+            3) smart_info;;
+            4) smart_benchmark_menu;;
+            5) smart_list_groups;;
+            6) smart_update_menu;;
+            0|q|Q) break;;
+            *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
+        esac
     done
 }
 
+smart_delete_group_locked() { # gid; retain state if either side cannot be cleaned
+    local gid="$1" gd="$GROUP_DIR/$1" active id kind lname rname failed=0
+    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 2
+    [ -d "$gd" ] || return 0
+    active=$(cat "$gd/forwarding.state" 2>/dev/null || true)
+    [ -z "$active" ] || smart_forward_one "$gd" "$active" off >/dev/null 2>&1 || failed=1
+    if [ -s "$gd/names.tsv" ]; then
+        while IFS='|' read -r id kind lname rname; do
+            [ -z "$rname" ] || smart_delete_remote "$kind" "$rname" >/dev/null 2>&1 || failed=1
+            [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || failed=1
+        done < "$gd/names.tsv"
+    elif [ -s "$gd/candidates.tsv" ]; then
+        while IFS='|' read -r id _ kind _ _ lname _; do
+            [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || failed=1
+        done < "$gd/candidates.tsv"
+    fi
+    if [ "$failed" -eq 0 ]; then
+        rm -rf -- "$gd"
+        return 0
+    fi
+    printf '%s\n' "$(date +%s)" > "$gd/delete.pending"
+    chmod 600 "$gd/delete.pending" 2>/dev/null || true
+    return 1
+}
 smart_delete_groups() {
-    local gd active
+    local gd gid failed=0 left=0
     systemctl disable --now mtunnel-smart-watchdog.timer >/dev/null 2>&1 || true
     for gd in "$GROUP_DIR"/*; do
         [ -d "$gd" ] || continue
-        active=$(cat "$gd/forwarding.state" 2>/dev/null || true)
-        [ -z "$active" ] || smart_forward_one "$gd" "$active" off >/dev/null 2>&1 || true
+        gid=$(basename "$gd")
+        flock -x -w 30 -o "$gd/.smart.lock" "$INSTALL_PATH" --delete-group "$gid" >/dev/null 2>&1 || failed=1
     done
-    rm -f "$WATCH_SERVICE" "$WATCH_TIMER"
-    rm -rf "$GROUP_DIR"/* 2>/dev/null || true
-    mkdir -p "$GROUP_DIR"; chmod 700 "$GROUP_DIR" 2>/dev/null || true
-    systemctl daemon-reload >/dev/null 2>&1 || true
+    for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && { left=1; break; }; done
+    if [ "$left" -eq 0 ]; then
+        rm -f "$WATCH_SERVICE" "$WATCH_TIMER"
+        mkdir -p "$GROUP_DIR"; chmod 700 "$GROUP_DIR" 2>/dev/null || true
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    if [ "$failed" -ne 0 ]; then
+        echo 'Warning: some Smart group state was retained because cleanup failed on Iran or Foreign. Re-run delete after connectivity is restored.' >&2
+        return 1
+    fi
+    return 0
 }
 case "${1:-}" in
+    --benchmark-group) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || exit 2; smart_benchmark_group_locked "$GROUP_DIR/$2"; exit $?;;
+    --watchdog-group) smart_peer_load || exit 0; smart_watchdog_group_locked "${2:-}"; exit $?;;
+    --delete-group) smart_delete_group_locked "${2:-}"; exit $?;;
     --delete-groups) smart_delete_groups; exit $?;;
+    --pair-window-cleanup) smart_pair_window_cleanup; exit $?;;
     --agent-daemon) smart_agent_daemon; exit $?;;
     --watchdog-once) smart_watchdog_once; exit $?;;
     --version|-V) echo "MTunnel Smart $MODULE_VERSION"; exit 0;;
     --pair-decode) smart_pair_decode "${2:-}" && printf 'IPv6=%s\nPort=%s\nFingerprint=%s\nExpires=%s\n' "$PAIR_IP6" "$PAIR_PORT" "$PAIR_FP" "$PAIR_EXPIRES"; exit $?;;
-    --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--delete-groups]'; exit 0;;
+    --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-groups|--pair-window-cleanup]'; exit 0;;
 esac
 smart_menu

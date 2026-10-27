@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.4.10).
-MODULE_VERSION="1.4.10"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.5.0).
+MODULE_VERSION="1.5.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

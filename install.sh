@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.4.10).
-MODULE_VERSION="1.4.10"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.5.0).
+MODULE_VERSION="1.5.0"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"
@@ -469,9 +469,12 @@ installer_uninstall() {
         echo -e "\n  ${Y}● Uninstall cancelled.${NC}\n"; return 1
     fi
     echo -e "\n  ${Y}● Terminating services and wiping files...${NC}"
-    systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mporter-watchdog.service 2>/dev/null || true
+    systemctl stop mtunnel-smart-watchdog.timer mtunnel-smart-agent.service mgre-watchdog.timer mxlan-watchdog.timer mporter-watchdog.service 2>/dev/null || true
     /usr/bin/mgre --teardown-all 2>/dev/null || true
     /usr/bin/mxlan --teardown-all 2>/dev/null || true
+    if command -v iptables >/dev/null 2>&1; then
+        while iptables -D INPUT -p tcp --dport 29876 -m comment --comment MTUNNEL_SMART_AGENT -j ACCEPT 2>/dev/null; do :; done
+    fi
     for bin in iptables ip6tables; do
         command -v "$bin" >/dev/null 2>&1 || continue
         for table in filter nat mangle raw; do
@@ -489,9 +492,9 @@ installer_uninstall() {
             crontab "$cron_tmp"; rm -f "$cron_tmp"
         }
     fi
-    systemctl stop mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
-    systemctl disable mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
-    rm -f /etc/systemd/system/mgre-watchdog.{service,timer} /etc/systemd/system/mxlan-watchdog.{service,timer} /etc/systemd/system/{mbackhaul,mrathole,mpaqet}-apply.service /etc/systemd/system/mporter-{iptables,obfs}.service
+    systemctl stop mtunnel-smart-watchdog.timer mtunnel-smart-agent.service mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+    systemctl disable mtunnel-smart-watchdog.timer mtunnel-smart-agent.service mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
+    rm -f /etc/systemd/system/mtunnel-smart-agent.service /etc/systemd/system/mtunnel-smart-watchdog.{service,timer} /etc/systemd/system/mgre-watchdog.{service,timer} /etc/systemd/system/mxlan-watchdog.{service,timer} /etc/systemd/system/{mbackhaul,mrathole,mpaqet}-apply.service /etc/systemd/system/mporter-{iptables,obfs}.service
     rm -f /usr/local/bin/mhealer_daemon.sh /usr/local/bin/mporter-{watchdog,iptables,obfs}.sh /etc/mhealer.conf
     rm -f /var/lock/mporter-state.lock /run/mporter-backends.tsv
     # Generic Gost/Realm installations may belong to another project: remove only when MPorter marked ownership.
@@ -514,8 +517,8 @@ installer_uninstall() {
     for core_bin in bh rathole paqet; do
         mt_owned_binary_remove "$core_bin" "/usr/local/bin/$core_bin" "/usr/bin/$core_bin" || true
     done
-    rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /root/mtunnel 2>/dev/null || true
-    rm -f /usr/bin/mtunnel /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest /usr/bin/mmirror
+    rm -rf /var/lib/mtunnel/owned-binaries /usr/lib/mtunnel /etc/mgre /etc/mporter /etc/mrathole /etc/mbackhaul /etc/paqet /etc/mtunnel/smart /root/mtunnel 2>/dev/null || true
+    rm -f /usr/bin/mtunnel /usr/bin/msmart /usr/bin/mgre /usr/bin/mxlan /usr/bin/mbackhaul /usr/bin/mpaqet /usr/bin/mporter /usr/bin/mrathole /usr/bin/mdoctor /usr/bin/linktest /usr/bin/mmirror
     # MTunnel-owned persistent sysctl drop-ins (live kernel values are left untouched until the next reload/reboot).
     rm -f /etc/sysctl.d/99-mtunnel-doctor.conf /etc/sysctl.d/99-mtunnel-bbr.conf /etc/sysctl.d/99-mporter-ipv4.conf /etc/sysctl.d/99-mporter-ipv6.conf
     rm -f /usr/local/bin/mtunnel
@@ -605,7 +608,7 @@ installer_main() {
     local scripts_only=0 want_prereqs=0 do_uninstall=0
     local script_file="${BASH_SOURCE[0]:-}" script_dir=''
     [[ ! -f "$script_file" ]] || script_dir=$(cd -- "$(dirname -- "$script_file")" && pwd) || return 1
-    local -a modules=(main:main.sh mporter:mporter.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
+    local -a modules=(main:main.sh mporter:mporter.sh msmart:tunnels/msmart.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
     local -a active_modules=()
     local -a files=()
     local current=0 mod_ver

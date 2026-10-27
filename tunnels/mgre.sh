@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.4.10).
-MODULE_VERSION="1.4.10"
+# MTunnel MGRE — GRE/GRE6 and IPIP tunnel management, including MTU and forwarding rules (v1.5.0).
+MODULE_VERSION="1.5.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1592,6 +1592,24 @@ menu_backup_restore() {
         echo -e "  ${G}✔ Restored and applied.${NC}"; sleep 2
     fi
 }
+mgre_smart_forward() { # NAME PORTS on|off
+    local name="$1" ports="$2" mode="$3" conf="$CONF_DIR/$1.conf" TYPE='' MAX_IPS=0 SYNC_KEY='' T_NAME='' targets=''
+    [[ "$name" =~ ^[A-Za-z0-9_.-]+$ && "$mode" =~ ^(on|off)$ ]] || return 1
+    [ -f "$conf" ] || return 1
+    mt_source_conf "$conf" 2>/dev/null || return 1
+    [ "$TYPE" = 1 ] || return 1
+    if [ "$mode" = on ]; then
+        ports=$(mt_sanitize_ports "$ports" tcp 2>/dev/null) || return 1
+        [ -n "$ports" ] || return 1
+        [ "$MAX_IPS" = 5 ] || return 1
+        targets=$(vip_targets "$SYNC_KEY" 5 "$TYPE" | awk '{print $2}' | paste -sd, -)
+        [ -n "$targets" ] || return 1
+        set_conf_var "$conf" FWD_TCP "$ports" && set_conf_var "$conf" FWD_UDP '' && set_conf_var "$conf" FWD_TARGETS "$targets" && set_conf_var "$conf" LB_MODE 1 || return 1
+    else
+        set_conf_var "$conf" FWD_TCP '' && set_conf_var "$conf" FWD_UDP '' && set_conf_var "$conf" FWD_TARGETS '' && set_conf_var "$conf" LB_MODE 0 || return 1
+    fi
+    mgre_apply_fwd "$conf"
+}
 # ======================================================================
 
 case "$1" in
@@ -1608,6 +1626,7 @@ case "$1" in
         exit 0 ;;
     --apply)    apply_all_tunnels; exit $? ;;
     --apply-one) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]+$ ]] && [ -f "$CONF_DIR/$2.conf" ] || exit 1; apply_tunnel "$CONF_DIR/$2.conf"; exit $? ;;
+    --smart-forward) mgre_smart_forward "${2:-}" "${3:-}" "${4:-off}"; exit $? ;;
     --watchdog) mgre_watchdog; exit 0 ;;
     --status|--list) mgre_status_cli; exit 0 ;;
     --backup)   f=$(backup_configs); [ -n "$f" ] && echo "Backup: $f" || { echo "Backup failed"; exit 1; }; exit 0 ;;
@@ -1901,6 +1920,12 @@ render_mgre_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
+if [ "${1:-}" = "--deploy-peer-link" ]; then
+    [ -n "${2:-}" ] || { echo "Missing Peer Link." >&2; exit 2; }
+    mt_link_decode "$2" || { echo "Invalid Peer Link." >&2; exit 2; }
+    mt_link_deploy
+    exit $?
+fi
 if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"

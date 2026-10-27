@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.4.10).
-MODULE_VERSION="1.4.10"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v1.5.0).
+MODULE_VERSION="1.5.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -72,7 +72,7 @@ WATCHDOG_SCRIPT="/usr/local/bin/mporter-watchdog.sh"
 APT_OPTS=(-o Acquire::ForceIPv4=true -o DPkg::Lock::Timeout=180 -y -q)
 
 MP_HEADLESS=false
-case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-apply|--backhaul-in-use|--wipe-mappings) MP_HEADLESS=true ;; esac
+case "${1:-}" in --health-scan|--state-sync|--purge-ip|--cleanup-orphans|--boot-apply|--backhaul-in-use|--wipe-mappings|--smart-pool) MP_HEADLESS=true ;; esac
 
 if [ "$(id -u)" -ne 0 ] && [ "${MPORTER_LIB:-0}" != "1" ]; then echo "MPorter must be run as root."; exit 1; fi
 
@@ -2444,11 +2444,62 @@ ensure_ipv4_forwarding() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
 }
 
+# Apply one ordered HAProxy first-up pool for Smart Tunnel.
+# Usage: mporter --smart-pool LISTEN_PORT HOST1 PORT1 [HOST2 PORT2 ...]
+# The order is authoritative: Smart Tunnel passes live candidates ranked by score.
+smart_pool_apply() {
+    local listen="${1:-}" owner base block out idx host port
+    shift || true
+    mt_valid_port "$listen" || { echo 'Invalid Smart Pool listen port.' >&2; return 2; }
+    [ "$#" -ge 2 ] && [ $(( $# % 2 )) -eq 0 ] || { echo 'Smart Pool requires HOST PORT pairs.' >&2; return 2; }
+    command -v haproxy >/dev/null 2>&1 || { echo 'HAProxy is required for Smart failover.' >&2; return 4; }
+    mkdir -p "$(dirname "$H_CONF")" || return 1
+    if [ ! -s "$H_CONF" ]; then hap_base_config > "$H_CONF" || return 1; fi
+    ensure_haproxy_base || return 1
+    owner=$(port_owner "$listen")
+    if [ -n "$owner" ] && [ "$owner" != HAProxy ]; then
+        echo "Port $listen is already used by $owner; Smart failover cannot bind it." >&2
+        return 3
+    fi
+    base=$(mp_tmp smartbase) || return 1
+    block=$(mp_tmp smartblock) || { rm -f "$base"; return 1; }
+    out=$(mp_tmp smartout) || { rm -f "$base" "$block"; return 1; }
+    hap_strip_ports "$listen" "$H_CONF" > "$base" || { rm -f "$base" "$block" "$out"; return 1; }
+    {
+        printf '%s\n' "frontend ft_$listen" "    mode tcp" "    bind *:$listen" "    default_backend bk_$listen" \
+                      "backend bk_$listen" "    mode tcp" "    balance first"
+        idx=1
+        while [ "$#" -gt 0 ]; do
+            host="$1"; port="$2"; shift 2
+            valid_ip "$host" || { echo "Invalid Smart Pool backend IP: $host" >&2; rm -f "$base" "$block" "$out"; return 2; }
+            mt_valid_port "$port" || { echo "Invalid Smart Pool backend port: $port" >&2; rm -f "$base" "$block" "$out"; return 2; }
+            printf '    server smart_%s_%s %s check inter 2s fall 2 rise 2 observe layer4 error-limit 3 on-error mark-down\n' \
+                   "$listen" "$idx" "$(hap_addr "$host" "$port")"
+            idx=$((idx+1))
+        done
+    } > "$block"
+    if grep -qxF "$LB_MARKER" "$base"; then
+        grep -qxF "$LB_END_MARKER" "$base" || echo "$LB_END_MARKER" >> "$base"
+        awk -v e="$LB_END_MARKER" -v bf="$block" '$0==e { while ((getline l < bf) > 0) print l; close(bf) } { print }' "$base" > "$out"
+    else
+        { cat "$base"; echo "$LB_MARKER"; echo '# Managed by MPorter (Smart/regular pools)'; cat "$block"; echo "$LB_END_MARKER"; } > "$out"
+    fi
+    rm -f "$base" "$block"
+    hap_commit "$out" || return 1
+    systemctl enable haproxy >/dev/null 2>&1 || true
+    return 0
+}
+
 # ==========================================================
 # Headless entry points (no installer / update side effects)
 # ==========================================================
 
 case "${1:-}" in
+    --smart-pool)
+        sp_listen="${2:-}"; [ -n "$sp_listen" ] || { echo 'Usage: mporter --smart-pool LISTEN_PORT HOST PORT [...]' >&2; exit 2; }
+        shift 2
+        smart_pool_apply "$sp_listen" "$@"
+        exit $? ;;
     --backhaul-in-use)
         [[ "${2:-}" == 127.77.* ]] && valid_ipv4 "$2" || exit 2
         if [ -s "$G_CONF" ] || [ -s "$R_CONF" ]; then command -v jq >/dev/null 2>&1 || exit 2; fi

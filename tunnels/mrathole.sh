@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.4.10).
-MODULE_VERSION="1.4.10"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.5.0).
+MODULE_VERSION="1.5.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -684,6 +684,18 @@ generate_toml() {
     return 0
 }
 
+rat_smart_ports() { # NAME TCP_PORTS
+    local name="$1" ports="$2" dir="$CONF_DIR/$1" meta="$CONF_DIR/$1/meta.conf" TYPE='' LINK_PORT='' REMOTE_IP='' TOKEN='' UDP_PORTS='' BIND_HOST='0.0.0.0'
+    [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    [ -f "$meta" ] || return 1
+    mt_source_conf "$meta" 2>/dev/null || return 1
+    [ "$TYPE" = 1 ] || return 1
+    validate_forward_ports "$ports" 0 tcp || return 1
+    mt_set_conf_var "$meta" TCP_PORTS "$ports" || return 1
+    generate_toml "$name" || return 1
+    systemctl restart "mrathole@$name" >/dev/null 2>&1 || return 1
+    systemctl is-active --quiet "mrathole@$name"
+}
 rat_endpoint_host() {
     local ep="$1" host
     [ -n "$ep" ] || return 1
@@ -1218,6 +1230,9 @@ if [ "${1:-}" == --delete-all ]; then
     [ -d "$CONF_DIR" ] && find "$CONF_DIR" -mindepth 1 -maxdepth 1 ! -name '.*' -exec rm -rf {} +
     exit 0
 fi
+if [ "${1:-}" == --smart-ports ]; then
+    rat_smart_ports "${2:-}" "${3:-}"; exit $?
+fi
 if [ "${1:-}" == --apply ]; then
     for dir in "$CONF_DIR"/*; do [ -d "$dir" ] && generate_toml "$(basename "$dir")"; done
     exit 0
@@ -1228,7 +1243,7 @@ for dir in "$CONF_DIR"/*; do
     mt_setup_counter_pair RAT "$(basename "$dir")" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
 done
 
-[ -n "${MT_PEER_LINK:-}" ] || check_first_run_core
+if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ]; then check_first_run_core; fi
 setup_systemd
 
 show_tunnels_info() {
@@ -1490,6 +1505,13 @@ render_mrathole_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
+if [ "${1:-}" = "--deploy-peer-link" ]; then
+    is_rathole_core_valid || { echo "Rathole core is missing or invalid on this server." >&2; exit 3; }
+    [ -n "${2:-}" ] || { echo "Missing Peer Link." >&2; exit 2; }
+    mt_link_decode "$2" || { echo "Invalid Peer Link." >&2; exit 2; }
+    mt_link_deploy
+    exit $?
+fi
 if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"

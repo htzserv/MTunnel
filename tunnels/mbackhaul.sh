@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.4.10).
-MODULE_VERSION="1.4.10"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.5.0).
+MODULE_VERSION="1.5.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1381,6 +1381,23 @@ bh_write_config_locked() {
     return 0
 }
 
+bh_smart_ports() { # NAME PORTS
+    local name="$1" ports="$2" meta="$CONF_DIR/$1.meta" ROLE='' TRANSPORT='' TUN_PORT='' REMOTE_IP='' TOKEN='' ENABLE_UDP='false' BIND_HOST='0.0.0.0'
+    [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    [ -f "$meta" ] || return 1
+    mt_source_conf "$meta" 2>/dev/null || return 1
+    [ "$ROLE" = 1 ] || return 1
+    [[ "$TRANSPORT" =~ ^(tcpmux|wsmux)$ ]] || return 1
+    validate_bh_ports "$ports" 0 || return 1
+    write_bh_config "$name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$ports" false "$BIND_HOST" backhaul "$meta" || return 1
+    systemctl restart "mbackhaul@$name" >/dev/null 2>&1 || return 1
+    systemctl is-active --quiet "mbackhaul@$name"
+}
+
+if [ "${1:-}" == --smart-ports ]; then
+    bh_smart_ports "${2:-}" "${3:-}"; exit $?
+fi
+
 setup_systemd_service() {
     local changed=false
     local tmp_srv="$SECURE_TMP/mbackhaul_tpl.service"
@@ -1942,7 +1959,7 @@ select_tunnel() {
     return 0
 }
 
-[ -n "${MT_PEER_LINK:-}" ] || check_first_run_core
+if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ]; then check_first_run_core; fi
 apply_bbr_optimization
 setup_systemd_service
 
@@ -2214,6 +2231,13 @@ render_mbackhaul_menu() {
     mt_workspace_footer 'Return to Main Core'
 }
 
+if [ "${1:-}" = "--deploy-peer-link" ]; then
+    is_bh_core_valid || { echo "Backhaul core is missing or invalid on this server." >&2; exit 3; }
+    [ -n "${2:-}" ] || { echo "Missing Peer Link." >&2; exit 2; }
+    mt_link_decode "$2" || { echo "Invalid Peer Link." >&2; exit 2; }
+    mt_link_deploy
+    exit $?
+fi
 if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.9).
-MODULE_VERSION="1.4.9"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.4.10).
+MODULE_VERSION="1.4.10"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -2231,16 +2231,6 @@ src_status_text() { # github|mirror
         *) printf '%b' "${R}unreachable${NC}";;
     esac
 }
-update_banner() { # one line under the header whenever ANY link has a newer version
-    local m c v s out=''
-    [ -s "$UPDATE_FILE" ] || return 0
-    while IFS=: read -r m c v s; do
-        [ -n "$v" ] || continue
-        out+="${m} v${v} (${s}); "
-    done < "$UPDATE_FILE"
-    [ -n "$out" ] || return 0
-    printf '  %b⬆ New version available:%b %s\n' "$Y" "$NC" "${out%; }"
-}
 # Menu "p": paste a Peer Code once; the matching module (gre/vxlan/rathole/backhaul/paqet) is opened
 # by the code's own type and imports it directly (modules read MT_PEER_LINK on start-up).
 use_peer_code() {
@@ -2269,7 +2259,6 @@ use_peer_code() {
 render_main_menu() {
     draw_main_header
     printf '\n'
-    update_banner
     printf '  %b┌─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├─%b %bp%b %b❯%b %bUse Peer Code%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"

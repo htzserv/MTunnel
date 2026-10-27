@@ -387,6 +387,16 @@ install_core_from_source() {
             [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/rathole")
             urls+=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset")
             need_zip=1;;
+        5)
+            # Strict MTunnel GitHub source for Smart prerequisite installation.
+            urls=("${MTUNNEL_GITHUB_BASE}/engines/$asset")
+            [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("${MTUNNEL_GITHUB_BASE}/engines/rathole")
+            need_zip=1;;
+        6)
+            # Strict MTunnel mirror source for Smart prerequisite installation.
+            urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
+            [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/rathole")
+            need_zip=1;;
         3)
             echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r url || return 0
             url="${url//$'\r'/}"; [ -n "$url" ] || return 0
@@ -1206,6 +1216,15 @@ select_tunnel() {
     return 0
 }
 
+if [ "${1:-}" == --install-core-smart ]; then
+    case "${2:-}" in
+        mtunnel) install_core_from_source 5;;
+        mirror) install_core_from_source 6;;
+        official) install_core_from_source 1;;
+        *) echo 'Usage: mrathole --install-core-smart {mtunnel|mirror|official}' >&2; exit 2;;
+    esac
+    exit $?
+fi
 if [ "${1:-}" == --counters ]; then
     [[ "${2:-}" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "$CONF_DIR/$2/meta.conf" ] || exit 1
     TYPE=''; LINK_PORT=''; REMOTE_IP=''; BIND_HOST='0.0.0.0'; mt_source_conf "$CONF_DIR/$2/meta.conf"
@@ -1253,7 +1272,7 @@ for dir in "$CONF_DIR"/*; do
     mt_setup_counter_pair RAT "$(basename "$dir")" "$LINK_PORT" "$REMOTE_IP" "$TYPE" "$BIND_HOST"
 done
 
-if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ] && [ "${1:-}" != "--deploy-peer-stdin" ]; then check_first_run_core; fi
+if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ] && [ "${1:-}" != "--deploy-peer-stdin" ] && [ "${1:-}" != "--install-core-smart" ]; then check_first_run_core; fi
 setup_systemd
 
 show_tunnels_info() {

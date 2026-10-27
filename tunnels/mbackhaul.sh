@@ -669,6 +669,16 @@ install_core_from_source() {
             [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/bh")
             urls+=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset")
             need_zip=0;;
+        5)
+            # Strict MTunnel GitHub source for Smart prerequisite installation.
+            urls=("${MTUNNEL_GITHUB_BASE}/engines/$asset")
+            [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_GITHUB_BASE}/engines/bh")
+            need_zip=0;;
+        6)
+            # Strict MTunnel mirror source for Smart prerequisite installation.
+            urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
+            [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/bh")
+            need_zip=0;;
         3)
             echo -ne "  ${C}● Enter Direct Link: ${NC}"; read -r url || return 0
             url="${url//$'\r'/}"; [ -n "$url" ] || return 0
@@ -1100,6 +1110,14 @@ bh_activate_config() {
 }
 
 case "${1:-}" in
+    --install-core-smart)
+        case "${2:-}" in
+            mtunnel) install_core_from_source 5;;
+            mirror) install_core_from_source 6;;
+            official) install_core_from_source 1;;
+            *) echo 'Usage: mbackhaul --install-core-smart {mtunnel|mirror|official}' >&2; exit 2;;
+        esac
+        exit $?;;
     --apply-forwarder) bh_apply_forwarder "${2:-}"; exit $?;;
     --clear-forwarder) bh_clear_forwarder "${2:-}"; exit $?;;
     --delete-one)
@@ -1969,7 +1987,7 @@ select_tunnel() {
     return 0
 }
 
-if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ] && [ "${1:-}" != "--deploy-peer-stdin" ]; then check_first_run_core; fi
+if [ -z "${MT_PEER_LINK:-}" ] && [ "${1:-}" != "--deploy-peer-link" ] && [ "${1:-}" != "--deploy-peer-stdin" ] && [ "${1:-}" != "--install-core-smart" ]; then check_first_run_core; fi
 apply_bbr_optimization
 setup_systemd_service
 

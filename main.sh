@@ -506,13 +506,52 @@ mt_ping_stats() {
 collect_active_tunnels_stats() {
     local tmp_target
     tmp_target=$(mktemp "$SECURE_TMP/.main_tun_stats.XXXXXX") || return 1
+    # Smart owns many internal tunnel candidates but the master dashboard presents each Smart group
+    # as ONE logical path. Internal Smart-owned profiles are hidden below and only the active candidate
+    # is emitted as the group's summary row.
+    local -A MT_SMART_OWNED=()
+    local -a MT_SMART_ROWS=()
+    local sgd sid skind slname srname sactive slabel sscore speer srank sproto spath sdev sinner slinkp sbenchp sstatus slat sloss sjit sup sdown
+    for sgd in /etc/mtunnel/smart/groups/*; do
+        [ -d "$sgd" ] || continue
+        if [ -s "$sgd/names.tsv" ]; then
+            while IFS='|' read -r sid skind slname srname; do
+                [ -n "$skind" ] && [ -n "$slname" ] && MT_SMART_OWNED["$skind|$slname"]=1
+            done < "$sgd/names.tsv"
+        fi
+        sactive=$(cat "$sgd/active.state" 2>/dev/null || true)
+        IFS='|' read -r sid slabel sscore <<< "$sactive"
+        [ -n "$sid" ] || continue
+        speer=$(mt_read_kv "$sgd/group.conf" FOREIGN_IPV4 2>/dev/null || true); [ -n "$speer" ] || speer='---'
+        srank=$(awk -F'|' -v x="$sid" '$1==x{print;exit}' "$sgd/ranking.tsv" 2>/dev/null || true)
+        if [ -n "$srank" ]; then
+            IFS='|' read -r _ slabel skind sproto spath slname sinner slinkp sbenchp sstatus slat sloss sjit sup sdown sscore <<< "$srank"
+        else
+            skind=$(awk -F'|' -v x="$sid" '$1==x{print $3;exit}' "$sgd/candidates.tsv" 2>/dev/null || true)
+            slname=$(awk -F'|' -v x="$sid" '$1==x{print $6;exit}' "$sgd/candidates.tsv" 2>/dev/null || true)
+            slat='---'; sloss='---'
+        fi
+        case "$skind" in
+            rathole) sdev="rat_$slname";;
+            *) sdev="$slname";;
+        esac
+        [ -n "$slabel" ] || slabel="$(basename "$sgd")"
+        [[ "$slat" =~ ^[0-9]+([.][0-9]+)?$ ]] && slat="${slat}ms" || slat='---'
+        [[ "$sloss" =~ ^[0-9]+([.][0-9]+)?$ ]] || sloss='---'
+        MT_SMART_ROWS+=("SMART|$slabel|$speer|GROUP|$slat|$sloss|$sdev|ACTIVE")
+    done
     # Service states and the socket table are fetched once per cycle, not once per tunnel.
     local -A MT_ACTIVE_UNITS=()
     local _u
     while read -r _u; do MT_ACTIVE_UNITS["$_u"]=1; done < <(systemctl list-units --type=service --state=active --no-legend --plain 2>/dev/null | awk '{print $1}')
     mt_ss_snapshot_begin 2>/dev/null || true
-    local count=0
-    # Fair selection under the 3-row header cap: pass 1 takes at most one tunnel
+    local count=0 smart_row
+    for smart_row in "${MT_SMART_ROWS[@]}"; do
+        [ "$count" -lt 3 ] || break
+        printf '%s\n' "$smart_row" >> "$tmp_target"
+        count=$((count+1))
+    done
+    # Fair selection under the 3-row header cap: pass 1 takes at most one non-Smart tunnel
     # per protocol (so GRE can never starve Backhaul/Rathole/Paqet); pass 2 fills
     # any remaining rows with the not-yet-shown tunnels.
     local -A picked=(); local cap sec_n=0
@@ -524,6 +563,7 @@ collect_active_tunnels_stats() {
         [ -f "$conf" ] || continue
         TYPE=""; T_NAME=""; REMOTE_PUB=""; LOCAL_PUB=""; CORE_SUBNET=""; CORE_V6=""; TUN_ID=""; VNI_ID=""; TUN_PROTO="ipv4"; FAB_PROTO="ipv4"; LOCAL_PUB6=""; REMOTE_PUB6=""; LOCAL_IP6=""; REMOTE_IP6=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; mt_source_conf "$conf" 2>/dev/null
         [ -z "$T_NAME" ] && continue
+        [ -z "${MT_SMART_OWNED[gre|$T_NAME]:-}" ] || continue
         [ -z "${picked[GRE|$T_NAME]:-}" ] || continue
         ip link show "$T_NAME" >/dev/null 2>&1 || continue
         [ "$(cat /sys/class/net/$T_NAME/operstate 2>/dev/null)" == "down" ] && continue
@@ -554,6 +594,7 @@ collect_active_tunnels_stats() {
             [ -f "$conf" ] || continue
                 TYPE=""; VX_NAME=""; BR_NAME=""; TUN_PROTO="ipv4"; CORE_V6=""; LOCAL_PUB=""; LOCAL_PUB6=""; REMOTE_PUB6=""; FAB_PROTO="ipv4"; REMOTE_PUB=""; CORE_SUBNET=""; TUN_ID=""; VNI_ID=""; FWD_TCP=""; FWD_UDP=""; MAX_IPS="0"; mt_source_conf "$conf" 2>/dev/null
             [ -z "$VX_NAME" ] && continue
+            [ -z "${MT_SMART_OWNED[vxlan|$VX_NAME]:-}" ] || continue
             [ -z "${picked[VXLAN|$VX_NAME]:-}" ] || continue
             ip link show "$VX_NAME" >/dev/null 2>&1 || continue
             [ "$(cat /sys/class/net/$VX_NAME/operstate 2>/dev/null)" == "down" ] && continue
@@ -583,6 +624,7 @@ collect_active_tunnels_stats() {
         for conf in /etc/mbackhaul/tunnels/*.meta; do
             [ -f "$conf" ] || continue
             local t_name=$(basename "$conf" .meta)
+            [ -z "${MT_SMART_OWNED[backhaul|$t_name]:-}" ] || continue
             ROLE=$(mt_read_kv "$conf" ROLE) || continue
             TUN_PORT=$(mt_read_kv "$conf" TUN_PORT) || continue
             REMOTE_IP=$(mt_read_kv "$conf" REMOTE_IP 2>/dev/null || true)
@@ -620,6 +662,7 @@ collect_active_tunnels_stats() {
         for d in /etc/mrathole/tunnels/*; do
             [ -d "$d" ] && [ -f "$d/meta.conf" ] || continue
             local t_name=$(basename "$d")
+            [ -z "${MT_SMART_OWNED[rathole|$t_name]:-}" ] || continue
             TYPE=$(mt_read_kv "$d/meta.conf" TYPE) || continue
             LINK_PORT=$(mt_read_kv "$d/meta.conf" LINK_PORT) || continue
             REMOTE_IP=$(mt_read_kv "$d/meta.conf" REMOTE_IP 2>/dev/null || true)
@@ -2421,6 +2464,16 @@ mtunnel_cli() {
             [ "$rc" -eq 0 ] && printf 'Sync completed successfully.\n' || printf 'Sync failed; previous scripts were preserved.\n' >&2
             return "$rc"
             ;;
+        --full-package-github)
+            printf 'MTunnel %s: installing full package from Official GitHub...\n' "$MODULE_VERSION"
+            ota_group_install all "$REPO_SCRIPTS" "$REPO_SCRIPTS"
+            return $?
+            ;;
+        --full-package-mirror)
+            printf 'MTunnel %s: installing full package from configured Mirror...\n' "$MODULE_VERSION"
+            ota_group_install all "$MIRROR_SCRIPTS" "$MIRROR_PACKAGES"
+            return $?
+            ;;
         --local)
             [ "$#" -ge 2 ] || { echo 'Usage: mtunnel --local PATH' >&2; return 2; }
             local_path="$2"
@@ -2438,6 +2491,8 @@ Usage: mtunnel [option]
   --report          Export Doctor diagnostic report
   --sync            Sync all scripts from Official GitHub
   --sync-mirror     Sync all scripts from configured mirror
+  --full-package-github  Install scripts + engines + all prerequisites from GitHub
+  --full-package-mirror  Install scripts + engines + all prerequisites from Mirror
   --local PATH      Install/switch to a local bundle or archive
   --version         Show MTunnel version
 

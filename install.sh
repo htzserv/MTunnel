@@ -1013,8 +1013,8 @@ installer_main() {
 
     echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"
     if { : </dev/tty; } 2>/dev/null; then
-        printf "  ${Y}Press any key to continue, or wait 8 seconds...${NC}"
-        IFS= read -r -s -n 1 -t 8 </dev/tty || true
+        printf "  ${Y}Press any key to continue, or wait 15 seconds...${NC}"
+        IFS= read -r -s -n 1 -t 15 </dev/tty || true
         printf "\r\033[K"
     else
         sleep 8

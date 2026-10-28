@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v15.0.1).
-MODULE_VERSION="15.0.1"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v15.0.2).
+MODULE_VERSION="15.0.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -366,12 +366,44 @@ get_local_ipv6() {
 }
 # mt_choose_peer_host supplied by core/common.sh
 
+# These modules write Backhaul v0.7.2 configuration. A different major version (for example v2.x) starts but
+# rejects that configuration ("neither server nor client configuration is properly set").
+# Set MTUNNEL_ALLOW_ANY_BH=1 to skip this check.
+BH_EXPECT_VERSION="0.7.2"
+BH_PROBED_VERSION=""; _BH_PROBE_KEY=""
+bh_core_bin() { local c; for c in /usr/local/bin/bh /usr/bin/bh; do [ -x "$c" ] && { printf '%s' "$c"; return 0; }; done; return 1; }
+# Sets BH_PROBED_VERSION from "bh -v" (empty when it cannot be determined). Cached per file size/mtime;
+# call it directly, not inside $(...), so the cache survives.
+bh_probe_version() { # path
+    local b="$1" key out
+    key="$b:$(stat -c '%Y:%s' "$b" 2>/dev/null)"
+    [ "$key" != "$_BH_PROBE_KEY" ] || return 0
+    out=$(timeout 3 "$b" -v 2>&1 </dev/null | head -n 3) || true
+    BH_PROBED_VERSION=""
+    [[ "$out" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]] && BH_PROBED_VERSION="${BASH_REMATCH[1]}"
+    _BH_PROBE_KEY="$key"
+    return 0
+}
+# True unless the binary positively reports a version other than the expected one.
+bh_core_version_ok() { # path
+    [ "${MTUNNEL_ALLOW_ANY_BH:-0}" = 1 ] && return 0
+    bh_probe_version "$1"
+    [ -z "$BH_PROBED_VERSION" ] || [ "$BH_PROBED_VERSION" = "$BH_EXPECT_VERSION" ]
+}
 is_bh_core_valid() {
     local candidate
     for candidate in /usr/local/bin/bh /usr/bin/bh; do
-        [ -x "$candidate" ] && mt_valid_elf "$candidate" && return 0
+        if [ -x "$candidate" ] && mt_valid_elf "$candidate"; then bh_core_version_ok "$candidate"; return; fi
     done
     return 1
+}
+# Restore a saved copy of the core after a wrong-version install, then restart the units that were running.
+bh_restore_core() { # saved-file
+    local prev="$1" unit; local -a active=()
+    [ -f "$prev" ] || return 1
+    mapfile -t active < <(systemctl list-units --type=service --state=active --no-legend --plain 'mbackhaul@*.service' 2>/dev/null | awk '{print $1}')
+    mt_install_files 755 "$prev" /usr/local/bin/bh "$prev" /usr/bin/bh || return 1
+    for unit in "${active[@]}"; do systemctl restart "$unit" >/dev/null 2>&1 || true; done
 }
 
 format_speed() {
@@ -716,8 +748,23 @@ install_core_from_source() {
         [ -n "$source" ] || { rm -rf "$work"; echo -e "  ${R}✖ Download failed. Previous installation preserved.${NC}" >&2; return 1; }
         mt_engine_cache "$source" "$chosen_url"
     fi
+    local prev_bh="" bh_new_bin
+    if is_bh_core_valid; then
+        prev_bh=$(mktemp "$SECURE_TMP/bh-prev.XXXXXX") && cp -pL "$(bh_core_bin)" "$prev_bh" 2>/dev/null || prev_bh=""
+    fi
     if mt_update_core bh mbackhaul "$source" local; then
         [ -z "$work" ] || rm -rf "$work"
+        bh_new_bin=$(bh_core_bin) || bh_new_bin=""
+        if [ -n "$bh_new_bin" ] && ! bh_core_version_ok "$bh_new_bin"; then
+            echo -e "  ${R}✖ The installed core reports v${BH_PROBED_VERSION}, but v${BH_EXPECT_VERSION} is required by these modules.${NC}" >&2
+            echo -e "  ${DIM}  The source you chose provides the wrong Backhaul version.${NC}" >&2
+            if [ -n "$prev_bh" ] && bh_restore_core "$prev_bh"; then
+                echo -e "  ${Y}● Previous working core restored.${NC}" >&2
+            fi
+            [ -z "$prev_bh" ] || rm -f "$prev_bh"
+            return 1
+        fi
+        [ -z "$prev_bh" ] || rm -f "$prev_bh"
         echo -e "  ${G}✔ Backhaul Core installed successfully.${NC}"
         echo -e "  ${DIM}● Previously active tunnels restarted.${NC}"
     else
@@ -729,8 +776,8 @@ install_core_from_source() {
 
 mt_core_version() {
     local out
-    out=$(bh --version 2>/dev/null | head -n1)
-    [ -n "$out" ] || out=$(bh -V 2>/dev/null | head -n1)
+    out=$(timeout 3 bh -v 2>&1 </dev/null | head -n1)
+    [ -n "$out" ] || out=$(timeout 3 bh -V 2>&1 </dev/null | head -n1)
     out=$(printf '%s' "$out" | grep -oE '[0-9]+(\.[0-9A-Za-z-]+)+' | head -n1)
     printf '%s' "${out:-not-installed}"
 }
@@ -760,7 +807,10 @@ render_unified_update_menu() {
     gh_label=$(mt_update_label "$SECURE_TMP/.mbackhaul_remote_ver_github")
     mirror_label=$(mt_update_label "$SECURE_TMP/.mbackhaul_remote_ver_mirror")
     core_v=$(mt_core_version)
-    [ -n "$core_v" ] && [ "$core_v" != "not-installed" ] && core_tag=" ${G}(installed)${NC}"
+    if [ -n "$core_v" ] && [ "$core_v" != "not-installed" ]; then
+        if is_bh_core_valid; then core_tag=" ${G}(installed)${NC}"
+        else core_tag=" ${Y}(installed v${core_v}; v${BH_EXPECT_VERSION} required)${NC}"; fi
+    fi
     mt_workspace_screen
     echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL — MBACKHAUL ]${NC}"
     echo -e "  ${FR}│${NC}"
@@ -813,7 +863,9 @@ check_first_run_core() {
         if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
             echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
-            echo -e "  ${FR}║${NC}   ${R}● Backhaul Core binary is NOT installed on this machine!${NC}                  ${FR}║${NC}"
+            local core_msg="Backhaul Core binary is NOT installed on this machine!"
+            if bh_core_bin >/dev/null; then bh_probe_version "$(bh_core_bin)"; core_msg="Installed Backhaul Core is v${BH_PROBED_VERSION}; v${BH_EXPECT_VERSION} is required!"; fi
+            printf '  %b║%b   %b● %-71.71s%b%b║%b\n' "$FR" "$NC" "$R" "$core_msg" "$NC" "$FR" "$NC"
             echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
             echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
             echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
@@ -1615,6 +1667,9 @@ draw_header() {
     local core_color="${R}"; local core_raw="Not Installed"
     if is_bh_core_valid; then
         core_color="${G}"; core_raw="Installed"
+    elif bh_core_bin >/dev/null; then
+        bh_probe_version "$(bh_core_bin)"
+        core_color="${Y}"; core_raw="Wrong v${BH_PROBED_VERSION:0:10}"
     fi
     
     local act_color="${DIM}"; local act_text="0/0"
@@ -2088,6 +2143,7 @@ mt_peer_ensure_core() {
     is_bh_core_valid && return 0
     local choice
     echo -e "\n  ${Y}● Backhaul Core is required before applying this Peer Code.${NC}"
+    if bh_core_bin >/dev/null; then bh_probe_version "$(bh_core_bin)"; echo -e "  ${R}✖ Installed core is v${BH_PROBED_VERSION}; v${BH_EXPECT_VERSION} is required.${NC}"; fi
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
     echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
@@ -2260,7 +2316,11 @@ render_mbackhaul_menu() {
 }
 
 if [ "${1:-}" = "--deploy-peer-link" ] || [ "${1:-}" = "--deploy-peer-stdin" ]; then
-    is_bh_core_valid || { echo "Backhaul core is missing or invalid on this server." >&2; exit 3; }
+    is_bh_core_valid || {
+        if bh_core_bin >/dev/null; then bh_probe_version "$(bh_core_bin)"; echo "Backhaul core is v${BH_PROBED_VERSION} but v${BH_EXPECT_VERSION} is required on this server." >&2
+        else echo "Backhaul core is missing or invalid on this server." >&2; fi
+        exit 3
+    }
     if [ "${1:-}" = "--deploy-peer-stdin" ]; then IFS= read -r mt_peer_arg; else mt_peer_arg="${2:-}"; fi
     [ -n "$mt_peer_arg" ] || { echo "Missing Peer Link." >&2; exit 2; }
     mt_link_decode "$mt_peer_arg" || { echo "Invalid Peer Link." >&2; exit 2; }

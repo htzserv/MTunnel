@@ -222,7 +222,7 @@ installer_fetch() {
     [[ "$conn_time" =~ ^[0-9]+$ ]] && ((conn_time >= 2 && conn_time <= 40)) || conn_time=8
     [[ "$url" == https://* ]] || { printf '  Download requires HTTPS: %s\n' "$label" >&2; return 1; }
     tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
-    printf '  %b⟳ %s%b\n' "$C" "$label" "$NC" >&2
+    [ "$quiet" = 1 ] || printf '  %b⟳%b %b%s%b\n' "$C" "$NC" "$W" "$label" "$NC" >&2
     if command -v curl >/dev/null 2>&1; then
         curl -fLsS --proto '=https' --proto-redir '=https' \
             --connect-timeout "$conn_time" --max-time "$max_time" \
@@ -231,51 +231,116 @@ installer_fetch() {
         wget -q --https-only --timeout="$conn_time" --tries=2 -O "$tmp" "$url" 2>/dev/null && rc=0
     fi
     if [ "$rc" = 0 ] && [ -s "$tmp" ] && mv -f -- "$tmp" "$dest"; then
-        printf '  %b✓ %s%b\n' "$G" "$label" "$NC" >&2
+        [ "$quiet" = 1 ] || printf '  %b✓%b %b%s%b\n' "$G" "$NC" "$W" "$label" "$NC" >&2
         return 0
     fi
     rm -f -- "$tmp"
     if [ "$quiet" != 1 ]; then
-        printf '  %b✖ %s — unavailable or download timed out%b\n' "$R" "$label" "$NC" >&2
+        printf '  %b✖%b %b%s%b %b— unavailable or download timed out%b\n' "$R" "$NC" "$W" "$label" "$NC" "$DIM" "$NC" >&2
     fi
     return 1
 }
 
+# Clean, fixed-column progress row used by all three installer stages.
+# Colors: green status icon, white name, yellow version/build tag,
+# white filled progress and dim unfilled progress.
 draw_progress() {
-    local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
-    [ -z "$total" ] || [ "$total" -le 0 ] && total=1
-    local percent=$(( n * 100 / total ))
-    local filled=$(( percent * width / 100 ))
-    local empty=$(( width - filled ))
-    local bar=$(printf "%${filled}s" "" | tr ' ' '#')
-    local empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+    local n="$1" total="$2" text="$3" ver="${4:-}" state="${5:-ok}" width=26
+    [[ "$total" =~ ^[0-9]+$ ]] && [ "$total" -gt 0 ] || total=1
+    local percent=$(( n * 100 / total )) filled empty bar empty_bar icon icon_col ver_text=''
+    ((percent > 100)) && percent=100
+    filled=$(( percent * width / 100 )); empty=$(( width - filled ))
+    bar=$(printf "%${filled}s" "" | tr ' ' '#')
+    empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
 
-    local ver_clean=""
-    [ -n "$ver" ] && [ "$ver" != "Unknown" ] && ver_clean=" (v${ver})"
-
-    local plain_label="${text}${ver_clean}"
-    local pad_spaces=$(( 26 - ${#plain_label} ))
-    [ "$pad_spaces" -lt 0 ] && pad_spaces=0
-    local padding=$(printf '%*s' "$pad_spaces" "")
+    if [ -n "$ver" ] && [ "$ver" != "Unknown" ]; then
+        case "$ver" in sha:*) ver_text="(${ver})";; *) ver_text="(v${ver})";; esac
+    fi
+    case "$state" in
+        skip) icon='↷'; icon_col="$Y";;
+        fail) icon='✖'; icon_col="$R";;
+        *)    icon='✓'; icon_col="$G";;
+    esac
 
     tput civis 2>/dev/null || true
-    if [ -n "$ver_clean" ]; then
-        printf "\r  %b✔%b %b%s%b%b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
-            "$G" "$NC" \
-            "$G" "$text" "$NC" \
-            "$Y" "$ver_clean" "$NC" \
-            "$padding" \
-            "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
-            "$W" "$percent" "$NC"
-    else
-        printf "\r  %b✔%b %b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
-            "$G" "$NC" \
-            "$G" "$text" "$NC" \
-            "$padding" \
-            "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
-            "$W" "$percent" "$NC"
-    fi
+    printf "\r\033[K  %b%s%b %b%-16.16s%b %b%-20.20s%b %b[%b%s%b%s%b] %b%3d%%%b" \
+        "$icon_col" "$icon" "$NC" \
+        "$W" "$text" "$NC" \
+        "$Y" "$ver_text" "$NC" \
+        "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
+        "$W" "$percent" "$NC"
     tput cnorm 2>/dev/null || true
+}
+
+# One compact row per install phase. The same row is redrawn from 0% to 100%;
+# item-level details are intentionally reserved for the final report.
+draw_stage_progress() {
+    local n="$1" total="$2" text="$3" state="${4:-run}" width=26
+    [[ "$total" =~ ^[0-9]+$ ]] && [ "$total" -gt 0 ] || total=1
+    [[ "$n" =~ ^[0-9]+$ ]] || n=0
+    local percent=$(( n * 100 / total )) filled empty bar empty_bar icon icon_col
+    ((percent > 100)) && percent=100
+    filled=$(( percent * width / 100 )); empty=$(( width - filled ))
+    bar=$(printf "%${filled}s" "" | tr ' ' '#')
+    empty_bar=$(printf "%${empty}s" "" | tr ' ' '-')
+
+    if [ "$state" = fail ]; then
+        icon='✖'; icon_col="$R"
+    elif [ "$percent" -ge 100 ]; then
+        icon='✓'; icon_col="$G"
+    else
+        icon='●'; icon_col="$Y"
+    fi
+
+    tput civis 2>/dev/null || true
+    printf "\r\033[K  %b%s%b %b%-16.16s%b %b[%b%s%b%s%b] %b%3d%%%b" \
+        "$icon_col" "$icon" "$NC" \
+        "$W" "$text" "$NC" \
+        "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
+        "$W" "$percent" "$NC"
+    tput cnorm 2>/dev/null || true
+}
+
+installer_script_version() {
+    sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$1" 2>/dev/null | head -n1
+}
+
+installer_pkg_version() {
+    dpkg-query -W -f='${Version}' "$1" 2>/dev/null || true
+}
+
+installer_file_build_tag() {
+    local f="$1" h=''
+    [ -f "$f" ] || return 0
+    h=$(sha256sum "$f" 2>/dev/null | awk '{print $1}')
+    [ -z "$h" ] || printf 'sha:%s' "${h:0:12}"
+}
+
+installer_print_report_group() {
+    local title="$1"; shift
+    local row name ver status icon col ver_text
+    [ "$#" -gt 0 ] || return 0
+    printf '\n  %b%s%b\n' "$Y" "$title" "$NC"
+    for row in "$@"; do
+        IFS='|' read -r name ver status <<< "$row"
+        icon='✓'; col="$G"
+        [[ "$status" == skipped* ]] && { icon='↷'; col="$Y"; }
+        [[ "$status" == failed* ]] && { icon='✖'; col="$R"; }
+        ver_text=''
+        if [ -n "$ver" ] && [ "$ver" != Unknown ]; then
+            case "$ver" in sha:*) ver_text="(${ver})";; *) ver_text="(v${ver})";; esac
+        fi
+        printf '    %b%s%b %b%-16.16s%b %b%-20.20s%b %b— %s%b\n' \
+            "$col" "$icon" "$NC" "$W" "$name" "$NC" "$Y" "$ver_text" "$NC" "$DIM" "$status" "$NC"
+    done
+}
+
+installer_print_report() {
+    printf '\n  %b════════════════ INSTALLATION REPORT ════════════════%b\n' "$FR" "$NC"
+    installer_print_report_group 'Scripts' "${INSTALL_REPORT_SCRIPTS[@]}"
+    installer_print_report_group 'Tunnel engines' "${INSTALL_REPORT_ENGINES[@]}"
+    installer_print_report_group 'Prerequisites' "${INSTALL_REPORT_PREREQS[@]}"
+    printf '\n  %b═════════════════════════════════════════════════════%b\n' "$FR" "$NC"
 }
 
 # ---- Installer header: same dashboard facts as the MTunnel main header -------------------------
@@ -604,8 +669,12 @@ installer_verify_package() {
 # *every* .deb from the 244-entry manifest (including mutually incompatible
 # Ubuntu releases and base libc/systemd packages).  Checking commands before
 # APT avoids unneeded downloads or OS upgrades and lets APT resolve deps safely.
+INSTALL_REPORT_SCRIPTS=()
+INSTALL_REPORT_ENGINES=()
+INSTALL_REPORT_PREREQS=()
+
 installer_install_prereqs() {
-    local pkg cmd
+    local pkg cmd ver state idx=0 apt_log=''
     local -a missing=() packages=(ca-certificates curl wget python3 openssl iperf3 iputils-ping iptables iproute2 util-linux gzip coreutils jq unzip tar procps cron nano)
     local -A checks=(
         [ca-certificates]='cert' [curl]='curl' [wget]='wget'
@@ -615,54 +684,66 @@ installer_install_prereqs() {
         [jq]='jq' [unzip]='unzip' [tar]='tar'
         [procps]='ps' [cron]='cron' [nano]='nano'
     )
-    local n_ok=0
+    local -A was_missing=()
+    INSTALL_REPORT_PREREQS=()
+
     if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
         echo 'APT/dpkg not found. Automatic prerequisite installation requires Debian/Ubuntu.' >&2
         return 1
     fi
+
+    draw_stage_progress 0 "${#packages[@]}" "Prerequisites"
+
     for pkg in "${packages[@]}"; do
         cmd="${checks[$pkg]}"
         if { [ "$cmd" = cert ] && [ -s /etc/ssl/certs/ca-certificates.crt ]; } || command -v "$cmd" >/dev/null 2>&1; then
-            printf '  %b✓ %s%b %b— already installed%b\n' "$G" "$pkg" "$NC" "$LG" "$NC"
-            n_ok=$((n_ok+1))
+            was_missing["$pkg"]=0
         else
-            printf '  %b✖ %s%b %b— missing%b\n' "$Y" "$pkg" "$NC" "$LG" "$NC"
+            was_missing["$pkg"]=1
             missing+=("$pkg")
         fi
     done
-    if [ "${#missing[@]}" -eq 0 ]; then
-        printf '  %b● Prerequisites: all %s required tools ready%b\n' "$G" "$n_ok" "$NC"
-        return 0
-    fi
-    installer_stage "Installing ${#missing[@]} missing prerequisites via APT (system-compatible packages)..."
-    # APT resolves dependencies rather than blindly installing an entire mixed
-    # .deb archive.  Timeouts stop silent infinite hangs on network/lock issues.
-    local -a apt_cmd=(apt-get -o DPkg::Lock::Timeout=45 \
-        -o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
-        -o Acquire::https::Timeout=15 -y install)
-    if command -v timeout >/dev/null 2>&1; then
-        DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=5s 240s \
-            "${apt_cmd[@]}" "${missing[@]}" || {
-                echo 'APT installation failed or timed out. Check repository connectivity; try sudo apt-get update.' >&2
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        apt_log=$(mktemp "${TMPDIR:-/tmp}/mtunnel-apt.XXXXXXXX") || return 1
+        local -a apt_cmd=(apt-get -o DPkg::Lock::Timeout=45 \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
+            -o Acquire::https::Timeout=15 -y install)
+        if command -v timeout >/dev/null 2>&1; then
+            if ! DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=5s 240s \
+                "${apt_cmd[@]}" "${missing[@]}" >"$apt_log" 2>&1; then
+                draw_stage_progress 0 "${#packages[@]}" "Prerequisites" fail; printf '\n'
+                echo 'APT installation failed or timed out. Last APT messages:' >&2
+                tail -n 12 "$apt_log" >&2 || true
+                rm -f "$apt_log"
                 return 1
-            }
-    else
-        DEBIAN_FRONTEND=noninteractive "${apt_cmd[@]}" "${missing[@]}" || {
-            echo 'APT installation failed. Check repository connectivity; try sudo apt-get update.' >&2
-            return 1
-        }
-    fi
-    for pkg in "${missing[@]}"; do
-        cmd="${checks[$pkg]}"
-        if { [ "$cmd" = cert ] && [ -s /etc/ssl/certs/ca-certificates.crt ]; } || command -v "$cmd" >/dev/null 2>&1; then
-            printf '  %b✓ %s%b %b— installed%b\n' "$G" "$pkg" "$NC" "$LG" "$NC"
+            fi
         else
-            printf '  %b✖ %s — command still missing after APT%b\n' "$R" "$pkg" "$NC" >&2
+            if ! DEBIAN_FRONTEND=noninteractive "${apt_cmd[@]}" "${missing[@]}" >"$apt_log" 2>&1; then
+                draw_stage_progress 0 "${#packages[@]}" "Prerequisites" fail; printf '\n'
+                echo 'APT installation failed. Last APT messages:' >&2
+                tail -n 12 "$apt_log" >&2 || true
+                rm -f "$apt_log"
+                return 1
+            fi
+        fi
+        rm -f "$apt_log"
+    fi
+
+    for pkg in "${packages[@]}"; do
+        idx=$((idx+1)); cmd="${checks[$pkg]}"; ver=$(installer_pkg_version "$pkg")
+        if { [ "$cmd" = cert ] && [ -s /etc/ssl/certs/ca-certificates.crt ]; } || command -v "$cmd" >/dev/null 2>&1; then
+            if [ "${was_missing[$pkg]:-0}" = 1 ]; then state='newly installed'; else state='already installed'; fi
+            INSTALL_REPORT_PREREQS+=("$pkg|${ver:-Unknown}|$state")
+            draw_stage_progress "$idx" "${#packages[@]}" "Prerequisites"
+        else
+            INSTALL_REPORT_PREREQS+=("$pkg|${ver:-Unknown}|failed after APT")
+            draw_stage_progress "$idx" "${#packages[@]}" "Prerequisites" fail
+            printf '\n'
             return 1
         fi
     done
-    printf '  %b● Prerequisites: %s already installed, %s newly installed%b\n' \
-        "$G" "$n_ok" "${#missing[@]}" "$NC"
+    printf '\n'
 }
 
 installer_main() {
@@ -673,7 +754,8 @@ installer_main() {
     local -a modules=(main:main.sh mporter:mporter.sh msmart:tunnels/msmart.sh linktest:linktest.sh mgre:tunnels/mgre.sh mxlan:tunnels/mxlan.sh mrathole:tunnels/mrathole.sh mbackhaul:tunnels/mbackhaul.sh mpaqet:tunnels/mpaqet.sh mdoctor:mdoctor.sh mmirror:mirror.sh)
     local -a active_modules=()
     local -a files=()
-    local current=0 mod_ver
+    local current=0 mod_ver installed_ver script_state
+    local -A engine_versions=() engine_skips=()
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --local) [ "$#" -ge 2 ] || { echo '--local needs a directory.' >&2; return 1; }; source_dir="$2"; remote=''; shift 2;;
@@ -735,37 +817,37 @@ installer_main() {
         [ "$scripts_only" == 1 ] && [[ "$path" == tunnels/* ]] && continue
         active_modules+=("$item")
     done
+    INSTALL_REPORT_SCRIPTS=()
+    INSTALL_REPORT_ENGINES=()
+    INSTALL_REPORT_PREREQS=()
     work=$(mktemp -d "${TMPDIR:-/tmp}/mtunnel-install.XXXXXX") || return 1
     chmod 700 "$work"
     INSTALLER_WORK="$work"
     trap 'rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup' EXIT
     draw_installer_header
+    draw_stage_progress 0 "${#active_modules[@]}" "Scripts"
     if [ -n "$remote" ]; then
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
         remote="${remote%/}"
         mkdir "$work/scripts" "$work/scripts/core" || return 1
-        installer_stage "Downloading shared core..."
-        if ! installer_fetch "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" 'core/common.sh' || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
+        if ! installer_fetch "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" 'core/common.sh' 1 || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
             echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
         for item in "${active_modules[@]}"; do
             path="${item#*:}"
             mkdir -p "$work/scripts/$(dirname "$path")" || return 1
-            if ! installer_fetch "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" "$path" || ! mt_validate_script "$work/scripts/$path"; then
+            if ! installer_fetch "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" "$path" 1 || ! mt_validate_script "$work/scripts/$path"; then
                 echo "Cannot prepare module: $path. Installed scripts preserved." >&2; return 1
             fi
             current=$((current+1)); name="${item%%:*}"
-            mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$work/scripts/$path")
-            draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
-            echo ''
+            mod_ver=$(installer_script_version "$work/scripts/$path")
+            draw_stage_progress "$current" "${#active_modules[@]}" "Scripts"
         done
-        installer_stage "Modules 100% — verifying installer metadata..."
         # If this fixed standalone install.sh was supplied locally, keep that
         # exact copy. Do not silently overwrite it with an older remote file.
         if [ "${script_file##*/}" = install.sh ] && [ -f "$script_file" ] && mt_validate_script "$script_file"; then
             cp -f -- "$script_file" "$work/scripts/install.sh" || return 1
-            echo -e "  ${G}✓ install.sh${NC} ${LG}— using the local installer${NC}"
-        elif ! installer_fetch "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" 'install.sh' || ! mt_validate_script "$work/scripts/install.sh"; then
+        elif ! installer_fetch "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" 'install.sh' 1 || ! mt_validate_script "$work/scripts/install.sh"; then
             echo 'Cannot prepare installer: install.sh. Installed scripts preserved.' >&2; return 1
         fi
         # The remote VERSION file is only an update marker and may lag behind the files.
@@ -793,7 +875,6 @@ installer_main() {
             mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Existing installation preserved." >&2; return 1; }
         done
     fi
-    installer_stage "Checking and staging installed scripts..."
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
     files+=("$source_dir/core/common.sh" "$root/usr/lib/mtunnel/common.sh"
@@ -804,46 +885,60 @@ installer_main() {
         mt_validate_script "$source_dir/$path" || { echo "Missing or invalid module: $path. Installed scripts preserved." >&2; return 1; }
         mt_validate_module_role "$source_dir/$path" "$path" || { echo "Wrong module role: $path. Installed scripts preserved." >&2; return 1; }
         mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Installed scripts preserved." >&2; return 1; }
+        mod_ver=$(installer_script_version "$source_dir/$path")
+        installed_ver=''; script_state='newly installed'
+        if [ -f "$target" ]; then
+            installed_ver=$(installer_script_version "$target")
+            if cmp -s "$source_dir/$path" "$target" 2>/dev/null; then
+                script_state='already installed (up to date)'
+            elif [ -n "$installed_ver" ]; then
+                script_state="updated from v${installed_ver}"
+            else
+                script_state='updated existing file'
+            fi
+        fi
+        INSTALL_REPORT_SCRIPTS+=("$name|${mod_ver:-Unknown}|$script_state")
         files+=("$source_dir/$path" "$target" "$source_dir/$path" "$root/root/mtunnel/$path")
         if [ -z "$remote" ]; then
             current=$((current+1))
-            mod_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$source_dir/$path")
-            draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
-            echo ''
+            draw_stage_progress "$current" "${#active_modules[@]}" "Scripts"
         fi
     done
+    printf '\n'
     files+=("$source_dir/install.sh" "$root/root/mtunnel/install.sh")
-    # Engines: install every one that exists at the source and is a valid ELF; a missing one is reported and
-    # skipped (it can be added later from the main menu) instead of aborting the whole installation.
+    # Engines: install every one that exists at the source and is a valid ELF; a missing one is
+    # skipped without aborting the whole installation. Progress still reaches 100% because every
+    # engine is accounted for as installed/already-present/skipped.
     local -a got_cores=() skipped_cores=() same_cores=()
     if [ "$with_cores" == 1 ]; then
-        installer_stage "Preparing tunnel engines (1/3)..."
-        local gz_arch='' gz_name='' src_file='' engine_manifest engine_input
+        local gz_arch='' gz_name='' src_file='' engine_manifest engine_input eng_tag='' skip_reason='' eng_current=0
+        draw_stage_progress 0 6 "Engines"
         engine_manifest="$source_dir/engines/manifest.txt"
         if [ -n "$remote" ]; then
             mkdir -p "$work/scripts/engines" || return 1
-            installer_fetch "$(mt_cb_url "$remote/engines/manifest.txt")" "$engine_manifest" 'engines/manifest.txt' || return 1
+            if ! installer_fetch "$(mt_cb_url "$remote/engines/manifest.txt")" "$engine_manifest" 'engines/manifest.txt' 1; then
+                echo 'Cannot download the tunnel-engine manifest.' >&2
+                return 1
+            fi
         fi
         case "$(uname -m)" in x86_64) gz_arch=amd64;; aarch64|arm64) gz_arch=arm64;; esac
         for name in bh rathole paqet gost haproxy realm; do
-            path="engines/$name"; src_file="$source_dir/$path"; engine_input="$name"
-            # gost is also published as gost-linux-<arch>-2.11.5.gz (gzip of the binary): used when no plain file exists.
+            path="engines/$name"; src_file="$source_dir/$path"; engine_input="$name"; skip_reason=''
             gz_name=''; [ "$name" != gost ] || [ -z "$gz_arch" ] || gz_name="gost-linux-${gz_arch}-2.11.5.gz"
+
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/engines" || return 1
-                # Reuse an installed engine only if it matches the selected source
-                # manifest. On repeated Full installs this avoids 6 binary downloads.
                 if [ -f "$root/usr/local/bin/$name" ] && mt_valid_elf "$root/usr/local/bin/$name" &&
                    installer_verify_package "$engine_manifest" "$root/usr/local/bin/$name" "$name" >/dev/null 2>&1; then
                     src_file="$root/usr/local/bin/$name"
-                    echo -e "  ${G}✓ ${name}${NC} ${LG}— verified installed copy; download skipped${NC}"
                 elif ! installer_fetch "$(mt_cb_url "$remote/engines/$name")" "$src_file" "engines/$name" 1; then
-                    if [ -n "$gz_name" ] && installer_fetch "$(mt_cb_url "$remote/engines/$gz_name")" "$work/scripts/engines/$gz_name" "engines/$gz_name"; then
+                    if [ -n "$gz_name" ] && installer_fetch "$(mt_cb_url "$remote/engines/$gz_name")" "$work/scripts/engines/$gz_name" "engines/$gz_name" 1; then
                         installer_verify_package "$engine_manifest" "$work/scripts/engines/$gz_name" "$gz_name" || return 1
                         gzip -dc "$work/scripts/engines/$gz_name" > "$src_file" || return 1
                         engine_input="$gz_name"
                     else
-                        rm -f "$src_file"; skipped_cores+=("$name (not available at selected source)"); continue
+                        rm -f "$src_file"
+                        skip_reason='not available at selected source'
                     fi
                 fi
             elif [ ! -f "$src_file" ] && [ -n "$gz_name" ] && [ -f "$source_dir/engines/$gz_name" ]; then
@@ -851,23 +946,35 @@ installer_main() {
                 src_file="$work/engines/$name"
                 installer_verify_package "$engine_manifest" "$source_dir/engines/$gz_name" "$gz_name" || return 1
                 engine_input="$gz_name"
-                gzip -dc "$source_dir/engines/$gz_name" > "$src_file" 2>/dev/null || { skipped_cores+=("$name (cannot unpack $gz_name)"); continue; }
+                gzip -dc "$source_dir/engines/$gz_name" > "$src_file" 2>/dev/null || skip_reason="cannot unpack $gz_name"
             fi
-            if [ "$engine_input" = "$name" ] && [ -f "$src_file" ]; then
+
+            if [ -z "$skip_reason" ] && [ "$engine_input" = "$name" ] && [ -f "$src_file" ]; then
                 installer_verify_package "$engine_manifest" "$src_file" "$name" || return 1
             fi
-            if ! mt_valid_elf "$src_file"; then
-                skipped_cores+=("$name (missing or not a valid ELF for this CPU)"); continue
+            if [ -z "$skip_reason" ] && ! mt_valid_elf "$src_file"; then
+                skip_reason='missing or not a valid ELF for this CPU'
             fi
+
+            eng_current=$((eng_current+1))
+            if [ -n "$skip_reason" ]; then
+                skipped_cores+=("$name")
+                engine_skips["$name"]="$skip_reason"
+                draw_stage_progress "$eng_current" 6 "Engines"
+                continue
+            fi
+
             got_cores+=("$name")
             if cmp -s "$src_file" "$root/usr/local/bin/$name" 2>/dev/null; then same_cores+=("$name"); fi
+            eng_tag=$(installer_file_build_tag "$src_file")
+            if [[ "$engine_input" =~ ^gost-linux-[^-]+-([0-9.]+)\.gz$ ]]; then eng_tag="${BASH_REMATCH[1]}"; fi
+            engine_versions["$name"]="${eng_tag:-Unknown}"
             files+=("$src_file" "$root/usr/local/bin/$name" "$src_file" "$root/usr/bin/$name" "$src_file" "$root/root/mtunnel/$path")
+            draw_stage_progress "$eng_current" 6 "Engines"
         done
-        if [ "${#skipped_cores[@]}" -gt 0 ]; then
-            echo -e "  ${Y}● Engines skipped:${NC}" >&2
-            for name in "${skipped_cores[@]}"; do echo -e "    ${Y}-${NC} $name" >&2; done
-        fi
+        printf '\n'
     fi
+
     local -a owned_candidates=()
     for name in "${got_cores[@]}"; do
         case "$name" in bh|rathole|paqet) ;; *) continue;; esac
@@ -876,24 +983,19 @@ installer_main() {
             owned_candidates+=("$name")
         fi
     done
-    installer_stage "Applying scripts and downloaded engine files (2/3)..."
+
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
+
     if [ "$with_cores" == 1 ]; then
-        local n_eng_total=6 n_eng_ok=0 n_eng_same=0 eng eng_same
-        echo -e "\n  ${Y}● Engines report:${NC}"
+        local eng eng_state
         for eng in bh rathole paqet gost haproxy realm; do
             if [[ " ${got_cores[*]} " == *" $eng "* ]]; then
-                eng_same=0; [[ " ${same_cores[*]} " == *" $eng "* ]] && eng_same=1
-                if [ "$eng_same" == 1 ]; then
-                    echo -e "  ${G}✓ ${eng}${NC} ${LG}— already installed (up to date)${NC}"; n_eng_same=$((n_eng_same+1))
-                else
-                    echo -e "  ${G}✓ ${eng}${NC} ${LG}— installed${NC}"; n_eng_ok=$((n_eng_ok+1))
-                fi
+                if [[ " ${same_cores[*]} " == *" $eng "* ]]; then eng_state='already installed (up to date)'; else eng_state='newly installed'; fi
+                INSTALL_REPORT_ENGINES+=("$eng|${engine_versions[$eng]:-Unknown}|$eng_state")
             else
-                echo -e "  ${R}✖ ${eng}${NC} ${LG}— skipped${NC}" >&2
+                INSTALL_REPORT_ENGINES+=("$eng|Unknown|skipped: ${engine_skips[$eng]:-not available}")
             fi
         done
-        echo -e "  ${G}● Engines: ${n_eng_same} already up to date, ${n_eng_ok} newly installed, ${#skipped_cores[@]} skipped (total ${n_eng_total})${NC}"
     fi
     for name in "${owned_candidates[@]}"; do
         MTUNNEL_TEST_ROOT="$root" mt_owned_binary_register "$name" "$root/usr/local/bin/$name" || echo "Warning: Could not record $name ownership" >&2
@@ -902,21 +1004,27 @@ installer_main() {
         mt_installer_retire_legacy
     fi
     if [ "$want_prereqs" == 1 ]; then
-        installer_stage "Checking required system prerequisites (3/3)..."
         installer_install_prereqs "$remote" "$source_dir" "$work" || {
             echo 'Scripts installed, but prerequisites failed. Installation is incomplete.' >&2; return 1;
         }
     fi
-    if [ "$launch" == 1 ]; then
-        echo -e "\n  ${G}● MTunnel Installation Complete! Launching Core Dashboard...${NC}\n"
-    else echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"; fi
+
+    installer_print_report
+
+    echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"
+    if { : </dev/tty; } 2>/dev/null; then
+        printf "  ${Y}Press any key to continue, or wait 8 seconds...${NC}"
+        IFS= read -r -s -n 1 -t 8 </dev/tty || true
+        printf "\r\033[K"
+    else
+        sleep 8
+    fi
     if [ "$with_cores" == 1 ] && [ -z "$root" ]; then
         while read -r target; do
             [ -z "$target" ] || systemctl restart "$target" || return 1
         done < <(systemctl list-units --type=service --state=active --no-legend --plain 'mrathole@*.service' 'mbackhaul@*.service' 'mpaqet@*.service' 'gost.service' 'haproxy.service' 2>/dev/null | awk '{print $1}')
     fi
     if [ "$launch" == 1 ]; then
-        sleep 1.5
         rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup
         trap - EXIT
         # After "curl ... | bash" stdin is the exhausted pipe: give the dashboard the terminal.

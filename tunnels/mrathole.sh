@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v15.0.1).
-MODULE_VERSION="15.0.1"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.5.5).
+MODULE_VERSION="1.5.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

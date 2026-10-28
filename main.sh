@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v15.0.1).
-MODULE_VERSION="15.0.1"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.5.5).
+MODULE_VERSION="1.5.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -121,6 +121,8 @@ mt_version_newer() { # true only when $1 is strictly newer than $2 (pure bash)
     local -a A B
     [[ "$a" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || return 1
     [[ "$b" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || b=0
+    [[ "$a" =~ ^(15|16)\.[0-9]+(\.[0-9]+)?$ && "$b" =~ ^1\.[0-9]+(\.[0-9]+)?$ ]] && return 1
+    [[ "$a" =~ ^1\.[0-9]+(\.[0-9]+)?$ && "$b" =~ ^(15|16)\.[0-9]+(\.[0-9]+)?$ ]] && return 0
     a="${a%%-*}"; b="${b%%-*}"
     IFS=. read -ra A <<< "$a"; IFS=. read -ra B <<< "$b"
     for ((i=0; i<${#A[@]} || i<${#B[@]}; i++)); do

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 15.0.1, API 1, layout revision 2.
+# MTunnel shared core — release 1.5.5, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="15.0.1"
+MTUNNEL_RELEASE_VERSION="1.5.5"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -140,6 +140,9 @@ mt_valid_index() {
 }
 mt_is_newer_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ && "$2" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || return 1
+    # 15.x/16.x are retired release lines; any 1.x release outranks them.
+    mt_is_retired_version "$1" && mt_is_current_release_line "$2" && return 1
+    mt_is_current_release_line "$1" && mt_is_retired_version "$2" && return 0
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]
 }
 
@@ -177,6 +180,10 @@ mt_version_newer() {
     local -a A B
     [[ "$a" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || return 1
     [[ "$b" =~ ^[0-9]+(\.[0-9]+)*([.-][A-Za-z0-9.-]+)?$ ]] || b=0
+    # A current 1.x release is newer than the retired 15.x/16.x line even though
+    # the raw major number is lower; do not advertise the retired line as an update.
+    mt_is_retired_version "$a" && mt_is_current_release_line "$b" && return 1
+    mt_is_current_release_line "$a" && mt_is_retired_version "$b" && return 0
     a="${a%%-*}"; b="${b%%-*}"
     IFS=. read -ra A <<< "$a"; IFS=. read -ra B <<< "$b"
     for ((i=0; i<${#A[@]} || i<${#B[@]}; i++)); do

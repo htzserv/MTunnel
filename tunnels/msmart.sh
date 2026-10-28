@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v15.1.1).
-MODULE_VERSION="1.5.1"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v1.5.5).
+MODULE_VERSION="1.5.5"
 MODULE_BUILD="2026102806"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
@@ -42,6 +42,18 @@ WATCH_TIMER=/etc/systemd/system/mtunnel-smart-watchdog.timer
 SECURE_TMP=/root/mtunnel/tmp
 INSTALL_PATH=/usr/bin/msmart
 UPDATE_CHECK_INTERVAL=600
+# Find the unpacked/local MTunnel bundle so Smart can use its bundled engines/ and prereqs/ first.
+SMART_LOCAL_ROOT=""
+SMART_SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P 2>/dev/null || true)
+for _smart_root in "$SMART_SCRIPT_DIR/.." /root/mtunnel; do
+    [ -n "$_smart_root" ] || continue
+    if [ -s "$_smart_root/prereqs/manifest.txt" ] || compgen -G "$_smart_root/prereqs/*.deb" >/dev/null || \
+       [ -s "$_smart_root/engines/manifest.txt" ] || compgen -G "$_smart_root/engines/*" >/dev/null; then
+        SMART_LOCAL_ROOT=$(cd -- "$_smart_root" && pwd -P 2>/dev/null || true)
+        [ -n "$SMART_LOCAL_ROOT" ] && break
+    fi
+done
+unset _smart_root SMART_SCRIPT_DIR
 mkdir -p "$SMART_DIR" "$GROUP_DIR" "$FOREIGN_GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 chmod 700 "$SMART_DIR" "$GROUP_DIR" "$FOREIGN_GROUP_DIR" "$SECURE_TMP" 2>/dev/null
 
@@ -590,19 +602,21 @@ smart_dependency_source_menu() {
     smart_header
     echo -e "\n  ${FR}┌─[ SMART PREREQUISITE SOURCE ]${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Only Smart-required engines and prerequisite packages are installed.${NC}"
-    echo -e "  ${FR}│${NC} ${DIM}Tunnel scripts and the rest of the MTunnel bundle are not downloaded here.${NC}"
+    echo -e "  ${FR}│${NC} ${DIM}Local files are tried first when available; otherwise use a remote source.${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}MTunnel GitHub${NC} ${DIM}(engines/ + prereqs/)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}MTunnel Mirror${NC} ${DIM}(engines/ + prereqs/)${NC}"
-    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Official Sources${NC} ${DIM}(engine releases + OS packages)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Local MTunnel Bundle${NC} ${DIM}(engines/ + prereqs/, if present)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}MTunnel GitHub${NC} ${DIM}(engines/ + prereqs/)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}MTunnel Mirror${NC} ${DIM}(engines/ + prereqs/)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Official Sources${NC} ${DIM}(engine releases + OS packages)${NC}"
     echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
     while true; do
         echo -ne "  ${C}Prerequisite Source ❯❯ ${NC}"; read -r choice || return 1
         choice="${choice//$'\r'/}"
         case "$choice" in
-            1) SMART_DEP_SOURCE=mtunnel; break;;
-            2) SMART_DEP_SOURCE=mirror; break;;
-            3) SMART_DEP_SOURCE=official; break;;
+            1) SMART_DEP_SOURCE=local; break;;
+            2) SMART_DEP_SOURCE=mtunnel; break;;
+            3) SMART_DEP_SOURCE=mirror; break;;
+            4) SMART_DEP_SOURCE=official; break;;
             0|q|Q|'') return 1;;
             *) echo -e "  ${R}✖ Invalid selection.${NC}";;
         esac
@@ -637,6 +651,7 @@ smart_runtime_missing() {
     for n in python3 openssl iperf3 ping iptables ip ss flock gzip base64 sha256sum; do
         command -v "$n" >/dev/null 2>&1 || miss+=("$n")
     done
+    { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } || miss+=(curl-or-wget)
     if ! smart_core_installed_backhaul; then
         if smart_bh_bin >/dev/null; then miss+=("backhaul-core(need-${SMART_BH_EXPECT},found-$(smart_bh_version))"); else miss+=("backhaul-core"); fi
     fi
@@ -650,16 +665,66 @@ smart_prereqs_ready() {
 
 smart_repo_base() {
     case "$1" in
+        local) [ -n "$SMART_LOCAL_ROOT" ] || return 1; printf '%s\n' "$SMART_LOCAL_ROOT";;
         mtunnel) printf '%s\n' "$MTUNNEL_GITHUB_BASE";;
         mirror) printf '%s\n' "$MTUNNEL_MIRROR_BASE";;
         *) return 1;;
     esac
 }
 
+smart_sha256_file() { # file -> SHA-256 using any available local implementation
+    local file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" 2>/dev/null | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" 2>/dev/null | awk '{print $NF}'
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$file" <<'PYHASH'
+import hashlib, sys
+h=hashlib.sha256()
+with open(sys.argv[1], 'rb') as f:
+    for chunk in iter(lambda: f.read(1024 * 1024), b''):
+        h.update(chunk)
+print(h.hexdigest())
+PYHASH
+    else
+        return 1
+    fi
+}
+
 smart_repo_manifest() { # base sub out
-    local base="$1" sub="$2" out="$3" tmp line hash name n=0
+    local base="$1" sub="$2" out="$3" tmp line hash name n=0 file source_manifest
     tmp=$(mktemp "$SECURE_TMP/.smart-manifest.XXXXXX") || return 1
-    mt_download "$(mt_cb_url "${base%/}/${sub}/manifest.txt")" "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+    if [ -d "$base" ]; then
+        # The main installer caches package files under /root/mtunnel but may not cache
+        # manifest.txt. Use the bundled manifest when present; otherwise hash the local files.
+        source_manifest="$base/$sub/manifest.txt"
+        if [ -r "$source_manifest" ]; then
+            cp -f -- "$source_manifest" "$tmp" || { rm -f "$tmp"; return 1; }
+        else
+            : > "$tmp"
+            for file in "$base/$sub"/*; do
+                [ -f "$file" ] || continue
+                name="${file##*/}"
+                [ "$name" != manifest.txt ] || continue
+                [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
+                case "$sub" in
+                    engines) [[ "$name" != *.deb ]] || continue;;
+                    prereqs) [[ "$name" == *.deb ]] || continue;;
+                    *) continue;;
+                esac
+                hash=$(smart_sha256_file "$file" 2>/dev/null || true)
+                if [[ "$hash" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                    printf '%s  %s\n' "$hash" "$name" >> "$tmp"
+                else
+                    # Local cache bootstrap can precede installation of coreutils/openssl/python3.
+                    printf '%s\n' "$name" >> "$tmp"
+                fi
+            done
+        fi
+    else
+        mt_download "$(mt_cb_url "${base%/}/${sub}/manifest.txt")" "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; return 1; }
+    fi
     : > "$out"
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line//$'\r'/}"
@@ -688,15 +753,59 @@ smart_repo_manifest_name() { # manifest regex
     awk -F'|' -v r="$re" '$2 ~ r {print $2}' "$mf" 2>/dev/null | sort -V | tail -n1
 }
 
+smart_prereq_manifest_name() { # manifest package-prefix architecture; only select known Ubuntu release builds
+    local mf="$1" prefix="$2" arch="$3" os_id os_version name candidate=""
+    os_id=$(awk -F= '$1=="ID" {gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null)
+    os_version=$(awk -F= '$1=="VERSION_ID" {gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null)
+    [ "$os_id" = ubuntu ] || return 1
+    while IFS='|' read -r _ name; do
+        [[ "$name" =~ ^${prefix}_.*_(${arch}|all)\.deb$ ]] || continue
+        case "$os_version:$prefix" in
+            24.04:python3) continue;;
+            24.04:openssl) [[ "$name" == openssl_3.0.* ]] || continue;;
+            24.04:iperf3) [[ "$name" == iperf3_3.16-* ]] || continue;;
+            24.04:libiperf0) [[ "$name" == libiperf0_3.16-* ]] || continue;;
+            24.04:iputils-ping) [[ "$name" == iputils-ping_33a20240117-* ]] || continue;;
+            24.04:iptables) [[ "$name" == iptables_1.8.10-* ]] || continue;;
+            24.04:iproute2) [[ "$name" == iproute2_6.1.* ]] || continue;;
+            24.04:util-linux) [[ "$name" == util-linux_2.39.* ]] || continue;;
+            24.04:gzip) [[ "$name" == gzip_1.12-* ]] || continue;;
+            24.04:curl) [[ "$name" == curl_8.5.* ]] || continue;;
+            26.04:python3) [[ "$name" == python3_3.14* ]] || continue;;
+            26.04:openssl) [[ "$name" == openssl_3.5.* ]] || continue;;
+            26.04:iperf3) [[ "$name" == iperf3_3.20-* ]] || continue;;
+            26.04:libiperf0) [[ "$name" == libiperf0_3.20-* ]] || continue;;
+            26.04:iputils-ping) [[ "$name" == iputils-ping_33a20250605-* ]] || continue;;
+            26.04:iptables) [[ "$name" == iptables_1.8.11-* ]] || continue;;
+            26.04:iproute2) [[ "$name" == iproute2_6.19.* ]] || continue;;
+            26.04:util-linux) [[ "$name" == util-linux_2.41.* ]] || continue;;
+            26.04:gzip) [[ "$name" == gzip_1.14-* ]] || continue;;
+            26.04:curl) [[ "$name" == curl_8.18.* ]] || continue;;
+            *) continue;;
+        esac
+        candidate="$name"
+    done < <(sort -t'|' -k2,2V "$mf" 2>/dev/null)
+    [ -n "$candidate" ] || return 1
+    printf '%s' "$candidate"
+}
+
 smart_repo_download_item() { # base sub name manifest dest
     local base="$1" sub="$2" name="$3" mf="$4" dest="$5" hash got
     [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || return 1
     hash=$(awk -F'|' -v n="$name" '$2==n{print $1;exit}' "$mf")
     [ -n "$hash" ] || return 1
-    mt_download "$(mt_cb_url "${base%/}/${sub}/$name")" "$dest" || return 1
+    if [ -d "$base" ]; then
+        [ -s "$base/$sub/$name" ] && cp -f -- "$base/$sub/$name" "$dest" || return 1
+    else
+        mt_download "$(mt_cb_url "${base%/}/${sub}/$name")" "$dest" || return 1
+    fi
     if [ "$hash" != '-' ]; then
-        got=$(sha256sum "$dest" 2>/dev/null | awk '{print $1}')
-        [ "$got" = "$hash" ] || { rm -f "$dest"; echo "Checksum mismatch: $name" >&2; return 1; }
+        got=$(smart_sha256_file "$dest" 2>/dev/null || true)
+        if [ -z "$got" ] && [ -d "$base" ]; then
+            echo "Warning: no local SHA-256 utility; trusting the local bundle copy for $name." >&2
+        elif [ "$got" != "$hash" ]; then
+            rm -f "$dest"; echo "Checksum mismatch or unavailable SHA-256 verifier: $name" >&2; return 1
+        fi
     fi
     return 0
 }
@@ -711,7 +820,7 @@ smart_engine_assets() { # echoes backhaul_asset|rathole_asset
     printf '%s|%s\n' "$bh" "$rh"
 }
 
-smart_install_engines_from_repo() { # mtunnel|mirror
+smart_install_engines_from_repo() { # local|mtunnel|mirror
     local src="$1" base mf stage assets bh_asset rh_asset bh_name rh_name rc=0
     base=$(smart_repo_base "$src") || return 1
     mf=$(mktemp "$SECURE_TMP/.smart-engines-mf.XXXXXX") || return 1
@@ -772,11 +881,12 @@ smart_missing_package_prefixes() {
     command -v flock >/dev/null 2>&1 || out+=(util-linux)
     command -v gzip >/dev/null 2>&1 || out+=(gzip)
     { command -v base64 >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; } || out+=(coreutils)
+    { command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; } || out+=(curl)
     printf '%s\n' "${out[@]}"
 }
 
-smart_install_prereq_debs_from_repo() { # mtunnel|mirror
-    local src="$1" base mf stage arch prefix name rc=0
+smart_install_prereq_debs_from_repo() { # local|mtunnel|mirror
+    local src="$1" base mf stage arch prefix name pkg_arch rc=0
     local -a prefixes=() debs=()
     mapfile -t prefixes < <(smart_missing_package_prefixes)
     [ ${#prefixes[@]} -gt 0 ] || { echo -e "  ${G}✔ System prerequisites already installed.${NC}"; return 0; }
@@ -788,20 +898,30 @@ smart_install_prereq_debs_from_repo() { # mtunnel|mirror
     arch=$(dpkg --print-architecture 2>/dev/null || true)
     [ -n "$arch" ] || arch=amd64
     for prefix in "${prefixes[@]}"; do
-        name=$(smart_repo_manifest_name "$mf" "^${prefix}_.*_(${arch}|all)\\.deb$")
+        name=$(smart_prereq_manifest_name "$mf" "$prefix" "$arch")
         if [ -z "$name" ]; then
-            echo -e "  ${R}✖ prereqs/: no compatible package found for ${prefix}.${NC}"; rc=1; continue
+            echo -e "  ${Y}⚠ No bundled package matching this Ubuntu release for ${prefix}; will need Official Sources.${NC}"; rc=1; continue
         fi
         echo -e "  ${C}⟳${NC} ${W}${prefix}:${NC} prereqs/${name}"
         if smart_repo_download_item "$base" prereqs "$name" "$mf" "$stage/$name" && dpkg-deb --info "$stage/$name" >/dev/null 2>&1; then
-            debs+=("$stage/$name")
+            pkg_arch=$(dpkg-deb -f "$stage/$name" Architecture 2>/dev/null || true)
+            if [ "$pkg_arch" = "$arch" ] || [ "$pkg_arch" = all ]; then
+                debs+=("$stage/$name")
+            else
+                echo -e "  ${R}✖ Wrong package architecture in ${name}: ${pkg_arch:-unknown} (server: ${arch}).${NC}"; rc=1
+            fi
         else
             echo -e "  ${R}✖ Invalid or failed prerequisite: ${name}${NC}"; rc=1
         fi
     done
     if [ ${#debs[@]} -gt 0 ]; then
         echo -e "  ${Y}● Installing selected prerequisite packages...${NC}"
-        DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" >/dev/null 2>&1 || rc=1
+        if ! DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" >/dev/null 2>&1; then
+            rc=1
+            if command -v apt-get >/dev/null 2>&1; then
+                DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=120 install -f -y -qq >/dev/null 2>&1 || true
+            fi
+        fi
     fi
     rm -rf "$stage"; rm -f "$mf"
     return "$rc"
@@ -838,7 +958,7 @@ smart_install_official_prereqs() {
     return "$rc"
 }
 
-smart_install_smart_prerequisites() { # mtunnel|mirror|official
+smart_install_smart_prerequisites() { # local|mtunnel|mirror|official
     local src="$1" mods rc=0
     mods=$(smart_modules_missing | paste -sd ', ' -)
     if [ -n "$mods" ]; then
@@ -847,7 +967,7 @@ smart_install_smart_prerequisites() { # mtunnel|mirror|official
         return 1
     fi
     case "$src" in
-        mtunnel|mirror)
+        local|mtunnel|mirror)
             smart_install_prereq_debs_from_repo "$src" || rc=1
             smart_install_engines_from_repo "$src" || rc=1
             ;;
@@ -874,6 +994,32 @@ smart_ensure_agent_dependencies() {
 smart_ensure_controller_dependencies() {
     smart_prereqs_ready && return 0
     echo -e "  ${R}✖ Smart prerequisites are incomplete. Open option 1: Install Prerequisites.${NC}"
+    return 1
+}
+
+# When the user opens Smart from the main menu, automatically prepare missing requirements.
+# Prefer the local bundle/cache first, then remote MTunnel sources, and finally distro APT.
+smart_auto_prepare_dependencies() {
+    local src mods
+    smart_prereqs_ready && return 0
+    echo -e "\n  ${Y}● Smart requirements are missing; preparing them automatically...${NC}"
+    mods=$(smart_modules_missing | paste -sd ', ' -)
+    if [ -n "$mods" ]; then
+        echo -e "  ${R}✖ Required tunnel modules are missing: ${W}$mods${NC}"
+        echo -e "  ${DIM}Install/sync the complete MTunnel script bundle first. The Smart menu will still open.${NC}"
+        return 1
+    fi
+    if [ -n "$SMART_LOCAL_ROOT" ]; then
+        echo -e "  ${C}⟳${NC} ${W}Trying local bundle:${NC} $SMART_LOCAL_ROOT"
+        smart_install_smart_prerequisites local && return 0
+    fi
+    for src in mtunnel mirror; do
+        echo -e "  ${C}⟳${NC} ${W}Trying ${src} source for missing Smart requirements...${NC}"
+        smart_install_smart_prerequisites "$src" && return 0
+    done
+    echo -e "  ${C}⟳${NC} ${W}Falling back to official OS repositories and engine releases...${NC}"
+    smart_install_smart_prerequisites official && return 0
+    echo -e "  ${R}✖ Automatic setup could not satisfy every Smart requirement. Use option 1 to retry or inspect the messages above.${NC}"
     return 1
 }
 
@@ -2741,4 +2887,7 @@ case "${1:-}" in
     --pair-decode) smart_pair_decode "${2:-}" && printf 'IPv6=%s\nPort=%s\nFingerprint=%s\nExpires=%s\n' "$PAIR_IP6" "$PAIR_PORT" "$PAIR_FP" "$PAIR_EXPIRES"; exit $?;;
     --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-group GID|--delete-groups|--pair-window-cleanup]'; exit 0;;
 esac
+if [ "$#" -eq 0 ]; then
+    smart_auto_prepare_dependencies || true
+fi
 smart_menu

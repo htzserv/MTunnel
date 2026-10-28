@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v15.0.1).
-MODULE_VERSION="15.0.1"
+# MTunnel LinkTest — connectivity, protocol, latency, loss, and MTU diagnostics (v1.5.5).
+MODULE_VERSION="1.5.5"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -134,7 +134,7 @@ self_update_module() {
     [ -f "$SECURE_TMP/.linktest_remote_ver" ] && remote_v=$(cat "$SECURE_TMP/.linktest_remote_ver" | tr -d '\r\n ')
 
     local gh_text="${C}Official GitHub Server${NC}"
-    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && [ "$remote_v" != "$MODULE_VERSION" ]; then
+    if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_update_available "$remote_v" "$MODULE_VERSION"; then
         gh_text="${C}Official GitHub Server${NC}    ${Y}(v${MODULE_VERSION} ➔ v${remote_v})${NC}"
     else
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
@@ -946,7 +946,7 @@ while true; do
     badge=""
     if [ -f "$SECURE_TMP/.linktest_remote_ver" ]; then
         rv=$(cat "$SECURE_TMP/.linktest_remote_ver" | tr -d '\r\n ')
-        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && [ "$rv" != "$MODULE_VERSION" ]; then
+        if [ -n "$rv" ] && [ "$rv" != "Unknown" ] && mt_update_available "$rv" "$MODULE_VERSION"; then
             badge=" ${Y}(Update Available: v${rv})${NC}"
         fi
     fi

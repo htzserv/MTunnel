@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v15.0.1).
-MODULE_VERSION="15.0.1"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.5.5).
+MODULE_VERSION="1.5.5"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"

@@ -1013,11 +1013,12 @@ installer_main() {
 
     echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"
     if { : </dev/tty; } 2>/dev/null; then
-        printf "  ${Y}Press any key to continue, or wait 15 seconds...${NC}"
-        IFS= read -r -s -n 1 -t 15 </dev/tty || true
+        printf "  ${W}Results will remain on screen for 30 seconds.${NC}\n"
+        printf "  ${Y}Press any key to skip the results.${NC}"
+        IFS= read -r -s -n 1 -t 30 </dev/tty || true
         printf "\r\033[K"
     else
-        sleep 8
+        sleep 30
     fi
     if [ "$with_cores" == 1 ] && [ -z "$root" ]; then
         while read -r target; do

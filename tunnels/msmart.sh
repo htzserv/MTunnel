@@ -30,7 +30,7 @@ unset _mt_fn
 
 [ "$EUID" -eq 0 ] || { echo 'Run MTunnel Smart with sudo.' >&2; exit 1; }
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'; FR='\033[1;33m'
+B='\033[1;34m'; G='\033[1;32m'; LG='\033[0;92m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'; FR='\033[1;33m'
 SMART_DIR=/etc/mtunnel/smart
 GROUP_DIR="$SMART_DIR/groups"
 FOREIGN_GROUP_DIR="$SMART_DIR/foreign-groups"
@@ -997,30 +997,102 @@ smart_ensure_controller_dependencies() {
     return 1
 }
 
-# When the user opens Smart from the main menu, automatically prepare missing requirements.
-# Prefer the local bundle/cache first, then remote MTunnel sources, and finally distro APT.
-smart_auto_prepare_dependencies() {
-    local src mods
-    smart_prereqs_ready && return 0
-    echo -e "\n  ${Y}● Smart requirements are missing; preparing them automatically...${NC}"
-    mods=$(smart_modules_missing | paste -sd ', ' -)
-    if [ -n "$mods" ]; then
-        echo -e "  ${R}✖ Required tunnel modules are missing: ${W}$mods${NC}"
-        echo -e "  ${DIM}Install/sync the complete MTunnel script bundle first. The Smart menu will still open.${NC}"
-        return 1
-    fi
-    if [ -n "$SMART_LOCAL_ROOT" ]; then
-        echo -e "  ${C}⟳${NC} ${W}Trying local bundle:${NC} $SMART_LOCAL_ROOT"
-        smart_install_smart_prerequisites local && return 0
-    fi
-    for src in mtunnel mirror; do
-        echo -e "  ${C}⟳${NC} ${W}Trying ${src} source for missing Smart requirements...${NC}"
-        smart_install_smart_prerequisites "$src" && return 0
+# First-run dependency status screen. Nothing is installed until the operator chooses a source.
+# Returns 0 to continue into Smart, 1 to return to the MTunnel main menu.
+smart_startup_requirements_menu() {
+    local choice src pkg bh_ok=0 rh_ok=0 all_ready=0 bh_ver
+    local -a missing_pkgs=() missing_mods=()
+
+    while true; do
+        smart_header
+        missing_pkgs=()
+        missing_mods=()
+        mapfile -t missing_pkgs < <(smart_missing_package_prefixes)
+        mapfile -t missing_mods < <(smart_modules_missing)
+        smart_core_installed_backhaul && bh_ok=1 || bh_ok=0
+        smart_core_installed_rathole && rh_ok=1 || rh_ok=0
+
+        echo -e "\n  ${FR}┌─[ SMART REQUIREMENTS CHECK ]${NC}"
+        echo -e "  ${FR}│${NC} ${W}Engines${NC}"
+        if [ "$bh_ok" -eq 1 ]; then
+            bh_ver=$(smart_bh_version)
+            if [ -n "$bh_ver" ]; then
+                echo -e "  ${FR}├─${NC} ${G}✓ Backhaul${NC} ${LG}— installed (v${bh_ver})${NC}"
+            else
+                echo -e "  ${FR}├─${NC} ${G}✓ Backhaul${NC} ${LG}— installed${NC}"
+            fi
+        else
+            echo -e "  ${FR}├─${NC} ${R}✖ Backhaul${NC} ${LG}— missing or incompatible${NC}"
+        fi
+        if [ "$rh_ok" -eq 1 ]; then
+            echo -e "  ${FR}├─${NC} ${G}✓ Rathole${NC} ${LG}— installed${NC}"
+        else
+            echo -e "  ${FR}├─${NC} ${R}✖ Rathole${NC} ${LG}— not installed${NC}"
+        fi
+
+        echo -e "  ${FR}│${NC} ${W}System prerequisites${NC}"
+        if [ "${#missing_pkgs[@]}" -eq 0 ]; then
+            echo -e "  ${FR}├─${NC} ${G}✓ All required prerequisites${NC} ${LG}— installed${NC}"
+        else
+            for pkg in "${missing_pkgs[@]}"; do
+                [ -n "$pkg" ] || continue
+                echo -e "  ${FR}├─${NC} ${R}✖ ${pkg}${NC} ${LG}— missing${NC}"
+            done
+        fi
+
+        if [ "${#missing_mods[@]}" -eq 0 ]; then
+            echo -e "  ${FR}│${NC} ${G}✓ Required tunnel scripts${NC} ${LG}— installed${NC}"
+        else
+            echo -e "  ${FR}│${NC} ${R}✖ Required tunnel scripts${NC} ${LG}— missing: ${missing_mods[*]}${NC}"
+        fi
+
+        all_ready=1
+        [ "$bh_ok" -eq 1 ] && [ "$rh_ok" -eq 1 ] || all_ready=0
+        [ "${#missing_pkgs[@]}" -eq 0 ] || all_ready=0
+        [ "${#missing_mods[@]}" -eq 0 ] || all_ready=0
+
+        echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}"
+        if [ "$all_ready" -eq 1 ]; then
+            echo -e "\n  ${G}✓ Smart is ready.${NC} ${LG}No installation is needed.${NC}"
+            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Refresh status${NC}"
+            echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Continue to Smart${NC}"
+            echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Return to Main Core"
+            echo -ne "\n  ${C}Requirements ❯❯ ${NC}"
+            read -r choice || return 1
+            choice="${choice//$'\r'/}"
+            case "$choice" in
+                1) continue;;
+                2) return 0;;
+                0|q|Q|'') return 1;;
+                *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
+            esac
+        else
+            echo -e "\n  ${Y}Some Smart requirements are missing. Choose how to install them:${NC}"
+            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}GitHub Script${NC} ${LG}— MTunnel engines + bundled prerequisites${NC}"
+            echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Mirror Script${NC} ${LG}— MTunnel mirror engines + prerequisites${NC}"
+            echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}APT${NC} ${LG}— system packages + official engine releases${NC}"
+            echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Continue anyway${NC} ${LG}— open Smart without fixing requirements${NC}"
+            echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Return to Main Core"
+            echo -ne "\n  ${C}Install source ❯❯ ${NC}"
+            read -r choice || return 1
+            choice="${choice//$'\r'/}"
+            case "$choice" in
+                1) src=mtunnel;;
+                2) src=mirror;;
+                3) src=official;;
+                4) return 0;;
+                0|q|Q|'') return 1;;
+                *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; continue;;
+            esac
+            echo -e "\n  ${C}⟳${NC} ${W}Checking and installing missing Smart requirements...${NC}"
+            if smart_install_smart_prerequisites "$src"; then
+                echo -e "\n  ${G}✓ Requirement check completed.${NC}"
+            else
+                echo -e "\n  ${R}✖ Some requirements could not be installed.${NC} ${LG}Review the errors above or choose another source.${NC}"
+            fi
+            smart_pause
+        fi
     done
-    echo -e "  ${C}⟳${NC} ${W}Falling back to official OS repositories and engine releases...${NC}"
-    smart_install_smart_prerequisites official && return 0
-    echo -e "  ${R}✖ Automatic setup could not satisfy every Smart requirement. Use option 1 to retry or inspect the messages above.${NC}"
-    return 1
 }
 
 smart_install_agent_service() {
@@ -2888,6 +2960,6 @@ case "${1:-}" in
     --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-group GID|--delete-groups|--pair-window-cleanup]'; exit 0;;
 esac
 if [ "$#" -eq 0 ]; then
-    smart_auto_prepare_dependencies || true
+    smart_startup_requirements_menu || exit 0
 fi
 smart_menu

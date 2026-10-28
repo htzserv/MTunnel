@@ -206,6 +206,41 @@ if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { r
 B='\033[1;37m'; G='\033[1;32m'; LG='\033[0;92m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 FR='\033[1;33m'
 
+# This installer has work to do after the script progress bar reaches 100%.
+# Print every blocking stage instead of appearing frozen on the last module.
+installer_stage() {
+    printf '\n  %b● %s%b\n' "$Y" "$1" "$NC" >&2
+}
+
+# Bounded HTTPS download for interactive installer operations.  The shared
+# mt_download helper can take several minutes *per file* on a bad connection.
+# A failed transfer does not replace an already-staged file.
+installer_fetch() {
+    local url="$1" dest="$2" label="${3:-${1##*/}}" quiet="${4:-0}" tmp rc=1
+    local max_time="${MT_INSTALL_FETCH_TIMEOUT:-35}" conn_time="${MT_INSTALL_CONNECT_TIMEOUT:-8}"
+    [[ "$max_time" =~ ^[0-9]+$ ]] && ((max_time >= 5 && max_time <= 180)) || max_time=35
+    [[ "$conn_time" =~ ^[0-9]+$ ]] && ((conn_time >= 2 && conn_time <= 40)) || conn_time=8
+    [[ "$url" == https://* ]] || { printf '  Download requires HTTPS: %s\n' "$label" >&2; return 1; }
+    tmp=$(mktemp "${dest}.download.XXXXXX") || return 1
+    printf '  %b⟳ %s%b\n' "$C" "$label" "$NC" >&2
+    if command -v curl >/dev/null 2>&1; then
+        curl -fLsS --proto '=https' --proto-redir '=https' \
+            --connect-timeout "$conn_time" --max-time "$max_time" \
+            --retry 1 --retry-delay 1 -o "$tmp" "$url" 2>/dev/null && rc=0
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --https-only --timeout="$conn_time" --tries=2 -O "$tmp" "$url" 2>/dev/null && rc=0
+    fi
+    if [ "$rc" = 0 ] && [ -s "$tmp" ] && mv -f -- "$tmp" "$dest"; then
+        printf '  %b✓ %s%b\n' "$G" "$label" "$NC" >&2
+        return 0
+    fi
+    rm -f -- "$tmp"
+    if [ "$quiet" != 1 ]; then
+        printf '  %b✖ %s — unavailable or download timed out%b\n' "$R" "$label" "$NC" >&2
+    fi
+    return 1
+}
+
 draw_progress() {
     local n=$1; local total=$2; local text=$3; local ver=$4; local width=26
     [ -z "$total" ] || [ "$total" -le 0 ] && total=1
@@ -565,63 +600,69 @@ installer_verify_package() {
     [ "$(sha256sum "$file" | cut -d' ' -f1)" = "$hash" ] || { echo "SHA256 mismatch: $name" >&2; return 1; }
 }
 
+# Install only tools actually required by MTunnel.  The old Full mode fetched
+# *every* .deb from the 244-entry manifest (including mutually incompatible
+# Ubuntu releases and base libc/systemd packages).  Checking commands before
+# APT avoids unneeded downloads or OS upgrades and lets APT resolve deps safely.
 installer_install_prereqs() {
-    local remote="$1" src="$2" work="$3" dir="$3/prereqs" mf line name hash deb pkg ver arch installed
-    local n_pr_total=0 n_pr_ok=0 n_pr_same=0
-    local -a debs=() pending_pkgs=()
-    local -A shown_current=() queued_pkg=()
-    mkdir -p "$dir" || return 1
-    mf="$src/prereqs/manifest.txt"
-    if [ -n "$remote" ]; then
-        mf="$work/prereqs-manifest.txt"
-        mt_download "$(mt_cb_url "$remote/prereqs/manifest.txt")" "$mf" || return 1
+    local pkg cmd
+    local -a missing=() packages=(ca-certificates curl wget python3 openssl iperf3 iputils-ping iptables iproute2 util-linux gzip coreutils jq unzip tar procps cron nano)
+    local -A checks=(
+        [ca-certificates]='cert' [curl]='curl' [wget]='wget'
+        [python3]='python3' [openssl]='openssl' [iperf3]='iperf3'
+        [iputils-ping]='ping' [iptables]='iptables' [iproute2]='ip'
+        [util-linux]='flock' [gzip]='gzip' [coreutils]='sha256sum'
+        [jq]='jq' [unzip]='unzip' [tar]='tar'
+        [procps]='ps' [cron]='cron' [nano]='nano'
+    )
+    local n_ok=0
+    if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then
+        echo 'APT/dpkg not found. Automatic prerequisite installation requires Debian/Ubuntu.' >&2
+        return 1
     fi
-    [ -f "$mf" ] || { echo 'Prerequisites require prereqs/manifest.txt with SHA256 hashes.' >&2; return 1; }
-    # Stage and verify the entire batch before invoking any package manager.
-    while IFS= read -r line || [ -n "$line" ]; do
-        line="${line//$'\r'/}"
-        [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
-        [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]] || return 1
-        name="${BASH_REMATCH[2]}"
-        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*\.deb$ ]] || return 1
-        deb="$src/prereqs/$name"
-        if [ -n "$remote" ]; then
-            deb="$dir/$name"
-            mt_download "$(mt_cb_url "$remote/prereqs/$name")" "$deb" || return 1
+    for pkg in "${packages[@]}"; do
+        cmd="${checks[$pkg]}"
+        if { [ "$cmd" = cert ] && [ -s /etc/ssl/certs/ca-certificates.crt ]; } || command -v "$cmd" >/dev/null 2>&1; then
+            printf '  %b✓ %s%b %b— already installed%b\n' "$G" "$pkg" "$NC" "$LG" "$NC"
+            n_ok=$((n_ok+1))
+        else
+            printf '  %b✖ %s%b %b— missing%b\n' "$Y" "$pkg" "$NC" "$LG" "$NC"
+            missing+=("$pkg")
         fi
-        installer_verify_package "$mf" "$deb" "$name" || return 1
-        pkg=$(dpkg-deb -f "$deb" Package) && ver=$(dpkg-deb -f "$deb" Version) && arch=$(dpkg-deb -f "$deb" Architecture) || return 1
-        [ "$arch" = all ] || [ "$arch" = "$(dpkg --print-architecture)" ] || { echo "Wrong architecture: $name" >&2; return 1; }
-        installed=$(dpkg-query -W -f='${Status}|${Version}' "$pkg" 2>/dev/null || true)
-        if [ "${installed%%|*}" = 'install ok installed' ] && dpkg --compare-versions "${installed#*|}" ge "$ver"; then
-            if [ -z "${shown_current[$pkg]+x}" ]; then
-                echo -e "  ${G}✓ ${pkg}${NC} ${LG}— already installed (up to date)${NC}"
-                shown_current[$pkg]=1
-                n_pr_same=$((n_pr_same+1))
-                n_pr_total=$((n_pr_total+1))
-            fi
-            continue
-        fi
-        debs+=("$deb")
-        if [ -z "${queued_pkg[$pkg]+x}" ]; then
-            pending_pkgs+=("$pkg")
-            queued_pkg[$pkg]=1
-            n_pr_total=$((n_pr_total+1))
-        fi
-    done < "$mf"
-    if [ "${#debs[@]}" -eq 0 ]; then
-        echo -e "  ${G}● Prerequisites: ${n_pr_same} already up to date, 0 newly installed (total ${n_pr_total})${NC}"
+    done
+    if [ "${#missing[@]}" -eq 0 ]; then
+        printf '  %b● Prerequisites: all %s required tools ready%b\n' "$G" "$n_ok" "$NC"
         return 0
     fi
-    # dpkg owns lock acquisition; never forcibly release another process's lock.
-    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" >/dev/null || {
-        echo 'Prerequisite installation failed. Resolve the reported package/lock error and retry.' >&2; return 1;
-    }
-    for pkg in "${pending_pkgs[@]}"; do
-        echo -e "  ${G}✓ ${pkg}${NC} ${LG}— installed${NC}"
-        n_pr_ok=$((n_pr_ok+1))
+    installer_stage "Installing ${#missing[@]} missing prerequisites via APT (system-compatible packages)..."
+    # APT resolves dependencies rather than blindly installing an entire mixed
+    # .deb archive.  Timeouts stop silent infinite hangs on network/lock issues.
+    local -a apt_cmd=(apt-get -o DPkg::Lock::Timeout=45 \
+        -o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
+        -o Acquire::https::Timeout=15 -y install)
+    if command -v timeout >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=5s 240s \
+            "${apt_cmd[@]}" "${missing[@]}" || {
+                echo 'APT installation failed or timed out. Check repository connectivity; try sudo apt-get update.' >&2
+                return 1
+            }
+    else
+        DEBIAN_FRONTEND=noninteractive "${apt_cmd[@]}" "${missing[@]}" || {
+            echo 'APT installation failed. Check repository connectivity; try sudo apt-get update.' >&2
+            return 1
+        }
+    fi
+    for pkg in "${missing[@]}"; do
+        cmd="${checks[$pkg]}"
+        if { [ "$cmd" = cert ] && [ -s /etc/ssl/certs/ca-certificates.crt ]; } || command -v "$cmd" >/dev/null 2>&1; then
+            printf '  %b✓ %s%b %b— installed%b\n' "$G" "$pkg" "$NC" "$LG" "$NC"
+        else
+            printf '  %b✖ %s — command still missing after APT%b\n' "$R" "$pkg" "$NC" >&2
+            return 1
+        fi
     done
-    echo -e "  ${G}● Prerequisites: ${n_pr_same} already up to date, ${n_pr_ok} newly installed (total ${n_pr_total})${NC}"
+    printf '  %b● Prerequisites: %s already installed, %s newly installed%b\n' \
+        "$G" "$n_ok" "${#missing[@]}" "$NC"
 }
 
 installer_main() {
@@ -703,13 +744,14 @@ installer_main() {
         [[ "$remote" == https://* ]] || { echo 'Download requires HTTPS.' >&2; return 1; }
         remote="${remote%/}"
         mkdir "$work/scripts" "$work/scripts/core" || return 1
-        if ! mt_download "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
+        installer_stage "Downloading shared core..."
+        if ! installer_fetch "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" 'core/common.sh' || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
             echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
         for item in "${active_modules[@]}"; do
             path="${item#*:}"
             mkdir -p "$work/scripts/$(dirname "$path")" || return 1
-            if ! mt_download "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" || ! mt_validate_script "$work/scripts/$path"; then
+            if ! installer_fetch "$(mt_cb_url "$remote/$path")" "$work/scripts/$path" "$path" || ! mt_validate_script "$work/scripts/$path"; then
                 echo "Cannot prepare module: $path. Installed scripts preserved." >&2; return 1
             fi
             current=$((current+1)); name="${item%%:*}"
@@ -717,7 +759,13 @@ installer_main() {
             draw_progress "$current" "${#active_modules[@]}" "$name" "$mod_ver"
             echo ''
         done
-        if ! mt_download "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" || ! mt_validate_script "$work/scripts/install.sh"; then
+        installer_stage "Modules 100% — verifying installer metadata..."
+        # If this fixed standalone install.sh was supplied locally, keep that
+        # exact copy. Do not silently overwrite it with an older remote file.
+        if [ "${script_file##*/}" = install.sh ] && [ -f "$script_file" ] && mt_validate_script "$script_file"; then
+            cp -f -- "$script_file" "$work/scripts/install.sh" || return 1
+            echo -e "  ${G}✓ install.sh${NC} ${LG}— using the local installer${NC}"
+        elif ! installer_fetch "$(mt_cb_url "$remote/install.sh")" "$work/scripts/install.sh" 'install.sh' || ! mt_validate_script "$work/scripts/install.sh"; then
             echo 'Cannot prepare installer: install.sh. Installed scripts preserved.' >&2; return 1
         fi
         # The remote VERSION file is only an update marker and may lag behind the files.
@@ -745,6 +793,7 @@ installer_main() {
             mt_validate_module_core_contract "$source_dir/$path" || { echo "Incompatible module/core contract: $path. Existing installation preserved." >&2; return 1; }
         done
     fi
+    installer_stage "Checking and staging installed scripts..."
     # Install the shared API before replacing any dependent module. All files
     # are staged and rolled back together by mt_install_files on copy failure.
     files+=("$source_dir/core/common.sh" "$root/usr/lib/mtunnel/common.sh"
@@ -768,11 +817,12 @@ installer_main() {
     # skipped (it can be added later from the main menu) instead of aborting the whole installation.
     local -a got_cores=() skipped_cores=() same_cores=()
     if [ "$with_cores" == 1 ]; then
+        installer_stage "Preparing tunnel engines (1/3)..."
         local gz_arch='' gz_name='' src_file='' engine_manifest engine_input
         engine_manifest="$source_dir/engines/manifest.txt"
         if [ -n "$remote" ]; then
             mkdir -p "$work/scripts/engines" || return 1
-            mt_download "$(mt_cb_url "$remote/engines/manifest.txt")" "$engine_manifest" || return 1
+            installer_fetch "$(mt_cb_url "$remote/engines/manifest.txt")" "$engine_manifest" 'engines/manifest.txt' || return 1
         fi
         case "$(uname -m)" in x86_64) gz_arch=amd64;; aarch64|arm64) gz_arch=arm64;; esac
         for name in bh rathole paqet gost haproxy realm; do
@@ -781,13 +831,20 @@ installer_main() {
             gz_name=''; [ "$name" != gost ] || [ -z "$gz_arch" ] || gz_name="gost-linux-${gz_arch}-2.11.5.gz"
             if [ -n "$remote" ]; then
                 mkdir -p "$work/scripts/engines" || return 1
-                if ! mt_download "$(mt_cb_url "$remote/engines/$name")" "$src_file" 2>/dev/null; then
-                    if [ -n "$gz_name" ] && mt_download "$(mt_cb_url "$remote/engines/$gz_name")" "$work/scripts/engines/$gz_name" 2>/dev/null \
-                       ; then
+                # Reuse an installed engine only if it matches the selected source
+                # manifest. On repeated Full installs this avoids 6 binary downloads.
+                if [ -f "$root/usr/local/bin/$name" ] && mt_valid_elf "$root/usr/local/bin/$name" &&
+                   installer_verify_package "$engine_manifest" "$root/usr/local/bin/$name" "$name" >/dev/null 2>&1; then
+                    src_file="$root/usr/local/bin/$name"
+                    echo -e "  ${G}✓ ${name}${NC} ${LG}— verified installed copy; download skipped${NC}"
+                elif ! installer_fetch "$(mt_cb_url "$remote/engines/$name")" "$src_file" "engines/$name" 1; then
+                    if [ -n "$gz_name" ] && installer_fetch "$(mt_cb_url "$remote/engines/$gz_name")" "$work/scripts/engines/$gz_name" "engines/$gz_name"; then
                         installer_verify_package "$engine_manifest" "$work/scripts/engines/$gz_name" "$gz_name" || return 1
                         gzip -dc "$work/scripts/engines/$gz_name" > "$src_file" || return 1
                         engine_input="$gz_name"
-                    else rm -f "$src_file"; skipped_cores+=("$name (not found in engines/)"); continue; fi
+                    else
+                        rm -f "$src_file"; skipped_cores+=("$name (not available at selected source)"); continue
+                    fi
                 fi
             elif [ ! -f "$src_file" ] && [ -n "$gz_name" ] && [ -f "$source_dir/engines/$gz_name" ]; then
                 mkdir -p "$work/engines" || return 1
@@ -819,6 +876,7 @@ installer_main() {
             owned_candidates+=("$name")
         fi
     done
+    installer_stage "Applying scripts and downloaded engine files (2/3)..."
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
     if [ "$with_cores" == 1 ]; then
         local n_eng_total=6 n_eng_ok=0 n_eng_same=0 eng eng_same
@@ -844,7 +902,7 @@ installer_main() {
         mt_installer_retire_legacy
     fi
     if [ "$want_prereqs" == 1 ]; then
-        echo -e "\n  ${Y}● Installing prerequisites...${NC}"
+        installer_stage "Checking required system prerequisites (3/3)..."
         installer_install_prereqs "$remote" "$source_dir" "$work" || {
             echo 'Scripts installed, but prerequisites failed. Installation is incomplete.' >&2; return 1;
         }

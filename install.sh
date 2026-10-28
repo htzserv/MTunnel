@@ -203,7 +203,7 @@ if ! declare -F mt_confirm_downgrade >/dev/null; then mt_confirm_downgrade() { r
 
 
 
-B='\033[1;37m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+B='\033[1;37m'; G='\033[1;32m'; LG='\033[0;92m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
 FR='\033[1;33m'
 
 draw_progress() {
@@ -227,7 +227,7 @@ draw_progress() {
     if [ -n "$ver_clean" ]; then
         printf "\r  %b✔%b %b%s%b%b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
             "$G" "$NC" \
-            "$W" "$text" "$NC" \
+            "$G" "$text" "$NC" \
             "$Y" "$ver_clean" "$NC" \
             "$padding" \
             "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
@@ -235,7 +235,7 @@ draw_progress() {
     else
         printf "\r  %b✔%b %b%s%b%s %b[%b%s%b%s%b] %b%3d%%%b" \
             "$G" "$NC" \
-            "$W" "$text" "$NC" \
+            "$G" "$text" "$NC" \
             "$padding" \
             "$W" "$W" "$bar" "$DIM" "$empty_bar" "$NC" \
             "$W" "$percent" "$NC"
@@ -567,7 +567,9 @@ installer_verify_package() {
 
 installer_install_prereqs() {
     local remote="$1" src="$2" work="$3" dir="$3/prereqs" mf line name hash deb pkg ver arch installed
-    local -a debs=() pending=() next=()
+    local n_pr_total=0 n_pr_ok=0 n_pr_same=0
+    local -a debs=() pending_pkgs=()
+    local -A shown_current=() queued_pkg=()
     mkdir -p "$dir" || return 1
     mf="$src/prereqs/manifest.txt"
     if [ -n "$remote" ]; then
@@ -592,15 +594,34 @@ installer_install_prereqs() {
         [ "$arch" = all ] || [ "$arch" = "$(dpkg --print-architecture)" ] || { echo "Wrong architecture: $name" >&2; return 1; }
         installed=$(dpkg-query -W -f='${Status}|${Version}' "$pkg" 2>/dev/null || true)
         if [ "${installed%%|*}" = 'install ok installed' ] && dpkg --compare-versions "${installed#*|}" ge "$ver"; then
-            echo "Already installed: $pkg"; continue
+            if [ -z "${shown_current[$pkg]+x}" ]; then
+                echo -e "  ${G}✓ ${pkg}${NC} ${LG}— already installed (up to date)${NC}"
+                shown_current[$pkg]=1
+                n_pr_same=$((n_pr_same+1))
+                n_pr_total=$((n_pr_total+1))
+            fi
+            continue
         fi
         debs+=("$deb")
+        if [ -z "${queued_pkg[$pkg]+x}" ]; then
+            pending_pkgs+=("$pkg")
+            queued_pkg[$pkg]=1
+            n_pr_total=$((n_pr_total+1))
+        fi
     done < "$mf"
-    [ "${#debs[@]}" -gt 0 ] || return 0
+    if [ "${#debs[@]}" -eq 0 ]; then
+        echo -e "  ${G}● Prerequisites: ${n_pr_same} already up to date, 0 newly installed (total ${n_pr_total})${NC}"
+        return 0
+    fi
     # dpkg owns lock acquisition; never forcibly release another process's lock.
-    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" || {
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confdef --force-confold "${debs[@]}" >/dev/null || {
         echo 'Prerequisite installation failed. Resolve the reported package/lock error and retry.' >&2; return 1;
     }
+    for pkg in "${pending_pkgs[@]}"; do
+        echo -e "  ${G}✓ ${pkg}${NC} ${LG}— installed${NC}"
+        n_pr_ok=$((n_pr_ok+1))
+    done
+    echo -e "  ${G}● Prerequisites: ${n_pr_same} already up to date, ${n_pr_ok} newly installed (total ${n_pr_total})${NC}"
 }
 
 installer_main() {
@@ -806,12 +827,12 @@ installer_main() {
             if [[ " ${got_cores[*]} " == *" $eng "* ]]; then
                 eng_same=0; [[ " ${same_cores[*]} " == *" $eng "* ]] && eng_same=1
                 if [ "$eng_same" == 1 ]; then
-                    echo -e "  ${G}✓ ${eng}${NC} ${DIM}— already installed (up to date)${NC}"; n_eng_same=$((n_eng_same+1))
+                    echo -e "  ${G}✓ ${eng}${NC} ${LG}— already installed (up to date)${NC}"; n_eng_same=$((n_eng_same+1))
                 else
-                    echo -e "  ${G}✓ ${eng}${NC} ${DIM}— installed${NC}"; n_eng_ok=$((n_eng_ok+1))
+                    echo -e "  ${G}✓ ${eng}${NC} ${LG}— installed${NC}"; n_eng_ok=$((n_eng_ok+1))
                 fi
             else
-                echo -e "  ${R}✖ ${eng}${NC} ${DIM}— skipped${NC}" >&2
+                echo -e "  ${R}✖ ${eng}${NC} ${LG}— skipped${NC}" >&2
             fi
         done
         echo -e "  ${G}● Engines: ${n_eng_same} already up to date, ${n_eng_ok} newly installed, ${#skipped_cores[@]} skipped (total ${n_eng_total})${NC}"

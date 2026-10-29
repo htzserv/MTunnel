@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel standalone installer: local source tree or HTTPS bootstrap (v1.5.5).
-MODULE_VERSION="1.5.5"
+MODULE_VERSION="1.5.6"
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
 MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"
@@ -41,9 +41,10 @@ mt_installer_load_common() {
         candidate="$script_dir/core/common.sh"
     elif [[ "$mode" != remote && -n "$script_dir" && -f "$script_dir/core/common.sh" ]]; then
         candidate="$script_dir/core/common.sh"
-    elif [[ "$mode" != remote && -n "$script_dir" && -f "$PWD/core/common.sh" ]]; then
-        candidate="$PWD/core/common.sh"
     else
+        # Never source code from the current working directory implicitly when
+        # running as root. Use the script's own bundle, an explicit --local tree,
+        # or fetch the core from the selected HTTPS source.
         # A curl/process-substitution bootstrap must not borrow an older installed
         # common.sh: installer helper functions may have changed within the same API.
         # Fetch the core from the same source as this installer instead.
@@ -54,7 +55,8 @@ mt_installer_load_common() {
         rc=1
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 120 --retry 2 -o "$tmp" "${remote%/}/core/common.sh?t=$(date +%s)" && rc=0
-        elif command -v wget >/dev/null 2>&1; then
+        fi
+        if [[ "$rc" != 0 ]] && command -v wget >/dev/null 2>&1; then
             wget -q --https-only --timeout=30 --tries=2 -O "$tmp" "${remote%/}/core/common.sh?t=$(date +%s)" && rc=0
         fi
         [[ "$rc" == 0 && -s "$tmp" ]] || { echo 'Unable to fetch the shared MTunnel core.' >&2; rm -f "$tmp"; return 1; }
@@ -82,7 +84,8 @@ mt_installer_load_common() {
 }
 mt_installer_load_common "$@" || exit 1
 unset -f mt_installer_load_common
-DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-$MTUNNEL_GITHUB_BASE}"
+DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
+MIRROR_REMOTE="${MTUNNEL_MIRROR_BASE:-https://c107328.parspack.net/c107328/MTunnel}"
 
 
 # Backward-compatible installer fallbacks. These make install.sh independently
@@ -227,7 +230,8 @@ installer_fetch() {
         curl -fLsS --proto '=https' --proto-redir '=https' \
             --connect-timeout "$conn_time" --max-time "$max_time" \
             --retry 1 --retry-delay 1 -o "$tmp" "$url" 2>/dev/null && rc=0
-    elif command -v wget >/dev/null 2>&1; then
+    fi
+    if [[ "$rc" != 0 ]] && command -v wget >/dev/null 2>&1; then
         wget -q --https-only --timeout="$conn_time" --tries=2 -O "$tmp" "$url" 2>/dev/null && rc=0
     fi
     if [ "$rc" = 0 ] && [ -s "$tmp" ] && mv -f -- "$tmp" "$dest"; then
@@ -509,14 +513,14 @@ mt_installer_retire_legacy() {
 }
 # ---- Interactive menu (shown when started with no source flags) ------------------------------
 # One number does everything:
-#   1-3  official GitHub : full package / scripts + tunnels / scripts only
-#   4-6  Iranian mirror  : full package / scripts + tunnels / scripts only
+#   1-3  official GitHub : full package / scripts + tunnel cores / scripts only
+#   4-6  Iranian mirror  : full package / scripts + tunnel cores / scripts only
 #   7    uninstall MTunnel from this system          0  quit
 # One menu entry (name only, one per line).
 _wiz_item() {
     case "$1" in
         1|4) echo -e "    ${Y}[$1]${NC} ${W}Full package${NC}";;
-        2|5) echo -e "    ${Y}[$1]${NC} ${W}Scripts + tunnels${NC}";;
+        2|5) echo -e "    ${Y}[$1]${NC} ${W}Scripts + tunnel cores${NC}";;
         3|6) echo -e "    ${Y}[$1]${NC} ${W}Scripts only${NC}";;
         7)   echo -e "    ${Y}[7]${NC} ${W}Uninstall${NC}";;
     esac
@@ -544,7 +548,7 @@ installer_wizard() {
                 if [ "$key" -le 3 ]; then src=github; pkg="$key"; else src=mirror; pkg=$((key-3)); fi
                 case "$pkg" in
                     1) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=1;;
-                    2) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
+                    2) WIZ_CORES=1; WIZ_SCRIPTS_ONLY=0; WIZ_PREREQS=0;;
                     3) WIZ_CORES=0; WIZ_SCRIPTS_ONLY=1; WIZ_PREREQS=0;;
                 esac
                 if [ "$src" == mirror ]; then WIZ_REMOTE="$MIRROR_REMOTE"; else WIZ_REMOTE="$DEFAULT_REMOTE"; fi
@@ -587,10 +591,30 @@ installer_uninstall() {
         done
     done
     if command -v crontab >/dev/null 2>&1; then
-        cron_tmp=$(mktemp "${TMPDIR:-/tmp}/uninstall-cron.XXXXXX") && {
-            crontab -l 2>/dev/null | awk '!/mbackhaul@|mrathole@|mpaqet@|\/usr\/bin\/mgre|\/usr\/bin\/mxlan|\/usr\/local\/bin\/mporter-watchdog/' > "$cron_tmp"
-            crontab "$cron_tmp"; rm -f "$cron_tmp"
-        }
+        local cron_backup_dir cron_backup filtered_cron
+        cron_tmp=$(mktemp "${TMPDIR:-/tmp}/uninstall-cron.XXXXXX") || cron_tmp=''
+        if [ -n "$cron_tmp" ] && crontab -l >"$cron_tmp" 2>/dev/null; then
+            cron_backup_dir=/var/backups/mtunnel
+            if mkdir -p "$cron_backup_dir" && chmod 700 "$cron_backup_dir"; then
+                cron_backup="$cron_backup_dir/root-crontab-$(date +%Y%m%d-%H%M%S)"
+                if cp -p -- "$cron_tmp" "$cron_backup"; then
+                    filtered_cron="${cron_tmp}.filtered"
+                    awk '!/mbackhaul@|mrathole@|mpaqet@|\/usr\/bin\/mgre([[:space:]]|$)|\/usr\/bin\/mxlan([[:space:]]|$)|\/usr\/local\/bin\/mporter-watchdog([[:space:]]|$)/' "$cron_tmp" > "$filtered_cron" && {
+                        if crontab "$filtered_cron"; then
+                            echo "  Root crontab updated; backup saved to $cron_backup"
+                        else
+                            echo 'Warning: could not update root crontab; original backup was preserved.' >&2
+                        fi
+                    }
+                    rm -f -- "$filtered_cron"
+                else
+                    echo 'Warning: crontab backup failed; root crontab was left untouched.' >&2
+                fi
+            else
+                echo 'Warning: could not create crontab backup directory; root crontab was left untouched.' >&2
+            fi
+        fi
+        [ -z "$cron_tmp" ] || rm -f -- "$cron_tmp"
     fi
     systemctl stop mtunnel-smart-watchdog.timer mtunnel-smart-agent.service mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
     systemctl disable mtunnel-smart-watchdog.timer mtunnel-smart-agent.service mgre-watchdog.timer mxlan-watchdog.timer mbackhaul-apply.service mrathole-apply.service mpaqet-apply.service mporter-iptables.service mporter-obfs.service 2>/dev/null || true
@@ -637,6 +661,28 @@ installer_deb_state() {
              if dpkg --compare-versions "$cur" ge "$ver" 2>/dev/null; then echo "current|$cur"; else echo "older|$cur"; fi;;
         *) echo "missing|";;
     esac
+}
+
+# Run APT with a live status line. The progress bar is intentionally not left at 0%
+# while APT is downloading/unpacking packages with its output redirected to a log.
+installer_run_apt_visible() {
+    local log="$1" limit="$2" pid rc line
+    shift 2
+    if command -v timeout >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=5s "${limit}s" "$@" >"$log" 2>&1 &
+    else
+        DEBIAN_FRONTEND=noninteractive "$@" >"$log" 2>&1 &
+    fi
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        line=$(tail -n 1 "$log" 2>/dev/null | tr '\r' ' ' | tr -s '[:space:]' ' ' | cut -c1-100)
+        [ -n "$line" ] || line="Waiting for APT / package manager..."
+        printf '\r\033[K  %b●%b APT: %s' "$Y" "$NC" "$line" >&2
+        sleep 1
+    done
+    wait "$pid"; rc=$?
+    printf '\r\033[K\n' >&2
+    return "$rc"
 }
 
 # Installs the .deb prerequisites of a full package: from the remote prereqs/ folder or a local prereqs/ folder.
@@ -692,7 +738,7 @@ installer_install_prereqs() {
         return 1
     fi
 
-    draw_stage_progress 0 "${#packages[@]}" "Prerequisites"
+    installer_stage "Checking prerequisite packages"
 
     for pkg in "${packages[@]}"; do
         cmd="${checks[$pkg]}"
@@ -706,28 +752,45 @@ installer_install_prereqs() {
 
     if [ "${#missing[@]}" -gt 0 ]; then
         apt_log=$(mktemp "${TMPDIR:-/tmp}/mtunnel-apt.XXXXXXXX") || return 1
+        local apt_update_log='' apt_error_log="$apt_log"
         local -a apt_cmd=(apt-get -o DPkg::Lock::Timeout=45 \
             -o Acquire::Retries=1 -o Acquire::http::Timeout=15 \
             -o Acquire::https::Timeout=15 -y install)
-        if command -v timeout >/dev/null 2>&1; then
-            if ! DEBIAN_FRONTEND=noninteractive timeout --signal=TERM --kill-after=5s 240s \
-                "${apt_cmd[@]}" "${missing[@]}" >"$apt_log" 2>&1; then
+        printf '  Installing %s missing prerequisite package(s) with APT...\n' "${#missing[@]}" >&2
+        if ! installer_run_apt_visible "$apt_log" 240 "${apt_cmd[@]}" "${missing[@]}"; then
+            # A fresh VPS may have stale/empty package lists. Refresh once only when
+            # APT explicitly cannot resolve a package, then retry the install once.
+            if grep -Eqi 'Unable to locate package|no installation candidate|has no installation candidate' "$apt_log"; then
+                apt_update_log=$(mktemp "${TMPDIR:-/tmp}/mtunnel-apt-update.XXXXXXXX") || { rm -f "$apt_log"; return 1; }
+                local -a update_cmd=(apt-get -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 update)
+                printf '  APT package lists appear stale; refreshing package indexes and retrying once...\n' >&2
+                if installer_run_apt_visible "$apt_update_log" 180 "${update_cmd[@]}"; then
+                    apt_error_log="$apt_log"
+                    if ! installer_run_apt_visible "$apt_log" 240 "${apt_cmd[@]}" "${missing[@]}"; then
+                        draw_stage_progress 0 "${#packages[@]}" "Prerequisites" fail; printf '\n'
+                        echo 'APT installation failed after refreshing package indexes. Last APT messages:' >&2
+                        tail -n 15 "$apt_log" >&2 || true
+                        rm -f "$apt_log" "$apt_update_log"
+                        return 1
+                    fi
+                else
+                    apt_error_log="$apt_update_log"
+                    draw_stage_progress 0 "${#packages[@]}" "Prerequisites" fail; printf '\n'
+                    echo 'APT could not refresh package indexes. Check network access and /etc/apt/sources.list*. Last APT messages:' >&2
+                    tail -n 15 "$apt_error_log" >&2 || true
+                    rm -f "$apt_log" "$apt_update_log"
+                    return 1
+                fi
+            else
                 draw_stage_progress 0 "${#packages[@]}" "Prerequisites" fail; printf '\n'
                 echo 'APT installation failed or timed out. Last APT messages:' >&2
-                tail -n 12 "$apt_log" >&2 || true
-                rm -f "$apt_log"
-                return 1
-            fi
-        else
-            if ! DEBIAN_FRONTEND=noninteractive "${apt_cmd[@]}" "${missing[@]}" >"$apt_log" 2>&1; then
-                draw_stage_progress 0 "${#packages[@]}" "Prerequisites" fail; printf '\n'
-                echo 'APT installation failed. Last APT messages:' >&2
-                tail -n 12 "$apt_log" >&2 || true
+                tail -n 15 "$apt_log" >&2 || true
                 rm -f "$apt_log"
                 return 1
             fi
         fi
         rm -f "$apt_log"
+        [ -z "$apt_update_log" ] || rm -f "$apt_update_log"
     fi
 
     for pkg in "${packages[@]}"; do
@@ -973,6 +1036,10 @@ installer_main() {
             draw_stage_progress "$eng_current" 6 "Engines"
         done
         printf '\n'
+        if [ "${#got_cores[@]}" -eq 0 ]; then
+            echo 'No tunnel engine binary could be downloaded and verified from the selected source. Nothing was installed; check engines/manifest.txt and the engine files.' >&2
+            return 1
+        fi
     fi
 
     local -a owned_candidates=()
@@ -983,6 +1050,14 @@ installer_main() {
             owned_candidates+=("$name")
         fi
     done
+
+    # Install prerequisites before committing scripts/engines. If APT fails, the
+    # existing MTunnel files remain untouched instead of leaving a half-installed bundle.
+    if [ "$want_prereqs" == 1 ]; then
+        installer_install_prereqs "$remote" "$source_dir" "$work" || {
+            echo 'Prerequisites failed; existing scripts and engines were preserved.' >&2; return 1;
+        }
+    fi
 
     mt_install_files 755 "${files[@]}" || { echo 'Install failed; committed files were rolled back.' >&2; return 1; }
 
@@ -1003,12 +1078,6 @@ installer_main() {
     if [ -z "$root" ]; then
         mt_installer_retire_legacy
     fi
-    if [ "$want_prereqs" == 1 ]; then
-        installer_install_prereqs "$remote" "$source_dir" "$work" || {
-            echo 'Scripts installed, but prerequisites failed. Installation is incomplete.' >&2; return 1;
-        }
-    fi
-
     # Finish any post-install service work before showing the final report, so
     # pressing Enter/any key leaves the report and launches immediately.
     if [ "$with_cores" == 1 ] && [ -z "$root" ]; then
@@ -1020,13 +1089,11 @@ installer_main() {
     installer_print_report
 
     echo -e "\n  ${G}● MTunnel Installation Complete!${NC}\n"
-    if { : </dev/tty; } 2>/dev/null; then
+    if [ "$launch" == 1 ] && { : </dev/tty; } 2>/dev/null; then
         printf "  ${W}Results will remain on screen for 30 seconds.${NC}\n"
         printf "  ${Y}Press Enter or any key to skip the results.${NC}"
         IFS= read -r -s -N 1 -t 30 </dev/tty || true
         printf "\r\033[K"
-    else
-        sleep 30
     fi
     if [ "$launch" == 1 ]; then
         rm -rf -- "$INSTALLER_WORK"; mt_installer_hdr_cleanup

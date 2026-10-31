@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.5.5).
-MODULE_VERSION="1.5.5"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.6.0).
+MODULE_VERSION="1.6.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -2284,10 +2284,7 @@ use_peer_code() {
     local link kind mod rc=0
     draw_main_header
     echo -e "\n  ${FR}┌─[ USE PEER CODE ]${NC}\n"
-    echo -ne "  ${C}●${NC} ${W}Paste Peer Code (q: back): ${NC}"
-    read -r link || return 0
-    link="${link//$'\r'/}"
-    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
+    mt_link_read_input link "  ${C}●${NC} ${W}Paste Peer Code (q: back): ${NC}" || return 0
     case "$link" in ''|q|Q) return 0;; esac
     if [[ "$link" =~ ^mtunnel://[0-9]+/([a-z]+)/ ]]; then kind="${BASH_REMATCH[1]}"; else kind=''; fi
     case "$kind" in
@@ -2300,7 +2297,7 @@ use_peer_code() {
     esac
     export MT_PEER_LINK="$link"
     run_mod "$mod" || rc=$?
-    unset MT_PEER_LINK
+    unset MT_PEER_LINK MT_LINK_INPUT_PENDING MT_LINK_INPUT_PENDING_SET
     return "$rc"
 }
 render_main_menu() {

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.5.5, API 1, layout revision 2.
+# MTunnel shared core — release 1.6.0, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.5.5"
+MTUNNEL_RELEASE_VERSION="1.6.0"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -1337,6 +1337,15 @@ mt_header_refresh_now() {
 mt_live_readline() {
     local __var="$1" prompt="$2" buffer="" char rc up now last_refresh=-1
     printf '%b' "$prompt"
+    # A multiline paste may contain a user's next answer after the Peer Code
+    # frame. Preserve that line if the Peer Code reader had to look ahead.
+    if [ "${MT_LINK_INPUT_PENDING_SET:-0}" = 1 ]; then
+        buffer="${MT_LINK_INPUT_PENDING:-}"
+        MT_LINK_INPUT_PENDING=''; MT_LINK_INPUT_PENDING_SET=0
+        [ -t 0 ] || printf '%s\n' "$buffer"
+        printf -v "$__var" '%s' "$buffer"
+        return 0
+    fi
     while true; do
         IFS= read -rsn1 -t 0.25 char
         rc=$?
@@ -1454,43 +1463,109 @@ mt_link_encode() {
     printf 'mtunnel://2/%s/%s.%s\n' "$MT_KIND" "$encoded" "$checksum"
 }
 
+# Normalize pasted Peer Codes. Old terminal boxes inserted visual line breaks and
+# border glyphs into the displayed code; keep only the URL alphabet after its prefix.
+mt_link_normalize_input() {
+    local raw="$1"
+    [ "${#raw}" -le 65536 ] || { echo 'Peer Code input is too large.' >&2; return 1; }
+    raw="${raw//$'\r'/}"
+    raw="${raw//$'\n'/}"
+    if [[ "$raw" == *"mtunnel://"* ]]; then raw="mtunnel://${raw#*mtunnel://}"; fi
+    printf '%s' "$raw" | LC_ALL=C tr -cd 'A-Za-z0-9:/._-'
+}
+
+mt_link_input_complete() {
+    local code="$1"
+    [[ "$code" =~ ^mtunnel://1/(gre|vxlan|backhaul|rathole|paqet)/[A-Za-z0-9_-]+\.[a-f0-9]{64}$ ]] ||
+    [[ "$code" =~ ^mtunnel://2/(gre|vxlan|backhaul|rathole|paqet)/[A-Za-z0-9_-]+\.[a-f0-9]{16}$ ]]
+}
+
+# Accept a one-line code or a legacy wrapped code pasted over several lines.
+# Continuation lines are joined and terminal box decoration is discarded.
+mt_link_read_input() {
+    local __var="$1" prompt="$2" part raw='' cleaned='' lines=0 lower line_clean
+    printf '%b' "$prompt"
+    # When users select an entire legacy/new code frame, ignore its heading and
+    # top/bottom borders and begin collecting at the actual mtunnel:// prefix.
+    while IFS= read -r part; do
+        [ -n "$part" ] || break
+        if [[ "$part" == *"mtunnel://"* ]]; then raw="$part"; break; fi
+        lower="${part,,}"
+        line_clean=$(mt_link_normalize_input "$part") || return 1
+        if [ -z "$line_clean" ] || [[ "$part" == *'╔'* || "$part" == *'╚'* || "$part" == *'║'* || "$part" == *'═'* || "$lower" == *'peer code'* || "$lower" == *'copy the complete code'* || "$lower" == *'valid for'* ]]; then
+            lines=$((lines + 1)); [ "$lines" -lt 16 ] || break
+            continue
+        fi
+        raw="$part"
+        break
+    done
+    cleaned=$(mt_link_normalize_input "$raw") || return 1
+    lines=0
+    while [[ "$cleaned" == mtunnel://* ]] && ! mt_link_input_complete "$cleaned"; do
+        (( lines < 512 )) || { echo 'Peer Code exceeded the maximum number of pasted lines.' >&2; return 1; }
+        [ "${#cleaned}" -le 32768 ] || { echo 'Peer Code is too long.' >&2; return 1; }
+        printf '%b' "  ${DIM:-}Continue pasting the remaining code (blank line to stop): ${NC:-}"
+        IFS= read -r part || break
+        [ -n "$part" ] || break
+        raw+=$'\n'$part
+        cleaned=$(mt_link_normalize_input "$raw") || return 1
+        lines=$((lines + 1))
+    done
+    # If the user pasted the entire old/new display frame, consume its trailing
+    # border (and preserve any real next answer instead of letting it become a name).
+    if mt_link_input_complete "$cleaned"; then
+        while IFS= read -r -t 0; do
+            IFS= read -r part || break
+            lower="${part,,}"
+            line_clean=$(mt_link_normalize_input "$part") || continue
+            if [ -z "$line_clean" ] || [[ "$part" == *'╔'* || "$part" == *'╚'* || "$part" == *'║'* || "$part" == *'═'* || "$lower" == *'peer code'* || "$lower" == *'copy the complete code'* || "$lower" == *'valid for'* ]]; then
+                continue
+            fi
+            MT_LINK_INPUT_PENDING="$part"; MT_LINK_INPUT_PENDING_SET=1
+            export MT_LINK_INPUT_PENDING MT_LINK_INPUT_PENDING_SET
+            break
+        done
+    fi
+    printf -v "$__var" '%s' "$cleaned"
+}
+
 mt_link_decode() {
-    local link="$1" rest kind encoded checksum actual raw padded canonical key val ver
-    link="${link//$'\r'/}"
-    link="${link#"${link%%[![:space:]]*}"}"; link="${link%"${link##*[![:space:]]}"}"
+    local link rest kind encoded checksum actual raw padded canonical key val ver
     declare -gA MT_LINK_DATA=()
-    [ "${#link}" -le 32768 ] || return 1
+    link=$(mt_link_normalize_input "${1:-}") || return 1
+    [ -n "$link" ] || { echo 'Peer Code is empty.' >&2; return 1; }
+    [ "${#link}" -le 32768 ] || { echo 'Peer Code is too long.' >&2; return 1; }
     case "$link" in
         mtunnel://1/*) ver=1; rest="${link#mtunnel://1/}";;
         mtunnel://2/*) ver=2; rest="${link#mtunnel://2/}";;
         mtunnel://3/*) echo 'Unsupported old link format. Ask the sender to generate the Peer Code again.' >&2; return 1;;
-        *) return 1;;
+        *) echo 'Unrecognized Peer Code format. Expected mtunnel://1/ or mtunnel://2/.' >&2; return 1;;
     esac
     kind="${rest%%/*}"; rest="${rest#*/}"
-    [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || return 1
-    [ "$kind" = "$MT_KIND" ] || { echo "This link is for $kind, not $MT_KIND." >&2; return 1; }
+    [[ "$kind" =~ ^(gre|vxlan|backhaul|rathole|paqet)$ ]] || { echo 'Peer Code contains an unsupported tunnel type.' >&2; return 1; }
+    [ "$kind" = "$MT_KIND" ] || { echo "This Peer Code is for $kind, not $MT_KIND." >&2; return 1; }
     encoded="${rest%.*}"; checksum="${rest##*.}"
-    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    [[ "$encoded" =~ ^[A-Za-z0-9_-]+$ ]] || { echo 'Peer Code payload is malformed or truncated.' >&2; return 1; }
     if [ "$ver" = 1 ]; then
-        [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || return 1
+        [[ "$checksum" =~ ^[a-f0-9]{64}$ ]] || { echo 'Peer Code checksum is missing or malformed.' >&2; return 1; }
         actual=$(printf '%s' "1/$kind/$encoded" | sha256sum); actual="${actual%% *}"
     else
-        [[ "$checksum" =~ ^[a-f0-9]{16}$ ]] || return 1
+        [[ "$checksum" =~ ^[a-f0-9]{16}$ ]] || { echo 'Peer Code checksum is missing or malformed.' >&2; return 1; }
         actual=$(printf '%s' "2/$kind/$encoded" | sha256sum); actual="${actual:0:16}"
     fi
-    [ "$actual" = "$checksum" ] || { echo 'Setup link checksum failed.' >&2; return 1; }
-    padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) return 1;; esac
+    [ "$actual" = "$checksum" ] || { echo 'Peer Code checksum failed. The code was copied incompletely or modified.' >&2; return 1; }
+    padded=$(printf '%s' "$encoded" | tr '_-' '/+'); case $((${#padded}%4)) in 2) padded+='==';; 3) padded+='=';; 1) echo 'Peer Code payload has invalid Base64 length.' >&2; return 1;; esac
     if [ "$ver" = 1 ]; then
-        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || return 1
+        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null) || { echo 'Peer Code Base64 decoding failed.' >&2; return 1; }
         canonical=$(printf '%s' "$raw" | base64 -w0 | tr '+/' '-_' | tr -d '=')
-        [ "$canonical" = "$encoded" ] || return 1 # rejects NULs/noncanonical/trailing newlines
+        [ "$canonical" = "$encoded" ] || { echo 'Peer Code payload is not canonical.' >&2; return 1; }
     else
-        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null | gunzip 2>/dev/null) || return 1
+        raw=$(printf '%s' "$padded" | base64 -d 2>/dev/null | gunzip -c 2>/dev/null) || { echo 'Peer Code payload could not be decompressed.' >&2; return 1; }
     fi
     while IFS='=' read -r key val; do
-        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
-        [[ ! -v MT_LINK_DATA[$key] ]] || return 1
-        mt_link_field_valid "$key" "$val" || return 1
+        [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || { echo 'Peer Code contains an invalid field name.' >&2; return 1; }
+        [[ ! -v MT_LINK_DATA[$key] ]] || { echo "Peer Code contains a duplicate field: $key." >&2; return 1; }
+        mt_link_field_valid "$key" "$val" || { echo "Peer Code contains an invalid value for $key." >&2; return 1; }
         MT_LINK_DATA[$key]="$val"
     done <<< "$raw"
     # v2 links omit SYNC_KEY when it equals the tunnel secret; restore it here.
@@ -1529,13 +1604,18 @@ mt_clipboard_copy() {
     else
         seq=$(printf '\033]52;c;%s\a' "$encoded")
     fi
-    if [ -w /dev/tty ]; then printf '%s' "$seq" > /dev/tty 2>/dev/null; else printf '%s' "$seq"; fi
+    [ -w /dev/tty ] || return 1
+    printf '%s' "$seq" > /dev/tty 2>/dev/null
 }
 
 mt_peer_copy_prompt() {
-    local link="$1" key rc now last_refresh=0
-    mt_clipboard_copy "$link" >/dev/null 2>&1 || true
-    echo -e "  ${G}●${NC} ${W}Peer Code sent to clipboard.${NC} ${DIM}(terminal support required)${NC}"
+    local link="$1" key rc now last_refresh=0 copied=0
+    mt_clipboard_copy "$link" >/dev/null 2>&1 && copied=1
+    if [ "$copied" = 1 ]; then
+        echo -e "  ${G}●${NC} ${W}Clipboard copy requested.${NC} ${DIM}If your terminal blocks OSC 52, copy the single code line above.${NC}"
+    else
+        echo -e "  ${Y}●${NC} ${W}Automatic clipboard is unavailable here; copy the single code line above.${NC}"
+    fi
     while true; do
         printf '  %bC%b = Copy again   %bEnter%b = Continue ❯❯ ' "$C" "$NC" "$C" "$NC"
         while true; do
@@ -1552,8 +1632,11 @@ mt_peer_copy_prompt() {
         done
         case "$key" in
             c|C)
-                mt_clipboard_copy "$link" >/dev/null 2>&1 || true
-                printf '\r\033[K  %b●%b %bCopy request sent again.%b\n' "$G" "$NC" "$W" "$NC"
+                if mt_clipboard_copy "$link" >/dev/null 2>&1; then
+                    printf '\r\033[K  %b●%b %bClipboard copy requested again.%b\n' "$G" "$NC" "$W" "$NC"
+                else
+                    printf '\r\033[K  %b●%b %bClipboard unavailable; copy the code line manually.%b\n' "$Y" "$NC" "$W" "$NC"
+                fi
                 ;;
             ''|$'\n'|$'\r')
                 echo
@@ -1564,19 +1647,12 @@ mt_peer_copy_prompt() {
 }
 
 mt_link_box() {
-    local text="$1" box_width=80 pad=5 inner_width text_width line chunk
-    inner_width=$((box_width - 2))
-    text_width=$((inner_width - (pad * 2)))
-    printf -v line '%*s' "$inner_width" ''
-    line="${line// /═}"
-    echo -e "  ${FR}╔${line}╗${NC}"
-    while [ -n "$text" ]; do
-        chunk="${text:0:text_width}"
-        text="${text:text_width}"
-        printf "  ${FR}║${NC}%*s${W}%-*s${NC}%*s${FR}║${NC}
-" "$pad" '' "$text_width" "$chunk" "$pad" ''
-    done
-    echo -e "  ${FR}╚${line}╝${NC}"
+    local text="$1"
+    # Never insert hard newlines into a code: terminal soft-wrapping is safe,
+    # while copied hard-wrapped chunks are easy to truncate in a read prompt.
+    echo -e "  ${FR}┌─[ COPY THE COMPLETE CODE ON THE NEXT LINE ]${NC}"
+    printf '  %b%s%b\n' "$W" "$text" "$NC"
+    echo -e "  ${FR}└────────────────────────────────────────────${NC}"
 }
 
 mt_link_read() { # read -r flat metadata as data, never source it

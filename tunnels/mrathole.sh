@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.5.5).
-MODULE_VERSION="1.5.5"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.6.0).
+MODULE_VERSION="1.6.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1396,7 +1396,7 @@ mt_peer_ensure_core() {
 mt_link_import() {
     local link ans name
     mt_workspace_screen
-    if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_ask link 'Paste Peer Setup Link (q: back): ' || return 1; fi
+    if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_link_read_input link "  ${C}●${NC} ${W}Paste Peer Setup Link (q: back): ${NC} " || return 1; fi
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
     echo -e "\n  ${FR}┌─[ PEER SETUP PREVIEW ]${NC}"

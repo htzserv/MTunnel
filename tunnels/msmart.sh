@@ -1,7 +1,7 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v1.5.5).
-MODULE_VERSION="1.5.5"
-MODULE_BUILD="2026102806"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v1.6.0).
+MODULE_VERSION="1.6.0"
+MODULE_BUILD="2026102901"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 SMART_API_REV=1
@@ -36,6 +36,7 @@ GROUP_DIR="$SMART_DIR/groups"
 FOREIGN_GROUP_DIR="$SMART_DIR/foreign-groups"
 AGENT_PORT=29876
 IPERF_PORT=5201
+PROBE_PORT_BASE=47000
 AGENT_SERVICE=/etc/systemd/system/mtunnel-smart-agent.service
 WATCH_SERVICE=/etc/systemd/system/mtunnel-smart-watchdog.service
 WATCH_TIMER=/etc/systemd/system/mtunnel-smart-watchdog.timer
@@ -518,11 +519,114 @@ except Exception as e:
 PY
 }
 smart_conf_get() { mt_link_read "$1" "$2" 2>/dev/null; }
+smart_conf_int() { # conf-file key default min max
+    local f="$1" key="$2" def="$3" min="$4" max="$5" v
+    v=$(smart_conf_get "$f" "$key")
+    [[ "$v" =~ ^[0-9]+$ ]] || v="$def"
+    [ "$v" -ge "$min" ] 2>/dev/null || v="$min"
+    [ "$v" -le "$max" ] 2>/dev/null || v="$max"
+    printf '%s' "$v"
+}
+
+smart_ensure_group_defaults() { # groupdir
+    local gd="$1" f="$1/group.conf" key val
+    [ -s "$f" ] || return 1
+    while IFS='|' read -r key val; do
+        grep -q "^${key}=" "$f" 2>/dev/null || smart_set_conf_var "$f" "$key" "$val" >/dev/null 2>&1 || return 1
+    done <<'EOF_DEFAULTS'
+WATCHDOG|1
+WATCH_INTERVAL|10
+BENCH_INTERVAL|3600
+BENCH_IPERF_SECONDS|2
+SWITCH_MARGIN|8
+SWITCH_STREAK|3
+MIN_HOLD|60
+DOWN_STREAK|3
+RECOVERY_STREAK|3
+DRAIN_SECONDS|3
+TCP_PROBE|1
+EOF_DEFAULTS
+    return 0
+}
+
+smart_event_log() { # groupdir event from to reason details
+    local gd="$1" event="$2" from="${3:-}" to="${4:-}" reason="${5:-}" details="${6:-}" ts iso line f
+    [ -d "$gd" ] || return 0
+    ts=$(date +%s 2>/dev/null || echo 0); iso=$(date -Is 2>/dev/null || date)
+    from="${from//$'\n'/ }"; to="${to//$'\n'/ }"; reason="${reason//$'\n'/ }"; details="${details//$'\n'/ }"
+    from="${from//|//}"; to="${to//|//}"; reason="${reason//|//}"; details="${details//|//}"
+    line="$ts|$iso|$event|$from|$to|$reason|$details"
+    f="$gd/events.log"; printf '%s\n' "$line" >> "$f"; chmod 600 "$f" 2>/dev/null || true
+    if [ "$(wc -l < "$f" 2>/dev/null || echo 0)" -gt 1200 ]; then tail -n 1000 "$f" > "$f.tmp" && mv -f "$f.tmp" "$f"; fi
+    command -v logger >/dev/null 2>&1 && logger -t msmart -- "group=$(basename "$gd") event=$event from=$from to=$to reason=$reason $details" 2>/dev/null || true
+}
+
+smart_flap_inc() { # groupdir id transition
+    local gd="$1" id="$2" tr="$3" f="$1/flaps.tsv" tmp="$1/.flaps.tmp" now
+    now=$(date +%s 2>/dev/null || echo 0)
+    awk -F'|' -v OFS='|' -v i="$id" -v t="$tr" -v n="$now" '
+      BEGIN{found=0} $1==i{$2=($2+0)+1;$3=n;$4=t;found=1} {print} END{if(!found) print i,1,n,t}
+    ' "$f" 2>/dev/null > "$tmp" || printf '%s|1|%s|%s\n' "$id" "$now" "$tr" > "$tmp"
+    mv -f "$tmp" "$f"; chmod 600 "$f" 2>/dev/null || true
+}
+
+smart_expire_controls() { # groupdir
+    local gd="$1" now id exp tmp
+    now=$(date +%s 2>/dev/null || echo 0)
+    if [ -s "$gd/pin.state" ]; then
+        IFS='|' read -r id exp < "$gd/pin.state" || true
+        if [[ "$exp" =~ ^[0-9]+$ ]] && [ "$exp" -gt 0 ] && [ "$exp" -le "$now" ]; then
+            rm -f "$gd/pin.state"; smart_event_log "$gd" PIN "$id" '' timeout 'pin expired'
+        fi
+    fi
+    if [ -s "$gd/maintenance.tsv" ]; then
+        tmp="$gd/.maintenance.tmp"; : > "$tmp"
+        while IFS='|' read -r id exp; do
+            [ -n "$id" ] || continue
+            if [[ "$exp" =~ ^[0-9]+$ ]] && [ "$exp" -gt 0 ] && [ "$exp" -le "$now" ]; then
+                smart_event_log "$gd" MAINTENANCE "$id" '' timeout 'maintenance expired'
+            else printf '%s|%s\n' "$id" "${exp:-0}" >> "$tmp"; fi
+        done < "$gd/maintenance.tsv"
+        mv -f "$tmp" "$gd/maintenance.tsv"; chmod 600 "$gd/maintenance.tsv" 2>/dev/null || true
+    fi
+    return 0
+}
+
+smart_pin_id() { # groupdir -> id
+    local id exp
+    smart_expire_controls "$1" >/dev/null 2>&1 || true
+    [ -s "$1/pin.state" ] || return 0
+    IFS='|' read -r id exp < "$1/pin.state" || true
+    [[ "$id" =~ ^[0-9]+$ ]] && printf '%s' "$id"
+}
+
+smart_is_maintenance() { # groupdir id; caller should expire controls once per operation
+    local gd="$1" id="$2"
+    [ -s "$gd/maintenance.tsv" ] && awk -F'|' -v i="$id" '$1==i{found=1} END{exit !found}' "$gd/maintenance.tsv"
+}
+
+smart_write_runtime_state() { # groupdir
+    local gd="$1" active='' forwarding='' current='' challenger='' streak=0 last=0 pin=''
+    active=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true); forwarding=$(cat "$gd/forwarding.state" 2>/dev/null || true)
+    [ -s "$gd/switch.state" ] && IFS='|' read -r current challenger streak last < "$gd/switch.state" || true; pin=$(smart_pin_id "$gd")
+    cat > "$gd/runtime.state.tmp" <<EOF_RUNTIME
+ACTIVE_ID=$active
+FORWARDING_ID=$forwarding
+CHALLENGER_ID=$challenger
+CHALLENGER_STREAK=${streak:-0}
+LAST_SWITCH=${last:-0}
+PIN_ID=$pin
+UPDATED_AT=$(date +%s)
+EOF_RUNTIME
+    mv -f "$gd/runtime.state.tmp" "$gd/runtime.state"; chmod 600 "$gd/runtime.state" 2>/dev/null || true
+}
+
 smart_peer_load() {
     local f="$SMART_DIR/peer.conf"
     [ -s "$f" ] || return 1
     SMART_F4=$(smart_conf_get "$f" FOREIGN_IPV4); SMART_F6=$(smart_conf_get "$f" FOREIGN_IPV6)
     SMART_PORT=$(smart_conf_get "$f" PORT); SMART_FP=$(smart_conf_get "$f" FINGERPRINT); SMART_TOKEN=$(smart_conf_get "$f" TOKEN)
+    SMART_AGENT_VERSION=$(smart_conf_get "$f" AGENT_VERSION); SMART_AGENT_API=$(smart_conf_get "$f" AGENT_API)
     mt_valid_ipv4 "$SMART_F4" && mt_valid_port "$SMART_PORT" && [[ "$SMART_FP" =~ ^[0-9a-f]{64}$ && "$SMART_TOKEN" =~ ^[A-Za-z0-9_-]{20,256}$ ]] || return 1
 }
 smart_agent_call() { # JSON body [timeout-seconds]
@@ -1129,11 +1233,14 @@ def ensure_agent_firewall(pair_open=False, controller=None):
     while ipt(['-D','INPUT','-p','tcp','--dport',str(port),'-j',CHAIN]): pass
     if not ipt(['-I','INPUT','1','-p','tcp','--dport',str(port),'-j',CHAIN]): return False
     if not ipt(['-F',CHAIN]): return False
-    if pair_open and not ipt(['-A',CHAIN,'-m','comment','--comment',PAIR_COMMENT,'-j','ACCEPT']): return False
+    # Let established TLS sessions continue, but rate-limit new Agent connections.
+    ipt(['-A',CHAIN,'-m','conntrack','--ctstate','ESTABLISHED,RELATED','-j','ACCEPT'])
+    if pair_open:
+        if not ipt(['-A',CHAIN,'-m','conntrack','--ctstate','NEW','-m','limit','--limit','30/min','--limit-burst','12','-m','comment','--comment',PAIR_COMMENT,'-j','ACCEPT']): return False
     if controller:
         try:
             ip=ipaddress.ip_address(controller)
-            if ip.version==4 and not ipt(['-A',CHAIN,'-s',controller,'-m','comment','--comment',PAIRED_COMMENT,'-j','ACCEPT']): return False
+            if ip.version==4 and not ipt(['-A',CHAIN,'-s',controller,'-m','conntrack','--ctstate','NEW','-m','limit','--limit','180/min','--limit-burst','40','-m','comment','--comment',PAIRED_COMMENT,'-j','ACCEPT']): return False
         except Exception:
             return False
     return ipt(['-A',CHAIN,'-j','DROP'])
@@ -1162,6 +1269,38 @@ def reap_process(proc, seconds=20):
             except Exception: pass
     t=threading.Timer(seconds,_stop); t.daemon=True; t.start()
 
+rate_lock=threading.Lock()
+rate_state={}
+def rate_allow(ip,limit,window=60):
+    now=time.monotonic()
+    with rate_lock:
+        arr=[t for t in rate_state.get(ip,[]) if now-t<window]
+        if len(arr)>=limit:
+            rate_state[ip]=arr; return False
+        arr.append(now); rate_state[ip]=arr
+        if len(rate_state)>2048:
+            for k in list(rate_state)[:512]:
+                if not rate_state.get(k) or now-rate_state[k][-1]>window: rate_state.pop(k,None)
+        return True
+
+def start_probe_listener(bind,p,seconds=7):
+    fam=socket.AF_INET6 if ipaddress.ip_address(bind).version==6 else socket.AF_INET
+    s=socket.socket(fam,socket.SOCK_STREAM); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+    s.bind((bind,p)); s.listen(16); s.settimeout(.5)
+    def worker():
+        end=time.monotonic()+seconds
+        try:
+            while time.monotonic()<end:
+                try:
+                    c,_=s.accept(); c.settimeout(.5); c.close()
+                except socket.timeout: pass
+                except Exception: break
+        finally:
+            try: s.close()
+            except Exception: pass
+    threading.Thread(target=worker,daemon=True).start()
+    return True
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version='MTunnelSmart/'+module_version
     def log_message(self,*a): return
@@ -1179,6 +1318,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         got=self.headers.get('Authorization','')
         return bool(token) and hmac.compare_digest(got.encode('utf-8','surrogatepass'),('Bearer '+token).encode('utf-8','surrogatepass'))
     def do_POST(self):
+        pair_req=(self.path=='/v1/pair')
+        if not rate_allow(self.client_address[0],12 if pair_req else 180): return self.sendj(429,{'ok':False,'error':'rate limit exceeded'})
         data=self.body()
         if data is None: return self.sendj(400,{'ok':False,'error':'invalid json'})
         if self.path=='/v1/pair':
@@ -1283,6 +1424,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if proc.poll() is not None: return self.sendj(500,{'ok':False,'error':'iperf3 server failed to bind'})
                 return self.sendj(200,{'ok':True,'pid':proc.pid})
             except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
+        if action=='probe_listeners':
+            items=data.get('items') or []
+            if not isinstance(items,list) or len(items)>32: return self.sendj(400,{'ok':False,'error':'invalid probe listener batch'})
+            started=0; failed=[]
+            for item in items:
+                if not isinstance(item,dict): failed.append('invalid-item'); continue
+                host=str(item.get('bind',''))
+                try: p=int(item.get('port',0) or 0)
+                except Exception: p=0
+                if not valid_ip(host) or not (1024<=p<=65535): failed.append(host or 'invalid-host'); continue
+                try: start_probe_listener(host,p,7); started+=1
+                except Exception: failed.append(host)
+            return self.sendj(200,{'ok':True,'started':started,'failed':failed})
+        if action=='probe_listener':
+            host=str(data.get('bind','')); p=int(data.get('port',0) or 0)
+            if not valid_ip(host) or not (1024<=p<=65535): return self.sendj(400,{'ok':False,'error':'invalid probe listener'})
+            try:
+                start_probe_listener(host,p,7); return self.sendj(200,{'ok':True})
+            except Exception as e: return self.sendj(409,{'ok':False,'error':str(e)})
         if action=='tcp_probe':
             host=str(data.get('host','')); p=int(data.get('port',0) or 0); vals=[]; fail=0
             if not valid_ip(host) or not (1<=p<=65535): return self.sendj(400,{'ok':False,'error':'invalid probe target'})
@@ -1331,13 +1491,17 @@ srv.serve_forever()
 PY
 }
 smart_pair_window_cleanup() {
-    local exp now chain=MTUNNEL_SMART
+    local exp now
     exp=$(cat "$SMART_DIR/pair.expires" 2>/dev/null || true); now=$(date +%s)
     if [[ "$exp" =~ ^[0-9]+$ ]] && [ "$exp" -gt "$now" ]; then return 0; fi
     rm -f "$SMART_DIR/pair.secret" "$SMART_DIR/pair.expires"
-    if command -v iptables >/dev/null 2>&1; then
-        while iptables -D "$chain" -m comment --comment MTUNNEL_SMART_PAIR -j ACCEPT 2>/dev/null; do :; done
-        iptables -C "$chain" -j DROP >/dev/null 2>&1 || iptables -A "$chain" -j DROP >/dev/null 2>&1 || true
+    # Rebuild the Agent firewall from persistent controller.ipv4. This removes the temporary
+    # rate-limited pairing rule exactly, even when its iptables match expression changes.
+    if systemctl is-active --quiet mtunnel-smart-agent.service 2>/dev/null; then
+        systemctl restart mtunnel-smart-agent.service >/dev/null 2>&1 || true
+    elif command -v iptables >/dev/null 2>&1; then
+        iptables -F MTUNNEL_SMART >/dev/null 2>&1 || true
+        iptables -A MTUNNEL_SMART -j DROP >/dev/null 2>&1 || true
     fi
 }
 smart_foreign_setup() {
@@ -1800,84 +1964,142 @@ smart_ping_stats() { # host [count] -> avg|loss|jitter
     [[ "$jit" =~ ^[0-9]+([.][0-9]+)?$ ]] || jit=9999
     printf '%s|%s|%s\n' "$avg" "$loss" "$jit"
 }
-smart_iperf_speed() { # target direction -> Mbps; prepares server on foreign
-    local target="$1" reverse="$2" body resp out
+smart_iperf_speed() { # target direction [seconds] -> Mbps
+    local target="$1" reverse="$2" seconds="${3:-4}" body resp out timeout_s
     command -v iperf3 >/dev/null 2>&1 || { echo 0; return; }
-    body=$(B="$target" P="$IPERF_PORT" python3 - <<'PY'
-import json,os; print(json.dumps({'action':'iperf_start','bind':os.environ['B'],'port':int(os.environ['P'])},separators=(',',':')))
-PY
-)
+    [[ "$seconds" =~ ^[0-9]+$ ]] || seconds=4; [ "$seconds" -ge 1 ] || seconds=1; [ "$seconds" -le 10 ] || seconds=10
+    body=$(printf '{"action":"iperf_start","bind":"%s","port":%s}' "$target" "$IPERF_PORT")
     resp=$(smart_agent_call "$body" || true); [ "$(smart_json_field "$resp" ok)" = 1 ] || { echo 0; return; }
-    sleep .2
-    local -a args=(-c "$target" -p "$IPERF_PORT" -t 4 -O 1 -J)
-    [ "$reverse" = reverse ] && args+=(-R)
-    out=$(timeout 15 iperf3 "${args[@]}" 2>/dev/null || true)
-    IPERF_JSON="$out" python3 - <<'PY'
+    sleep .2; timeout_s=$((seconds+10))
+    local -a args=(-c "$target" -p "$IPERF_PORT" -t "$seconds" -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
+    out=$(timeout "$timeout_s" iperf3 "${args[@]}" 2>/dev/null || true)
+    IPERF_JSON="$out" python3 - <<'PY_IPERF'
 import json,os
 try:
  d=json.loads(os.environ.get('IPERF_JSON','{}')); e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; print(round(float(x.get('bits_per_second',0))/1e6,1))
 except Exception: print(0)
-PY
+PY_IPERF
 }
-smart_iperf_speed_rathole() { # local mapped port direction; Foreign iperf binds same port
-    local port="$1" reverse="$2" body resp out
+smart_iperf_speed_rathole() { # local mapped port direction [seconds]
+    local port="$1" reverse="$2" seconds="${3:-4}" body resp out timeout_s
     command -v iperf3 >/dev/null 2>&1 || { echo 0; return; }
-    body=$(P="$port" python3 - <<'PY'
-import json,os; print(json.dumps({'action':'iperf_start','bind':'127.0.0.1','port':int(os.environ['P'])},separators=(',',':')))
-PY
-)
+    [[ "$seconds" =~ ^[0-9]+$ ]] || seconds=4; [ "$seconds" -ge 1 ] || seconds=1; [ "$seconds" -le 10 ] || seconds=10
+    body=$(printf '{"action":"iperf_start","bind":"127.0.0.1","port":%s}' "$port")
     resp=$(smart_agent_call "$body" || true); [ "$(smart_json_field "$resp" ok)" = 1 ] || { echo 0; return; }
-    sleep .2
-    local -a args=(-c 127.0.0.1 -p "$port" -t 4 -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
-    out=$(timeout 15 iperf3 "${args[@]}" 2>/dev/null || true)
-    IPERF_JSON="$out" python3 - <<'PY'
+    sleep .2; timeout_s=$((seconds+10))
+    local -a args=(-c 127.0.0.1 -p "$port" -t "$seconds" -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
+    out=$(timeout "$timeout_s" iperf3 "${args[@]}" 2>/dev/null || true)
+    IPERF_JSON="$out" python3 - <<'PY_RAT'
 import json,os
 try:
  d=json.loads(os.environ.get('IPERF_JSON','{}')); e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; print(round(float(x.get('bits_per_second',0))/1e6,1))
 except Exception: print(0)
-PY
+PY_RAT
 }
-smart_score() { # avg loss jitter up down maxspeed
-    python3 - "$@" <<'PY'
-import sys
-lat,loss,jit,up,down,maxs=map(float,sys.argv[1:7]); speed=(up+down)/2
-reli=max(0,100-loss*8); lats=max(0,100-min(lat,500)/5); jits=max(0,100-min(jit,100)); spd=0 if maxs<=0 else min(100,speed/maxs*100)
-print(round(reli*.35+lats*.25+jits*.15+spd*.25,1))
-PY
+smart_score() { # avg loss jitter up down maxspeed; awk avoids a Python process per score
+    awk -v lat="$1" -v loss="$2" -v jit="$3" -v up="$4" -v down="$5" -v maxs="$6" 'BEGIN{
+      speed=(up+down)/2; reli=100-loss*8; if(reli<0)reli=0;
+      lats=100-((lat<500?lat:500)/5); if(lats<0)lats=0;
+      jits=100-(jit<100?jit:100); if(jits<0)jits=0;
+      spd=(maxs<=0)?0:(speed/maxs*100); if(spd>100)spd=100;
+      printf "%.1f\\n",reli*.35+lats*.25+jits*.15+spd*.25
+    }'
 }
-smart_hysteresis_order() { # groupdir ranking-file; keeps the active path stable unless it fails or a challenger wins 3 checks
-    local gd="$1" rank="$2"
+
+smart_recovery_score() { # latency loss jitter -> provisional health-only score
+    awk -v lat="$1" -v loss="$2" -v jit="$3" 'BEGIN{s=55-lat*.05-loss*1.2-((jit>10)?(jit-10)*.08:0);if(s<5)s=5;if(s>55)s=55;printf "%.1f\\n",s}'
+}
+
+smart_local_tcp_probe() { # host port [count] -> reachable|loss
+    local host="$1" port="$2" count="${3:-2}" i ok=0
+    for ((i=0;i<count;i++)); do
+        if timeout 2 bash -c 'exec 3<>"/dev/tcp/$1/$2"; exec 3>&-; exec 3<&-' bash "$host" "$port" >/dev/null 2>&1; then ok=$((ok+1)); fi
+        [ "$i" -ge $((count-1)) ] || sleep .08
+    done
+    if [ "$ok" -gt 0 ]; then printf '1|%s\n' "$(( (count-ok)*100/count ))"; else printf '0|100\n'; fi
+}
+
+SMART_PROBE_BATCH_OK=0
+smart_arm_tunnel_probes() { # candidates-or-ranking-file [exclude-id]; one Agent request for all GRE/VXLAN paths
+    local file="$1" exclude="${2:-}" id label kind proto path name inner linkp benchp status port items='' body resp ok err
+    SMART_PROBE_BATCH_OK=0
+    [ -s "$file" ] || { SMART_PROBE_BATCH_OK=1; return 0; }
+    while IFS='|' read -r id label kind proto path name inner linkp benchp status _; do
+        [[ "$kind" =~ ^(gre|vxlan)$ ]] || continue
+        [ "$id" != "$exclude" ] || continue
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        { mt_valid_ipv4 "$inner" || mt_valid_ipv6 "$inner"; } || continue
+        port=$((PROBE_PORT_BASE + (10#$id % 1000)))
+        [ -z "$items" ] || items+=','
+        items+=$(printf '{"bind":"%s","port":%s}' "$inner" "$port")
+    done < "$file"
+    [ -n "$items" ] || { SMART_PROBE_BATCH_OK=1; return 0; }
+    body=$(printf '{"action":"probe_listeners","items":[%s]}' "$items")
+    resp=$(smart_agent_call "$body" 6 || true); ok=$(smart_json_field "$resp" ok)
+    if [ "$ok" = 1 ]; then SMART_PROBE_BATCH_OK=1; sleep .08; return 0; fi
+    err=$(smart_json_field "$resp" error)
+    if [ "$err" = 'unsupported action' ]; then SMART_PROBE_BATCH_OK=2; return 0; fi
+    return 1
+}
+
+smart_tunnel_tcp_probe() { # inner-ip candidate-id [armed] -> reachable|loss
+    local host="$1" id="$2" armed="${3:-}" port body resp ok r loss err
+    [[ "$id" =~ ^[0-9]+$ ]] || { printf '0|100\n'; return; }
+    port=$((PROBE_PORT_BASE + (10#$id % 1000)))
+    if [ "$armed" = armed ]; then
+        [ "$SMART_PROBE_BATCH_OK" = 2 ] && { printf '1|0\n'; return; }
+        [ "$SMART_PROBE_BATCH_OK" = 1 ] || { printf '0|100\n'; return; }
+    else
+        body=$(printf '{"action":"probe_listener","bind":"%s","port":%s}' "$host" "$port")
+        resp=$(smart_agent_call "$body" 5 || true); ok=$(smart_json_field "$resp" ok)
+        if [ "$ok" != 1 ]; then
+            err=$(smart_json_field "$resp" error)
+            [ "$err" = 'unsupported action' ] && { printf '1|0\n'; return; }
+            printf '0|100\n'; return
+        fi
+        sleep .08
+    fi
+    IFS='|' read -r r loss <<< "$(smart_local_tcp_probe "$host" "$port" 2)"
+    printf '%s|%s\n' "${r:-0}" "${loss:-100}"
+}
+smart_hysteresis_order() { # groupdir ranking-file; configurable hysteresis + pin
+    local gd="$1" rank="$2" conf="$1/group.conf"
     local sf="$gd/switch.state" current='' challenger='' streak=0 last=0 now top active_score top_score active_status tmp
+    local margin streak_need min_hold pin old reason=''
     [ -s "$rank" ] || return 0
+    smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true; smart_expire_controls "$gd" >/dev/null 2>&1 || true
+    margin=$(smart_conf_int "$conf" SWITCH_MARGIN 8 0 100); streak_need=$(smart_conf_int "$conf" SWITCH_STREAK 3 1 20); min_hold=$(smart_conf_int "$conf" MIN_HOLD 60 0 86400)
     now=$(date +%s)
     if [ -s "$sf" ]; then IFS='|' read -r current challenger streak last < "$sf" || true; fi
     [[ "$streak" =~ ^[0-9]+$ ]] || streak=0; [[ "$last" =~ ^[0-9]+$ ]] || last=0
-    top=$(awk -F'|' '$10=="UP"{print $1;exit}' "$rank")
-    if [ -z "$top" ]; then
-        : > "$gd/active.state"; printf '||0|%s\n' "$last" > "$sf"; chmod 600 "$sf" "$gd/active.state"; return 0
-    fi
-    active_status=$(awk -F'|' -v i="$current" '$1==i{print $10;exit}' "$rank")
-    if [ -z "$current" ] || [ "$active_status" != UP ]; then
-        current="$top"; challenger=''; streak=0; last="$now"
-    elif [ "$top" = "$current" ]; then
-        challenger=''; streak=0
+    old="$current"; top=$(awk -F'|' '$10=="UP"{v=$16+0;if(!seen||v>best){seen=1;best=v;id=$1}}END{if(seen)print id}' "$rank"); pin=$(smart_pin_id "$gd")
+    if [ -n "$pin" ] && [ "$(awk -F'|' -v i="$pin" '$1==i{print $10;exit}' "$rank")" = UP ]; then
+        if [ "$current" != "$pin" ]; then current="$pin"; challenger=''; streak=0; last="$now"; reason=pin; fi
+    elif [ -z "$top" ]; then
+        current=''; challenger=''; streak=0; reason=all_down
     else
-        active_score=$(awk -F'|' -v i="$current" '$1==i && $10=="UP"{print $16;exit}' "$rank")
-        top_score=$(awk -F'|' -v i="$top" '$1==i && $10=="UP"{print $16;exit}' "$rank")
-        if [ $((now-last)) -ge 60 ] && awk -v t="${top_score:-0}" -v a="${active_score:-0}" 'BEGIN{exit !(t>=a+8)}'; then
-            if [ "$challenger" = "$top" ]; then streak=$((streak+1)); else challenger="$top"; streak=1; fi
-            if [ "$streak" -ge 3 ]; then current="$top"; challenger=''; streak=0; last="$now"; fi
+        active_status=$(awk -F'|' -v i="$current" '$1==i{print $10;exit}' "$rank")
+        if [ -z "$current" ]; then current="$top"; challenger=''; streak=0; last="$now"; reason=initial
+        elif [ "$active_status" != UP ]; then current="$top"; challenger=''; streak=0; last="$now"; reason=down
+        elif [ "$top" = "$current" ]; then challenger=''; streak=0
         else
-            challenger=''; streak=0
+            active_score=$(awk -F'|' -v i="$current" '$1==i && $10=="UP"{print $16;exit}' "$rank")
+            top_score=$(awk -F'|' -v i="$top" '$1==i && $10=="UP"{print $16;exit}' "$rank")
+            if [ $((now-last)) -ge "$min_hold" ] && awk -v t="${top_score:-0}" -v a="${active_score:-0}" -v m="$margin" 'BEGIN{exit !(t>=a+m)}'; then
+                if [ "$challenger" = "$top" ]; then streak=$((streak+1)); else challenger="$top"; streak=1; fi
+                if [ "$streak" -ge "$streak_need" ]; then current="$top"; challenger=''; streak=0; last="$now"; reason=better_score; fi
+            else challenger=''; streak=0
+            fi
         fi
     fi
     tmp="$gd/.ranking.priority"
-    awk -F'|' -v i="$current" '$1==i{print;next}{rest[++n]=$0} END{for(j=1;j<=n;j++)print rest[j]}' "$rank" > "$tmp" && mv -f "$tmp" "$rank"
+    if [ -n "$current" ]; then awk -F'|' -v i="$current" '$1==i{print;next}{rest[++n]=$0} END{for(j=1;j<=n;j++)print rest[j]}' "$rank" > "$tmp" && mv -f "$tmp" "$rank"; fi
     printf '%s|%s|%s|%s\n' "$current" "$challenger" "$streak" "$last" > "$sf"
-    awk -F'|' -v i="$current" '$1==i{print $1"|"$2"|"$16;exit}' "$rank" > "$gd/active.state"
+    if [ -n "$current" ]; then awk -F'|' -v i="$current" '$1==i{print $1"|"$2"|"$16;exit}' "$rank" > "$gd/active.state"; else : > "$gd/active.state"; fi
     chmod 600 "$sf" "$gd/active.state" "$rank" 2>/dev/null || true
+    if [ "$old" != "$current" ]; then smart_event_log "$gd" SWITCH "$old" "$current" "${reason:-decision}" "margin=$margin streak=$streak_need hold=$min_hold"; fi
+    smart_write_runtime_state "$gd"
 }
-
 smart_backhaul_service_spec() { # benchmark-port service-ports
     local bench="$1" services="$2" p out="${bench}=127.0.0.1:${IPERF_PORT}"
     local -a _svc=()
@@ -1908,6 +2130,19 @@ smart_forward_one() { # groupdir candidate-id on|off
         *) return 1;;
     esac
 }
+smart_drain_forwarder() { # groupdir candidate-id
+    local gd="$1" id="$2" conf="$1/group.conf" seconds ports end n p
+    seconds=$(smart_conf_int "$conf" DRAIN_SECONDS 3 0 30); [ "$seconds" -gt 0 ] || return 0
+    ports=$(smart_conf_get "$conf" SERVICE_PORTS); [ -n "$ports" ] || return 0
+    end=$(( $(date +%s) + seconds ))
+    while [ "$(date +%s)" -lt "$end" ]; do
+        n=0
+        for p in ${ports//,/ }; do n=$((n + $(ss -tnH state established 2>/dev/null | awk -v want=":$p" '$4 ~ want"$" || $5 ~ want"$"{c++} END{print c+0}'))); done
+        [ "$n" -gt 0 ] || return 0; sleep 1
+    done
+    smart_event_log "$gd" DRAIN "$id" "$id" timeout "waited=${seconds}s"
+}
+
 smart_apply_active_forwarding_core() { # groupdir ranking-file
     local gd="$1" rank="$2"
     local state="$gd/forwarding.state" current previous='' current_kind='' previous_kind=''
@@ -1921,6 +2156,7 @@ smart_apply_active_forwarding_core() { # groupdir ranking-file
     current_kind=$(awk -F'|' -v i="$current" '$1==i{print $3;exit}' "$gd/candidates.tsv")
     [ -z "$previous" ] || previous_kind=$(awk -F'|' -v i="$previous" '$1==i{print $3;exit}' "$gd/candidates.tsv")
     if [ -n "$previous" ] && [[ "$current_kind" =~ ^(rathole|backhaul)$ ]] && [[ "$previous_kind" =~ ^(rathole|backhaul)$ ]]; then
+        smart_drain_forwarder "$gd" "$previous" || true
         smart_forward_one "$gd" "$previous" off || true
         if ! smart_forward_one "$gd" "$current" on; then
             smart_forward_one "$gd" "$previous" on >/dev/null 2>&1 || true
@@ -1931,6 +2167,7 @@ smart_apply_active_forwarding_core() { # groupdir ranking-file
         [ -z "$previous" ] || smart_forward_one "$gd" "$previous" off || true
     fi
     printf '%s\n' "$current" > "$state"; chmod 600 "$state"
+    smart_write_runtime_state "$gd"
 }
 # Wrapper: when the active tunnel changes, push the new state to the Foreign header mirror.
 smart_apply_active_forwarding() { # groupdir ranking-file
@@ -1941,80 +2178,77 @@ smart_apply_active_forwarding() { # groupdir ranking-file
     [ "$before" = "$after" ] || smart_sync_foreign_state "$gd"
     return "$rc"
 }
-smart_benchmark_group_locked() { # groupdir; caller owns the process-level lock
-    local gd="$1"
-    local cand="$gd/candidates.tsv" out="$gd/ranking.tsv" tmp="$gd/.bench.tmp" id label kind proto path name inner linkp benchp status lat loss jit up down score maxs=0 stats target target_port body resp
-    [ -s "$cand" ] || return 1
-    : > "$tmp"
-    echo -e "\n  ${C}Starting benchmark (sequential; no simultaneous speed tests)...${NC}"
+smart_benchmark_group_locked() { # groupdir [full|light] [reason]
+    local gd="$1" mode="${2:-full}" reason="${3:-manual}" conf="$1/group.conf"
+    local cand="$gd/candidates.tsv" out="$gd/ranking.tsv" tmp="$gd/.bench.tmp" id label kind proto path name inner linkp benchp status lat loss jit up down score maxs=0 stats body resp target
+    local active_id seconds old_up old_down old_status old_lat old_loss old_jit old_score oldrow tcp_ok tcp_loss
+    [ -s "$cand" ] || return 1; smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true; smart_expire_controls "$gd" >/dev/null 2>&1 || true
+    active_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true)
+    if [ "$mode" = light ]; then seconds=$(smart_conf_int "$conf" BENCH_IPERF_SECONDS 2 1 5); else mode=full; seconds=4; fi
+    if [ "$(smart_conf_int "$conf" TCP_PROBE 1 0 1)" = 1 ]; then
+        if [ "$mode" = light ]; then smart_arm_tunnel_probes "$cand" "$active_id" || true; else smart_arm_tunnel_probes "$cand" || true; fi
+    fi
+    : > "$tmp"; echo -e "\n  ${C}Starting ${mode} benchmark (sequential; active path is not speed-tested in light mode)...${NC}"
     while IFS='|' read -r id label kind proto path name inner linkp benchp status; do
-        [ "$status" = UP ] || { printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|DOWN|9999|100|9999|0|0|0\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" >> "$tmp"; continue; }
-        echo -e "  ${DIM}[$id]${NC} ${W}$label${NC}"
-        if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
-            body=$(H="$(smart_local_ipv4)" P="$linkp" python3 - <<'PY'
-import json,os; print(json.dumps({'action':'tcp_probe','host':os.environ['H'],'port':int(os.environ['P'])},separators=(',',':')))
-PY
-)
-            [[ "$path" != *v6* ]] || body=$(H="$(smart_local_ipv6)" P="$linkp" python3 - <<'PY'
-import json,os; print(json.dumps({'action':'tcp_probe','host':os.environ['H'],'port':int(os.environ['P'])},separators=(',',':')))
-PY
-)
-            resp=$(smart_agent_call "$body" || true); lat=$(smart_json_field "$resp" avg_ms); loss=$(smart_json_field "$resp" loss); jit=$(smart_json_field "$resp" jitter_ms); target=127.0.0.1; target_port="$benchp"
-            if [ "$kind" = backhaul ]; then
-                up=$(smart_iperf_speed_backhaul "$benchp" normal); down=$(smart_iperf_speed_backhaul "$benchp" reverse)
-            else
-                up=$(smart_iperf_speed_rathole "$benchp" normal); down=$(smart_iperf_speed_rathole "$benchp" reverse)
+        [ -s "$gd/delete-tunnel.${id}.pending" ] && status=DOWN
+        echo -e "  ${DIM}[$id]${NC} ${W}$label${NC}"; lat=9999; loss=100; jit=9999; up=0; down=0
+        if [ "$mode" = light ] && [ "$id" = "$active_id" ] && [ -s "$out" ]; then
+            oldrow=$(awk -F'|' -v i="$id" '$1==i{print;exit}' "$out")
+            if [ -n "$oldrow" ]; then
+                IFS='|' read -r _ _ _ _ _ _ _ _ _ old_status old_lat old_loss old_jit old_up old_down old_score <<< "$oldrow"
+                printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|0\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$old_status" "$old_lat" "$old_loss" "$old_jit" "$old_up" "$old_down" >> "$tmp"
+                continue
             fi
-        else
-            stats=$(smart_ping_stats "$inner"); IFS='|' read -r lat loss jit <<< "$stats"; target="$inner"
-            up=$(smart_iperf_speed "$inner" normal); down=$(smart_iperf_speed "$inner" reverse)
         fi
-        lat=${lat:-9999}; loss=${loss:-100}; jit=${jit:-9999}; up=${up:-0}; down=${down:-0}
-        # UP/DOWN is decided by reachability (ping / TCP probe). A failed iperf3 run only lowers the score;
-        # it must not mark a working tunnel DOWN (which left the group with no active tunnel).
-        status=UP
-        if awk -v l="$lat" -v s="$loss" -v u="$up" -v d="$down" 'BEGIN{exit !((l>=9999 || s>=100) && u<=0 && d<=0)}'; then status=DOWN; fi
+        if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
+            if [[ "$path" == *v6* ]]; then target=$(smart_conf_get "$conf" IRAN_IPV6); else target=$(smart_conf_get "$conf" IRAN_IPV4); fi
+            body=$(printf '{"action":"tcp_probe","host":"%s","port":%s}' "$target" "$linkp")
+            resp=$(smart_agent_call "$body" || true); lat=$(smart_json_field "$resp" avg_ms); loss=$(smart_json_field "$resp" loss); jit=$(smart_json_field "$resp" jitter_ms)
+            if [ "$kind" = backhaul ]; then up=$(smart_iperf_speed_backhaul "$benchp" normal "$seconds"); down=$(smart_iperf_speed_backhaul "$benchp" reverse "$seconds")
+            else up=$(smart_iperf_speed_rathole "$benchp" normal "$seconds"); down=$(smart_iperf_speed_rathole "$benchp" reverse "$seconds"); fi
+        else
+            stats=$(smart_ping_stats "$inner" 3); IFS='|' read -r lat loss jit <<< "$stats"
+            if [ "$(smart_conf_int "$conf" TCP_PROBE 1 0 1)" = 1 ] && awk -v l="${loss:-100}" 'BEGIN{exit !(l<100)}'; then
+                IFS='|' read -r tcp_ok tcp_loss <<< "$(smart_tunnel_tcp_probe "$inner" "$id" armed)"; [ "$tcp_ok" = 1 ] || loss=100
+            fi
+            up=$(smart_iperf_speed "$inner" normal "$seconds"); down=$(smart_iperf_speed "$inner" reverse "$seconds")
+        fi
+        lat=${lat:-9999}; loss=${loss:-100}; jit=${jit:-9999}; up=${up:-0}; down=${down:-0}; status=UP
+        if awk -v l="$lat" -v s="$loss" 'BEGIN{exit !((l>=9999)||(s>=100))}'; then status=DOWN; fi
+        smart_is_maintenance "$gd" "$id" && status=DOWN
         printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|0\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$status" "$lat" "$loss" "$jit" "$up" "$down" >> "$tmp"
     done < "$cand"
-    maxs=$(awk -F'|' 'BEGIN{m=0}$10=="UP"{s=($14+$15)/2;if(s>m)m=s}END{print m}' "$tmp")
-    : > "$out"
+    maxs=$(awk -F'|' 'BEGIN{m=0}$10=="UP"{x=($14+$15)/2;if(x>m)m=x}END{print m}' "$tmp"); : > "$out"
     while IFS='|' read -r id label kind proto path name inner linkp benchp status lat loss jit up down _; do
         if [ "$status" = UP ]; then score=$(smart_score "$lat" "$loss" "$jit" "$up" "$down" "$maxs"); else score=0; fi
         printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$status" "$lat" "$loss" "$jit" "$up" "$down" "$score" >> "$out"
     done < "$tmp"
-    rm -f "$tmp"
-    sort -t'|' -k16,16nr "$out" -o "$out"
-    awk -F'|' '{print $1"|"$11"|"$16}' "$out" > "$gd/.baseline.tmp" && mv -f "$gd/.baseline.tmp" "$gd/baseline.tsv"
-    chmod 600 "$gd/baseline.tsv" 2>/dev/null || true
-    smart_hysteresis_order "$gd" "$out"
-    local forward_rc=0
-    smart_apply_active_forwarding "$gd" "$out" || forward_rc=$?
-    rm -f "$gd/.rebench.pending" 2>/dev/null || true
+    rm -f "$tmp"; sort -t'|' -k10,10r -k16,16nr "$out" -o "$out"
+    awk -F'|' '{print $1"|"$11"|"$16}' "$out" > "$gd/.baseline.tmp" && mv -f "$gd/.baseline.tmp" "$gd/baseline.tsv"; chmod 600 "$gd/baseline.tsv" 2>/dev/null || true
+    smart_hysteresis_order "$gd" "$out"; local forward_rc=0; smart_apply_active_forwarding "$gd" "$out" || forward_rc=$?
+    date +%s > "$gd/.last_benchmark"; rm -f "$gd/.rebench.pending" 2>/dev/null || true; smart_event_log "$gd" BENCHMARK '' '' "$reason" "mode=$mode rc=$forward_rc"
     return "$forward_rc"
 }
-smart_benchmark_group() { # groupdir; use flock --close so children never inherit the lock fd
-    local gd="$1" gid
-    [ -d "$gd" ] || return 1
-    gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
-    flock -x -w 300 -o "$gd/.smart.lock" "$INSTALL_PATH" --benchmark-group "$gid"
+smart_benchmark_group() { # groupdir [full|light] [reason]
+    local gd="$1" mode="${2:-full}" reason="${3:-manual}" gid
+    [ -d "$gd" ] || return 1; gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
+    flock -x -w 300 -o "$gd/.smart.lock" "$INSTALL_PATH" --benchmark-group "$gid" "$mode" "$reason"
 }
-smart_iperf_speed_backhaul() { # local mapped port direction
-    local port="$1" reverse="$2" body resp out
+smart_iperf_speed_backhaul() { # local mapped port direction [seconds]
+    local port="$1" reverse="$2" seconds="${3:-4}" body resp out timeout_s
     command -v iperf3 >/dev/null 2>&1 || { echo 0; return; }
-    body=$(P="$IPERF_PORT" python3 - <<'PY'
-import json,os; print(json.dumps({'action':'iperf_start','bind':'127.0.0.1','port':int(os.environ['P'])},separators=(',',':')))
-PY
-)
+    [[ "$seconds" =~ ^[0-9]+$ ]] || seconds=4; [ "$seconds" -ge 1 ] || seconds=1; [ "$seconds" -le 10 ] || seconds=10
+    body=$(printf '{"action":"iperf_start","bind":"127.0.0.1","port":%s}' "$IPERF_PORT")
     resp=$(smart_agent_call "$body" || true); [ "$(smart_json_field "$resp" ok)" = 1 ] || { echo 0; return; }
-    sleep .2
-    local -a args=(-c 127.0.0.1 -p "$port" -t 4 -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
-    out=$(timeout 15 iperf3 "${args[@]}" 2>/dev/null || true)
-    IPERF_JSON="$out" python3 - <<'PY'
+    sleep .2; timeout_s=$((seconds+10))
+    local -a args=(-c 127.0.0.1 -p "$port" -t "$seconds" -O 1 -J); [ "$reverse" = reverse ] && args+=(-R)
+    out=$(timeout "$timeout_s" iperf3 "${args[@]}" 2>/dev/null || true)
+    IPERF_JSON="$out" python3 - <<'PY_BH'
 import json,os
 try:
  d=json.loads(os.environ.get('IPERF_JSON','{}')); e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; print(round(float(x.get('bits_per_second',0))/1e6,1))
 except Exception: print(0)
-PY
+PY_BH
 }
 smart_rank_color() { # value mode(low|high) good warn -> prints G / Y / R color code
     local c
@@ -2022,30 +2256,27 @@ smart_rank_color() { # value mode(low|high) good warn -> prints G / Y / R color 
         if (m=="low") r=(v<=g)?0:((v<=w)?1:2); else r=(v>=g)?0:((v>=w)?1:2); print r}')
     case "$c" in 0) printf '%s' "$G";; 1) printf '%s' "$Y";; *) printf '%s' "$R";; esac
 }
-smart_show_ranking_file() { # ranking.tsv; plain colored list (no table)
-    local f="$1" n=0 act_id id label kind proto path name inner linkp benchp status lat loss jit up down score
-    local lat_txt lat_col loss_col up_col dn_col sc_col st_col mark
+smart_show_ranking_file() { # ranking.tsv
+    local f="$1" gd n=0 act_id id label kind proto path name inner linkp benchp status lat loss jit up down score
+    local lat_txt lat_col loss_col up_col dn_col sc_col st_col mark current challenger streak last target now pin tag challenger_label
     [ -s "$f" ] || { echo -e "  ${Y}● No benchmark result yet.${NC}"; return 1; }
-    act_id=$(cut -d'|' -f1 "$(dirname "$f")/active.state" 2>/dev/null || true)
-    echo -e "\n  ${FR}▼ SMART TUNNEL RANKING${NC}  ${DIM}(ms · loss · ↑upload ↓download Mbps · score)${NC}\n"
-    while IFS='|' read -r id label kind proto path name inner linkp benchp status lat loss jit up down score; do
-        n=$((n+1)); label="$(smart_short_label "$label")"
-        lat="${lat:-9999}"; loss="${loss:-100}"; up="${up:-0}"; down="${down:-0}"; score="${score:-0}"
-        if awk -v l="$lat" 'BEGIN{exit !(l>=9999)}'; then
-            lat_txt='---'; lat_col="$DIM"
-        else
-            lat_txt="$(printf "%.1f" "$lat")ms"; lat_col=$(smart_rank_color "$lat" low 80 200)
-        fi
-        loss_col=$(smart_rank_color "$loss" low 0 5)
-        up_col=$(smart_rank_color "$up" high 50 10)
-        dn_col=$(smart_rank_color "$down" high 50 10)
-        sc_col=$(smart_rank_color "$score" high 70 40)
-        if [ "$status" = UP ]; then st_col="$G"; else st_col="$R"; sc_col="$R"; fi
-        mark=' '; [ "$id" = "$act_id" ] && [ "$status" = UP ] && mark='★'
-        printf "  ${Y}%-2s${NC} ${G}%s${NC} ${W}%-24.24s${NC} %b%-9s${NC} ${DIM}loss${NC} %b%-5s${NC} ${DIM}↑${NC}%b%-7s${NC} ${DIM}↓${NC}%b%-8s${NC} ${DIM}score${NC} %b%-5s${NC} %b%s${NC}\n" \
-            "$n" "$mark" "$label" "$lat_col" "$lat_txt" "$loss_col" "${loss}%" "$up_col" "$up" "$dn_col" "$down" "$sc_col" "$score" "$st_col" "$status"
-    done < "$f"
+    gd=$(dirname "$f"); act_id=$(cut -d'|' -f1 "$gd/active.state" 2>/dev/null || true); pin=$(smart_pin_id "$gd")
+    [ -s "$gd/switch.state" ] && IFS='|' read -r current challenger streak last < "$gd/switch.state" || true
+    target=$(smart_conf_int "$gd/group.conf" SWITCH_STREAK 3 1 20); now=$(date +%s)
+    echo -e "\n  ${FR}▼ SMART TUNNEL RANKING${NC}  ${DIM}(ms · loss · ↑upload ↓download Mbps · score)${NC}"
+    if [ -n "$challenger" ]; then challenger_label=$(awk -F'|' -v i="$challenger" '$1==i{print $2;exit}' "$f"); echo -e "  ${DIM}Challenger:${NC} ${Y}$(smart_short_label "$challenger_label")${NC} ${DIM}(ID $challenger) • ${streak:-0}/${target} checks${NC}"; fi
+    [ -z "$pin" ] || echo -e "  ${DIM}Pinned:${NC} ${M}ID $pin${NC}"
+    [[ "$last" =~ ^[0-9]+$ ]] && [ "$last" -gt 0 ] && echo -e "  ${DIM}Last switch:${NC} $((now-last))s ago"
     echo
+    while IFS='|' read -r id label kind proto path name inner linkp benchp status lat loss jit up down score; do
+        n=$((n+1)); label="$(smart_short_label "$label")"; tag=''; lat="${lat:-9999}"; loss="${loss:-100}"; up="${up:-0}"; down="${down:-0}"; score="${score:-0}"
+        if awk -v l="$lat" 'BEGIN{exit !(l>=9999)}'; then lat_txt='---'; lat_col="$DIM"; else lat_txt="$(printf "%.1f" "$lat")ms"; lat_col=$(smart_rank_color "$lat" low 80 200); fi
+        loss_col=$(smart_rank_color "$loss" low 0 5); up_col=$(smart_rank_color "$up" high 50 10); dn_col=$(smart_rank_color "$down" high 50 10); sc_col=$(smart_rank_color "$score" high 70 40)
+        if [ "$status" = UP ]; then st_col="$G"; else st_col="$R"; sc_col="$R"; fi
+        mark=' '; [ "$id" = "$act_id" ] && [ "$status" = UP ] && mark='★'; [ "$id" = "$pin" ] && tag+=' PIN'; smart_is_maintenance "$gd" "$id" && tag+=' MAINT'
+        printf "  ${Y}%-2s${NC} ${G}%s${NC} ${W}%-24.24s${NC} %b%-9s${NC} ${DIM}loss${NC} %b%-5s${NC} ${DIM}↑${NC}%b%-7s${NC} ${DIM}↓${NC}%b%-8s${NC} ${DIM}score${NC} %b%-5s${NC} %b%s${NC}${M}%s${NC}\n" \
+            "$n" "$mark" "$label" "$lat_col" "$lat_txt" "$loss_col" "${loss}%" "$up_col" "$up" "$dn_col" "$down" "$sc_col" "$score" "$st_col" "$status" "$tag"
+    done < "$f"; echo
 }
 smart_create_group() {
     smart_peer_load || { echo -e "  ${R}✖ Pair the Foreign server first (option 2 on Foreign, option 3 on Iran).${NC}"; smart_pause; return 1; }
@@ -2109,6 +2340,16 @@ FOREIGN_TO_IRAN_V4=$SMART_F_TO_I4
 IRAN_TO_FOREIGN_V6=$SMART_I_TO_F6
 FOREIGN_TO_IRAN_V6=$SMART_F_TO_I6
 WATCHDOG=1
+WATCH_INTERVAL=10
+BENCH_INTERVAL=3600
+BENCH_IPERF_SECONDS=2
+SWITCH_MARGIN=8
+SWITCH_STREAK=3
+MIN_HOLD=60
+DOWN_STREAK=3
+RECOVERY_STREAK=3
+DRAIN_SECONDS=3
+TCP_PROBE=1
 EOF
     chmod 600 "$gd/group.conf"
     : > "$gd/candidates.tsv"; : > "$gd/names.tsv"
@@ -2167,7 +2408,7 @@ EOF
 smart_install_watchdog() {
     cat > "$WATCH_SERVICE" <<'EOF'
 [Unit]
-Description=MTunnel Smart lightweight health ranking
+Description=MTunnel Smart health, failover and periodic benchmark scheduler
 After=network-online.target
 
 [Service]
@@ -2189,76 +2430,78 @@ WantedBy=timers.target
 EOF
     systemctl daemon-reload >/dev/null 2>&1; systemctl enable --now mtunnel-smart-watchdog.timer >/dev/null 2>&1 || true
 }
-smart_schedule_rebenchmark() { # groupdir
-    local gd="$1" gid unit
-    [ -d "$gd" ] || return 1
-    gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
-    ( set -o noclobber; : > "$gd/.rebench.pending" ) 2>/dev/null || return 0
-    chmod 600 "$gd/.rebench.pending" 2>/dev/null || true
-    unit="mtunnel-smart-rebench-${gid}-$(date +%s)"
-    if command -v systemd-run >/dev/null 2>&1 && systemd-run --quiet --collect --unit="$unit" --on-active=30s "$INSTALL_PATH" --benchmark-group "$gid" >/dev/null 2>&1; then
-        return 0
+smart_schedule_rebenchmark() { # groupdir [delay] [mode] [reason]
+    local gd="$1" delay="${2:-30}" mode="${3:-full}" reason="${4:-recovery}" gid unit
+    [ -d "$gd" ] || return 1; gid=$(basename "$gd"); [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
+    ( set -o noclobber; printf '%s|%s|%s\n' "$mode" "$reason" "$(date +%s)" > "$gd/.rebench.pending" ) 2>/dev/null || return 0
+    chmod 600 "$gd/.rebench.pending" 2>/dev/null || true; unit="mtunnel-smart-rebench-${gid}-$(date +%s)"
+    if command -v systemd-run >/dev/null 2>&1 && systemd-run --quiet --collect --unit="$unit" --on-active="${delay}s" "$INSTALL_PATH" --benchmark-group "$gid" "$mode" "$reason" >/dev/null 2>&1; then return 0; fi
+    nohup sh -c 'sleep "$1"; exec "$2" --benchmark-group "$3" "$4" "$5"' sh "$delay" "$INSTALL_PATH" "$gid" "$mode" "$reason" >/dev/null 2>&1 &
+}
+
+smart_maybe_periodic_benchmark() { # groupdir
+    local gd="$1" conf="$1/group.conf" interval last now ptime
+    interval=$(smart_conf_int "$conf" BENCH_INTERVAL 3600 300 86400); now=$(date +%s); last=$(cat "$gd/.last_benchmark" 2>/dev/null || smart_conf_get "$conf" CREATED_AT)
+    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    if [ -s "$gd/.rebench.pending" ]; then
+        ptime=$(awk -F'|' '{print $3;exit}' "$gd/.rebench.pending" 2>/dev/null); [[ "$ptime" =~ ^[0-9]+$ ]] || ptime="$now"
+        [ $((now-ptime)) -le 900 ] || rm -f "$gd/.rebench.pending"
     fi
-    nohup sh -c 'sleep 30; exec "$1" --benchmark-group "$2"' sh "$INSTALL_PATH" "$gid" >/dev/null 2>&1 &
+    [ $((now-last)) -lt "$interval" ] || smart_schedule_rebenchmark "$gd" 5 light periodic || true
 }
-smart_recovery_score() { # latency loss jitter -> provisional health-only score
-    python3 - "$1" "$2" "$3" <<'PY'
-import sys
-lat,loss,jit=map(float,sys.argv[1:4])
-score=55.0-min(lat,500.0)*0.05-loss*1.2-max(0.0,jit-10.0)*0.08
-print(round(max(5.0,min(55.0,score)),1))
-PY
-}
-smart_watchdog_group_locked() { # gid; caller owns process-level flock --close
-    local gid="$1" gd="$GROUP_DIR/$1" f baseline tmp id label kind proto path name inner linkp benchp status blat loss jit up down current_score base_score live_score pstat unit loss_now jit_now lat base_lat needs_rebench=0
-    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1
-    [ -d "$gd" ] || return 0
-    [ "$(smart_conf_get "$gd/group.conf" WATCHDOG)" = 1 ] || return 0
-    f="$gd/ranking.tsv"; baseline="$gd/baseline.tsv"; [ -s "$f" ] || return 0
-    tmp="$gd/.ranking.live"; : > "$tmp"
-    while IFS='|' read -r id label kind proto path name inner linkp benchp status blat loss jit up down current_score; do
-        if [ -s "$gd/delete-tunnel.${id}.pending" ]; then
-            printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|DOWN|%s|%s|%s|%s|%s|0\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$blat" "$loss" "$jit" "$up" "$down" >> "$tmp"
-            continue
-        fi
-        base_lat=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$baseline" 2>/dev/null || true)
-        base_score=$(awk -F'|' -v i="$id" '$1==i{print $3;exit}' "$baseline" 2>/dev/null || true)
-        [[ "$base_lat" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_lat="$blat"
-        [[ "$base_score" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_score="$current_score"
-        status=DOWN; live_score=0
-        if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
-            unit="mbackhaul@$name"; [ "$kind" = rathole ] && unit="mrathole@$name"
-            if systemctl is-active --quiet "$unit" 2>/dev/null && ss -tn state established 2>/dev/null | grep -Eq ":${linkp}([[:space:]]|$)"; then
-                status=UP
-                if awk -v b="${base_score:-0}" 'BEGIN{exit !(b<=0)}'; then
-                    live_score=40; needs_rebench=1
-                else
-                    live_score="$base_score"
-                fi
-            fi
+
+smart_watchdog_group_locked() { # gid; caller owns group lock
+    local gid="$1" gd="$GROUP_DIR/$1" conf f baseline tmp htmp id label kind proto path name inner linkp benchp prev_status blat loss jit up down current_score base_score live_score unit loss_now jit_now lat base_lat needs_rebench=0
+    local now last_watch interval down_need recovery_need raw_status tcp_ok tcp_loss d u effective
+    local -A HD=() HU=()
+    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1; [ -d "$gd" ] || return 0
+    conf="$gd/group.conf"; smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true; [ "$(smart_conf_get "$conf" WATCHDOG)" = 1 ] || return 0
+    now=$(date +%s); interval=$(smart_conf_int "$conf" WATCH_INTERVAL 10 10 300); last_watch=$(cat "$gd/.last_watchdog" 2>/dev/null || echo 0); [[ "$last_watch" =~ ^[0-9]+$ ]] || last_watch=0
+    [ $((now-last_watch)) -ge "$interval" ] || return 0; printf '%s\n' "$now" > "$gd/.last_watchdog"
+    down_need=$(smart_conf_int "$conf" DOWN_STREAK 3 1 20); recovery_need=$(smart_conf_int "$conf" RECOVERY_STREAK 3 1 20)
+    f="$gd/ranking.tsv"; baseline="$gd/baseline.tsv"; [ -s "$f" ] || { smart_maybe_periodic_benchmark "$gd"; return 0; }
+    smart_expire_controls "$gd" >/dev/null 2>&1 || true
+    if [ "$(smart_conf_int "$conf" TCP_PROBE 1 0 1)" = 1 ]; then smart_arm_tunnel_probes "$f" || true; fi
+    if [ -s "$gd/health.state" ]; then while IFS='|' read -r id d u _; do HD[$id]="${d:-0}"; HU[$id]="${u:-0}"; done < "$gd/health.state"; fi
+    tmp="$gd/.ranking.live"; htmp="$gd/.health.tmp"; : > "$tmp"; : > "$htmp"
+    while IFS='|' read -r id label kind proto path name inner linkp benchp prev_status blat loss jit up down current_score; do
+        if [ -s "$gd/delete-tunnel.${id}.pending" ] || smart_is_maintenance "$gd" "$id"; then
+            raw_status=DOWN; lat=9999; loss_now=100; jit_now=9999; live_score=0
         else
-            pstat=$(smart_ping_stats "$inner" 2); IFS='|' read -r lat loss_now jit_now <<< "$pstat"
-            if awk -v l="$loss_now" 'BEGIN{exit !(l<100)}'; then
-                status=UP
-                if awk -v b="${base_score:-0}" 'BEGIN{exit !(b<=0)}'; then
-                    live_score=$(smart_recovery_score "$lat" "$loss_now" "$jit_now"); needs_rebench=1
-                else
-                    live_score=$(python3 - "$base_score" "$base_lat" "$lat" "$loss_now" "$jit_now" <<'PY'
-import sys
-base,old,now,loss,jit=map(float,sys.argv[1:]); penalty=max(0,now-old)*.18+loss*1.5+max(0,jit-10)*.08; print(round(max(0,base-penalty),1))
-PY
-)
+            base_lat=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$baseline" 2>/dev/null || true); base_score=$(awk -F'|' -v i="$id" '$1==i{print $3;exit}' "$baseline" 2>/dev/null || true)
+            [[ "$base_lat" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_lat="$blat"; [[ "$base_score" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_score="$current_score"
+            raw_status=DOWN; live_score=0; lat="$blat"; loss_now="$loss"; jit_now="$jit"
+            if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
+                unit="mbackhaul@$name"; [ "$kind" = rathole ] && unit="mrathole@$name"
+                if systemctl is-active --quiet "$unit" 2>/dev/null && ss -tn state established 2>/dev/null | grep -Eq ":${linkp}([[:space:]]|$)"; then raw_status=UP; live_score="${base_score:-40}"; fi
+            else
+                IFS='|' read -r lat loss_now jit_now <<< "$(smart_ping_stats "$inner" 2)"
+                if awk -v l="$loss_now" 'BEGIN{exit !(l<100)}'; then
+                    raw_status=UP
+                    if [ "$(smart_conf_int "$conf" TCP_PROBE 1 0 1)" = 1 ]; then IFS='|' read -r tcp_ok tcp_loss <<< "$(smart_tunnel_tcp_probe "$inner" "$id" armed)"; [ "$tcp_ok" = 1 ] || raw_status=DOWN; fi
+                    if [ "$raw_status" = UP ]; then
+                        if awk -v b="${base_score:-0}" 'BEGIN{exit !(b<=0)}'; then live_score=$(smart_recovery_score "$lat" "$loss_now" "$jit_now"); needs_rebench=1
+                        else live_score=$(awk -v b="$base_score" -v old="$base_lat" -v now="$lat" -v l="$loss_now" -v j="$jit_now" 'BEGIN{p=((now>old)?(now-old)*.18:0)+l*1.5+((j>10)?(j-10)*.08:0);x=b-p;if(x<0)x=0;printf "%.1f",x}')
+                        fi
+                    fi
                 fi
-                blat="$lat"; loss="$loss_now"; jit="$jit_now"
             fi
         fi
-        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$status" "$blat" "$loss" "$jit" "$up" "$down" "$live_score" >> "$tmp"
+        d="${HD[$id]:-0}"; u="${HU[$id]:-0}"; effective="$prev_status"
+        if [ "$raw_status" = UP ]; then
+            d=0; u=$((u+1)); if [ "$prev_status" = DOWN ] && [ "$u" -lt "$recovery_need" ]; then effective=DOWN; live_score=0; else effective=UP; fi
+        else
+            u=0; d=$((d+1)); if [ "$prev_status" = UP ] && [ "$d" -lt "$down_need" ]; then effective=UP; live_score="${current_score:-0}"; else effective=DOWN; live_score=0; fi
+        fi
+        if [ "$effective" != "$prev_status" ]; then smart_event_log "$gd" HEALTH "$id" "$effective" "${prev_status}->${effective}" "raw=$raw_status down=$d up=$u"; smart_flap_inc "$gd" "$id" "${prev_status}->${effective}"; fi
+        printf '%s|%s|%s|%s\n' "$id" "$d" "$u" "$raw_status" >> "$htmp"
+        [ "$effective" = UP ] || { lat=9999; loss_now=100; jit_now=9999; }
+        printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$name" "$inner" "$linkp" "$benchp" "$effective" "$lat" "$loss_now" "$jit_now" "$up" "$down" "$live_score" >> "$tmp"
     done < "$f"
-    sort -t'|' -k10,10r -k16,16nr "$tmp" -o "$tmp"; mv -f "$tmp" "$f"; chmod 600 "$f"
-    smart_hysteresis_order "$gd" "$f"
-    smart_apply_active_forwarding "$gd" "$f" || true
-    [ "$needs_rebench" -eq 0 ] || smart_schedule_rebenchmark "$gd" || true
-    smart_sync_foreign_throttled "$gd" || true
+    mv -f "$htmp" "$gd/health.state"; chmod 600 "$gd/health.state"; sort -t'|' -k10,10r -k16,16nr "$tmp" -o "$tmp"; mv -f "$tmp" "$f"; chmod 600 "$f"
+    smart_hysteresis_order "$gd" "$f"; smart_apply_active_forwarding "$gd" "$f" || true
+    [ "$needs_rebench" -eq 0 ] || smart_schedule_rebenchmark "$gd" 30 full recovery || true
+    smart_maybe_periodic_benchmark "$gd"; smart_sync_foreign_throttled "$gd" || true
 }
 smart_watchdog_once() {
     smart_peer_load || return 0
@@ -2268,6 +2511,301 @@ smart_watchdog_once() {
         gid=$(basename "$gd")
         [ "$(smart_conf_get "$gd/group.conf" WATCHDOG)" = 1 ] || continue
         flock -n -o "$gd/.smart.lock" "$INSTALL_PATH" --watchdog-group "$gid" >/dev/null 2>&1 || true
+    done
+}
+
+smart_build_candidate() { # groupdir candidate-line l4 l6 f4 f6 services
+    local gd="$1" line="$2" l4="$3" l6="$4" f4="$5" f6="$6" services="$7"
+    local gid id label kind proto path base secret hash num core corev6 links local_link remote_link inner lname rname linkport benchport ports status=DOWN dep_out
+    gid=$(basename "$gd"); IFS='|' read -r id label kind proto path <<< "$line"; [ -n "$id" ] || return 2
+    awk -F'|' -v i="$id" '$1==i{found=1} END{exit !found}' "$gd/candidates.tsv" 2>/dev/null && return 3
+    secret=$(smart_random_hex 16); hash=$(smart_sha "$gid:$id:$secret"); base="s${id}${hash:0:5}"; num=$((16#${hash:0:6})); [ "$num" -gt 0 ] || num=1
+    corev6="fd${hash:0:2}:${hash:2:4}:${hash:6:4}:${hash:10:4}"; if [ "$kind" = vxlan ]; then core=$(mt_legacy_core_subnet "$num" vxlan); else core=$(mt_legacy_core_subnet "$num" gre); fi
+    echo -e "  ${DIM}[$id]${NC} ${W}$label${NC}"
+    if [ "$kind" = rathole ]; then
+        linkport=$(smart_pick_port $((30000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((38000 + id*17)) "$services") || true
+        [ -n "$linkport" ] && [ -n "$benchport" ] || { echo 'No free Rathole port.' >&2; return 1; }
+        links=$(smart_rathole_links "$path" "$base" "$secret" "$linkport" "$benchport" "$services" "$l4" "$l6" "$f4" "$f6") || true; IFS='|' read -r local_link remote_link lname rname <<< "$links"
+    elif [ "$kind" = backhaul ]; then
+        linkport=$(smart_pick_port $((28000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((36000 + id*17)) "$services") || true
+        [ -n "$linkport" ] && [ -n "$benchport" ] || { echo 'No free Backhaul port.' >&2; return 1; }; ports="${benchport}=127.0.0.1:${IPERF_PORT}"
+        links=$(smart_backhaul_links "$proto" "$path" "$base" "$secret" "$linkport" "$ports" "$l4" "$l6" "$f4" "$f6") || true; IFS='|' read -r local_link remote_link lname rname <<< "$links"
+    else
+        links=$(smart_network_links "$kind" "$proto" "$base" "$secret" "$num" "$core" "$corev6" "$l4" "$l6" "$f4" "$f6") || true; IFS='|' read -r local_link remote_link inner lname rname <<< "$links"
+    fi
+    [ -n "$lname" ] && [ -n "$rname" ] && printf '%s|%s|%s|%s\n' "$id" "$kind" "$lname" "$rname" >> "$gd/names.tsv"
+    if [ -n "$remote_link" ] && smart_deploy_remote "$kind" "$remote_link"; then
+        if dep_out=$(smart_deploy_local "$kind" "$local_link" 2>&1); then status=UP
+        else printf '%s\n' "$dep_out" | tail -n 6 >&2; [ -z "$rname" ] || smart_delete_remote "$kind" "$rname" >/dev/null 2>&1 || true; fi
+    fi
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$id" "$label" "$kind" "$proto" "$path" "$lname" "$inner" "$linkport" "$benchport" "$status" >> "$gd/candidates.tsv"
+    [ "$status" = UP ]
+}
+
+smart_group_candidate_context() { # groupdir -> candidate lines using saved reachability
+    local gd="$1" l4 l6 f4 f6 response lbh=0 rbh=0 lrat=0 rrat=0
+    l4=$(smart_conf_get "$gd/group.conf" IRAN_IPV4); l6=$(smart_conf_get "$gd/group.conf" IRAN_IPV6); f4=$(smart_conf_get "$gd/group.conf" FOREIGN_IPV4); f6=$(smart_conf_get "$gd/group.conf" FOREIGN_IPV6)
+    smart_core_installed_backhaul && lbh=1; smart_core_installed_rathole && lrat=1
+    response=$(smart_agent_call '{"action":"info"}' || true); [ "$(smart_json_field "$response" backhaul_core)" = 1 ] && rbh=1; [ "$(smart_json_field "$response" rathole_core)" = 1 ] && rrat=1
+    smart_candidate_lines "$l4" "$l6" "$f4" "$f6" "$lbh" "$rbh" "$lrat" "$rrat" \
+      "$(smart_conf_get "$gd/group.conf" IRAN_TO_FOREIGN_V4)" "$(smart_conf_get "$gd/group.conf" FOREIGN_TO_IRAN_V4)" "$(smart_conf_get "$gd/group.conf" IRAN_TO_FOREIGN_V6)" "$(smart_conf_get "$gd/group.conf" FOREIGN_TO_IRAN_V6)"
+}
+
+smart_add_tunnels_locked() { # gid ids; caller owns group lock
+    local gid="$1" ids="$2" gd="$GROUP_DIR/$1" conf="$GROUP_DIR/$1/group.conf" l4 l6 f4 f6 services avail id line kind fail=0 seen_gre=0 seen_vxlan=0
+    [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ && "$ids" =~ ^[0-9]+(,[0-9]+)*$ ]] || return 2; [ -d "$gd" ] || return 1
+    smart_peer_load || return 1; l4=$(smart_conf_get "$conf" IRAN_IPV4); l6=$(smart_conf_get "$conf" IRAN_IPV6); f4=$(smart_conf_get "$conf" FOREIGN_IPV4); f6=$(smart_conf_get "$conf" FOREIGN_IPV6); services=$(smart_conf_get "$conf" SERVICE_PORTS); avail=$(smart_group_candidate_context "$gd")
+    awk -F'|' '$3=="gre"{f=1} END{exit !f}' "$gd/candidates.tsv" 2>/dev/null && seen_gre=1; awk -F'|' '$3=="vxlan"{f=1} END{exit !f}' "$gd/candidates.tsv" 2>/dev/null && seen_vxlan=1
+    for id in ${ids//,/ }; do
+        awk -F'|' -v i="$id" '$1==i{f=1} END{exit !f}' "$gd/candidates.tsv" 2>/dev/null && { echo "Tunnel $id already exists." >&2; fail=1; continue; }
+        line=$(awk -F'|' -v i="$id" '$1==i{print;exit}' <<< "$avail"); [ -n "$line" ] || { echo "Candidate $id unavailable." >&2; fail=1; continue; }; kind=$(awk -F'|' '{print $3}' <<< "$line")
+        if [ "$kind" = gre ]; then [ "$seen_gre" -eq 0 ] || { echo 'Only one mGRE fabric is allowed per group.' >&2; fail=1; continue; }; seen_gre=1; fi
+        if [ "$kind" = vxlan ]; then [ "$seen_vxlan" -eq 0 ] || { echo 'Only one VXLAN fabric is allowed per group.' >&2; fail=1; continue; }; seen_vxlan=1; fi
+        smart_build_candidate "$gd" "$line" "$l4" "$l6" "$f4" "$f6" "$services" || fail=1
+    done
+    smart_benchmark_group_locked "$gd" full add_tunnel || true; smart_sync_foreign_state "$gd"; smart_event_log "$gd" EDIT '' '' add_tunnel "ids=$ids"; return "$fail"
+}
+
+smart_add_tunnels_to_group() { # groupdir interactive
+    local gd="$1" conf="$1/group.conf" l4 l6 f4 f6 response ok avail filtered='' line id label kind proto path existing_gre=0 existing_vxlan=0 choice ids services failed=0 gid
+    smart_peer_load || { echo -e "  ${R}✖ Foreign peer is not paired.${NC}"; return 1; }; smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true
+    l4=$(smart_conf_get "$conf" IRAN_IPV4); l6=$(smart_conf_get "$conf" IRAN_IPV6); f4=$(smart_conf_get "$conf" FOREIGN_IPV4); f6=$(smart_conf_get "$conf" FOREIGN_IPV6); services=$(smart_conf_get "$conf" SERVICE_PORTS)
+    response=$(smart_agent_call '{"action":"info"}' || true); ok=$(smart_json_field "$response" ok); [ "$ok" = 1 ] || { echo -e "  ${R}✖ Foreign Agent is offline.${NC}"; return 1; }
+    smart_reachability_matrix "$l4" "$l6" "$f4" "$f6"
+    smart_set_conf_var "$conf" IRAN_TO_FOREIGN_V4 "$SMART_I_TO_F4"; smart_set_conf_var "$conf" FOREIGN_TO_IRAN_V4 "$SMART_F_TO_I4"; smart_set_conf_var "$conf" IRAN_TO_FOREIGN_V6 "$SMART_I_TO_F6"; smart_set_conf_var "$conf" FOREIGN_TO_IRAN_V6 "$SMART_F_TO_I6"
+    avail=$(smart_group_candidate_context "$gd"); [ -n "$avail" ] || { echo -e "  ${Y}● No compatible candidates.${NC}"; return 1; }
+    awk -F'|' '$3=="gre"{f=1} END{exit !f}' "$gd/candidates.tsv" 2>/dev/null && existing_gre=1; awk -F'|' '$3=="vxlan"{f=1} END{exit !f}' "$gd/candidates.tsv" 2>/dev/null && existing_vxlan=1
+    while IFS='|' read -r id label kind proto path; do
+        awk -F'|' -v i="$id" '$1==i{f=1}END{exit !f}' "$gd/candidates.tsv" 2>/dev/null && continue
+        [ "$kind" = gre ] && [ "$existing_gre" = 1 ] && continue; [ "$kind" = vxlan ] && [ "$existing_vxlan" = 1 ] && continue
+        filtered+="${filtered:+$'\n'}$id|$label|$kind|$proto|$path"
+    done <<< "$avail"
+    [ -n "$filtered" ] || { echo -e "  ${Y}● No additional tunnel can be added (fabric limit or all candidates installed).${NC}"; return 0; }
+    echo -e "\n  ${FR}┌─[ ADD TUNNELS ]${NC}"; while IFS='|' read -r id label kind proto path; do echo -e "  ${FR}├─${NC} ${W}$id${NC} ${DIM}❯${NC} ${C}$label${NC} ${DIM}$path${NC}"; done <<< "$filtered"
+    echo -ne "  ${C}IDs to add (comma-separated, Enter=cancel): ${NC}"; read -r choice; choice="${choice// /}"; [ -n "$choice" ] || return 0
+    [[ "$choice" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo -e "  ${R}✖ Invalid IDs.${NC}"; return 2; }; ids=$(smart_unique_fabric_ids "$filtered" "$choice")
+    [ -n "$ids" ] || return 1; [ "$ids" = "$choice" ] || echo -e "  ${Y}● Fabric rule applied; selected IDs: $ids${NC}"
+    gid=$(basename "$gd"); flock -x -w 300 -o "$gd/.smart.lock" "$INSTALL_PATH" --add-tunnels "$gid" "$ids"; return $?
+}
+
+smart_rename_group() { # groupdir
+    local gd="$1" cur n other existing
+    cur=$(smart_group_label "$gd"); echo -ne "  ${C}New group name [${cur}]: ${NC}"; read -r n; n="${n// /}"; [ -n "$n" ] || return 0
+    [[ "$n" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,23}$ ]] || { echo -e "  ${R}✖ Invalid group name.${NC}"; return 1; }
+    for other in "$GROUP_DIR"/*; do [ -d "$other" ] || continue; [ "$other" = "$gd" ] && continue; existing=$(smart_group_label "$other"); [ "${existing,,}" != "${n,,}" ] || { echo -e "  ${R}✖ Name already exists.${NC}"; return 1; }; done
+    smart_set_conf_var "$gd/group.conf" GROUP_NAME "$n" && { smart_sync_foreign_state "$gd"; smart_event_log "$gd" EDIT "$cur" "$n" rename ''; }
+}
+
+smart_set_tunnel_maintenance() { # groupdir id minutes; 0=manual
+    local gd="$1" id="$2" mins="$3" exp=0 tmp
+    [[ "$id" =~ ^[0-9]+$ && "$mins" =~ ^[0-9]+$ ]] || return 2; [ "$mins" -eq 0 ] || exp=$(( $(date +%s) + mins*60 ))
+    tmp="$gd/.maintenance.tmp"; awk -F'|' -v i="$id" '$1!=i' "$gd/maintenance.tsv" 2>/dev/null > "$tmp" || true; printf '%s|%s\n' "$id" "$exp" >> "$tmp"; mv -f "$tmp" "$gd/maintenance.tsv"; chmod 600 "$gd/maintenance.tsv"
+    if [ -s "$gd/ranking.tsv" ]; then
+        awk -F'|' -v OFS='|' -v i="$id" '$1==i{$10="DOWN";$16=0}{print}' "$gd/ranking.tsv" > "$gd/.maintenance-ranking.tmp" && mv -f "$gd/.maintenance-ranking.tmp" "$gd/ranking.tsv"
+        smart_hysteresis_order "$gd" "$gd/ranking.tsv"; smart_apply_active_forwarding "$gd" "$gd/ranking.tsv" >/dev/null 2>&1 || true
+    fi
+    smart_event_log "$gd" MAINTENANCE '' "$id" set "minutes=$mins"
+}
+
+smart_pin_maintenance_menu() { # groupdir
+    local gd="$1" opt id label mins exp n sel idx; local -a ids=()
+    while true; do
+        smart_expire_controls "$gd" >/dev/null 2>&1 || true; smart_header
+        echo -e "\n  ${FR}┌─[ PIN / MAINTENANCE: $(smart_group_label "$gd") ]${NC}"
+        echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} Pin tunnel"
+        echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} Clear pin"
+        echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} Put tunnel in maintenance"
+        echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} Remove tunnel from maintenance"
+        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
+        case "$opt" in
+          1|3)
+            ids=(); n=0; while IFS='|' read -r id label _; do n=$((n+1)); ids+=("$id"); echo -e "  ${W}$n${NC} ${DIM}❯${NC} ID $id • $(smart_short_label "$label")"; done < "$gd/candidates.tsv"
+            [ "$n" -gt 0 ] || continue; echo -ne "  ${C}Tunnel: ${NC}"; read -r sel; idx=$(smart_pick_index "$sel" "$n") || continue; id="${ids[$idx]}"
+            echo -ne "  ${C}Timeout minutes [60, 0=manual]: ${NC}"; read -r mins; mins="${mins:-60}"; [[ "$mins" =~ ^[0-9]+$ ]] || continue
+            if [ "$opt" = 1 ]; then exp=0; [ "$mins" -eq 0 ] || exp=$(( $(date +%s)+mins*60 )); printf '%s|%s\n' "$id" "$exp" > "$gd/pin.state"; chmod 600 "$gd/pin.state"; smart_event_log "$gd" PIN '' "$id" set "minutes=$mins"; smart_hysteresis_order "$gd" "$gd/ranking.tsv"; smart_apply_active_forwarding "$gd" "$gd/ranking.tsv" || true
+            else smart_set_tunnel_maintenance "$gd" "$id" "$mins"; smart_schedule_rebenchmark "$gd" 2 full maintenance_set || true; fi;;
+          2) id=$(cut -d'|' -f1 "$gd/pin.state" 2>/dev/null || true); rm -f "$gd/pin.state"; smart_event_log "$gd" PIN "$id" '' clear ''; smart_hysteresis_order "$gd" "$gd/ranking.tsv"; smart_apply_active_forwarding "$gd" "$gd/ranking.tsv" || true;;
+          4) [ -s "$gd/maintenance.tsv" ] || continue; cat -n "$gd/maintenance.tsv"; echo -ne "  ${C}Tunnel ID to enable: ${NC}"; read -r id; [[ "$id" =~ ^[0-9]+$ ]] || continue; awk -F'|' -v i="$id" '$1!=i' "$gd/maintenance.tsv" > "$gd/.maintenance.tmp"; mv -f "$gd/.maintenance.tmp" "$gd/maintenance.tsv"; smart_event_log "$gd" MAINTENANCE "$id" '' clear ''; smart_schedule_rebenchmark "$gd" 2 full maintenance_clear || true;;
+          0|q|Q) return;; *) :;; esac
+    done
+}
+
+smart_group_settings_menu() { # groupdir
+    local gd="$1" f="$1/group.conf" opt key min max cur val
+    smart_ensure_group_defaults "$gd" || return 1
+    while true; do
+      smart_header; echo -e "\n  ${FR}┌─[ SMART SETTINGS: $(smart_group_label "$gd") ]${NC}"
+      echo -e "  ${FR}├─${NC} 1 ❯ Watch interval      : ${Y}$(smart_conf_get "$f" WATCH_INTERVAL)s${NC}"
+      echo -e "  ${FR}├─${NC} 2 ❯ Periodic benchmark  : ${Y}$(smart_conf_get "$f" BENCH_INTERVAL)s${NC}"
+      echo -e "  ${FR}├─${NC} 3 ❯ Light iperf duration : ${Y}$(smart_conf_get "$f" BENCH_IPERF_SECONDS)s${NC}"
+      echo -e "  ${FR}├─${NC} 4 ❯ Switch margin       : ${Y}$(smart_conf_get "$f" SWITCH_MARGIN)${NC}"
+      echo -e "  ${FR}├─${NC} 5 ❯ Switch streak       : ${Y}$(smart_conf_get "$f" SWITCH_STREAK)${NC}"
+      echo -e "  ${FR}├─${NC} 6 ❯ Minimum hold        : ${Y}$(smart_conf_get "$f" MIN_HOLD)s${NC}"
+      echo -e "  ${FR}├─${NC} 7 ❯ DOWN debounce       : ${Y}$(smart_conf_get "$f" DOWN_STREAK) checks${NC}"
+      echo -e "  ${FR}├─${NC} 8 ❯ Recovery hold       : ${Y}$(smart_conf_get "$f" RECOVERY_STREAK) checks${NC}"
+      echo -e "  ${FR}├─${NC} 9 ❯ Drain wait          : ${Y}$(smart_conf_get "$f" DRAIN_SECONDS)s${NC}"
+      echo -e "  ${FR}├─${NC}10 ❯ GRE/VXLAN TCP probe : ${Y}$(smart_conf_get "$f" TCP_PROBE)${NC}"
+      echo -e "  ${FR}└─${NC} 0 ❯ Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
+      case "$opt" in 1)key=WATCH_INTERVAL;min=10;max=300;;2)key=BENCH_INTERVAL;min=300;max=86400;;3)key=BENCH_IPERF_SECONDS;min=1;max=5;;4)key=SWITCH_MARGIN;min=0;max=100;;5)key=SWITCH_STREAK;min=1;max=20;;6)key=MIN_HOLD;min=0;max=86400;;7)key=DOWN_STREAK;min=1;max=20;;8)key=RECOVERY_STREAK;min=1;max=20;;9)key=DRAIN_SECONDS;min=0;max=30;;10)key=TCP_PROBE;min=0;max=1;;0|q|Q)return;;*)continue;;esac
+      cur=$(smart_conf_get "$f" "$key"); echo -ne "  ${C}$key [$cur] ($min-$max): ${NC}"; read -r val; [ -n "$val" ] || continue
+      [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -ge "$min" ] && [ "$val" -le "$max" ] || { echo -e "  ${R}✖ Invalid value.${NC}"; sleep 1; continue; }
+      smart_set_conf_var "$f" "$key" "$val"; smart_event_log "$gd" CONFIG "$key" "$val" edit ''
+    done
+}
+
+smart_event_menu() { # groupdir
+    local gd="$1" n="${2:-30}" id cnt last tr label
+    smart_header; echo -e "\n  ${FR}┌─[ RECENT EVENTS: $(smart_group_label "$gd") ]${NC}"
+    if [ -s "$gd/events.log" ]; then tail -n "$n" "$gd/events.log" | awk -F'|' '{printf "  %s | %-11s | %s -> %s | %s | %s\\n",$2,$3,$4,$5,$6,$7}'; else echo -e "  ${DIM}No events yet.${NC}"; fi
+    echo -e "\n  ${FR}┌─[ FLAP COUNTERS ]${NC}"
+    if [ -s "$gd/flaps.tsv" ]; then while IFS='|' read -r id cnt last tr; do label=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$gd/candidates.tsv"); echo -e "  ${W}ID $id${NC} ${DIM}$(smart_short_label "$label")${NC} • ${Y}$cnt${NC} transitions • $tr"; done < "$gd/flaps.tsv"; else echo -e "  ${DIM}No flaps recorded.${NC}"; fi
+    smart_pause
+}
+
+smart_dry_run_group() { # groupdir
+    local gd="$1" f="$1/ranking.tsv" current challenger streak last top active_status as ts margin need hold now pin action reason next
+    [ -s "$f" ] || { echo "$(basename "$gd"): no ranking"; return; }; [ -s "$gd/switch.state" ] && IFS='|' read -r current challenger streak last < "$gd/switch.state" || true
+    top=$(awk -F'|' '$10=="UP"{v=$16+0;if(!seen||v>best){seen=1;best=v;id=$1}}END{if(seen)print id}' "$f"); active_status=$(awk -F'|' -v i="$current" '$1==i{print $10;exit}' "$f"); as=$(awk -F'|' -v i="$current" '$1==i{print $16;exit}' "$f"); ts=$(awk -F'|' -v i="$top" '$1==i{print $16;exit}' "$f")
+    margin=$(smart_conf_int "$gd/group.conf" SWITCH_MARGIN 8 0 100); need=$(smart_conf_int "$gd/group.conf" SWITCH_STREAK 3 1 20); hold=$(smart_conf_int "$gd/group.conf" MIN_HOLD 60 0 86400); now=$(date +%s); pin=$(smart_pin_id "$gd"); action="$current"; reason=hold
+    if [ -n "$pin" ] && [ "$(awk -F'|' -v i="$pin" '$1==i{print $10;exit}' "$f")" = UP ]; then action="$pin"; reason=pin
+    elif [ -z "$current" ] || [ "$active_status" != UP ]; then action="$top"; reason=down
+    elif [ "$top" = "$current" ]; then reason=already_best
+    elif [ $((now-${last:-0})) -ge "$hold" ] && awk -v t="${ts:-0}" -v a="${as:-0}" -v m="$margin" 'BEGIN{exit !(t>=a+m)}'; then if [ "$challenger" = "$top" ]; then next=$(( ${streak:-0}+1 )); else next=1; fi; reason="challenger $next/$need"; [ "$next" -ge "$need" ] && action="$top"
+    fi
+    echo "$(smart_group_label "$gd"): current=${current:-OFF} predicted=${action:-OFF} reason=$reason top=${top:-none} score=${ts:-0}"
+}
+
+smart_status_json() {
+    local gd
+    for gd in "$GROUP_DIR"/*; do [ -d "$gd" ] && smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true; done
+    GROUP_DIR_ENV="$GROUP_DIR" MODULE_VERSION_ENV="$MODULE_VERSION" python3 - <<'PY_STATUS'
+import os,json,time
+root=os.environ['GROUP_DIR_ENV']; out={'version':os.environ.get('MODULE_VERSION_ENV'),'generated_at':int(time.time()),'groups':[]}
+def conf(path):
+ d={}
+ try:
+  for l in open(path):
+   if '=' in l:
+    k,v=l.rstrip('\n').split('=',1); d[k]=v
+ except OSError: pass
+ return d
+def line(path):
+ try:return open(path).read().strip()
+ except OSError:return ''
+for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+ gd=os.path.join(root,name)
+ if not os.path.isdir(gd): continue
+ c=conf(os.path.join(gd,'group.conf')); a=line(os.path.join(gd,'active.state')).split('|'); sw=line(os.path.join(gd,'switch.state')).split('|'); pin=line(os.path.join(gd,'pin.state')).split('|')
+ g={'id':name,'name':c.get('GROUP_NAME',name),'ports':[int(x) for x in c.get('SERVICE_PORTS','').split(',') if x.isdigit()],
+    'active_id':a[0] if a and a[0] else None,'active_label':a[1] if len(a)>1 else None,'active_score':float(a[2]) if len(a)>2 and a[2].replace('.','',1).isdigit() else None,
+    'forwarding_id':line(os.path.join(gd,'forwarding.state')) or None,'challenger_id':sw[1] if len(sw)>1 and sw[1] else None,'challenger_streak':int(sw[2]) if len(sw)>2 and sw[2].isdigit() else 0,
+    'last_switch':int(sw[3]) if len(sw)>3 and sw[3].isdigit() else 0,'pin_id':pin[0] if pin and pin[0] else None,'settings':{k:c.get(k) for k in ('WATCH_INTERVAL','BENCH_INTERVAL','BENCH_IPERF_SECONDS','SWITCH_MARGIN','SWITCH_STREAK','MIN_HOLD','DOWN_STREAK','RECOVERY_STREAK','DRAIN_SECONDS','TCP_PROBE')}}
+ maint={}
+ try:
+  for l in open(os.path.join(gd,'maintenance.tsv')):
+   f=l.strip().split('|'); maint[f[0]]=int(f[1]) if len(f)>1 and f[1].isdigit() else 0
+ except OSError: pass
+ g['tunnels']=[]
+ try:
+  for l in open(os.path.join(gd,'ranking.tsv')):
+   f=l.rstrip('\n').split('|')
+   if len(f)>=16:g['tunnels'].append({'id':f[0],'label':f[1],'kind':f[2],'status':f[9],'latency_ms':float(f[10]),'loss_pct':float(f[11]),'upload_mbps':float(f[13]),'download_mbps':float(f[14]),'score':float(f[15]),'maintenance_until':maint.get(f[0])})
+ except (OSError,ValueError): pass
+ out['groups'].append(g)
+print(json.dumps(out,separators=(',',':')))
+PY_STATUS
+}
+
+smart_teardown_group_tunnels() { # groupdir; best effort, keeps group directory
+    local gd="$1" id kind lname rname active
+    active=$(cat "$gd/forwarding.state" 2>/dev/null || true); [ -z "$active" ] || smart_forward_one "$gd" "$active" off >/dev/null 2>&1 || true
+    if [ -s "$gd/names.tsv" ]; then
+        while IFS='|' read -r id kind lname rname; do [ -z "$rname" ] || smart_delete_remote "$kind" "$rname" >/dev/null 2>&1 || true; [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || true; done < "$gd/names.tsv"
+    elif [ -s "$gd/candidates.tsv" ]; then
+        while IFS='|' read -r id _ kind _ _ lname _; do [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || true; done < "$gd/candidates.tsv"
+    fi
+    : > "$gd/candidates.tsv"; : > "$gd/names.tsv"; : > "$gd/ranking.tsv"; : > "$gd/baseline.tsv"; : > "$gd/active.state"; : > "$gd/forwarding.state"; : > "$gd/switch.state"; rm -f "$gd/health.state"
+}
+
+smart_rebuild_ids_for_endpoints() { # gd ids l4 l6 f4 f6 i2f4 f2i4 i2f6 f2i6
+    local gd="$1" ids="$2" l4="$3" l6="$4" f4="$5" f6="$6" i2f4="$7" f2i4="$8" i2f6="$9"; shift 9
+    local f2i6="$1" services response lbh=0 rbh=0 lrat=0 rrat=0 avail id line fail=0
+    services=$(smart_conf_get "$gd/group.conf" SERVICE_PORTS); smart_core_installed_backhaul && lbh=1; smart_core_installed_rathole && lrat=1
+    response=$(smart_agent_call '{"action":"info"}' || true); [ "$(smart_json_field "$response" backhaul_core)" = 1 ] && rbh=1; [ "$(smart_json_field "$response" rathole_core)" = 1 ] && rrat=1
+    avail=$(smart_candidate_lines "$l4" "$l6" "$f4" "$f6" "$lbh" "$rbh" "$lrat" "$rrat" "$i2f4" "$f2i4" "$i2f6" "$f2i6")
+    for id in ${ids//,/ }; do
+        line=$(awk -F'|' -v i="$id" '$1==i{print;exit}' <<< "$avail")
+        [ -n "$line" ] || { echo "Candidate $id is unavailable with requested endpoints." >&2; fail=1; continue; }
+        smart_build_candidate "$gd" "$line" "$l4" "$l6" "$f4" "$f6" "$services" || fail=1
+    done
+    return "$fail"
+}
+
+smart_rebuild_endpoints_locked() { # gid l4 l6 f4 f6 i2f4 f2i4 i2f6 f2i6
+    local gid="$1" gd="$GROUP_DIR/$1" l4="$2" l6="$3" f4="$4" f6="$5" i2f4="$6" f2i4="$7" i2f6="$8" f2i6="$9"
+    local ids old_l4 old_l6 old_f4 old_f6 oi2f4 of2i4 oi2f6 of2i6 backup fail=0
+    [ -d "$gd" ] || return 1; ids=$(awk -F'|' '{printf "%s%s",sep,$1;sep=","}' "$gd/candidates.tsv"); [ -n "$ids" ] || return 1
+    old_l4=$(smart_conf_get "$gd/group.conf" IRAN_IPV4); old_l6=$(smart_conf_get "$gd/group.conf" IRAN_IPV6); old_f4=$(smart_conf_get "$gd/group.conf" FOREIGN_IPV4); old_f6=$(smart_conf_get "$gd/group.conf" FOREIGN_IPV6)
+    oi2f4=$(smart_conf_get "$gd/group.conf" IRAN_TO_FOREIGN_V4); of2i4=$(smart_conf_get "$gd/group.conf" FOREIGN_TO_IRAN_V4); oi2f6=$(smart_conf_get "$gd/group.conf" IRAN_TO_FOREIGN_V6); of2i6=$(smart_conf_get "$gd/group.conf" FOREIGN_TO_IRAN_V6)
+    backup=$(mktemp -d "$SECURE_TMP/rebuild-${gid}.XXXXXX") || return 1; cp -a "$gd/." "$backup/"
+    smart_event_log "$gd" ENDPOINT "$old_l4/$old_f4" "$l4/$f4" rebuild_start "ids=$ids"; smart_teardown_group_tunnels "$gd"
+    smart_set_conf_var "$gd/group.conf" IRAN_IPV4 "$l4"; smart_set_conf_var "$gd/group.conf" IRAN_IPV6 "$l6"; smart_set_conf_var "$gd/group.conf" FOREIGN_IPV4 "$f4"; smart_set_conf_var "$gd/group.conf" FOREIGN_IPV6 "$f6"
+    smart_set_conf_var "$gd/group.conf" IRAN_TO_FOREIGN_V4 "$i2f4"; smart_set_conf_var "$gd/group.conf" FOREIGN_TO_IRAN_V4 "$f2i4"; smart_set_conf_var "$gd/group.conf" IRAN_TO_FOREIGN_V6 "$i2f6"; smart_set_conf_var "$gd/group.conf" FOREIGN_TO_IRAN_V6 "$f2i6"
+    smart_rebuild_ids_for_endpoints "$gd" "$ids" "$l4" "$l6" "$f4" "$f6" "$i2f4" "$f2i4" "$i2f6" "$f2i6" || fail=1
+    [ "$fail" -eq 0 ] && smart_benchmark_group_locked "$gd" full endpoint_change || fail=1
+    if [ "$fail" -eq 0 ]; then rm -rf "$backup"; smart_sync_foreign_state "$gd"; smart_event_log "$gd" ENDPOINT "$old_l4/$old_f4" "$l4/$f4" success ''; return 0; fi
+    echo 'Endpoint rebuild failed; attempting rollback to previous endpoints.' >&2
+    smart_teardown_group_tunnels "$gd"; cp -f "$backup/group.conf" "$gd/group.conf"; : > "$gd/candidates.tsv"; : > "$gd/names.tsv"
+    smart_rebuild_ids_for_endpoints "$gd" "$ids" "$old_l4" "$old_l6" "$old_f4" "$old_f6" "$oi2f4" "$of2i4" "$oi2f6" "$of2i6" || true
+    smart_benchmark_group_locked "$gd" full endpoint_rollback || true; smart_event_log "$gd" ENDPOINT "$l4/$f4" "$old_l4/$old_f4" rollback ''; rm -rf "$backup"; return 1
+}
+
+smart_change_group_endpoints() { # groupdir interactive
+    local gd="$1" f="$1/group.conf" l4 l6 f4 f6 n gid
+    l4=$(smart_conf_get "$f" IRAN_IPV4); l6=$(smart_conf_get "$f" IRAN_IPV6); f4=$(smart_conf_get "$f" FOREIGN_IPV4); f6=$(smart_conf_get "$f" FOREIGN_IPV6)
+    echo -ne "  ${C}Iran IPv4 [$l4] (none=disable): ${NC}"; read -r n; [ -z "$n" ] || { [ "${n,,}" = none ] && l4=Unknown || l4="$n"; }
+    echo -ne "  ${C}Iran IPv6 [$l6] (none=disable): ${NC}"; read -r n; [ -z "$n" ] || { [ "${n,,}" = none ] && l6=Unknown || l6="$n"; }
+    echo -ne "  ${C}Foreign IPv4 [$f4] (none=disable): ${NC}"; read -r n; [ -z "$n" ] || { [ "${n,,}" = none ] && f4=Unknown || f4="$n"; }
+    echo -ne "  ${C}Foreign IPv6 [$f6] (none=disable): ${NC}"; read -r n; [ -z "$n" ] || { [ "${n,,}" = none ] && f6=Unknown || f6="$n"; }
+    [ "$l4" = Unknown ] || mt_valid_ipv4 "$l4" || { echo -e "  ${R}✖ Invalid Iran IPv4.${NC}"; return 1; }; [ "$f4" = Unknown ] || mt_valid_ipv4 "$f4" || { echo -e "  ${R}✖ Invalid Foreign IPv4.${NC}"; return 1; }
+    [ "$l6" = Unknown ] || mt_valid_ipv6 "$l6" || { echo -e "  ${R}✖ Invalid Iran IPv6.${NC}"; return 1; }; [ "$f6" = Unknown ] || mt_valid_ipv6 "$f6" || { echo -e "  ${R}✖ Invalid Foreign IPv6.${NC}"; return 1; }
+    { [ "$l4" != Unknown ] || [ "$l6" != Unknown ]; } && { [ "$f4" != Unknown ] || [ "$f6" != Unknown ]; } || { echo -e "  ${R}✖ Each side needs at least one usable IP family.${NC}"; return 1; }
+    smart_reachability_matrix "$l4" "$l6" "$f4" "$f6"; gid=$(basename "$gd")
+    echo -ne "  ${Y}Rebuild every tunnel in this group with the new endpoints? Type 'yes': ${NC}"; read -r n; [ "$n" = yes ] || return 0
+    flock -x -w 300 -o "$gd/.smart.lock" "$INSTALL_PATH" --rebuild-endpoints "$gid" "$l4" "$l6" "$f4" "$f6" "$SMART_I_TO_F4" "$SMART_F_TO_I4" "$SMART_I_TO_F6" "$SMART_F_TO_I6"
+}
+
+smart_change_peer_ipv4() { # management IP only; preserves cert fingerprint/token after verification
+    local f="$SMART_DIR/peer.conf" old new resp ok
+    smart_peer_load || return 1; old="$SMART_F4"; echo -ne "  ${C}Foreign Agent IPv4 [$old]: ${NC}"; read -r new; [ -n "$new" ] || return 0
+    mt_valid_ipv4 "$new" || { echo -e "  ${R}✖ Invalid IPv4.${NC}"; return 1; }
+    resp=$(smart_https_call "$new" "$SMART_PORT" "$SMART_FP" "$SMART_TOKEN" /v1/action '{"action":"info"}' 8 || true); ok=$(smart_json_field "$resp" ok)
+    [ "$ok" = 1 ] || { echo -e "  ${R}✖ Agent verification failed on $new: $(smart_json_field "$resp" error)${NC}"; return 1; }
+    smart_set_conf_var "$f" FOREIGN_IPV4 "$new"; echo -e "  ${G}✔ Agent management IPv4 changed: $old → $new${NC}"
+}
+
+smart_manage_group() {
+    smart_select_group_interactive || return
+    local gd="$SELECTED_GROUP_DIR" opt
+    smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true
+    while true; do
+      smart_header; echo -e "\n  ${FR}┌─[ EDIT SMART GROUP: ${W}$(smart_group_label "$gd")${FR} ]${NC}"
+      echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} Rename Group"
+      echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} Change Iran / Foreign Endpoint IPs"
+      echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} Add Tunnels"
+      echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} Remove Tunnels"
+      echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} Add / Remove Ports"
+      echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} Pin / Maintenance"
+      echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} Smart Settings"
+      echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} Events & Flaps"
+      echo -e "  ${FR}├─${NC} ${W}9${NC} ${DIM}❯${NC} Change Foreign Agent Management IPv4"
+      echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
+      case "$opt" in
+        1) smart_rename_group "$gd"; smart_pause;; 2) smart_change_group_endpoints "$gd"; smart_pause;; 3) smart_add_tunnels_to_group "$gd"; smart_pause;;
+        4) smart_menu_delete_tunnels "$gd";; 5) smart_manage_ports "$gd";; 6) smart_pin_maintenance_menu "$gd";; 7) smart_group_settings_menu "$gd";; 8) smart_event_menu "$gd";;
+        9) smart_change_peer_ipv4; smart_pause;; 0|q|Q) return;; *) :;;
+      esac
+      [ -d "$gd" ] || return
     done
 }
 
@@ -2457,6 +2995,8 @@ smart_sync_group_ports_locked() { # gid new_ports_csv; caller owns .smart.lock
         return 1
     fi
     smart_sync_foreign_state "$gd"
+    smart_event_log "$gd" PORTS "$old_ports" "$new_ports" edit ''
+    smart_write_runtime_state "$gd"
     return 0
 }
 
@@ -2468,8 +3008,8 @@ smart_sync_group_ports() { # groupdir new_ports_csv; serialize against watchdog/
 }
 
 smart_manage_ports() {
-    smart_select_group_interactive || return
-    local gd="$SELECTED_GROUP_DIR" gid
+    local gd="${1:-}" gid
+    if [ -z "$gd" ]; then smart_select_group_interactive || return; gd="$SELECTED_GROUP_DIR"; fi
     gid=$(smart_group_label "$gd")
     local pf_opt cur_ports in_ports merged_ports active_lbl
 
@@ -2578,14 +3118,17 @@ smart_delete_single_tunnel_locked() { # gid candidate_id; caller owns .smart.loc
     [ -z "$lname" ] || smart_delete_local "$kind" "$lname" >/dev/null 2>&1 || local_ok=0
 
     if [ "$remote_ok" -eq 1 ] && [ "$local_ok" -eq 1 ]; then
-        for f in candidates.tsv names.tsv ranking.tsv baseline.tsv; do
+        for f in candidates.tsv names.tsv ranking.tsv baseline.tsv health.state maintenance.tsv; do
             [ -e "$gd/$f" ] || continue
             tmp="$gd/.${f}.delete.$$"
             awk -F'|' -v i="$target_id" '$1!=i' "$gd/$f" > "$tmp" && mv -f "$tmp" "$gd/$f"
             chmod 600 "$gd/$f" 2>/dev/null || true
         done
+        if [ "$(cut -d'|' -f1 "$gd/pin.state" 2>/dev/null || true)" = "$target_id" ]; then rm -f "$gd/pin.state"; smart_event_log "$gd" PIN "$target_id" '' tunnel_deleted ''; fi
         rm -f "$gd/delete-tunnel.${target_id}.pending"
+        smart_event_log "$gd" TUNNEL "$target_id" '' delete "kind=$kind"
     else
+        smart_event_log "$gd" TUNNEL "$target_id" '' delete_pending "foreign=$remote_ok iran=$local_ok"
         smart_mark_tunnel_delete_pending "$gd" "$target_id" "$remote_ok" "$local_ok"
         echo "Tunnel cleanup is incomplete (Foreign=$remote_ok Iran=$local_ok); state retained for retry." >&2
     fi
@@ -2600,6 +3143,7 @@ smart_delete_single_tunnel_locked() { # gid candidate_id; caller owns .smart.loc
         fi
     fi
     smart_sync_foreign_state "$gd"
+    smart_write_runtime_state "$gd"
     [ "$remote_ok" -eq 1 ] && [ "$local_ok" -eq 1 ]
 }
 
@@ -2611,8 +3155,8 @@ smart_delete_single_tunnel() { # groupdir candidate_id; serialize against watchd
 }
 
 smart_menu_delete_tunnels() {
-    smart_select_group_interactive || return
-    local gd="$SELECTED_GROUP_DIR" gid
+    local gd="${1:-}" gid
+    if [ -z "$gd" ]; then smart_select_group_interactive || return; gd="$SELECTED_GROUP_DIR"; fi
     gid=$(smart_group_label "$gd")
 
     while true; do
@@ -2795,41 +3339,25 @@ smart_menu() {
     while true; do
         smart_header
         echo -e "\n  ${FR}┌─[ PROVISION & MANAGE ]${NC}"
-        echo -e "  ${FR}│${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}Install Prerequisites${NC} ${DIM}(Iran + Foreign)${NC}"
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Foreign: Create Pair Code${NC}"
         echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Iran: Enter Pair Code & Create Group${NC}"
         echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Create Another Smart Group${NC}"
         echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Groups, Tunnels & Ports${NC}"
-        echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Ports & Forwarding${NC}"
+        echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}Edit Smart Group${NC} ${DIM}(IPs / tunnels / ports / pin)${NC}"
         echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${M}Benchmark & Ranking${NC}"
         echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Peer & Agent Status${NC}"
         echo -e "  ${FR}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Update & Local Install${NC}$(smart_update_badge)"
-        echo -e "  ${FR}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${R}Delete Tunnels${NC}"
-        echo -e "  ${FR}└─${NC} ${W}11${NC} ${DIM}❯${NC} ${R}Delete Smart Groups${NC}"
-        echo -e "  ${FR}────────────────────────────${NC}"
+        echo -e "  ${FR}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${R}Delete Smart Groups${NC}"
         echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}"
-        echo -ne "\n  ${C}MSMART ❯❯ ${NC}"; read -r opt
-        opt="${opt// /}"; opt="${opt//$'\\r'/}"
+        echo -ne "\n  ${C}MSMART ❯❯ ${NC}"; read -r opt; opt="${opt// /}"; opt="${opt//$'\\r'/}"
         case "$opt" in
-            1) smart_prereq_menu;;
-            2) smart_foreign_setup;;
-            3) smart_iran_pair_and_group;;
-            4) smart_create_group;;
-            5) smart_list_overview;;
-            6) smart_manage_ports;;
-            7) smart_benchmark_menu;;
-            8) smart_info;;
-            9) smart_update_menu;;
-            10) smart_menu_delete_tunnels;;
-            11) smart_menu_delete_groups;;
-            0|q|Q) break;;
-            *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
+            1) smart_prereq_menu;; 2) smart_foreign_setup;; 3) smart_iran_pair_and_group;; 4) smart_create_group;; 5) smart_list_overview;;
+            6) smart_manage_group;; 7) smart_benchmark_menu;; 8) smart_info;; 9) smart_update_menu;; 10) smart_menu_delete_groups;;
+            0|q|Q) break;; *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
         esac
     done
 }
-
-
 smart_delete_group_locked() { # gid; retain state if either side cannot be cleaned
     local gid="$1" gd="$GROUP_DIR/$1" active id kind lname rname failed=0
     [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 2
@@ -2847,6 +3375,7 @@ smart_delete_group_locked() { # gid; retain state if either side cannot be clean
         done < "$gd/candidates.tsv"
     fi
     if [ "$failed" -eq 0 ]; then
+        smart_event_log "$gd" GROUP "$gid" '' delete ''
         smart_sync_foreign_state "$gd" delete
         rm -rf -- "$gd"
         return 0
@@ -2876,18 +3405,22 @@ smart_delete_groups() {
     return 0
 }
 case "${1:-}" in
-    --benchmark-group) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || exit 2; smart_benchmark_group_locked "$GROUP_DIR/$2"; exit $?;;
+    --benchmark-group) [[ "${2:-}" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || exit 2; smart_benchmark_group_locked "$GROUP_DIR/$2" "${3:-full}" "${4:-cli}"; exit $?;;
     --watchdog-group) smart_peer_load || exit 0; smart_watchdog_group_locked "${2:-}"; exit $?;;
     --sync-ports) smart_sync_group_ports_locked "${2:-}" "${3:-}"; exit $?;;
     --delete-tunnel) smart_delete_single_tunnel_locked "${2:-}" "${3:-}"; exit $?;;
+    --add-tunnels) smart_add_tunnels_locked "${2:-}" "${3:-}"; exit $?;;
+    --rebuild-endpoints) smart_rebuild_endpoints_locked "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-0}" "${8:-0}" "${9:-0}" "${10:-0}"; exit $?;;
     --delete-group) smart_delete_group_locked "${2:-}"; exit $?;;
     --delete-groups) smart_delete_groups; exit $?;;
+    --status) [ "${2:-}" = --json ] && { smart_status_json; exit $?; }; smart_list_overview; exit $?;;
+    --dry-run) if [ -n "${2:-}" ]; then [ -d "$GROUP_DIR/$2" ] || exit 2; smart_dry_run_group "$GROUP_DIR/$2"; else for _gd in "$GROUP_DIR"/*; do [ -d "$_gd" ] && smart_dry_run_group "$_gd"; done; fi; exit 0;;
     --pair-window-cleanup) smart_pair_window_cleanup; exit $?;;
     --agent-daemon) smart_agent_daemon; exit $?;;
     --watchdog-once) smart_watchdog_once; exit $?;;
     --version|-V) echo "MTunnel Smart $MODULE_VERSION build $MODULE_BUILD"; exit 0;;
     --pair-decode) smart_pair_decode "${2:-}" && printf 'IPv6=%s\nPort=%s\nFingerprint=%s\nExpires=%s\n' "$PAIR_IP6" "$PAIR_PORT" "$PAIR_FP" "$PAIR_EXPIRES"; exit $?;;
-    --help|-h) echo 'Usage: msmart [--version|--agent-daemon|--watchdog-once|--benchmark-group GID|--delete-group GID|--delete-groups|--pair-window-cleanup]'; exit 0;;
+    --help|-h) echo 'Usage: msmart [--version|--status --json|--dry-run [GID]|--watchdog-once|--benchmark-group GID [full|light] [reason]|--delete-group GID|--delete-groups]'; exit 0;;
 esac
 if [ "$#" -eq 0 ]; then
     smart_auto_prepare_dependencies || true

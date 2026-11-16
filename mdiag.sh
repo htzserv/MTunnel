@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MDiag — Unified Doctor & LinkTest diagnostics engine (v1.6.1).
-MODULE_VERSION="1.6.1"
+# MTunnel MDiag — Unified Doctor & LinkTest diagnostics engine (v2.0.0).
+MODULE_VERSION="2.0.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -124,7 +124,7 @@ check_update_bg_legacy() {
 
 check_update_bg() {
     # Shared checker: GitHub and the mirror are asked in parallel, the highest version wins.
-    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "mdoctor.sh" "mdoctor"; return 0; fi
+    if declare -F mt_check_update_both >/dev/null 2>&1; then mt_check_update_both "mdiag.sh" "mdoctor"; return 0; fi
     check_update_bg_legacy
 }
 
@@ -435,6 +435,7 @@ doc_scan_mtunnel() {
     doc_script_check 'Paqet Engine' /usr/bin/mpaqet
     doc_script_check 'MPorter' /usr/bin/mporter
     doc_script_check 'MTunnel Doctor' /usr/bin/mdoctor
+    doc_script_check 'LinkTest Engine' /usr/bin/linktest
     for bin in bh rathole paqet; do
         corepath=$(command -v "$bin" 2>/dev/null || true)
         [ -n "$corepath" ] && doc_row PASS "Binary Core: $bin" "$corepath" || doc_row WARN "Binary Core: $bin" 'not installed yet'

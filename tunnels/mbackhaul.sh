@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v1.6.1).
-MODULE_VERSION="1.6.1"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.0.0).
+MODULE_VERSION="2.0.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -192,7 +192,7 @@ bt_init_runtime "$@"
 # These modules write Backhaul v0.7.2 configuration. A different major version (for example v2.x) starts but
 # rejects that configuration ("neither server nor client configuration is properly set").
 # Set MTUNNEL_ALLOW_ANY_BH=1 to skip this check.
-BH_EXPECT_VERSION="0.7.2"
+BH_EXPECT_VERSION="2.0.0"
 BH_PROBED_VERSION=""; _BH_PROBE_KEY=""
 bh_core_bin() { local c; for c in /usr/local/bin/bh /usr/bin/bh; do [ -x "$c" ] && { printf '%s' "$c"; return 0; }; done; return 1; }
 # Sets BH_PROBED_VERSION from "bh -v" (empty when it cannot be determined). Cached per file size/mtime;

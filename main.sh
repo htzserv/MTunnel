@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v1.6.1).
-MODULE_VERSION="1.6.1"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.0.0).
+MODULE_VERSION="2.0.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -91,10 +91,11 @@ declare -A COMPONENT_MAP=(
     ["linktest"]="mdiag.sh"
     ["mmirror"]="mirror.sh"
     ["common"]="core/common.sh"
+    ["bintunnel"]="core/bintunnel.sh"
     ["install"]="install.sh"
 )
-EDITABLE_COMPONENTS=("main" "mporter" "msmart" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "mmirror" "common" "install")
-UPDATE_COMPONENTS=("main" "mporter" "msmart" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "mmirror" "common" "install")
+EDITABLE_COMPONENTS=("main" "mporter" "msmart" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "mmirror" "common" "bintunnel" "install")
+UPDATE_COMPONENTS=("main" "mporter" "msmart" "linktest" "mgre" "mxlan" "mrathole" "mbackhaul" "mpaqet" "mdoctor" "mmirror" "common" "bintunnel" "install")
 ALL_PACKAGES=(
     "bh"
     "rathole"
@@ -149,6 +150,7 @@ component_local_version_for_watch() {
     case "$mod" in
         main) file="$MTUNNEL_PATH";;
         common) file=/usr/lib/mtunnel/common.sh;;
+        bintunnel) file=/usr/lib/mtunnel/bintunnel.sh;;
         install) file="$LOCAL_DIR/install.sh";;
         *) file="/usr/bin/$mod";;
     esac
@@ -1239,7 +1241,7 @@ mt_local_source_has_packages() {
 mt_bundle_root_is_complete() {
     local d="$1" mod rel
     [ -d "$d" ] || return 1
-    [ -f "$d/main.sh" ] && [ -f "$d/install.sh" ] && [ -f "$d/core/common.sh" ] || return 1
+[ -f "$d/main.sh" ] && [ -f "$d/install.sh" ] && [ -f "$d/core/common.sh" ] && [ -f "$d/core/bintunnel.sh" ] || return 1
     for mod in "${ALL_MODULES[@]}"; do rel="${MOD_MAP[$mod]}"; [ -f "$d/$rel" ] || return 1; done
     return 0
 }
@@ -1680,6 +1682,7 @@ component_primary_target() {
     case "$1" in
         main) printf '%s\n' "$MTUNNEL_PATH";;
         common) printf '%s\n' '/usr/lib/mtunnel/common.sh';;
+        bintunnel) printf '%s\n' '/usr/lib/mtunnel/bintunnel.sh';;
         install) printf '%s\n' "$LOCAL_DIR/install.sh";;
         *) printf '/usr/bin/%s\n' "$1";;
     esac
@@ -1709,6 +1712,10 @@ validate_component_candidate() {
         return 0
     fi
     mt_validate_script "$file" || return 1
+    if [ "$component" == bintunnel ]; then
+        head -n 5 "$file" | grep -Fq '# MTunnel Shared Binary-Tunnel Library' || { echo 'Incorrect bintunnel library pasted. Existing file preserved.' >&2; return 1; }
+        return 0
+    fi
     if [ "$component" == install ]; then
         head -n 5 "$file" | grep -Fq '# MTunnel standalone installer:' || { echo 'Incorrect installer script pasted. Existing file preserved.' >&2; return 1; }
         return 0
@@ -1725,6 +1732,7 @@ install_component_candidate() {
     if [ -n "$current_v" ]; then mt_module_downgrade_allowed "$current_v" "$new_v" || return $?; fi
     case "$component" in
         common) mt_install_files 644 "$file" /usr/lib/mtunnel/common.sh "$file" "$LOCAL_DIR/core/common.sh";;
+        bintunnel) mt_install_files 644 "$file" /usr/lib/mtunnel/bintunnel.sh "$file" "$LOCAL_DIR/core/bintunnel.sh";;
         install) mt_install_files 755 "$file" "$LOCAL_DIR/install.sh";;
         *) mt_install_script "$file" "$rel" "$target";;
     esac

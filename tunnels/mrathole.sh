@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v1.6.1).
-MODULE_VERSION="1.6.1"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v2.0.0).
+MODULE_VERSION="2.0.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -35,6 +35,11 @@ if ! declare -F mt_hdr_draw >/dev/null || ! declare -F mt_port_guard >/dev/null 
 fi
 unset -f mt_load_common
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
+BT_MOD="mrathole"; BT_REL_PATH="tunnels/mrathole.sh"; BT_TITLE="MRathole"
+for _bt_cand in "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../core/bintunnel.sh" /usr/lib/mtunnel/bintunnel.sh /root/mtunnel/core/bintunnel.sh; do
+    if [[ -f "$_bt_cand" && -r "$_bt_cand" ]]; then source "$_bt_cand" || exit 1; break; fi
+done; unset _bt_cand
+if ! declare -F bt_init_runtime >/dev/null 2>&1; then echo "MTunnel: core/bintunnel.sh is missing. Reinstall the complete bundle." >&2; exit 1; fi
 BT_MOD="mrathole"; BT_REL_PATH="tunnels/mrathole.sh"; BT_TITLE="MRathole"
 for _bt_cand in "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../core/bintunnel.sh" /usr/lib/mtunnel/bintunnel.sh /root/mtunnel/core/bintunnel.sh; do
     if [[ -f "$_bt_cand" && -r "$_bt_cand" ]]; then source "$_bt_cand" || exit 1; break; fi

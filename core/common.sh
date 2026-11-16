@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 1.6.1, API 1, layout revision 2.
+# MTunnel shared core — release 2.0.0, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="1.6.1"
+MTUNNEL_RELEASE_VERSION="2.0.0"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"

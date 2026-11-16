@@ -255,7 +255,9 @@ refresh_header_live() {
 
 hdr_stats_loop() {
     while true; do
-        collect_header_rows
+        if declare -F collect_header_rows >/dev/null 2>&1; then
+            collect_header_rows
+        fi
         [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ] && kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
         sleep "$HDR_CHECK_INTERVAL"
     done

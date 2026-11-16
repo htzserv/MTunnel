@@ -758,10 +758,10 @@ installer_main() {
         remote="${remote%/}"
         mkdir "$work/scripts" "$work/scripts/core" || return 1
         if ! installer_fetch "$(mt_cb_url "$remote/core/common.sh")" "$work/scripts/core/common.sh" 'core/common.sh' 1 || ! mt_validate_shared_core "$work/scripts/core/common.sh"; then
+            echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
+        fi
         if ! installer_fetch "$(mt_cb_url "$remote/core/bintunnel.sh")" "$work/scripts/core/bintunnel.sh" 'core/bintunnel.sh' 1 || ! bash -n "$work/scripts/core/bintunnel.sh" 2>/dev/null; then
             echo 'Cannot prepare shared binary-tunnel library; current installation preserved.' >&2; return 1
-        fi
-            echo 'Cannot prepare shared core; current installation preserved.' >&2; return 1
         fi
         for item in "${active_modules[@]}"; do
             path="${item#*:}"

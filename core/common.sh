@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 2.0.0, API 1, layout revision 2.
+# MTunnel shared core — release 2.0.1, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="2.0.0"
+MTUNNEL_RELEASE_VERSION="2.0.1"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -790,7 +790,9 @@ mt_setup_counter_pair() {
     fi
     if [ "$role" == 1 ] && [ "$bind" == '::' ]; then addresses+=('0.0.0.0'); fi
     for addr in "${addresses[@]}"; do
-        bin=iptables; [[ "$addr" == *:* ]] && bin=ip6tables -w 5 command -v "$bin" >/dev/null 2>&1 || continue
+        bin=iptables
+        [[ "$addr" == *:* ]] && bin=ip6tables
+        command -v "$bin" >/dev/null 2>&1 || continue
         if [ "$role" != 1 ]; then input=(-s "$addr" --sport "$port"); output=(-d "$addr" --dport "$port"); fi
         "$bin" -w 5 -t mangle -C INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" 2>/dev/null ||
             "$bin" -w 5 -t mangle -A INPUT -p "$proto" "${input[@]}" -m comment --comment "${prefix}_RX_${name}" || return 1
@@ -2964,9 +2966,9 @@ mt_build_fwd_rules6() {
 }
 mt_rollback_fwd_tag6() {
     local tag="$1"
-    mt_delete_tagged_rules ip6tables -w 5 nat PREROUTING "$tag" >/dev/null 2>&1 || true
-    mt_delete_tagged_rules ip6tables -w 5 nat POSTROUTING "$tag" >/dev/null 2>&1 || true
-    mt_delete_tagged_rules ip6tables -w 5 filter FORWARD "$tag" >/dev/null 2>&1 || true
+    mt_delete_tagged_rules ip6tables nat PREROUTING "$tag" >/dev/null 2>&1 || true
+    mt_delete_tagged_rules ip6tables nat POSTROUTING "$tag" >/dev/null 2>&1 || true
+    mt_delete_tagged_rules ip6tables filter FORWARD "$tag" >/dev/null 2>&1 || true
 }
 
 # ── Forward-port conflict detection (non-interactive; safe for watchdogs) ──

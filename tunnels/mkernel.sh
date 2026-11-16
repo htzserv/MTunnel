@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.0.0).
-MODULE_VERSION="2.0.0"
+# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.0.1).
+MODULE_VERSION="2.0.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1343,14 +1343,14 @@ clean_fwd_rules() {
     ipt_delete_tagged nat PREROUTING "MGRE_FWD_${t}"
     ipt_delete_tagged nat POSTROUTING "MGRE_FWD_${t}"
     ipt_delete_tagged filter FORWARD "MGRE_FWD_${t}"
-    IPT_BIN=ip6tables -w 5 ipt_delete_tagged nat PREROUTING "MGRE_FWD_${t}"
-    IPT_BIN=ip6tables -w 5 ipt_delete_tagged nat POSTROUTING "MGRE_FWD_${t}"
-    IPT_BIN=ip6tables -w 5 ipt_delete_tagged filter FORWARD "MGRE_FWD_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged nat PREROUTING "MGRE_FWD_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged nat POSTROUTING "MGRE_FWD_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged filter FORWARD "MGRE_FWD_${t}"
 }
 clean_mss_rules() {
     local t="$1"; [ -z "$t" ] && return
     ipt_delete_tagged mangle FORWARD "MGRE_MSS_${t}"
-    IPT_BIN=ip6tables -w 5 ipt_delete_tagged mangle FORWARD "MGRE_MSS_${t}"
+    IPT_BIN=ip6tables ipt_delete_tagged mangle FORWARD "MGRE_MSS_${t}"
 }
 
 mgre_mtu_limits() { # <proto> -> "min max default"
@@ -1412,7 +1412,7 @@ teardown_tunnel() {
 
 rebuild_guard() {
     ipt_delete_tagged filter INPUT "MGRE_GUARD_HOOK"
-    IPT_BIN=ip6tables -w 5 ipt_delete_tagged filter INPUT "MGRE_GUARD_HOOK"
+    IPT_BIN=ip6tables ipt_delete_tagged filter INPUT "MGRE_GUARD_HOOK"
     iptables -F MGRE_GUARD 2>/dev/null
     ip6tables -w 5 -F MGRE6_GUARD 2>/dev/null
     if [ ! -f "$GUARD_FLAG" ]; then
@@ -3022,7 +3022,7 @@ teardown_fabric() {
 
 rebuild_guard() {
     ipt_delete_tagged filter INPUT "MXLAN_GUARD_HOOK"
-    IPT_BIN=ip6tables -w 5 ipt_delete_tagged filter INPUT "MXLAN_GUARD_HOOK"
+    IPT_BIN=ip6tables ipt_delete_tagged filter INPUT "MXLAN_GUARD_HOOK"
     iptables -F MXLAN_GUARD 2>/dev/null
     ip6tables -w 5 -F MXLAN6_GUARD 2>/dev/null
     if [ ! -f "$GUARD_FLAG" ]; then

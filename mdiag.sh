@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MDiag — Unified Doctor & LinkTest diagnostics engine (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MDiag — Unified Doctor & LinkTest diagnostics engine (v2.0.2).
+MODULE_VERSION="2.0.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -39,8 +39,8 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel Doctor with sudo." >&2; exit 1; fi
 
 
 if [ "$DIAG_MODE" = "doctor" ]; then
-: "${FR:=[38;2;0;245;212m}"
-
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
 REPORT_DIR="$LOCAL_DIR/reports"
@@ -176,7 +176,7 @@ self_update_module() {
     fi
 
     if [ -z "$src_opt" ]; then
-        clear; echo -e "\n  ${FR}╭─[ OTA Update (MDoctor) ]${NC}"
+        clear; echo -e "\n  ${FR}┌─[ OTA Update (MDoctor) ]${NC}"
         echo -e "  ${FR}│${NC}"
         echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -186,7 +186,7 @@ self_update_module() {
         echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
         echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
         echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
     fi
 
@@ -211,10 +211,10 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-    echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}"
+    echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
     echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-    echo -e "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+    echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$MT_REL_PATH" "$INSTALL_PATH" "$0"; then
         rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
@@ -255,7 +255,7 @@ doc_group() {
     if [ "$DOC_PLAIN" = 1 ]; then
         printf '\n[%s]\n' "$title"
     else
-        printf '\n  %b╭─[ %s ]%b\n' "$FR" "$title" "$NC"
+        printf '\n  %b┌─[ %s ]%b\n' "$FR" "$title" "$NC"
         printf '  %b│%b\n' "$FR" "$NC"
     fi
 }
@@ -469,7 +469,7 @@ doc_print_summary() {
     if [ "$DOC_PLAIN" = 1 ]; then
         printf '\nSUMMARY: %s | %s\n' "$verdict" "$DOC_LAST_SUMMARY"
     else
-        printf '\n  %b╭─[ DOCTOR RESULT ]%b\n' "$FR" "$NC"
+        printf '\n  %b┌─[ DOCTOR RESULT ]%b\n' "$FR" "$NC"
         printf '  %b│%b\n' "$FR" "$NC"
         printf '  %b├─%b %b%-17s%b %b%s%b\n' "$FR" "$NC" "$color" "$verdict" "$NC" "$W" "$DOC_LAST_SUMMARY" "$NC"
         printf '  %b└────────────────────────────────────────────────────────────%b\n' "$FR" "$NC"
@@ -555,7 +555,7 @@ doc_safe_repair() {
     local choice mod ok=1
     while true; do
         draw_doctor_header
-        printf '\n  %b╭─[ SAFE REPAIR ACTIONS ]%b\n' "$FR" "$NC"
+        printf '\n  %b┌─[ SAFE REPAIR ACTIONS ]%b\n' "$FR" "$NC"
         printf '  %b│%b\n' "$FR" "$NC"
         printf '  %b├─%b %b1%b %b❯%b %bEnable & Persist IPv4 Forwarding%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
         printf '  %b├─%b %b2%b %b❯%b %bEnable & Persist IPv6 Forwarding%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC"
@@ -563,7 +563,7 @@ doc_safe_repair() {
         printf '  %b├─%b %b4%b %b❯%b %bReload systemd Unit Database%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
         printf '  %b│%b\n' "$FR" "$NC"
         printf '  %b├────────────────────────────%b\n' "$FR" "$NC"
-        printf '  %b╰─%b %b0%b %b❯%b %bReturn to Doctor%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+        printf '  %b└─%b %b0%b %b❯%b %bReturn to Doctor%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
         printf '  %bREPAIR ❯❯ %b' "$C" "$NC"; read -r choice
         case "$choice" in
             0|'') return 0;;
@@ -605,10 +605,10 @@ doc_export_report() {
         return 0
     fi
     draw_doctor_header
-    echo -e "\n  ${FR}╭─[ REPORT EXPORTED ]${NC}"
+    echo -e "\n  ${FR}┌─[ REPORT EXPORTED ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}Diagnostic report saved successfully.${NC}"
-    echo -e "  ${FR}╰─${NC} ${C}${file}${NC}"
+    echo -e "  ${FR}└─${NC} ${C}${file}${NC}"
     doc_pause
 }
 
@@ -626,7 +626,7 @@ refresh_doctor_header_live() {
 
 render_doctor_menu() {
     draw_doctor_header
-    printf '\n  %b╭─[ MTUNNEL DOCTOR & DIAGNOSTICS ]%b\n' "$FR" "$NC"
+    printf '\n  %b┌─[ MTUNNEL DOCTOR & DIAGNOSTICS ]%b\n' "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├─%b %b1%b %b❯%b %bRun Full Health Scan%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
     printf '  %b├─%b %b2%b %b❯%b %bNetwork & IPv6 Diagnostics%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
@@ -638,7 +638,7 @@ render_doctor_menu() {
     printf '  %b├─%b %b8%b %b❯%b %bOTA Update%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(doc_update_badge)"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├────────────────────────────%b\n' "$FR" "$NC"
-    printf '  %b╰─%b %b0%b %b❯%b %bReturn to Dashboard%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+    printf '  %b└─%b %b0%b %b❯%b %bReturn to Dashboard%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 
 case "${1:-}" in
@@ -694,8 +694,8 @@ if [ "$DIAG_MODE" = "linktest" ]; then
 
 
 
-: "${FR:=[38;2;0;245;212m}"
-
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/linktest"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
@@ -789,7 +789,7 @@ self_update_module() {
         gh_text="${C}Official GitHub Server${NC}    ${DIM}(v${MODULE_VERSION})${NC}"
     fi
 
-    draw_header; echo -e "\n  ${FR}╭─[ OTA Update (Linktest Engine) ]${NC}"
+    draw_header; echo -e "\n  ${FR}┌─[ OTA Update (Linktest Engine) ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -799,7 +799,7 @@ self_update_module() {
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Offline Editor)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
     
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
@@ -820,10 +820,10 @@ self_update_module() {
     sed -i 's/\r$//' "$tmp_file"
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
-        echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -e "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+        echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
         
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled by user.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -895,7 +895,7 @@ finally:
 
 run_protocol_matrix_test() {
     draw_header
-    echo -e "\n  ${FR}╭─[ AUTO-SYNCED PROTOCOL BENCHMARK ]${NC}"
+    echo -e "\n  ${FR}┌─[ AUTO-SYNCED PROTOCOL BENCHMARK ]${NC}"
     echo -e "  ${FR}│${NC} ${W}Info:${NC} Automated Step-by-Step handshake across both endpoints."
     echo -e "  ${FR}├────────────────────────────────────────────────────────────────────────────${NC}"
 
@@ -993,7 +993,7 @@ PY
         fi
 
         echo -e "  ${G}✔ Sync Established!${NC} Executing benchmark matrix...\n"
-        echo -e "  ${FR}╭═════════════════════════════╦════════════╦══════════════╦══════════════════════════════╗${NC}"
+        echo -e "  ${FR}╔═════════════════════════════╦════════════╦══════════════╦══════════════════════════════╗${NC}"
         printf "  ${FR}║${NC} ${W}%-27s${NC} ${FR}║${NC} ${W}%-10s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "PROTOCOL / TRANSPORT" "STATUS" "LATENCY" "DIAGNOSTICS & DETAILS"
         echo -e "  ${FR}╠═════════════════════════════╬════════════╬══════════════╬══════════════════════════════╣${NC}"
 
@@ -1077,14 +1077,14 @@ PY
         test_bh_mode "Backhaul WSMUX precheck" "9643" "${Y}"
         test_bh_mode "Backhaul WSSMUX precheck" "9743" "${M}"
 
-        echo -e "  ${FR}╰═════════════════════════════╩════════════╩══════════════╩══════════════════════════════╝${NC}"
+        echo -e "  ${FR}╚═════════════════════════════╩════════════╩══════════════╩══════════════════════════════╝${NC}"
 
         if [ ${#passed_protocols[@]} -gt 0 ]; then
             echo ""
             echo -ne "  ${C}●${NC} ${W}Run Live Speedtest benchmark on ${G}PASSED${W} channels? [y/N]: ${NC}"; read -r do_speed
             if [[ "${do_speed,,}" == "y" ]]; then
                 echo -e "\n  ${Y}● Measuring Real-time Throughput (3s per channel)...${NC}\n"
-                echo -e "  ${FR}╭═════════════════════════════╦══════════════════════════╦══════════════════════════════╗${NC}"
+                echo -e "  ${FR}╔═════════════════════════════╦══════════════════════════╦══════════════════════════════╗${NC}"
                 printf "  ${FR}║${NC} ${W}%-27s${NC} ${FR}║${NC} ${W}%-24s${NC} ${FR}║${NC} ${W}%-28s${NC} ${FR}║${NC}\n" "PASSED CHANNEL" "BANDWIDTH THROUGHPUT" "DIAGNOSTIC STATUS"
                 echo -e "  ${FR}╠═════════════════════════════╬══════════════════════════╬══════════════════════════════╣${NC}"
 
@@ -1098,7 +1098,7 @@ PY
                         printf "  ${FR}║${NC} ${DIM}%-27s${NC} ${FR}║${NC} ${R}%-24s${NC} ${FR}║${NC} ${DIM}%-28s${NC} ${FR}║${NC}\n" "$p_name" "N/A" "Connection Timeout"
                     fi
                 done
-                echo -e "  ${FR}╰═════════════════════════════╩══════════════════════════╩══════════════════════════════╝${NC}"
+                echo -e "  ${FR}╚═════════════════════════════╩══════════════════════════╩══════════════════════════════╝${NC}"
             fi
         fi
 
@@ -1408,7 +1408,7 @@ lt_start_engine_responder() {
     local key rec engine payload link linkport publicport backendport core cfg log bindok cap='' local4 local6
     local4=$(mt_local_ipv4); local6=$(mt_local_ipv6)
     [ "$local4" != Unknown ] || local4=''
-    echo -e "\n  ${FR}╭─[ BH / RH DUAL-STACK RESPONDER ]${NC}"
+    echo -e "\n  ${FR}┌─[ BH / RH DUAL-STACK RESPONDER ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}IPv4:${NC} ${C}${local4:-Unavailable}${NC}"
     echo -e "  ${FR}├─${NC} ${W}IPv6:${NC} ${C}${local6:-Unavailable}${NC}"
     echo -e "  ${FR}├────────────────────────────────────────────────────────────${NC}"
@@ -1501,11 +1501,11 @@ lt_run_engine_matrix_tester() {
         return 1
     fi
 
-    echo -e "\n  ${FR}╭─[ REAL BACKHAUL / RATHOLE IPv4 ↔ IPv6 ENGINE MATRIX ]${NC}"
+    echo -e "\n  ${FR}┌─[ REAL BACKHAUL / RATHOLE IPv4 ↔ IPv6 ENGINE MATRIX ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}4→6:${NC} IPv4 payload over IPv6 engine link"
     echo -e "  ${FR}├─${NC} ${W}6→4:${NC} IPv6 payload over IPv4 engine link"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
-    echo -e "  ${FR}╭════════════╦═════════════╦═══════════╦════════════════════════════════════╗${NC}"
+    echo -e "  ${FR}╔════════════╦═════════════╦═══════════╦════════════════════════════════════╗${NC}"
     echo -e "  ${FR}║${NC} ${W}ENGINE     ${NC}${FR}║${NC} ${W}STATUS      ${NC}${FR}║${NC} ${W}LATENCY  ${NC}${FR}║${NC} ${W}PATH / DIAGNOSTIC                  ${NC}${FR}║${NC}"
     echo -e "  ${FR}╠════════════╬═════════════╬═══════════╬════════════════════════════════════╣${NC}"
     for key in BH44 BH46 BH64 BH66 RH44 RH46 RH64 RH66; do
@@ -1516,9 +1516,9 @@ lt_run_engine_matrix_tester() {
         fi
         lt_matrix_row "$(lt_engine_label "$key")" "$LT_STATUS" "$LT_LAT" "$LT_DETAIL" "$status_color"
     done
-    echo -e "  ${FR}╰════════════╩═════════════╩═══════════╩════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚════════════╩═════════════╩═══════════╩════════════════════════════════════╝${NC}"
 
-    echo -e "\n  ${FR}╭─[ EXTRA NETWORK FAMILY PROBES ]${NC}"
+    echo -e "\n  ${FR}┌─[ EXTRA NETWORK FAMILY PROBES ]${NC}"
     if [ -n "$remote4" ]; then
         if mt_tcp_probe "$remote4" "$ENGINE_CTRL_PORT"; then echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}TCP IPv4${NC}   ${C}reachable${NC}"; else echo -e "  ${FR}├─${NC} ${R}✖${NC} ${W}TCP IPv4${NC}   blocked"; fi
         ud4=$(lt_udp_probe "$remote4"); if [[ "$ud4" =~ ^[0-9]+$ ]]; then echo -e "  ${FR}├─${NC} ${G}✔${NC} ${W}UDP IPv4${NC}   ${C}${ud4}ms${NC}"; else echo -e "  ${FR}├─${NC} ${R}✖${NC} ${W}UDP IPv4${NC}   blocked"; fi
@@ -1535,7 +1535,7 @@ lt_run_engine_matrix_tester() {
 
 run_engine_family_matrix() {
     draw_header
-    echo -e "\n  ${FR}╭─[ BACKHAUL / RATHOLE IPv4 ↔ IPv6 MATRIX ]${NC}"
+    echo -e "\n  ${FR}┌─[ BACKHAUL / RATHOLE IPv4 ↔ IPv6 MATRIX ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}4→6 means IPv4 payload over an IPv6 engine link.${NC}"
     echo -e "  ${FR}├─${NC} ${W}6→4 means IPv6 payload over an IPv4 engine link.${NC}"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
@@ -1557,12 +1557,12 @@ run_engine_family_matrix() {
 
 run_mtu_discovery() {
     draw_header
-    echo -e "\n  ${FR}╭─[ ACCURATE MTU & PACKET-LOSS DISCOVERY ]${NC}"
+    echo -e "\n  ${FR}┌─[ ACCURATE MTU & PACKET-LOSS DISCOVERY ]${NC}"
     echo -ne "  ${C}●${NC} ${W}Target Peer IP Address: ${NC}"; read -r target_ip
     target_ip=$(echo "$target_ip" | tr -d '\r' | tr -d ' ')
     [ -z "$target_ip" ] && return
 
-    echo -e "\n  ${FR}╭══════════╦══════════════╦═════════════╦══════════════╦═════════════════╗${NC}"
+    echo -e "\n  ${FR}╔══════════╦══════════════╦═════════════╦══════════════╦═════════════════╗${NC}"
     printf "  ${FR}║${NC} ${W}%-8s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-15s${NC} ${FR}║${NC}\n" "MTU SIZE" "PAYLOAD" "PACKET LOSS" "PING (MS)" "STATUS"
     echo -e "  ${FR}╠══════════╬══════════════╬═════════════╬══════════════╬═════════════════╣${NC}"
 
@@ -1588,7 +1588,7 @@ run_mtu_discovery() {
 
         printf "  ${FR}║${NC} ${Y}%-8s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${W}%-11s${NC} ${FR}║${NC} ${C}%-12s${NC} ${FR}║${NC} %b%-15s%b ${FR}║${NC}\n" "$mtu" "$payload" "$loss" "$avg_ping" "$st_badge" "$NC"
     done
-    echo -e "  ${FR}╰══════════╩══════════════╩═════════════╩══════════════╩═════════════════╝${NC}"
+    echo -e "  ${FR}╚══════════╩══════════════╩═════════════╩══════════════╩═════════════════╝${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy
 }
 
@@ -1602,7 +1602,7 @@ while true; do
     fi
 
     draw_header
-    echo -e "\n  ${FR}╭─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}"
+    echo -e "\n  ${FR}┌─[ LINK & PROTOCOL BENCHMARK ACTIONS ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Full Auto-Synced Protocol + BH/RH Matrix & Speedtest${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Backhaul / Rathole IPv4 ↔ IPv6 Matrix${NC}"
@@ -1618,7 +1618,7 @@ while true; do
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${G}OTA Update${NC}${badge}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
 
     echo -ne "  ${C}LINKTEST ❯❯ ${NC}"; read -r opt
     case $opt in
@@ -1672,7 +1672,7 @@ while True:
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy ;;
         6)
            draw_header
-           echo -e "\n  ${FR}╭─[ SYSTEM LISTENING PORTS ]${NC}"
+           echo -e "\n  ${FR}┌─[ SYSTEM LISTENING PORTS ]${NC}"
            ss -lntp 2>/dev/null | awk 'NR>1 {split($5, a, ":"); port = a[length(a)]; proc = $0; gsub(/.*users:\(\("/, "", proc); gsub(/".*/, "", proc); if (port != "") printf "  %-7s %-47s\n", port, proc;}' || true
            echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r dummy ;;
         7) self_update_module ;;

@@ -4,7 +4,7 @@
 # MTunnel Ecosystem - MDesign Speed & Network Optimizer
 # Module version: see MODULE_VERSION below
 # ==========================================================
-MODULE_VERSION="2.1.0"
+MODULE_VERSION="2.0.2"
 
 set -o pipefail
 
@@ -14,14 +14,14 @@ set -o pipefail
 
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
-C_LINE='\033[38;2;0;245;212m'        # Electric Cyan Neon Frame
-C_CYAN='\033[38;2;0;217;255m'        # Neon Ice Cyan
-C_GREEN='\033[38;2;57;255;20m'        # Laser Neon Green
-C_RED='\033[38;2;255;42;109m'         # Neon Crimson
-C_MAGENTA='\033[38;2;255;0;127m'      # Hot Neon Pink / Magenta
-C_ORANGE='\033[38;2;255;190;11m'      # Cyber Amber
-C_WHITE='\033[1;38;2;248;249;250m'    # Crisp Bright White
-C_GRAY='\033[38;2;110;125;155m'       # Slate Blue-Gray
+C_LINE='\033[1;33m'          # Gold divider line (matches the MTunnel frame colour)
+C_CYAN='\033[38;5;45m'       # Pure Aqua / Cyan
+C_GREEN='\033[38;5;48m'      # Mint Green Indicator
+C_RED='\033[38;5;203m'       # Soft Red Exit / IP
+C_MAGENTA='\033[38;5;170m'   # Purple / Pink
+C_ORANGE='\033[38;5;215m'    # Light Orange
+C_WHITE='\033[38;5;255m'     # Bold Bright White
+C_GRAY='\033[38;5;244m'      # Subtitle / Details
 
 # ----------------------------------------------------------
 # Root Check
@@ -177,11 +177,15 @@ show_header() {
     server_ip="${server_ip:-127.0.0.1}"
 
     echo ""
-    echo -e "\033[1;38;2;0;245;212m   ███    ███ ██ ██████  ██████   ██████  ██████      ██████  ██████  ████████ ██ ███    ███ ██ ███████ ███████ ██████  ${C_RESET}"
-    echo -e "\033[1;38;2;0;217;255m   ████  ████ ██ ██   ██ ██   ██ ██    ██ ██   ██    ██    ██ ██   ██    ██    ██ ████  ████ ██    ███  ██      ██   ██ ${C_RESET}"
-    echo -e "\033[1;38;2;123;97;255m   ██ ████ ██ ██ ██████  ██████  ██    ██ ██████     ██    ██ ██████     ██    ██ ██ ████ ██ ██   ███   █████   ██████  ${C_RESET}"
-    echo -e "\033[1;38;2;200;45;210m   ██  ██  ██ ██ ██   ██ ██   ██ ██    ██ ██   ██    ██    ██ ██         ██    ██ ██  ██  ██ ██  ███    ██      ██   ██ ${C_RESET}"
-    echo -e "\033[1;38;2;255;0;127m   ██      ██ ██ ██   ██ ██   ██  ██████  ██   ██     ██████  ██         ██    ██ ██      ██ ██ ███████ ███████ ██   ██ ${C_RESET}"
+    echo -e "${C_CYAN}${C_BOLD}"
+    cat << "EOF"
+   ███    ███ ██ ██████  ██████   ██████  ██████      ██████  ██████  ████████ ██ ███    ███ ██ ███████ ███████ ██████  
+   ████  ████ ██ ██   ██ ██   ██ ██    ██ ██   ██    ██    ██ ██   ██    ██    ██ ████  ████ ██    ███  ██      ██   ██ 
+   ██ ████ ██ ██ ██████  ██████  ██    ██ ██████     ██    ██ ██████     ██    ██ ██ ████ ██ ██   ███   █████   ██████  
+   ██  ██  ██ ██ ██   ██ ██   ██ ██    ██ ██   ██    ██    ██ ██         ██    ██ ██  ██  ██ ██  ███    ██      ██   ██ 
+   ██      ██ ██ ██   ██ ██   ██  ██████  ██   ██     ██████  ██         ██    ██ ██      ██ ██ ███████ ███████ ██   ██ 
+EOF
+    echo -e "${C_RESET}"
     echo ""
     echo -e "   ${C_WHITE}${C_BOLD}Network Core v${MODULE_VERSION}${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}IP:${C_RESET} ${C_RED}${server_ip}${C_RESET}  ${C_LINE}║${C_RESET}  ${C_CYAN}OS:${C_RESET} ${C_WHITE}Ubuntu ${UBUNTU_RELEASE} (${UBUNTU_CODENAME})${C_RESET}"
     echo ""

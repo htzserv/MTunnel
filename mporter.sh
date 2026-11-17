@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v2.0.2).
+MODULE_VERSION="2.0.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -48,8 +48,8 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
 
-: "${FR:=[38;2;0;245;212m}"
-
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; W='\033[1;37m'; C='\033[0;36m'; M='\033[1;35m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/mporter"
 SERVICE_FILE="/etc/systemd/system/mporter.service"
 H_CONF="/etc/haproxy/haproxy.cfg"
@@ -300,7 +300,7 @@ self_update_module() {
     local rel_path="mporter.sh" cb="?t=$(date +%s)" remote_v="Unknown"
     [ -f "$SECURE_TMP/.mporter_remote_ver" ] && remote_v=$(tr -d '\r\n ' < "$SECURE_TMP/.mporter_remote_ver")
 
-    clear; echo -e "\n  ${FR}╭─[ OTA Update (Script Only) ]${NC}"
+    clear; echo -e "\n  ${FR}┌─[ OTA Update (Script Only) ]${NC}"
     if [ -n "$remote_v" ] && [ "$remote_v" != "Unknown" ] && mt_update_available "$remote_v" "$MODULE_VERSION"; then
         echo -e "  ${FR}├─${NC} ${Y}Update Available: v${MODULE_VERSION} ➔ v${remote_v}${NC}"
     else
@@ -310,7 +310,7 @@ self_update_module() {
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
 
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
@@ -334,10 +334,10 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-        echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}"
+        echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
         echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
         echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-        echo -ne "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+        echo -ne "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
         rm -f "$tmp_file"; echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1
@@ -492,12 +492,12 @@ mp_bh_choose_target() {
     local records=() item name ip meta choice i pair
     mapfile -t records < <(mp_bh_records)
     [ "${#records[@]}" -gt 0 ] || return 1
-    echo -e "\n  ${FR}╭─[ BACKHAUL TARGETS (TCP) ]${NC}"
+    echo -e "\n  ${FR}┌─[ BACKHAUL TARGETS (TCP) ]${NC}"
     for i in "${!records[@]}"; do
         IFS='|' read -r name ip meta <<< "${records[$i]}"
         printf "  ${FR}├─${NC} ${W}%s${NC} ${DIM}❯${NC} ${C}%-20s${NC} ${G}%s${NC}\n" "$i" "$name" "$ip"
     done
-    echo -ne "  ${FR}╰─${NC} ${C}Select index [q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    echo -ne "  ${FR}└─${NC} ${C}Select index [q: cancel] ❯❯ ${NC}"; read -r choice || return 1
     mt_valid_index "$choice" "${#records[@]}" || return 1
     IFS='|' read -r MP_BH_NAME MP_BH_IP MP_BH_META <<< "${records[$((10#$choice))]}"
     MP_BH_PUBLIC_PORTS=""
@@ -1086,12 +1086,12 @@ mp_download() {
 
 mp_choose_core_source() {
     local choice
-    echo -e "\n  ${FR}╭─[ CORE DOWNLOAD SOURCE ]${NC}"
+    echo -e "\n  ${FR}┌─[ CORE DOWNLOAD SOURCE ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}ParsPack + official fallback${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom HTTPS link (asked per engine)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local /root/mtunnel/engines${NC}"
-    echo -ne "  ${FR}╰─${NC} ${C}Select [1-4 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    echo -ne "  ${FR}└─${NC} ${C}Select [1-4 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
     [[ "$choice" =~ ^[1-4]$ ]] || return 1
     MP_CORE_SOURCE="$choice"
 }
@@ -1229,13 +1229,13 @@ download_realm_binary() {
 }
 
 install_core_engines() {
-    clear; draw_header; echo -e "\n  ${FR}╭─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
+    clear; draw_header; echo -e "\n  ${FR}┌─[ ENGINE SELECTION (Select Cores to Install) ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy Engine Only${NC} ${DIM}(Load Balancer / Stable)${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost Engine Only${NC} ${DIM}(TLS/WS Obfuscator)${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Realm Engine Only${NC} ${DIM}(High-Performance / Rust)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Iptables NAT Engine Only${NC} ${DIM}(Raw Speed)${NC}"
     echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install ALL Engines (Quad-Core)${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Option ❯❯ ${NC}"; read -r eng_opt
     [[ "$eng_opt" =~ ^[1-5]$ ]] || return
     MP_CORE_SOURCE=2
@@ -1254,7 +1254,7 @@ install_core_engines() {
     local install_failed=false
     ensure_ipv4_forwarding || return 1
 
-    echo -e "\n  ${FR}╭─[ INITIALIZING INSTALLATION ]${NC}"
+    echo -e "\n  ${FR}┌─[ INITIALIZING INSTALLATION ]${NC}"
     (
         sysctl -w fs.file-max=2000000 >/dev/null 2>&1
         sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
@@ -1405,7 +1405,7 @@ health_scan() {
 
 show_health_matrix() {
     draw_header
-    echo -e "\n  ${FR}╭─[ BACKEND HEALTH MATRIX ]${NC}"
+    echo -e "\n  ${FR}┌─[ BACKEND HEALTH MATRIX ]${NC}"
     printf "  ${FR}║${NC} ${W}%-18s %-26s %-7s %-18s %-6s${NC}\n" "INTERFACE" "TARGET" "PORT" "STATE" "FAILS"
     echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════${NC}"
     if [ ! -s "$HEALTH_FILE" ]; then health_scan >/dev/null 2>&1; fi
@@ -1418,7 +1418,7 @@ show_health_matrix() {
     else
         echo -e "  ${FR}│  No HAProxy backends discovered.${NC}"
     fi
-    echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════${NC}"
+    echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r _
 }
 
@@ -1516,7 +1516,7 @@ draw_header() {
     local pad_len=$(( 106 - ${#raw_text} )); (( pad_len < 0 )) && pad_len=0
     local padding; padding=$(printf '%*s' "$pad_len" "")
 
-    echo -e "  ${FR}╭══════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "  ${FR}╔══════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${FR}║${NC} ${W}MPorter v${MODULE_VERSION}${NC} ${FR}║${NC} ${DIM}IP:${NC} ${W}${STATS_SERVER_IP}${NC} ${FR}║${NC} ${DIM}HAP:${NC} ${STATS_HAP_STAT} ${DIM}RLM:${NC} ${STATS_RLM_STAT} ${DIM}GST:${NC} ${STATS_GST_STAT} ${DIM}IPT:${NC} ${STATS_IPT_STAT} ${FR}║${NC} ${DIM}IPs:${NC} ${STATS_IP_STATUS} ${FR}║${NC} ${DIM}Pts:${NC} ${G}${STATS_TOTAL_PORTS}${NC}${padding}${FR}║${NC}"
     if [ -n "${STATS_SERVER_IP6:-}" ]; then
         local raw6=" IPv6: ${STATS_SERVER_IP6} │ IPv6 targets: HAP/GST/RLM/IPT " pad6
@@ -1568,7 +1568,7 @@ draw_header() {
             printf "  ${FR}║${NC} ${C}%-12s${NC} ${FR}║${NC} ${M}%-8s${NC} ${FR}║${NC} ${G}%-26s${NC} ${FR}║${NC} %b%s ${FR}║${NC} %b%s ${FR}║${NC}\n" "$clean_name" "$t_type" "$display_ips" "$disp_eng" "$pad_eng" "$fwd_dist" "$pad"
         done < <(printf '%s\n' "${!iface_ips_arr[@]}" | sort)
     fi
-    echo -e "  ${FR}╰══════════════╩══════════╩════════════════════════════╩══════════════════════╩════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚══════════════╩══════════╩════════════════════════════╩══════════════════════╩════════════════════════════╝${NC}"
 }
 engine_ready() {
     case "$1" in
@@ -1586,12 +1586,12 @@ engine_ready() {
 
 smart_map() {
     draw_header
-    echo -e "\n  ${FR}╭─[ STRICT FORWARDING ENGINE (1-to-1) ]${NC}"
+    echo -e "\n  ${FR}┌─[ STRICT FORWARDING ENGINE (1-to-1) ]${NC}"
     echo -e "  ${FR}│${NC} ${W}1${NC} ${DIM}❯${NC} ${C}HAProxy${NC} ${DIM}(Load Balancer / Stable)${NC}"
     echo -e "  ${FR}│${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Gost${NC} ${DIM}(TLS/WS Obfuscator)${NC}"
     echo -e "  ${FR}│${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Realm${NC} ${DIM}(High-Performance / Rust)${NC}"
     echo -e "  ${FR}│${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Iptables Kernel NAT${NC} ${DIM}(Raw Speed / 0% CPU)${NC}"
-    echo -ne "  ${FR}╰─${NC} ${C}Select ❯❯ ${NC}"; local fwd_engine; read -r fwd_engine
+    echo -ne "  ${FR}└─${NC} ${C}Select ❯❯ ${NC}"; local fwd_engine; read -r fwd_engine
     fwd_engine="${fwd_engine//[^0-9]/}"
     [[ "$fwd_engine" =~ ^[1-4]$ ]] || { echo -e "  ${R}● Invalid engine!${NC}"; sleep 1; return; }
     engine_ready "$fwd_engine" || { echo -e "  ${R}● This engine is not installed yet. Run option 1 (Install) first.${NC}"; sleep 2; return; }
@@ -1613,11 +1613,11 @@ smart_map() {
     elif [ ${#gre_ifs[@]} -eq 0 ]; then
         echo -ne "  ${FR}╚═❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read -r target_ip
     else
-        echo -e "\n  ${FR}╭══════════════════ Available Interfaces ════════════════════╗${NC}"
+        echo -e "\n  ${FR}╔══════════════════ Available Interfaces ════════════════════╗${NC}"
         local i; for i in "${!gre_ifs[@]}"; do printf "  ${FR}║${NC}  ${Y}%d${NC} ${C}❯${NC} ${W}%-52s${NC} ${FR}║${NC}\n" "$i" "${gre_ifs[$i]}"; done
         echo -e "  ${FR}╠══════════════════════════════════════════════════════════════╣${NC}"
         printf "  ${FR}║${NC}  ${Y}m${NC} ${C}❯${NC} ${M}%-52s${NC} ${FR}║${NC}\n" "Manual IP Entry (Bypass Interfaces)"
-        echo -e "  ${FR}╰══════════════════════════════════════════════════════════════╝${NC}"
+        echo -e "  ${FR}╚══════════════════════════════════════════════════════════════╝${NC}"
         echo -ne "  ${C}●${NC} ${W}Select Interface (0-$(( ${#gre_ifs[@]} - 1 )) or 'm'): ${NC}"; read -r if_choice
         if_choice="${if_choice//[^0-9mM]/}"
         if [[ "$if_choice" =~ ^[mM]$ ]]; then
@@ -1628,9 +1628,9 @@ smart_map() {
             if [ ${#map_ips[@]} -eq 0 ]; then
                 echo -ne "  ${FR}╚═❯${NC} ${W}Enter Target Destination IP manually: ${NC}"; read -r target_ip
             else
-                echo -e "\n  ${FR}╭══════════════════ IPs on ${selected_if} ══════════════════╗${NC}"
+                echo -e "\n  ${FR}╔══════════════════ IPs on ${selected_if} ══════════════════╗${NC}"
                 for i in "${!map_ips[@]}"; do printf "  ${FR}║${NC}  ${Y}%d${NC} ${C}❯${NC} ${G}%-50s${NC} ${FR}║${NC}\n" "$i" "${map_ips[$i]}"; done
-                echo -e "  ${FR}╰══════════════════════════════════════════════════════════════╝${NC}"
+                echo -e "  ${FR}╚══════════════════════════════════════════════════════════════╝${NC}"
                 echo -ne "  ${C}●${NC} ${W}Select EXACT Index (0-$(( ${#map_ips[@]} - 1 ))) or 'a' for Auto-Distribute: ${NC}"; read -r ip_choice
                 ip_choice="${ip_choice//[^0-9aA]/}"
                 if [[ "$ip_choice" =~ ^[aA]$ ]]; then
@@ -1680,7 +1680,7 @@ smart_map() {
     [ -n "$clean_ports" ] || { echo -e "  ${R}● No valid ports (1-65535).${NC}"; sleep 1.5; return; }
 
     echo -e "\n  ${Y}● Applying Strict 1-to-1 Mappings...${NC}"
-    echo -e "  ${FR}╭══════════════╦═════════╦════════════════════════════════════════════╗${NC}"
+    echo -e "  ${FR}╔══════════════╦═════════╦════════════════════════════════════════════╗${NC}"
     local target_title="Target IP"
     [ -z "$bh_meta" ] || target_title="Target IP / Port"
     printf "  ${FR}║${NC} ${W}%-12s${NC} ${FR}║${NC} ${W}%-7s${NC} ${FR}║${NC} ${W}%-42s${NC} ${FR}║${NC}\n" "Local Port" "Engine" "$target_title"
@@ -1736,7 +1736,7 @@ smart_map() {
         printf "  ${FR}║${NC} ${G}%-12s${NC} ${FR}║${NC} ${C}%-7s${NC} ${FR}║${NC} ${W}%-42s${NC} ${FR}║${NC}\n" "$p" "$eng_name" "$display_target"
         port_idx=$((port_idx + 1))
     done
-    echo -e "  ${FR}╰══════════════╩═════════╩════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚══════════════╩═════════╩════════════════════════════════════════════╝${NC}"
 
     if [ ${#mapped_ports[@]} -eq 0 ]; then
         rm -f "$work" 2>/dev/null; echo -ne "\n  ${Y}● Nothing to apply. Press Enter...${NC}"; read -r _; return
@@ -1828,7 +1828,7 @@ obfs_setup() {
 
 smart_loadbalance() {
     draw_header
-    echo -e "\n  ${FR}╭─[ SMART LOADBALANCE v11 ]${NC}"
+    echo -e "\n  ${FR}┌─[ SMART LOADBALANCE v11 ]${NC}"
     echo -e "  ${FR}│${NC} ${W}Architecture:${NC} ${C}HAProxy L4${NC} ${DIM}+${NC} ${G}central state${NC} ${DIM}+${NC} ${M}health monitor${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Backend DOWN never deletes the mapping. Existing pools on other ports are kept.${NC}\n"
     engine_ready 1 || { echo -e "  ${R}● HAProxy is not installed. Run option 1 (Install) first.${NC}"; sleep 2; return; }
@@ -1841,9 +1841,9 @@ smart_loadbalance() {
     local active_ifs=(); mapfile -t active_ifs < <(tunnel_ifaces)
     [ ${#active_ifs[@]} -gt 0 ] || { echo -e "  ${R}● No active MDesign interfaces found.${NC}"; sleep 2; return; }
 
-    echo -e "  ${FR}╭════════════════════ Interfaces ═════════════════════╗${NC}"
+    echo -e "  ${FR}╔════════════════════ Interfaces ═════════════════════╗${NC}"
     local i; for i in "${!active_ifs[@]}"; do printf "  ${FR}║${NC} ${Y}%2d${NC} ${C}❯${NC} %-49s ${FR}║${NC}\n" "$i" "${active_ifs[$i]}"; done
-    echo -e "  ${FR}╰══════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚══════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}Select Interface ❯❯ ${NC}"; read -r i
     [[ "$i" =~ ^[0-9]+$ ]] && [ -n "${active_ifs[$i]:-}" ] || { echo -e "  ${R}● Invalid selection.${NC}"; sleep 1.5; return; }
     local selected_if="${active_ifs[$i]}"
@@ -1856,9 +1856,9 @@ smart_loadbalance() {
         sleep 2.5; return
     fi
 
-    echo -e "\n  ${FR}╭════════════════════ Discovered Peers ═════════════════╗${NC}"
+    echo -e "\n  ${FR}╔════════════════════ Discovered Peers ═════════════════╗${NC}"
     for i in "${!peer_ips[@]}"; do printf "  ${FR}║${NC} ${Y}%2d${NC} ${C}❯${NC} ${G}%-50s${NC} ${FR}║${NC}\n" "$i" "${peer_ips[$i]}"; done
-    echo -e "  ${FR}╰═══════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚═══════════════════════════════════════════════════════╝${NC}"
     local peer_count; echo -ne "  ${C}How many peers to use? [1-${#peer_ips[@]}, a=all] ❯❯ ${NC}"; read -r peer_count
     local selected_peers=()
     if [[ "$peer_count" == "a" || "$peer_count" == "A" ]]; then selected_peers=("${peer_ips[@]}")
@@ -1964,7 +1964,7 @@ show_table() {
             printf "  ${FR}║${NC} ${C}%-12s${NC} ${FR}║${NC} ${M}%-8s${NC} ${FR}║${NC} ${G}%-26s${NC} ${FR}║${NC} %b%s ${FR}║${NC} ${Y}%b%s${NC} ${FR}║${NC}\n" "$clean_name" "$t_type" "$show_ip" "$disp_eng" "$pad_eng" "$display_ports" "$pad"
         done < <(printf '%s\n' "${!ip_ports_arr[@]}" | sort -V)
     fi
-    echo -e "  ${FR}╰══════════════╩══════════╩════════════════════════════╩══════════════════════════╩════════════════════════╝${NC}"
+    echo -e "  ${FR}╚══════════════╩══════════╩════════════════════════════╩══════════════════════════╩════════════════════════╝${NC}"
     echo -ne "\n  ${DIM}Press Enter to return...${NC}"; read -r _
 }
 
@@ -2198,7 +2198,7 @@ mp_replace_target_ip() { # replace this IP in every MPorter-owned mapping/pool
 
 change_target_ip_menu() {
     draw_header
-    echo -e "\n  ${FR}╭─[ CHANGE TARGET IP ]${NC}"
+    echo -e "\n  ${FR}┌─[ CHANGE TARGET IP ]${NC}"
     local rows=() ips=() old new idx confirm ports row
     mapfile -t rows < <(collect_mappings)
     mapfile -t ips < <(printf '%s\n' "${rows[@]}" | awk -F'|' 'NF==4 && $2!="127.0.0.1" && $2!="::1" {print $2}' | sort -u)
@@ -2207,7 +2207,7 @@ change_target_ip_menu() {
         ports=$(printf '%s\n' "${rows[@]}" | awk -F'|' -v ip="${ips[$idx]}" '$2==ip {print $1}' | sort -nu | paste -sd,)
         printf "  ${FR}├─${NC} ${W}%s${NC} ${DIM}❯${NC} ${C}%s${NC} ${DIM}(ports: %s)${NC}\n" "$((idx+1))" "${ips[$idx]}" "$ports"
     done
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Target ❯❯ ${NC}"; read -r idx || return 0
     case "$idx" in 0|q|Q|'') return 0;; esac
     [[ "$idx" =~ ^[0-9]{1,5}$ ]] || { echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1; return 0; }
@@ -2234,21 +2234,21 @@ change_target_ip_menu() {
 
 edit_mapping() {
     draw_header
-    echo -e "\n  ${FR}╭─[ EDIT MAPPINGS ]${NC}"
+    echo -e "\n  ${FR}┌─[ EDIT MAPPINGS ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add Port Mappings${NC} ${DIM}(Strict 1-to-1 wizard)${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove a Single Local Port${NC} ${DIM}(all engines)${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}Disable OBFS on a Port${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${C}Change Target IP (Keep Ports / Settings)${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     local e_opt idx; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r e_opt
     case "$e_opt" in
         1) smart_map ;;
         2)
             local rows=(); mapfile -t rows < <(collect_mappings | awk -F'|' '$2 != "127.0.0.1" && $2 != "::1" {print $1"|"$4}' | sort -u | awk -F'|' '{a[$1]=a[$1] (a[$1]?"/":"") $2} END {for (k in a) print k"|"a[k]}' | sort -t'|' -k1,1n)
             [ ${#rows[@]} -gt 0 ] || { echo -e "  ${R}● No MPorter mappings found.${NC}"; sleep 1.5; return; }
-            echo -e "\n  ${FR}╭══════════════ Local Ports ══════════════╗${NC}"
+            echo -e "\n  ${FR}╔══════════════ Local Ports ══════════════╗${NC}"
             local i; for i in "${!rows[@]}"; do printf "  ${FR}║${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-7s${NC} ${DIM}%-24s${NC} ${FR}║${NC}\n" "$i" "${rows[$i]%%|*}" "${rows[$i]#*|}"; done
-            echo -e "  ${FR}╰═════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}╚═════════════════════════════════════════╝${NC}"
             echo -ne "  ${C}Select Index ❯❯ ${NC}"; read -r idx; idx="${idx//[^0-9]/}"
             [ -n "$idx" ] && [ -n "${rows[$idx]:-}" ] || { echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; }
             local port="${rows[$idx]%%|*}" confirm
@@ -2275,11 +2275,11 @@ edit_mapping() {
 # ==========================================================
 
 purge_menu() {
-    draw_header; echo -e "\n  ${FR}╭─[ DELETE & PURGE MAPPINGS ]${NC}"
+    draw_header; echo -e "\n  ${FR}┌─[ DELETE & PURGE MAPPINGS ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}Purge Specific Interface${NC} ${DIM}(Removes all IPs on an interface)${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Purge Specific Target IP${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${R}Wipe ALL Mappings Globally${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     local p_opt idx confirm; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r p_opt; p_opt="${p_opt//[^0-3]/}"
 
     local all_ips; all_ips=$(collect_mappings | cut -d'|' -f2 | grep -v -E '^(127\.0\.0\.1|::1)$' | sort -uV)
@@ -2289,7 +2289,7 @@ purge_menu() {
             [ -n "$all_ips" ] || { echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; }
             declare -A iface_ips; local ip ifc_info i=0 iface_list=()
             for ip in $all_ips; do ifc_info=$(get_iface_info "$ip"); iface_ips["$ifc_info"]+="$ip "; done
-            echo -e "\n  ${FR}╭══════════════════ Select Interface to Purge ═════════════════╗${NC}"
+            echo -e "\n  ${FR}╔══════════════════ Select Interface to Purge ═════════════════╗${NC}"
             while IFS= read -r ifc_info; do
                 [ -n "$ifc_info" ] || continue
                 iface_list[$i]="$ifc_info"; local ip_arr; read -ra ip_arr <<< "${iface_ips[$ifc_info]}"
@@ -2298,7 +2298,7 @@ purge_menu() {
                 printf "  ${FR}║${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-22s${NC} ${DIM}(Contains %-2d IPs)${NC}%s${FR}║${NC}\n" "$i" "$disp_name" "${#ip_arr[@]}" "$sp"
                 i=$((i + 1))
             done < <(printf '%s\n' "${!iface_ips[@]}" | sort)
-            echo -e "  ${FR}╰══════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}╚══════════════════════════════════════════════════════════════╝${NC}"
             echo -ne "  ${C}Select Index ❯❯ ${NC}"; read -r idx; idx="${idx//[^0-9]/}"
             local selected_ifc_info="${iface_list[${idx:-x}]:-}"
             [ -n "$selected_ifc_info" ] || { echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; }
@@ -2312,14 +2312,14 @@ purge_menu() {
         2)
             [ -n "$all_ips" ] || { echo -e "  ${R}● No active mappings found!${NC}"; sleep 2; return; }
             local ip_arr; read -ra ip_arr <<< "$(echo $all_ips)"
-            echo -e "\n  ${FR}╭══════════════════ Select Target IP to Purge ═════════════════╗${NC}"
+            echo -e "\n  ${FR}╔══════════════════ Select Target IP to Purge ═════════════════╗${NC}"
             local i; for i in "${!ip_arr[@]}"; do
                 local ifc_info disp_name raw_str pad sp
                 ifc_info=$(get_iface_info "${ip_arr[$i]}"); disp_name="${ifc_info##*|} [${ifc_info%%|*}]"
                 raw_str=$(printf "  %02d ❯ %-26s (%s)" "$i" "${ip_arr[$i]}" "$disp_name"); pad=$(( 58 - ${#raw_str} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
                 printf "  ${FR}║${NC}  ${Y}%02d${NC} ${C}❯${NC} ${W}%-26s${NC} ${DIM}(%s)${NC}%s${FR}║${NC}\n" "$i" "${ip_arr[$i]}" "$disp_name" "$sp"
             done
-            echo -e "  ${FR}╰══════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}╚══════════════════════════════════════════════════════════════╝${NC}"
             echo -ne "  ${C}Select Index ❯❯ ${NC}"; read -r idx; idx="${idx//[^0-9]/}"
             local target_ip="${ip_arr[${idx:-x}]:-}"
             [ -n "$target_ip" ] || { echo -e "  ${R}● Invalid selection!${NC}"; sleep 1; return; }
@@ -2388,7 +2388,7 @@ hap_restart_safe() {
 
 manual_restart() {
     draw_header
-    echo -e "\n  ${FR}╭─[ RESTART SERVICES ]${NC}\n  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Restart Realm Engine${NC}\n  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Restart Kernel NAT Engine${NC}\n  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Restart ALL Engines${NC}\n  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "\n  ${FR}┌─[ RESTART SERVICES ]${NC}\n  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Restart HAProxy Engine${NC}\n  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Restart Gost Engine${NC}\n  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}Restart Realm Engine${NC}\n  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${Y}Restart Kernel NAT Engine${NC}\n  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}Restart ALL Engines${NC}\n  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     local r_opt; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r r_opt; r_opt="${r_opt//[^0-5]/}"; echo ""
     case $r_opt in
         1) hap_restart_safe && echo -e "  ${G}● HAProxy restarted successfully.${NC}" ;;
@@ -2551,12 +2551,12 @@ show_mporter_info() {
     local choice
     while true; do
         draw_header
-        echo -e "\n  ${FR}╭─[ Tunnel Info & Specs ]${NC}"
+        echo -e "\n  ${FR}┌─[ Tunnel Info & Specs ]${NC}"
         echo -e "  ${FR}│${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${M}IP / Port Mappings${NC}"
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Backend Health Matrix${NC}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to MPorter Menu${NC}\n"
+        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to MPorter Menu${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r choice || return 0
         case "${choice//$'\r'/}" in
             1) show_table;;

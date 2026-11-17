@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.0.2).
+MODULE_VERSION="2.0.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -58,8 +58,8 @@ if ! declare -F bt_init_runtime >/dev/null 2>&1; then echo "MTunnel: core/bintun
 
 
 
-: "${FR:=[38;2;0;245;212m}"
-
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/mbackhaul"
 CONF_DIR="/etc/mbackhaul/tunnels"
 CERT_DIR="/etc/mbackhaul/certs"
@@ -239,7 +239,7 @@ apply_bbr_optimization() {
 
 bh_select_transport() {
     local choice
-    echo -e "\n  ${FR}╭─[ TRANSPORT PROTOCOL ]${NC}"
+    echo -e "\n  ${FR}┌─[ TRANSPORT PROTOCOL ]${NC}"
     echo -e "  ${FR}│${NC}"
     local n label
     for n in 1 2 3 4 5 6 7; do
@@ -250,7 +250,7 @@ bh_select_transport() {
         printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "$n" "$NC" "$DIM" "$NC" "$W" "$label" "$NC"
     done
     echo -e "  ${FR}│${NC}"
-    echo -ne "  ${FR}╰─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    echo -ne "  ${FR}└─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
     case "$choice" in
         1) BH_TRANSPORT=tcp;; 2) BH_TRANSPORT=tcpmux;; 3) BH_TRANSPORT=wsmux;;
         4) BH_TRANSPORT=wssmux;; 5) BH_TRANSPORT=ws;; 6) BH_TRANSPORT=wss;;
@@ -320,7 +320,7 @@ bh_advanced_wizard() {
     local name="$1" role="$2" transport="$3" choice key
     bh_load_options "$CONF_DIR/$name.meta" || return 1
     BH_SETTINGS_FILE=""
-    echo -e "\n  ${FR}╭─[ ADVANCED TUNNEL SETTINGS ]${NC}"
+    echo -e "\n  ${FR}┌─[ ADVANCED TUNNEL SETTINGS ]${NC}"
     echo -ne "  ${FR}├─${NC} ${W}Customize settings? [y/N]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
     if [[ "${choice,,}" == y || "${choice,,}" == yes ]]; then
         bh_ask_option LOG 'Log level (trace/debug/info/warn/error)' || return 1
@@ -612,7 +612,7 @@ render_unified_update_menu() {
         else core_tag=" ${Y}(installed v${core_v}; v${BH_EXPECT_VERSION} required)${NC}"; fi
     fi
     mt_workspace_screen
-    echo -e "\n  ${FR}╭─[ UPDATE & LOCAL INSTALL — MBACKHAUL ]${NC}"
+    echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL — MBACKHAUL ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
@@ -621,7 +621,7 @@ render_unified_update_menu() {
     echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
     echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
 }
 unified_update_menu() {
     local opt
@@ -643,14 +643,14 @@ unified_update_menu() {
 }
 
 menu_install_core() {
-    echo -e "\n  ${FR}╭─[ INSTALL / UPDATE BACKHAUL CORE ]${NC}"
+    echo -e "\n  ${FR}┌─[ INSTALL / UPDATE BACKHAUL CORE ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
 
@@ -662,18 +662,18 @@ check_first_run_core() {
         local first_prompt_flag="$CONF_DIR/.core_prompted"
         if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
-            echo -e "\n  ${FR}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
             local core_msg="Backhaul Core binary is NOT installed on this machine!"
             if bh_core_bin >/dev/null; then bh_probe_version "$(bh_core_bin)"; core_msg="Installed Backhaul Core is v${BH_PROBED_VERSION}; v${BH_EXPECT_VERSION} is required!"; fi
             printf '  %b║%b   %b● %-71.71s%b%b║%b\n' "$FR" "$NC" "$R" "$core_msg" "$NC" "$FR" "$NC"
             echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
-            echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
             echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
             echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
             echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
             echo -e "  ${FR}│${NC}"
-            echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
@@ -740,11 +740,11 @@ bh_expanded_ports() {
 
 bh_choose_forwarder() {
     local choice current="${1:-backhaul}"
-    echo -e "\n  ${FR}╭─[ FORWARDING ENGINE ]${NC}"
+    echo -e "\n  ${FR}┌─[ FORWARDING ENGINE ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Backhaul (Built-in TCP / UDP)${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}iptables (TCP / UDP)${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}MPorter (Select its TCP engine separately)${NC}"
-    echo -ne "  ${FR}╰─${NC} ${C}Select [Enter: ${current}, q: cancel] ❯❯ ${NC}"
+    echo -ne "  ${FR}└─${NC} ${C}Select [Enter: ${current}, q: cancel] ❯❯ ${NC}"
     read -r choice || return 1
     case "${choice//$'\r'/}" in
         1) BH_FORWARDER=backhaul;; 2) BH_FORWARDER=iptables;; 3) BH_FORWARDER=mporter;;
@@ -829,7 +829,7 @@ bh_show_forwarder() {
     for pair in "${pairs[@]}"; do
         printf "  ${FR}├─${NC} ${W}%-5s${NC} ${DIM}❯${NC} ${G}%s:%s${NC} ${DIM}(TCP)${NC}\n" "${pair%:*}" "$ip" "${pair##*:}"
     done
-    echo -e "  ${FR}╰─${NC} ${W}Open MPorter > Add Port Mappings > Backhaul Targets; ports are matched automatically.${NC}"
+    echo -e "  ${FR}└─${NC} ${W}Open MPorter > Add Port Mappings > Backhaul Targets; ports are matched automatically.${NC}"
 }
 
 bh_forward_chain() {
@@ -1577,7 +1577,7 @@ show_tunnel_registry() {
             proto_display="${C}${TRANSPORT^^}${NC} ${DIM}(UDP: ${G}${udp_status}${DIM})${NC}"
         fi
 
-        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
         local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
         echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
@@ -1613,7 +1613,7 @@ show_tunnel_registry() {
             echo -e "  ${FR}║${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${FR}║${NC}"
         fi
         
-        echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
+        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
         [ "$ROLE" != 1 ] || bh_show_forwarder "$t_name"
         ((count++))
     done
@@ -1639,8 +1639,8 @@ show_live_radar() {
 
     while true; do
         printf "\033[H"; draw_header
-        echo -e "\n  ${FR}╭─[ BACKHAUL TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
-        echo -e "  ${FR}╭══════════════════════╦════════════════╦══════════════════╦══════════════════╦════════════════════╦════════════════════╗${NC}"
+        echo -e "\n  ${FR}┌─[ BACKHAUL TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
+        echo -e "  ${FR}╔══════════════════════╦════════════════╦══════════════════╦══════════════════╦════════════════════╦════════════════════╗${NC}"
         printf "  ${FR}║${NC} ${W}%-20s${NC} ${FR}║${NC} ${W}%-14s${NC} ${FR}║${NC} ${C}%-16s${NC} ${FR}║${NC} ${M}%-16s${NC} ${FR}║${NC} ${DIM}%-18s${NC} ${FR}║${NC} ${DIM}%-18s${NC} ${FR}║${NC}\n" "TUNNEL NAME" "STATUS" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL RX" "∑ TOTAL TX"
         echo -e "  ${FR}╠══════════════════════╬════════════════╬══════════════════╬══════════════════╬════════════════════╬════════════════════╣${NC}"
 
@@ -1672,7 +1672,7 @@ show_live_radar() {
         if [ "$count" -eq 0 ]; then
             printf "  ${FR}║${NC} ${DIM}%-120s${NC} ${FR}║${NC}\n" "  No active Backhaul tunnels configured."
         fi
-        echo -e "  ${FR}╰══════════════════════╩════════════════╩══════════════════╩══════════════════╩════════════════════╩════════════════════╝${NC}"
+        echo -e "  ${FR}╚══════════════════════╩════════════════╩══════════════════╩══════════════════╩════════════════════╩════════════════════╝${NC}"
         printf "\033[J"
         mt_monitor_wait 1 || break
     done
@@ -1683,12 +1683,12 @@ manage_cron() {
     local t_name="$1"
     local cron_script="$CONF_DIR/${t_name}_restart.sh"
     
-    echo -e "\n  ${FR}╭─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
+    echo -e "\n  ${FR}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read -r cr_opt
 
     if [[ "$cr_opt" == "1" ]]; then
@@ -1727,14 +1727,14 @@ manage_cron() {
 
 uninstall_mbackhaul() {
     clear
-    echo -e "\n  ${R}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MBACKHAUL${NC}                 ${R}║${NC}"
     echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All active Backhaul tunnels & systemd units                            ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All configurations, metadata & SSL certificates                        ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All iptables traffic counters & crontabs                               ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● Backhaul core binaries (/usr/local/bin/bh) & mbackhaul module          ${R}║${NC}"
-    echo -e "  ${R}╰════════════════════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
@@ -1789,11 +1789,11 @@ select_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
     
-    echo -e "\n  ${FR}╭══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
+    echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
     for i in "${!configs[@]}"; do
         printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"
     done
-    echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
@@ -1857,7 +1857,7 @@ mt_peer_ensure_core() {
     if bh_core_bin >/dev/null; then bh_probe_version "$(bh_core_bin)"; echo -e "  ${R}✖ Installed core is v${BH_PROBED_VERSION}; v${BH_EXPECT_VERSION} is required.${NC}"; fi
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     while true; do
         mt_live_readline choice "  ${C}Select Source ❯❯ ${NC}" || return 1
         choice="${choice//$'\r'/}"
@@ -2019,7 +2019,7 @@ while true; do
     case $opt in
         1) 
            bh_start_screen
-           echo -e "\n  ${FR}╭─[ DEPLOY NEW TUNNEL ]${NC}"
+           echo -e "\n  ${FR}┌─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
                echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read -r s_type
                s_type=$(echo "$s_type" | tr -d '\r')
@@ -2112,9 +2112,9 @@ while true; do
         2)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && continue
-           echo -e "\n  ${FR}╭══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
+           echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
            for i in "${!configs[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
-           echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
+           echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
            echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read -r del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then
@@ -2184,7 +2184,7 @@ while true; do
                
            elif [[ "$opt" == "5" ]]; then
                bh_start_screen
-               echo -e "\n  ${FR}╭─[ TRANSPORT & ADVANCED SETTINGS ]${NC}"
+               echo -e "\n  ${FR}┌─[ TRANSPORT & ADVANCED SETTINGS ]${NC}"
                echo -ne "  ${C}Change transport? [y/N; current: $TRANSPORT] ❯❯ ${NC}"; read -r change_transport
                if [[ "${change_transport,,}" == y || "${change_transport,,}" == yes ]]; then
                    bh_select_transport || continue; TRANSPORT="$BH_TRANSPORT"

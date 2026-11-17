@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v2.0.2).
+MODULE_VERSION="2.0.2"
 [ -n "${BASH_VERSION:-}" ] || { echo 'Run this installer with bash: sudo bash install.sh' >&2; exit 1; }
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"
@@ -133,7 +133,7 @@ installer_require_core_api() {
 }
 
 B='\033[1;37m'; G='\033[1;32m'; LG='\033[0;92m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-
+FR='\033[1;33m'
 
 # Bounded HTTPS download for interactive installer operations.  The shared
 # mt_download helper can take several minutes *per file* on a bad connection.

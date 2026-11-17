@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v2.0.2).
+MODULE_VERSION="2.0.2"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -58,8 +58,8 @@ if ! declare -F bt_init_runtime >/dev/null 2>&1; then echo "MTunnel: core/bintun
 
 
 
-: "${FR:=[38;2;0;245;212m}"
-
+B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
+FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
 INSTALL_PATH="/usr/bin/mpaqet"
 CONF_DIR="/etc/paqet"
 SERVICE_DIR="/etc/systemd/system"
@@ -163,7 +163,7 @@ render_unified_update_menu() {
     core_v=$(mt_core_version)
     [ -n "$core_v" ] && [ "$core_v" != "not-installed" ] && core_tag=" ${G}(installed)${NC}"
     mt_workspace_screen
-    echo -e "\n  ${FR}╭─[ UPDATE & LOCAL INSTALL — MPAQET ]${NC}"
+    echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL — MPAQET ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
@@ -172,7 +172,7 @@ render_unified_update_menu() {
     echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
     echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
 }
 unified_update_menu() {
     local opt
@@ -194,14 +194,14 @@ unified_update_menu() {
 }
 
 menu_install_core() {
-    echo -e "\n  ${FR}╭─[ INSTALL / UPDATE PAQET CORE ]${NC}"
+    echo -e "\n  ${FR}┌─[ INSTALL / UPDATE PAQET CORE ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines/paqet)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r\n ')
 
@@ -213,16 +213,16 @@ check_first_run_core() {
         local first_prompt_flag="$CONF_DIR/.core_prompted"
         if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
-            echo -e "\n  ${FR}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
             echo -e "  ${FR}║${NC}   ${R}● Paqet Core binary is NOT installed on this machine!${NC}                   ${FR}║${NC}"
             echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
-            echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
             echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
             echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
             echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines/paqet)${NC}"
             echo -e "  ${FR}│${NC}"
-            echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r ')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
@@ -537,7 +537,7 @@ choose_kcp_profile() {
     local role="$1" current="${2:-BALANCED}" choice sub cores
     cores=$(cpu_cores)
     mt_workspace_screen
-    echo -e "\n  ${FR}╭════════════════════════ KCP PROFILE ════════════════════════╗${NC}"
+    echo -e "\n  ${FR}╔════════════════════════ KCP PROFILE ════════════════════════╗${NC}"
     echo -e "  ${FR}║${NC} ${W}CPU-aware presets. MTU is never changed by a profile.${NC}"
     echo -e "  ${FR}╠═════════════════════════════════════════════════════════════╣${NC}"
     echo -e "  ${FR}║${NC} ${G}1${NC}) ECO         lowest CPU: 1 conn, slow timers, batched"
@@ -548,7 +548,7 @@ choose_kcp_profile() {
     echo -e "  ${FR}║${NC} ${W}6${NC}) CLASSIC     paqet built-in normal / fast / fast2 / fast3"
     echo -e "  ${FR}║${NC} ${R}7${NC}) EXTREME     300+ Mbit: needs 4+ cores and 2GB+ RAM, window 4096"
     echo -e "  ${FR}║${NC} ${DIM}Current: ${current}   |   CPU cores on this server: ${cores}${NC}"
-    echo -e "  ${FR}╰═════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚═════════════════════════════════════════════════════════════╝${NC}"
     echo -e "  ${DIM}Apply the profile on BOTH servers. conn is capped by this server's cores.${NC}"
     echo -ne "  ${C}Profile ❯❯ ${NC}"; read -r choice
     case "$choice" in
@@ -1153,7 +1153,7 @@ show_tunnel_registry() {
 
         local rx=$(get_paqet_rx "$t_name"); local tx=$(get_paqet_tx "$t_name")
 
-        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
         local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
         echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
@@ -1184,7 +1184,7 @@ show_tunnel_registry() {
             echo -e "  ${FR}║${NC} ${DIM}Port Mappings:${NC} ${Y}${p_str}${NC}${sp5} ${FR}║${NC}"
         fi
         
-        echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
+        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
@@ -1207,8 +1207,8 @@ show_live_radar() {
 
     while true; do
         printf "\033[H"; draw_header
-        echo -e "\n  ${FR}╭─[ PAQET TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
-        echo -e "  ${FR}╭══════════════════╦════════════╦══════════════╦══════════════╦══════════════╦══════════════╗${NC}"
+        echo -e "\n  ${FR}┌─[ PAQET TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
+        echo -e "  ${FR}╔══════════════════╦════════════╦══════════════╦══════════════╦══════════════╦══════════════╗${NC}"
         printf "  ${FR}║${NC} ${W}%-16s${NC} ${FR}║${NC} ${W}%-10s${NC} ${FR}║${NC} ${C}%-12s${NC} ${FR}║${NC} ${M}%-12s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC} ${DIM}%-12s${NC} ${FR}║${NC}\n" "TUNNEL NAME" "STATUS" "▼ DOWNLOAD" "▲ UPLOAD" "∑ TOTAL RX" "∑ TOTAL TX"
         echo -e "  ${FR}╠══════════════════╬════════════╬══════════════╬══════════════╬══════════════╬══════════════╣${NC}"
 
@@ -1242,7 +1242,7 @@ show_live_radar() {
         if [ "$count" -eq 0 ]; then
             printf "  ${FR}║${NC} ${DIM}%-86s${NC} ${FR}║${NC}\n" "  No active Paqet tunnels configured."
         fi
-        echo -e "  ${FR}╰══════════════════╩════════════╩══════════════╩══════════════╩══════════════╩══════════════╝${NC}"
+        echo -e "  ${FR}╚══════════════════╩════════════╩══════════════╩══════════════╩══════════════╩══════════════╝${NC}"
         printf "\033[J"
         mt_monitor_wait 1 || break
     done
@@ -1253,11 +1253,11 @@ select_tunnel() {
     local configs=($(ls "$CONF_DIR"/*.yaml 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
 
-    echo -e "\n  ${FR}╭══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
+    echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
     for i in "${!configs[@]}"; do
         printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .yaml)"
     done
-    echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
@@ -1269,14 +1269,14 @@ select_tunnel() {
 
 uninstall_mpaqet() {
     clear
-    echo -e "\n  ${R}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MPAQET${NC}                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All active Paqet tunnels & systemd units                               ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All YAML configurations & metadata in /etc/paqet                       ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All raw & mangle iptables counters                                    ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● Paqet core binary (/usr/local/bin/paqet) & mpaqet module               ${R}║${NC}"
-    echo -e "  ${R}╰════════════════════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
@@ -1365,7 +1365,7 @@ mt_peer_ensure_core() {
     echo -e "\n  ${Y}● Paqet Core is required before applying this Peer Code.${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
-    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     while true; do
         mt_live_readline choice "  ${C}Select Source ❯❯ ${NC}" || return 1
         choice="${choice//$'\r'/}"
@@ -1532,7 +1532,7 @@ while true; do
     case $opt in
         1)
            mt_workspace_screen
-           echo -e "\n  ${FR}╭─[ DEPLOY SERVER TUNNEL ]${NC}"
+           echo -e "\n  ${FR}┌─[ DEPLOY SERVER TUNNEL ]${NC}"
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. srv1): ${NC}"; read -r suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            if [ -z "$suffix" ]; then echo -e "  ${R}✖ Invalid Name!${NC}"; sleep 1.5; continue; fi
@@ -1626,7 +1626,7 @@ EOF
            
         2)
            mt_workspace_screen
-           echo -e "\n  ${FR}╭─[ DEPLOY CLIENT TUNNEL ]${NC}"
+           echo -e "\n  ${FR}┌─[ DEPLOY CLIENT TUNNEL ]${NC}"
            echo -ne "  ${C}● Tunnel Suffix Name (e.g. cl1): ${NC}"; read -r suffix
            suffix=$(echo "$suffix" | tr -dc 'a-zA-Z0-9')
            if [ -z "$suffix" ]; then echo -e "  ${R}✖ Invalid Name!${NC}"; sleep 1.5; continue; fi
@@ -1760,9 +1760,9 @@ EOF
         3)
            configs=($(ls "$CONF_DIR"/*.meta 2>/dev/null))
            [ ${#configs[@]} -eq 0 ] && continue
-           echo -e "\n  ${FR}╭══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
+           echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
            for i in "${!configs[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}" .meta)"; done
-           echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
+           echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
            echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read -r del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r ')
            

@@ -1,13 +1,47 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 2.0.1, API 1, layout revision 2.
+# MTunnel shared core — release 2.1.0, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="2.0.1"
+MTUNNEL_RELEASE_VERSION="2.1.0"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
-: "${FR:=\033[1;33m}"
+# MDesign Neon TrueColor Palette (v2.1.0)
+if [[ "${COLORTERM:-}" == *truecolor* || "${COLORTERM:-}" == *24bit* || "${TERM:-}" == *256color* || "${TERM:-}" == xterm* || "${TERM:-}" == screen* || "${TERM:-}" == tmux* ]]; then
+    B='\033[1;38;2;58;134;255m'
+    G='\033[1;38;2;57;255;20m'
+    Y='\033[1;38;2;255;190;11m'
+    R='\033[1;38;2;255;42;109m'
+    C='\033[38;2;0;217;255m'
+    M='\033[1;38;2;181;55;242m'
+    W='\033[1;38;2;248;249;250m'
+    DIM='\033[38;2;110;125;155m'
+    FR='\033[38;2;0;245;212m'
+    ACCENT='\033[1;38;2;255;0;127m'
+    NC='\033[0m'
+else
+    B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'
+    C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'
+    FR='\033[1;36m'; ACCENT='\033[1;35m'; NC='\033[0m'
+fi
+
+mt_neon_bar() { # pct [width=6] [color]
+    local pct="${1:-0}" w="${2:-6}" col="${3:-$G}" filled empty i out=""
+    [[ "$pct" =~ ^[0-9]+$ ]] || pct=0
+    [ "$pct" -gt 100 ] && pct=100
+    filled=$(( (pct * w + 50) / 100 ))
+    [ "$pct" -gt 0 ] && [ "$filled" -eq 0 ] && filled=1
+    [ "$filled" -gt "$w" ] && filled="$w"
+    empty=$(( w - filled ))
+    printf -v out '%b' "$col"
+    for ((i=0; i<filled; i++)); do out+="▰"; done
+    printf -v out '%s%b' "$out" "$DIM"
+    for ((i=0; i<empty; i++)); do out+="▱"; done
+    printf -v out '%s%b' "$out" "$NC"
+    printf '%s' "$out"
+}
+
 # CENTRAL SOURCE CONFIGURATION (root-managed, data-only; no eval or source).
 # Override these defaults with /etc/mtunnel/sources.conf, or by exporting
 # MTUNNEL_GITHUB_BASE and MTUNNEL_MIRROR_BASE before launching the script.
@@ -1399,28 +1433,26 @@ mt_workspace_row() {
     mt_term_cols_set; cols="$MT_TERM_COLS"
     max_label=$((cols - 12)); [ "$max_label" -lt 12 ] && max_label=12
     [ ${#label} -le "$max_label" ] || label="${label:0:$((max_label-1))}…"
-    printf '  %b├─%b %b%-2s%b%b❯%b %b\033[1m%s%b%b\n' \
-        "$FR" "$NC" "$W" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
+    printf '  %b├─%b %b%-2s%b %b❯%b %b\033[1m%s%b%b\n' \
+        "$FR" "$NC" "${ACCENT:-$M}" "$1" "$NC" "$DIM" "$NC" "${3:-$C}" "$label" "$NC" "${4:-}"
 }
 
 mt_workspace_group() {
     local cols; mt_term_cols_set; cols="$MT_TERM_COLS"
     if [ "${2:-}" = first ]; then
-        printf '\n  %b┌─[ %s ]%b\n' "$FR" "$1" "$NC"
+        printf '\n  %b╭─[ %b⚡ %s%b %b]%b\n' "$FR" "${ACCENT:-$M}" "$1" "$NC" "$FR" "$NC"
     else
         [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$FR" "$NC"
-        printf '  %b├─[ %s ]%b\n' "$FR" "$1" "$NC"
+        printf '  %b├─[ %b◈ %s%b %b]%b\n' "$FR" "${ACCENT:-$M}" "$1" "$NC" "$FR" "$NC"
     fi
     [ "$cols" -lt 72 ] || printf '  %b│%b\n' "$FR" "$NC"
 }
 
 mt_workspace_footer() {
-    # Keep option 0 *inside* the left-hand menu frame, visibly separated
-    # from destructive actions such as Delete/Uninstall. Shared by all tunnels.
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├────────────────────────────%b\n' "$FR" "$NC"
-    printf '  %b└─%b %b0%b %b❯%b %b\033[1m%s%b\n\n' \
-        "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
+    printf '  %b├──────────────────────────────%b\n' "$FR" "$NC"
+    printf '  %b╰─%b %b0%b  %b❯%b %b\033[1m%s%b\n\n' \
+        "$FR" "$NC" "$R" "$NC" "$DIM" "$NC" "$DIM" "$1" "$NC"
 }
 
 mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
@@ -2126,7 +2158,7 @@ mt_hdr_draw() {
         fi
         content_w=$((boxw - 2))
         printf -v border '%*s' "$content_w" ''; border="${border// /═}"
-        printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+        printf '\033[K\n  %b╭%s╮%b\033[K\n' "$FR" "$border" "$NC"
         _mt_hdr_line() { # plain text (used for width/truncation) + optional coloured twin with identical visible text
             local t="$1" c="${2:-}" w=$((content_w-2)) LC_CTYPE=C.UTF-8
             if (( ${#t} > w )); then t="${t:0:w}"; c=''; fi
@@ -2163,7 +2195,7 @@ mt_hdr_draw() {
                     "${icon_c}${row_icon}${NC} ${W}${name}${NC} ${DIM}[${NC}${M}${tag}${NC}${DIM}]${NC} ${DIM}|${NC} ${C}${peer:-"---"}${NC} ${DIM}| Ping${NC} ${ping_c}${ping:-"---"}${NC} ${DIM}| Loss${NC} ${loss_c}${loss:-"---"}${NC}"
             done
         fi
-        printf '  %b╚%s╝%b\033[K\n' "$FR" "$border" "$NC"
+        printf '  %b╰%s╯%b\033[K\n' "$FR" "$border" "$NC"
         unset -f _mt_hdr_line
         return 0
     fi
@@ -2191,7 +2223,7 @@ mt_hdr_draw() {
     v6_field=$(( w6 - 10 ))
     printf -v border '%*s' "$total" ''; border="${border// /═}"
 
-    printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$FR" "$border" "$NC"
     # Row 1: title | IPv4 | IPv6 | BBR + module status
     local x_lbl="${x_label:0:8}" x_w
     x_w=$(( w4 - 15 - (${#x_lbl} + 1) )); (( x_w < 1 )) && x_w=1
@@ -2201,10 +2233,13 @@ mt_hdr_draw() {
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
         "$x_lbl" "$x_col" "$x_w" "$x_w" "$x_val" "$NC"
     printf "  ${FR}╠${border}╣${NC}\033[K\n"
-    # Row 2: CPU/cores | RAM | Net down | Net up
-    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
-        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
-        "$ram_col" "$ram_str" "$NC" \
+    # Row 2: CPU bar + cores | RAM bar | Net down | Net up
+    local cpu_bar ram_bar ram_short="${MT_RAM_USED}/${MT_RAM_TOTAL}"
+    cpu_bar=$(mt_neon_bar "${MT_CPU_PCT:-0}" 5 "$cpu_col")
+    ram_bar=$(mt_neon_bar "${MT_RAM_PCT:-0}" 5 "$ram_col")
+    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %s %b%-4.4s%b ${DIM}(%-7.7s)${NC} ${FR}║${NC} ${DIM}RAM:${NC} %s %b%-11.11s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+        "$cpu_bar" "$cpu_col" "$cpu_str" "$NC" "$core_label" \
+        "$ram_bar" "$ram_col" "$ram_short" "$NC" \
         "$rx_col" "$((w6-9))" "$((w6-9))" "$MT_RX" "$NC" \
         "$tx_col" "$((w4-9))" "$((w4-9))" "$MT_TX" "$NC"
 
@@ -2256,7 +2291,7 @@ mt_hdr_draw() {
         local empty_text="${MT_HDR_EMPTY_TEXT:-No tunnels of this type are configured on this host.}"
         printf "  ${FR}║${NC}  ${DIM}● %-*.*s${NC}  ${FR}║${NC}\033[K\n" "$((total-6))" "$((total-6))" "$empty_text"
     fi
-    printf '  %b╚%s╝%b\033[K\n' "$FR" "$border" "$NC"
+    printf '  %b╰%s╯%b\033[K\n' "$FR" "$border" "$NC"
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2364,19 +2399,19 @@ mt_master_header_draw() {
             local _a _b _c _d _e _f _g _h
             while IFS='|' read -r _a _b _c _d _e _f _g _h; do [ -n "$_a" ] && tun_count=$((tun_count+1)); done < "$SECURE_TMP/.main_tun_stats"
         fi
-        printf "\033[K\n  ${FR}╔${border}╗${NC}\033[K\n"
+        printf "\033[K\n  ${FR}╭${border}╮${NC}\033[K\n"
         compact_line="MDesign v${master_version} | ${s_ip}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         compact_line="CPU ${cpu_str} | RAM ${ram_str}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         compact_line="RX ${rx_speed} | TX ${tx_speed}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         compact_line="BBR ${bbr_text} | IPv6 ${v6_text} | Tunnels ${tun_count} | Porter ${porter_text}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
-        printf "  ${FR}╚${border}╝${NC}\033[K\n"
+        printf "  ${FR}╰${border}╯${NC}\033[K\n"
         return 0
     fi
     if [ "$term_cols" -lt 124 ]; then
         boxw=$((term_cols - 4)); [ "$boxw" -lt 32 ] && boxw=32; [ "$boxw" -gt 78 ] && boxw=78
         content_w=$((boxw - 2))
         printf -v border '%*s' "$content_w" ''; border="${border// /═}"
-        printf "\033[K\n  ${FR}╔${border}╗${NC}\033[K\n"
+        printf "\033[K\n  ${FR}╭${border}╮${NC}\033[K\n"
         compact_line="MDesign v${master_version} | Local: ${s_ip}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         compact_line="CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text} | IPv6 ${v6_text}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         compact_line="Porter ${porter_text} | RX ${rx_speed} | TX ${tx_speed}"; printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
@@ -2394,7 +2429,7 @@ mt_master_header_draw() {
             compact_line='No active tunnels configured.'
             printf "  ${FR}║${NC} %-*.*s ${FR}║${NC}\033[K\n" "$((content_w-2))" "$((content_w-2))" "$compact_line"
         fi
-        printf "  ${FR}╚${border}╝${NC}\033[K\n"
+        printf "  ${FR}╰${border}╯${NC}\033[K\n"
         return 0
     fi
 
@@ -2429,18 +2464,21 @@ mt_master_header_draw() {
     printf -v border '%*s' "$total" ''
     border="${border// /═}"
 
-    printf '\033[K\n  %b╔%s╗%b\033[K\n' "$FR" "$border" "$NC"
+    printf '\033[K\n  %b╭%s╮%b\033[K\n' "$FR" "$border" "$NC"
     # Row 1: title 31 | IPv4 25 | IPv6 w6 | BBR + Porter w4
     printf "  ${FR}║${NC} ${W}%-29.29s${NC} ${FR}║${NC} ${C}◆${NC} ${DIM}IPv4${NC}  ${M}%-15.15s${NC} ${FR}║${NC} ${M}◆${NC} ${DIM}IPv6${NC}  %b%-*.*s%b ${FR}║${NC} ${DIM}BBR:${NC} %b%s%b %-3.3s  ${DIM}Porter:${NC} %b%s%b %-*.*s ${FR}║${NC}\033[K\n" \
-        "MDesign Master Core v${master_version}" "$s_ip" \
+        "⚡ MDesign Core v${master_version}" "$s_ip" \
         "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
         "$porter_col" "$porter_icon" "$NC" "$((w4-24))" "$((w4-24))" "$porter_text"
     printf "  ${FR}╠${border}╣${NC}\033[K\n"
-    # Row 2: CPU 31 | RAM 25 | Net ▼ w6 | Net ▲ w4
-    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
-        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
-        "$ram_col" "$ram_str" "$NC" \
+    # Row 2: CPU bar 31 | RAM bar 25 | Net ▼ w6 | Net ▲ w4
+    local cpu_bar ram_bar ram_short="${r_used}/${r_total}"
+    cpu_bar=$(mt_neon_bar "${cpu_pct:-0}" 5 "$cpu_col")
+    ram_bar=$(mt_neon_bar "${r_pct:-0}" 5 "$ram_col")
+    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %s %b%-4.4s%b ${DIM}(%-7.7s)${NC} ${FR}║${NC} ${DIM}RAM:${NC} %s %b%-11.11s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
+        "$cpu_bar" "$cpu_col" "$cpu_str" "$NC" "$core_label" \
+        "$ram_bar" "$ram_col" "$ram_short" "$NC" \
         "$rx_col" "$((w6-9))" "$((w6-9))" "$rx_speed" "$NC" \
         "$tx_col" "$((w4-9))" "$((w4-9))" "$tx_speed" "$NC"
     printf "  ${FR}╠${border}╣${NC}\033[K\n"
@@ -2498,7 +2536,7 @@ mt_master_header_draw() {
     if [ "$shown" -eq 0 ]; then
         printf "  ${FR}║${NC}  ${DIM}● %-*.*s${NC}  ${FR}║${NC}\033[K\n" "$((111+extra))" "$((111+extra))" "No active tunnels or fabrics deployed across the ecosystem."
     fi
-    printf "  ${FR}╚${border}╝${NC}\033[K\n"
+    printf "  ${FR}╰${border}╯${NC}\033[K\n"
 }
 
 

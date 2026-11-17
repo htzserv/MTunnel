@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.0.1).
-MODULE_VERSION="2.0.1"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.1.0).
+MODULE_VERSION="2.1.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -53,8 +53,8 @@ mt_version_newer() { # true only when $1 is strictly newer than $2 (pure bash)
 }
 fi
 if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
+: "${FR:=[38;2;0;245;212m}"
+
 MTUNNEL_PATH="/usr/bin/mtunnel"
 REPO_SCRIPTS="$MTUNNEL_GITHUB_BASE"
 MIRROR_SCRIPTS="$MTUNNEL_MIRROR_BASE"
@@ -1612,7 +1612,7 @@ ota_group_install() {
 }
 render_ota_menu() {
     draw_main_header
-    echo -e "\n  ${FR}┌─[ Update & Local Install ]${NC}"
+    echo -e "\n  ${FR}╭─[ Update & Local Install ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}R${NC} ${DIM}❯${NC} ${Y}Check for updates now${NC} ${DIM}(GitHub + Mirror)${NC}"
     echo -e "  ${FR}│${NC}"
@@ -1644,7 +1644,7 @@ render_ota_menu() {
     echo -e "  ${FR}├─${NC} ${W}13${NC}${DIM}❯${NC} ${Y}Install via Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├────────────────────────────${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit to Dashboard${NC}\n"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Exit to Dashboard${NC}\n"
 }
 draw_item_progress() {
     local n="$1" total="$2" label="$3" version="$4" state="${5:-ok}" width=30
@@ -1665,9 +1665,9 @@ choose_module() {
     local i selection branch mode="${1:-OVERWRITE}"
     draw_main_header
     if [ "$mode" == EDITOR ]; then
-        echo -e "\n  ${FR}┌─[ MANUAL CODE PASTE (NANO) ]${NC}\n  ${FR}│${NC}"
+        echo -e "\n  ${FR}╭─[ MANUAL CODE PASTE (NANO) ]${NC}\n  ${FR}│${NC}"
     else
-        echo -e "\n  ${FR}┌─[ SELECT COMPONENT TARGET ]${NC}\n  ${FR}│${NC}"
+        echo -e "\n  ${FR}╭─[ SELECT COMPONENT TARGET ]${NC}\n  ${FR}│${NC}"
     fi
     for i in "${!EDITABLE_COMPONENTS[@]}"; do
         branch='├─'; [ "$i" -ne "$((${#EDITABLE_COMPONENTS[@]}-1))" ] || branch='└─'
@@ -1766,7 +1766,7 @@ ota_update_one_file() {
     work=$(mktemp -d "$SECURE_TMP/onefile.XXXXXX") || return 1
     file="$work/input"
     draw_main_header
-    echo -e "\n  ${FR}┌─[ DOWNLOAD ${module^^} SCRIPT FROM ${source_name} ]${NC}\n"
+    echo -e "\n  ${FR}╭─[ DOWNLOAD ${module^^} SCRIPT FROM ${source_name} ]${NC}\n"
     if ! mt_download "$base/$rel?t=$(date +%s)" "$file"; then
         echo -e "  ${R}✖ Download failed. Existing script preserved.${NC}"
         rm -rf "$work"; return 1
@@ -1781,7 +1781,7 @@ ota_update_one_file() {
     new_ver=$(component_version_from_file "$module" "$file")
     echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
     echo -e "  ${FR}├─${NC} ${W}Remote Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}Apply this script? (y/n): ${NC}"; read -r confirm
+    echo -ne "  ${FR}╰─${NC} ${C}Apply this script? (y/n): ${NC}"; read -r confirm
     if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
         if install_component_candidate "$module" "$file"; then
             echo -e "\n  ${G}✔ ${rel} (v${new_ver:-Unknown}) updated successfully.${NC}\n"
@@ -1820,7 +1820,7 @@ show_ota_update_hub() {
                 case "$act" in
                     0)  # Download scripts (whole bundle: shared core + every module + installer)
                         draw_main_header
-                        echo -e "\n  ${FR}┌─[ DOWNLOADING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
+                        echo -e "\n  ${FR}╭─[ DOWNLOADING ALL SCRIPTS FROM ${source_name} ]${NC}\n"
                         sync_rc=0; ota_group_install scripts "$base_scripts" "$base_packages" || sync_rc=$?
                         if [ "$sync_rc" == 0 ]; then
                             upd_clear
@@ -1838,7 +1838,7 @@ show_ota_update_hub() {
                         ota_update_one_file mmirror "$base_scripts" "$source_name" || true;;
                     3)  # Download engines (binary cores)
                         draw_main_header
-                        echo -e "\n  ${FR}┌─[ DOWNLOADING ENGINES FROM ${source_name} (BH, RATHOLE, PAQET, GOST, HAPROXY) ]${NC}\n"
+                        echo -e "\n  ${FR}╭─[ DOWNLOADING ENGINES FROM ${source_name} (BH, RATHOLE, PAQET, GOST, HAPROXY) ]${NC}\n"
                         if ota_group_install engines "$base_scripts" "$base_packages"; then
                             echo -e "\n\n  ${G}● Engines downloaded and installed successfully.${NC}\n"
                         else
@@ -1846,7 +1846,7 @@ show_ota_update_hub() {
                         fi;;
                     4)  # Download & install prerequisites: progress bar only, output goes to a log
                         draw_main_header
-                        echo -e "\n  ${FR}┌─[ PREREQUISITES: ${source_name} ]${NC}\n"
+                        echo -e "\n  ${FR}╭─[ PREREQUISITES: ${source_name} ]${NC}\n"
                         pre_log=$(mktemp "$SECURE_TMP/prereq.XXXXXX.log") || pre_log="$SECURE_TMP/prereq.log"
                         pre_rc=$(mktemp "$SECURE_TMP/prereq.XXXXXX.rc") || pre_rc="$SECURE_TMP/prereq.rc"
                         pre_report=$(mktemp "$SECURE_TMP/prereq.XXXXXX.report") || pre_report="$SECURE_TMP/prereq.report"
@@ -1872,7 +1872,7 @@ show_ota_update_hub() {
                     base_scripts="$MIRROR_SCRIPTS"; base_packages="$MIRROR_PACKAGES"; source_name='IRANIAN MIRROR'
                 fi
                 draw_main_header
-                echo -e "\n  ${FR}┌─[ INSTALLING FULL PACKAGE FROM ${source_name} ]${NC}\n"
+                echo -e "\n  ${FR}╭─[ INSTALLING FULL PACKAGE FROM ${source_name} ]${NC}\n"
                 sync_rc=0; ota_group_install all "$base_scripts" "$base_packages" || sync_rc=$?
                 if [ "$sync_rc" == 0 ]; then
                     upd_clear
@@ -1888,7 +1888,7 @@ show_ota_update_hub() {
                 work=$(mktemp -d "$SECURE_TMP/link.XXXXXX") || return 1
                 file="$work/input"
                 draw_main_header
-                echo -e "\n  ${FR}┌─[ INSTALL FROM LINK ]${NC}\n"
+                echo -e "\n  ${FR}╭─[ INSTALL FROM LINK ]${NC}\n"
                 echo -ne "  ${C}●${NC} ${W}Enter Direct HTTPS (.sh / .zip / .tar.gz) URL: ${NC}"; read -r url
                 url="${url//[$'\r\n\t ']/}"
                 [ -n "$url" ] || { rm -rf "$work"; continue; }
@@ -1940,12 +1940,12 @@ show_ota_update_hub() {
                 new_ver=$(component_version_from_file "$module" "$file")
                 current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
                 draw_main_header
-                echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${FR}│${NC}"
+                echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${FR}│${NC}"
                 echo -e "  ${FR}├─${NC} ${W}Target Component:${NC} ${C}${module}${NC} ${DIM}(${rel})${NC}"
                 echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
                 echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
                 echo -e "  ${FR}│${NC}"
-                echo -ne "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+                echo -ne "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
                 if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
                     if install_component_candidate "$module" "$file"; then
                         echo -e "\n  ${G}✔ Component ${module} (v${new_ver:-Unknown}) successfully applied!${NC}\n"
@@ -1972,12 +1972,12 @@ show_ota_update_hub() {
                 new_ver=$(component_version_from_file "$module" "$file")
                 current_v=$(component_version_from_file "$module" "$target" 2>/dev/null)
                 draw_main_header
-                echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${FR}│${NC}"
+                echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}\n  ${FR}│${NC}"
                 echo -e "  ${FR}├─${NC} ${W}Target Component:${NC} ${C}${module}${NC} ${DIM}(${rel})${NC}"
                 echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${current_v:-Unknown}${NC}"
                 echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver:-Unknown}${NC}"
                 echo -e "  ${FR}│${NC}"
-                echo -ne "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+                echo -ne "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
                 if [[ "${confirm,,}" == y || "${confirm,,}" == yes ]]; then
                     if install_component_candidate "$module" "$file"; then
                         echo -e "\n  ${G}✔ Component ${module} (v${new_ver:-Unknown}) successfully applied!${NC}\n"
@@ -2108,7 +2108,7 @@ install_iperf3_source() {
 run_iperf3() {
     if ! is_iperf3_valid; then
         draw_main_header
-        echo -e "\n  ${FR}┌─[ IPERF3 BENCHMARK INSTALLER ]${NC}"
+        echo -e "\n  ${FR}╭─[ IPERF3 BENCHMARK INSTALLER ]${NC}"
         echo -e "  ${FR}│${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official APT Repository (apt-get install libiperf0 iperf3)${NC}"
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror (.deb Packages)${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
@@ -2116,7 +2116,7 @@ run_iperf3() {
         echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
         echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${Y}Custom Direct Link (.deb)${NC}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel / Return to Main Core${NC}\n"
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel / Return to Main Core${NC}\n"
         echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r inst_opt
         inst_opt=$(echo "$inst_opt" | tr -d '\r ')
         if [[ "$inst_opt" =~ ^[1-5]$ ]]; then
@@ -2127,11 +2127,11 @@ run_iperf3() {
     fi
     render_iperf_menu() {
         draw_main_header
-        echo -e "\n  ${FR}┌─[ IPERF3 BANDWIDTH BENCHMARK (Port: 5201 TCP/UDP) ]${NC}"
+        echo -e "\n  ${FR}╭─[ IPERF3 BANDWIDTH BENCHMARK (Port: 5201 TCP/UDP) ]${NC}"
         echo -e "  ${FR}│${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Run as Server (Listener Mode)${NC} ${DIM}(Wait for peer connections)${NC}"
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}Run as Client (Sender Mode)${NC}   ${DIM}(Push bandwidth stream to server)${NC}"
-        echo -e "  ${FR}│${NC}\n  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
+        echo -e "  ${FR}│${NC}\n  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}\n"
     }
     while true; do
         render_iperf_menu
@@ -2208,7 +2208,7 @@ src_status_text() { # github|mirror
 use_peer_code() {
     local link kind mod rc=0
     draw_main_header
-    echo -e "\n  ${FR}┌─[ USE PEER CODE ]${NC}\n"
+    echo -e "\n  ${FR}╭─[ USE PEER CODE ]${NC}\n"
     mt_link_read_input link "  ${C}●${NC} ${W}Paste Peer Code (q: back): ${NC}" || return 0
     case "$link" in ''|q|Q) return 0;; esac
     if [[ "$link" =~ ^mtunnel://[0-9]+/([a-z]+)/ ]]; then kind="${BASH_REMATCH[1]}"; else kind=''; fi
@@ -2225,37 +2225,85 @@ use_peer_code() {
     unset MT_PEER_LINK MT_LINK_INPUT_PENDING MT_LINK_INPUT_PENDING_SET
     return "$rc"
 }
+_mt_grid_cell() { # key color label badge width
+    local k="$1" col="$2" lbl="$3" bdg="$4" w="$5" plain vis pad LC_CTYPE=C.UTF-8
+    if [ -z "$k" ]; then
+        printf '%*s' "$w" ''
+        return 0
+    fi
+    plain="  ${k} ❯ ${lbl}${bdg}"
+    vis=$(printf '%b' "$plain" | sed -E $'s/\033\[[0-9;]*m//g')
+    pad=$(( w - ${#vis} ))
+    (( pad < 0 )) && pad=0
+    printf '  %b%-2s%b %b❯%b %b%s%b%s%*s' "${ACCENT:-$M}" "$k" "$NC" "$DIM" "$NC" "$col" "$lbl" "$NC" "$bdg" "$pad" ''
+}
 render_main_menu() {
     draw_main_header
+    mt_hdr_cols_update 2>/dev/null || true
+    local cols="${MT_HDR_COLS:-120}"
+    if [ "$cols" -ge 114 ]; then
+        local cw=56 border d_l d_r d_b
+        printf -v border '%*s' "$cw" ''; border="${border// /─}"
+        printf -v d_l '%*s' 27 ''; d_l="${d_l// /─}"
+        printf -v d_r '%*s' 31 ''; d_r="${d_r// /─}"
+        printf -v d_b '%*s' 34 ''; d_b="${d_b// /─}"
+        printf '\n  %b╭─[ %b⚡ TUNNELS & SMART FABRIC%b %b]%s┬─[ %b◈ TOOLS & SYSTEM OPS%b %b]%s╮%b\n' \
+            "$FR" "${ACCENT:-$M}" "$NC" "$FR" "$d_l" \
+            "${ACCENT:-$M}" "$NC" "$FR" "$d_r" "$NC"
+        printf '  %b│%b%*s%b│%b%*s%b│%b\n' "$FR" "$NC" "$cw" '' "$FR" "$NC" "$cw" '' "$FR" "$NC"
+
+        local -a L_K=("p" "s" "1" "2" "3" "4" "5" "")
+        local -a L_C=("$G" "$Y" "$C" "$M" "$R" "$G" "$M" "")
+        local -a L_T=("Use Peer Code" "Smart Tunnel / Auto Failover" "GRE / GRE6 / IPIP Tunnel" "VXLAN Virtual Mesh Fabric" "Rathole Reverse Tunnel" "Backhaul Multiplexer" "Paqet Raw Packet KCP Tunnel" "")
+        local -a L_B=("" "$(module_update_badge msmart)" "$(module_update_badge mgre)" "$(module_update_badge mxlan)" "$(module_update_badge mrathole)" "$(module_update_badge mbackhaul)" "$(module_update_badge mpaqet)" "")
+
+        local -a R_K=("6" "7" "8" "9" "10" "11" "12" "13")
+        local -a R_C=("$G" "$Y" "$C" "$C" "$M" "$G" "$Y" "$R")
+        local -a R_T=("Port Forwarding Matrix (Mporter)" "Link Test & Protocol Benchmark" "iPerf3 Bandwidth Benchmark" "MTunnel Doctor & Diagnostics" "Mirror (DNS & APT Optimizer)" "Update & Local Install" "Delete All Tunnels (Files Stay)" "Nuclear Wipe (Uninstall)")
+        local -a R_B=("$(module_update_badge mporter)" "$(module_update_badge linktest)" "" "$(module_update_badge mdoctor)" "$(module_update_badge mmirror)" "$(updates_summary_badge)" "" "")
+
+        local idx cL cR
+        for idx in "${!L_K[@]}"; do
+            cL=$(_mt_grid_cell "${L_K[$idx]}" "${L_C[$idx]}" "${L_T[$idx]}" "${L_B[$idx]}" "$cw")
+            cR=$(_mt_grid_cell "${R_K[$idx]}" "${R_C[$idx]}" "${R_T[$idx]}" "${R_B[$idx]}" "$cw")
+            printf '  %b│%b%s%b│%b%s%b│%b\n' "$FR" "$NC" "$cL" "$FR" "$NC" "$cR" "$FR" "$NC"
+        done
+
+        printf '  %b│%b%*s%b│%b%*s%b│%b\n' "$FR" "$NC" "$cw" '' "$FR" "$NC" "$cw" '' "$FR" "$NC"
+        printf '  %b╰%s┴─[ %b0%b %b❯%b %bExit Terminal%b %b]%s╯%b\n\n' \
+            "$FR" "$border" "$R" "$NC" "$DIM" "$NC" "$DIM" "$NC" "$FR" "$d_b" "$NC"
+        return 0
+    fi
+
     printf '\n'
-    printf '  %b┌─[ PAIRING & SMART AUTOMATION ]%b\n' "$FR" "$NC"
+    printf '  %b╭─[ %b⚡ PAIRING & SMART AUTOMATION%b %b]%b\n' "$FR" "${ACCENT:-$M}" "$NC" "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─%b %bp%b %b❯%b %bUse Peer Code%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
-    printf '  %b├─%b %bs%b %b❯%b %bSmart Tunnel / Auto Failover%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge msmart)"
+    printf '  %b├─%b %bp%b  %b❯%b %bUse Peer Code%b\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$G" "$NC"
+    printf '  %b├─%b %bs%b  %b❯%b %bSmart Tunnel / Auto Failover%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge msmart)"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─[ TUNNEL CORE & FABRIC MODULES ]%b\n' "$FR" "$NC"
+    printf '  %b├─[ %b◈ TUNNEL CORE & FABRIC MODULES%b %b]%b\n' "$FR" "${ACCENT:-$M}" "$NC" "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─%b %b1%b %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
-    printf '  %b├─%b %b2%b %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
-    printf '  %b├─%b %b3%b %b❯%b %bRathole Reverse Tunnel%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
-    printf '  %b├─%b %b4%b %b❯%b %bBackhaul Multiplexer%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
-    printf '  %b├─%b %b5%b %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
+    printf '  %b├─%b %b1%b  %b❯%b %bGRE / GRE6 / IPIP Tunnel%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mgre)"
+    printf '  %b├─%b %b2%b  %b❯%b %bVXLAN Virtual Mesh Fabric%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mxlan)"
+    printf '  %b├─%b %b3%b  %b❯%b %bRathole Reverse Tunnel%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$R" "$NC" "$(module_update_badge mrathole)"
+    printf '  %b├─%b %b4%b  %b❯%b %bBackhaul Multiplexer%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mbackhaul)"
+    printf '  %b├─%b %b5%b  %b❯%b %bPaqet Raw Packet KCP Tunnel%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mpaqet)"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─[ TOOLS & BENCHMARK UTILITIES ]%b\n' "$FR" "$NC"
+    printf '  %b├─[ %b◈ TOOLS & BENCHMARK UTILITIES%b %b]%b\n' "$FR" "${ACCENT:-$M}" "$NC" "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─%b %b6%b %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
-    printf '  %b├─%b %b7%b %b❯%b %bLink Test & Protocol Benchmark%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge linktest)"
-    printf '  %b├─%b %b8%b %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
-    printf '  %b├─%b %b9%b %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
-    printf '  %b├─%b %b10%b %b❯%b %bMirror (DNS & APT Optimizer)%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mmirror)"
+    printf '  %b├─%b %b6%b  %b❯%b %bPort Forwarding Matrix (Mporter)%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$G" "$NC" "$(module_update_badge mporter)"
+    printf '  %b├─%b %b7%b  %b❯%b %bLink Test & Protocol Benchmark%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$Y" "$NC" "$(module_update_badge linktest)"
+    printf '  %b├─%b %b8%b  %b❯%b %biPerf3 Bandwidth Benchmark%b\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b9%b  %b❯%b %bMTunnel Doctor & Diagnostics%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$C" "$NC" "$(module_update_badge mdoctor)"
+    printf '  %b├─%b %b10%b %b❯%b %bMirror (DNS & APT Optimizer)%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$M" "$NC" "$(module_update_badge mmirror)"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$FR" "$NC"
+    printf '  %b├─[ %b◈ SYSTEM UPDATE & MAINTENANCE%b %b]%b\n' "$FR" "${ACCENT:-$M}" "$NC" "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b├─%b %b11%b %b❯%b %bUpdate & Local Install%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
-    printf '  %b├─%b %b12%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
-    printf '  %b├─%b %b13%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b11%b %b❯%b %bUpdate & Local Install%b%s\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
+    printf '  %b├─%b %b12%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
+    printf '  %b├─%b %b13%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$FR" "$NC" "${ACCENT:-$M}" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
-    printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+    printf '  %b╰─%b %b0%b  %b❯%b %bExit Terminal%b\n\n' "$FR" "$NC" "$R" "$NC" "$DIM" "$NC" "$DIM" "$NC"
 }
 # Delete every tunnel and forwarding of every type, but keep all scripts, cores and packages.
 delete_all_tunnels_keep_files() {
@@ -2270,9 +2318,9 @@ delete_all_tunnels_keep_files() {
         "mxlan|--delete-all|VXLAN fabrics"
     )
     draw_main_header
-    echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${FR}╭════════════════════════════════════════════════════════════╗${NC}"
     printf '  %b║%b %b%-58s%b %b║%b\n' "$FR" "$NC" "$W" "Delete ALL Tunnels & Forwardings (Files Stay)" "$NC" "$FR" "$NC"
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}\n"
     echo -e "  ${R}Will be deleted:${NC}"
     echo -e "  ${DIM}●${NC} All GRE / GRE6 / IPIP / VXLAN tunnels and their interfaces"
     echo -e "  ${DIM}●${NC} All Rathole, Backhaul and Paqet tunnels and their services"
@@ -2329,10 +2377,10 @@ delete_all_tunnels_keep_files() {
 show_local_install() {
     local local_input
     draw_main_header
-    echo -e "\n  ${FR}┌─[ OFFLINE LOCAL INSTALL ]${NC}\n"
+    echo -e "\n  ${FR}╭─[ OFFLINE LOCAL INSTALL ]${NC}\n"
     echo -ne "  ${C}●${NC} ${W}Enter local path (Directory, .zip, or .tar.gz) [Enter for current]: ${NC}"; read -r local_input
     draw_main_header
-    echo -e "\n  ${FR}┌─[ INSTALLING FROM LOCAL SOURCE ]${NC}\n"
+    echo -e "\n  ${FR}╭─[ INSTALLING FROM LOCAL SOURCE ]${NC}\n"
     local deploy_rc=0
     offline_local_deploy "$local_input" 1 || deploy_rc=$?
     if [ "$deploy_rc" == 0 ]; then
@@ -2460,9 +2508,9 @@ while true; do
         12) delete_all_tunnels_keep_files ;;
         13)
             draw_main_header
-            echo -e "\n  ${R}╔════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "\n  ${R}╭════════════════════════════════════════════════════════════╗${NC}"
             echo -e "  ${R}║${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}║${NC}"
-            echo -e "  ${R}╚════════════════════════════════════════════════════════════╝${NC}\n"
+            echo -e "  ${R}╰════════════════════════════════════════════════════════════╝${NC}\n"
             echo -e "  ${Y}⚠ Warning: This will stop and remove all tunnels, services,${NC}"
             echo -e "  ${Y}  MTunnel tunnel cores, MTunnel services, and MTunnel-owned configs!${NC}\n"
             echo -ne "  ${R}Type WIPE-MTUNNEL to continue: ${NC}"; read -r del_confirm

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v2.0.1).
-MODULE_VERSION="2.0.1"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v2.1.0).
+MODULE_VERSION="2.1.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -40,11 +40,6 @@ for _bt_cand in "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../core/
     if [[ -f "$_bt_cand" && -r "$_bt_cand" ]]; then source "$_bt_cand" || exit 1; break; fi
 done; unset _bt_cand
 if ! declare -F bt_init_runtime >/dev/null 2>&1; then echo "MTunnel: core/bintunnel.sh is missing. Reinstall the complete bundle." >&2; exit 1; fi
-BT_MOD="mrathole"; BT_REL_PATH="tunnels/mrathole.sh"; BT_TITLE="MRathole"
-for _bt_cand in "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/../core/bintunnel.sh" /usr/lib/mtunnel/bintunnel.sh /root/mtunnel/core/bintunnel.sh; do
-    if [[ -f "$_bt_cand" && -r "$_bt_cand" ]]; then source "$_bt_cand" || exit 1; break; fi
-done; unset _bt_cand
-if ! declare -F bt_init_runtime >/dev/null 2>&1; then echo "MTunnel: core/bintunnel.sh is missing. Reinstall the complete bundle." >&2; exit 1; fi
 
 
 
@@ -63,8 +58,8 @@ if ! declare -F bt_init_runtime >/dev/null 2>&1; then echo "MTunnel: core/bintun
 
 
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
+: "${FR:=[38;2;0;245;212m}"
+
 INSTALL_PATH="/usr/bin/mrathole"
 CONF_DIR="/etc/mrathole/tunnels"
 SERVICE_TPL="/etc/systemd/system/mrathole@.service"
@@ -78,6 +73,7 @@ chmod 700 "$CONF_DIR" "$SECURE_TMP" 2>/dev/null
 rm -f "$SECURE_TMP/.mrathole_in_menu" 2>/dev/null
 
 ensure_dependencies() {
+    [ -f /var/lib/mtunnel/.deps_ok ] && return 0
     local missing=()
     command -v crontab >/dev/null 2>&1 || missing+=("cron")
     command -v curl >/dev/null 2>&1 || missing+=("curl")
@@ -88,7 +84,7 @@ ensure_dependencies() {
         systemctl start cron >/dev/null 2>&1
     fi
 }
-if [[ "${1:-}" != --* ]]; then ensure_dependencies; fi
+if [[ "${1:-}" != --* ]]; then ensure_dependencies && mkdir -p /var/lib/mtunnel 2>/dev/null && touch /var/lib/mtunnel/.deps_ok 2>/dev/null || true; fi
 
 if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
     mt_install_files 755 "$0" "$INSTALL_PATH" || { echo "Cannot install module." >&2; exit 1; }
@@ -300,7 +296,7 @@ render_unified_update_menu() {
     core_v=$(mt_core_version)
     [ -n "$core_v" ] && [ "$core_v" != "not-installed" ] && core_tag=" ${G}(installed)${NC}"
     mt_workspace_screen
-    echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL — MRATHOLE ]${NC}"
+    echo -e "\n  ${FR}╭─[ UPDATE & LOCAL INSTALL — MRATHOLE ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}${core_tag}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}${core_tag}"
@@ -309,7 +305,7 @@ render_unified_update_menu() {
     echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${M}Install Everything from /root/mtunnel${NC}"
     echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Paste Script Code Manually${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return${NC}\n"
 }
 unified_update_menu() {
     local opt
@@ -331,14 +327,14 @@ unified_update_menu() {
 }
 
 menu_install_core() {
-    echo -e "\n  ${FR}┌─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
+    echo -e "\n  ${FR}╭─[ INSTALL / UPDATE RATHOLE CORE ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_choice
     src_choice=$(echo "$src_choice" | tr -d '\r')
 
@@ -350,16 +346,16 @@ check_first_run_core() {
         local first_prompt_flag="$CONF_DIR/.core_prompted"
         if [ "$(cat "$first_prompt_flag" 2>/dev/null)" != "$MODULE_VERSION" ]; then
             clear
-            echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "\n  ${FR}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
             echo -e "  ${FR}║${NC}   ${R}● Rathole Core binary is NOT installed on this machine!${NC}                  ${FR}║${NC}"
             echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
-            echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
+            echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════╝${NC}"
             echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
             echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
             echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .zip)${NC}"
             echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
             echo -e "  ${FR}│${NC}"
-            echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
+            echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Skip for now${NC}\n"
             echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r init_opt
             init_opt=$(echo "$init_opt" | tr -d '\r')
             if [[ "$init_opt" =~ ^[1-4]$ ]]; then
@@ -757,7 +753,7 @@ draw_header() {
     # Unified dashboard header (same look as the main screen) -- THIS module's tunnels only.
     local _now _mtime
     _now=$(date +%s); _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ]; then collect_header_rows fast; fi
+    if [ ! -f "$HDR_ROWS_FILE" ]; then : > "$HDR_ROWS_FILE"; ( collect_header_rows fast >/dev/null 2>&1 & ); fi
     mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "RAT" ""
     HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$act_text" "$act_color" "$core_raw" "$core_color" "$stat_icon" "$stat_text" "$stat_color" "$g_text" "$g_color" "${total_t}" > "$_meta_cache"
@@ -804,7 +800,7 @@ show_tunnel_registry() {
         elif [ "$st" == "WAITING" ]; then stat_icon="◎"; stat_text="WAITING CLIENT"; stat_color="${Y}";
         elif [ "$st" == "RECONNECTING" ]; then stat_icon="◎"; stat_text="RECONNECTING..."; stat_color="${Y}"; fi
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
         local pad=$(( 122 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; local sp=$(printf '%*s' "$pad" "")
         echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
@@ -837,7 +833,7 @@ show_tunnel_registry() {
         local pad5=$(( 122 - ${#l5} )); [ "$pad5" -lt 0 ] && pad5=0; local sp5=$(printf '%*s' "$pad5" "")
         echo -e "  ${FR}║${NC} ${DIM}UDP Mappings :${NC} ${C}${udp_str:-None}${NC}${sp5} ${FR}║${NC}"
         
-        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
+        echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n"
         ((count++))
     done
     if [ "$count" -eq 0 ]; then echo -e "  ${R}● No tunnels configured yet!${NC}\n"; fi
@@ -850,8 +846,8 @@ show_live_radar() {
     tput civis; clear
     while true; do
         printf "\033[H"; draw_header
-        echo -e "\n  ${FR}┌─[ RATHOLE TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
-        echo -e "  ${FR}╔══════════════════════╦════════════════╦══════════════════════════╦════════════════════════════╗${NC}"
+        echo -e "\n  ${FR}╭─[ RATHOLE TRAFFIC RADAR ]${NC} ${C}(1s Auto-Refresh | Press 'q' to exit)${NC}\n"
+        echo -e "  ${FR}╭══════════════════════╦════════════════╦══════════════════════════╦════════════════════════════╗${NC}"
         printf "  ${FR}║${NC} ${W}%-20s${NC} ${FR}║${NC} ${W}%-14s${NC} ${FR}║${NC} ${Y}%-24s${NC} ${FR}║${NC} ${DIM}%-26s${NC} ${FR}║${NC}\n" "TUNNEL NAME" "STATUS" "TCP PORTS" "UDP PORTS"
         echo -e "  ${FR}╠══════════════════════╬════════════════╬══════════════════════════╬════════════════════════════╣${NC}"
 
@@ -878,7 +874,7 @@ show_live_radar() {
         if [ "$count" -eq 0 ]; then
             printf "  ${FR}║${NC} ${DIM}%-91s${NC} ${FR}║${NC}\n" "  No active Rathole tunnels configured."
         fi
-        echo -e "  ${FR}╚══════════════════════╩════════════════╩══════════════════════════╩════════════════════════════╝${NC}"
+        echo -e "  ${FR}╰══════════════════════╩════════════════╩══════════════════════════╩════════════════════════════╝${NC}"
         printf "\033[J"
         mt_monitor_wait 1 || break
     done
@@ -889,12 +885,12 @@ manage_cron() {
     local t_name="$1"
     local cron_script="$CONF_DIR/$t_name/restart.sh"
     
-    echo -e "\n  ${FR}┌─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
+    echo -e "\n  ${FR}╭─[ ANTI-FREEZE CRONJOB MANAGER ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Add/Update Auto-Restart Cronjob${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Remove Auto-Restart Cronjob${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read -r cr_opt
 
     if [[ "$cr_opt" == "1" ]]; then
@@ -933,14 +929,14 @@ manage_cron() {
 
 uninstall_mrathole() {
     clear
-    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${R}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MRATHOLE${NC}                  ${R}║${NC}"
     echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All active Rathole tunnels & systemd units                             ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All TOML configuration files & metadata                                ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All restart cronjobs                                                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● Rathole core binary (/usr/local/bin/rathole) & mrathole module         ${R}║${NC}"
-    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${R}╰════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
     confirm=$(echo "$confirm" | tr -d '\r ')
@@ -983,11 +979,11 @@ select_tunnel() {
     local configs=($(ls -d "$CONF_DIR"/* 2>/dev/null))
     if [ ${#configs[@]} -eq 0 ]; then echo -e "\n  ${R}● No tunnels configured yet!${NC}"; sleep 1.5; return 1; fi
     
-    echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
+    echo -e "\n  ${FR}╭══════════════════ Select Tunnel to Manage ═════════════════╗${NC}"
     for i in "${!configs[@]}"; do
         printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${configs[$i]}")"
     done
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Index or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r')
     mt_valid_index "$t_idx" "${#configs[@]}" || return 1
@@ -1105,7 +1101,7 @@ mt_peer_ensure_core() {
     echo -e "\n  ${Y}● Rathole Core is required before applying this Peer Code.${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Install Core From Github${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Install Core From Iranian Mirror${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
     while true; do
         mt_live_readline choice "  ${C}Select Source ❯❯ ${NC}" || return 1
         choice="${choice//$'\r'/}"
@@ -1254,7 +1250,7 @@ while true; do
     case $opt in
         1) 
            mt_workspace_screen
-           echo -e "\n  ${FR}┌─[ DEPLOY NEW TUNNEL ]${NC}"
+           echo -e "\n  ${FR}╭─[ DEPLOY NEW TUNNEL ]${NC}"
            while true; do 
                echo -ne "  ${C}●${NC} ${W}Role [1: IRAN (Server) | 2: KHAREJ (Client) | q: Back]: ${NC}"; read -r s_type
                s_type=$(echo "$s_type" | tr -d '\r')
@@ -1343,9 +1339,9 @@ EOF
         2)
            tunnels=($(ls -d "$CONF_DIR"/* 2>/dev/null))
            [ ${#tunnels[@]} -eq 0 ] && continue
-           echo -e "\n  ${FR}╔══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
+           echo -e "\n  ${FR}╭══════════════════ Select Tunnel to Delete ═════════════════╗${NC}"
            for i in "${!tunnels[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-53s${NC} ${FR}║${NC}\n" "$i" "$(basename "${tunnels[$i]}")"; done
-           echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+           echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
            echo -ne "  ${C}Index (or 'all' / 'q'): ${NC}"; read -r del_idx
            del_idx=$(echo "$del_idx" | tr -d '\r')
            if [[ "$del_idx" == "all" ]]; then

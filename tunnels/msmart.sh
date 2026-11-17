@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.0.1).
-MODULE_VERSION="2.0.1"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.1.0).
+MODULE_VERSION="2.1.0"
 MODULE_BUILD="2026102901"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
@@ -30,7 +30,7 @@ unset _mt_fn
 
 [ "$EUID" -eq 0 ] || { echo 'Run MTunnel Smart with sudo.' >&2; exit 1; }
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'; FR='\033[1;33m'
+: "${FR:=[38;2;0;245;212m}"
 SMART_DIR=/etc/mtunnel/smart
 GROUP_DIR="$SMART_DIR/groups"
 FOREIGN_GROUP_DIR="$SMART_DIR/foreign-groups"
@@ -302,10 +302,10 @@ smart_install_update_file() { # candidate path
     new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$candidate" | head -n1)
     [[ "$new_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo -e "  ${R}✖ MODULE_VERSION was not found.${NC}"; return 1; }
     mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver" || return 1
-    echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+    echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${Y}v${MODULE_VERSION}${NC}"
     echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
+    echo -ne "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}"; read -r confirm
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled.${NC}"; return 0; }
     mt_install_script "$candidate" "tunnels/msmart.sh" "$INSTALL_PATH" "$0" || { echo -e "  ${R}✖ Update failed. Previous module preserved.${NC}"; return 1; }
     if systemctl is-active --quiet mtunnel-smart-agent.service 2>/dev/null; then
@@ -390,7 +390,7 @@ smart_update_menu() {
         gh_col=$(smart_update_source_color "$SMART_UPD_GH")
         mi_col=$(smart_update_source_color "$SMART_UPD_MIR")
 
-        echo -e "\n  ${FR}┌─[ UPDATE & LOCAL INSTALL ]${NC}"
+        echo -e "\n  ${FR}╭─[ UPDATE & LOCAL INSTALL ]${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Local:${NC} ${W}v${MODULE_VERSION}${NC} ${DIM}• build ${MODULE_BUILD}${NC}"
         echo -e "  ${FR}│${NC} ${gh_col}${gh_txt}${NC}"
         echo -e "  ${FR}│${NC} ${mi_col}${mi_txt}${NC}"
@@ -402,7 +402,7 @@ smart_update_menu() {
         echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Install Local msmart.sh${NC}"
         echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Refresh Update Status${NC}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Smart Menu${NC}"
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Smart Menu${NC}"
         echo -ne "\n  ${C}MSMART UPDATE ❯❯ ${NC}"; read -r opt
         opt="${opt// /}"; opt="${opt//$'\\r'/}"
         case "$opt" in
@@ -704,7 +704,7 @@ smart_dependency_source_menu() {
     local choice
     SMART_DEP_SOURCE=""
     smart_header
-    echo -e "\n  ${FR}┌─[ SMART PREREQUISITE SOURCE ]${NC}"
+    echo -e "\n  ${FR}╭─[ SMART PREREQUISITE SOURCE ]${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Only Smart-required engines and prerequisite packages are installed.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Local files are tried first when available; otherwise use a remote source.${NC}"
     echo -e "  ${FR}│${NC}"
@@ -712,7 +712,7 @@ smart_dependency_source_menu() {
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}MTunnel GitHub${NC} ${DIM}(engines/ + prereqs/)${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${G}MTunnel Mirror${NC} ${DIM}(engines/ + prereqs/)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Official Sources${NC} ${DIM}(engine releases + OS packages)${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
     while true; do
         echo -ne "  ${C}Prerequisite Source ❯❯ ${NC}"; read -r choice || return 1
         choice="${choice//$'\r'/}"
@@ -1506,7 +1506,7 @@ smart_pair_window_cleanup() {
 }
 smart_foreign_setup() {
     smart_header
-    echo -e "\n  ${FR}┌─[ FOREIGN AGENT: CREATE PAIR CODE ]${NC}"
+    echo -e "\n  ${FR}╭─[ FOREIGN AGENT: CREATE PAIR CODE ]${NC}"
     echo -e "  ${FR}│${NC} ${W}Run this on the Foreign server.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}This server becomes the Foreign Agent. After pairing, management is done from Iran.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Prerequisites must be installed first (option 1).${NC}"
@@ -1547,7 +1547,7 @@ smart_foreign_setup() {
 smart_pair_controller() {
     smart_header
     smart_prereqs_ready || { echo -e "  ${R}✖ Smart prerequisites are incomplete on Iran. Run option 1 first.${NC}"; smart_pause; return 1; }
-    echo -e "\n  ${FR}┌─[ IRAN CONTROLLER PAIRING ]${NC}"
+    echo -e "\n  ${FR}╭─[ IRAN CONTROLLER PAIRING ]${NC}"
     echo -e "  ${FR}│${NC} ${DIM}On the Foreign server run option 2 (Create Pair Code) first.${NC}"
     echo -e "  ${FR}└────────────────────────────────────────────────────────────${NC}\n"
     local foreign4 code response ok token rv4 rv6 v api
@@ -1593,7 +1593,7 @@ smart_info() {
     local l4 l6 response ok r_ver r_api
     l4=$(smart_local_ipv4); l6=$(smart_local_ipv6); response=$(smart_agent_call '{"action":"info"}' || true); ok=$(smart_json_field "$response" ok)
     r_ver=$(smart_json_field "$response" version); r_api=$(smart_json_field "$response" api_rev)
-    echo -e "\n  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${FR}║${NC} ${C}▼ SMART PEER & CONTROLLER STATUS${NC}                                                           ${FR}║${NC}"
     echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
     printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${C}%-69s${NC} ${FR}║${NC}\n" "Iran IPv4" "$l4"
@@ -1602,7 +1602,7 @@ smart_info() {
     printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${C}%-69s${NC} ${FR}║${NC}\n" "Foreign IPv6" "${SMART_F6:-Unknown}"
     printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} ${Y}%-69s${NC} ${FR}║${NC}\n" "Agent Port" "$SMART_PORT"
     printf "  ${FR}║${NC} ${W}%-18s${NC} ${DIM}❯${NC} %b%-69s%b ${FR}║${NC}\n" "Agent Status" "$([ "$ok" = 1 ] && printf "$G" || printf "$R")" "$([ "$ok" = 1 ] && echo "ONLINE (v${r_ver:-?} • API ${r_api:-?})" || echo "OFFLINE")" "$NC"
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
     [ "$ok" = 1 ] || echo -e "  ${R}✖ Error: $(smart_json_field "$response" error)${NC}"
     smart_pause
 }
@@ -1632,7 +1632,7 @@ smart_reachability_matrix() { # local4 local6 foreign4 foreign6
     SMART_I_TO_F4=0; SMART_F_TO_I4=0; SMART_I_TO_F6=0; SMART_F_TO_I6=0
     SMART_I_TO_F4_AVG=9999; SMART_F_TO_I4_AVG=9999; SMART_I_TO_F6_AVG=9999; SMART_F_TO_I6_AVG=9999
     smart_header
-    echo -e "\n  ${FR}┌─[ REACHABILITY CHECK ]${NC}"
+    echo -e "\n  ${FR}╭─[ REACHABILITY CHECK ]${NC}"
     echo -ne "  ${C}●${NC} ${W}Run bidirectional IPv4/IPv6 ping checks now? [Y/n]: ${NC}"; read -r ans
     case "${ans,,}" in n|no)
         mt_valid_ipv4 "$l4" && mt_valid_ipv4 "$f4" && { SMART_I_TO_F4=1; SMART_F_TO_I4=1; }
@@ -1650,11 +1650,11 @@ smart_reachability_matrix() { # local4 local6 foreign4 foreign6
         ;;
     esac
     smart_header
-    echo -e "\n  ${FR}┌─[ REACHABILITY REPORT ]${NC}"
+    echo -e "\n  ${FR}╭─[ REACHABILITY REPORT ]${NC}"
     printf '  %b├─%b %-30s %b%s%b\n' "$FR" "$NC" "Iran IPv4 → Foreign IPv4" "$([ "$SMART_I_TO_F4" = 1 ] && printf "$G" || printf "$R")" "$([ "$SMART_I_TO_F4" = 1 ] && echo "OK  ${SMART_I_TO_F4_AVG}ms" || echo BLOCKED)" "$NC"
     printf '  %b├─%b %-30s %b%s%b\n' "$FR" "$NC" "Foreign IPv4 → Iran IPv4" "$([ "$SMART_F_TO_I4" = 1 ] && printf "$G" || printf "$R")" "$([ "$SMART_F_TO_I4" = 1 ] && echo "OK  ${SMART_F_TO_I4_AVG}ms" || echo BLOCKED)" "$NC"
     printf '  %b├─%b %-30s %b%s%b\n' "$FR" "$NC" "Iran IPv6 → Foreign IPv6" "$([ "$SMART_I_TO_F6" = 1 ] && printf "$G" || printf "$R")" "$([ "$SMART_I_TO_F6" = 1 ] && echo "OK  ${SMART_I_TO_F6_AVG}ms" || echo BLOCKED)" "$NC"
-    printf '  %b└─%b %-30s %b%s%b\n' "$FR" "$NC" "Foreign IPv6 → Iran IPv6" "$([ "$SMART_F_TO_I6" = 1 ] && printf "$G" || printf "$R")" "$([ "$SMART_F_TO_I6" = 1 ] && echo "OK  ${SMART_F_TO_I6_AVG}ms" || echo BLOCKED)" "$NC"
+    printf '  %b╰─%b %-30s %b%s%b\n' "$FR" "$NC" "Foreign IPv6 → Iran IPv6" "$([ "$SMART_F_TO_I6" = 1 ] && printf "$G" || printf "$R")" "$([ "$SMART_F_TO_I6" = 1 ] && echo "OK  ${SMART_F_TO_I6_AVG}ms" || echo BLOCKED)" "$NC"
     echo -e "\n  ${DIM}Unavailable paths are removed from the tunnel list automatically.${NC}"
     smart_pause
 }
@@ -2294,7 +2294,7 @@ smart_create_group() {
     avail=$(smart_candidate_lines "$l4" "$l6" "$SMART_F4" "$f6" "$lbh" "$rbh" "$lrat" "$rrat" "$SMART_I_TO_F4" "$SMART_F_TO_I4" "$SMART_I_TO_F6" "$SMART_F_TO_I6")
     [ -n "$avail" ] || { echo -e "  ${R}✖ No compatible IPv4/IPv6 tunnel candidates found.${NC}"; smart_pause; return 1; }
     smart_header
-    echo -e "\n  ${FR}┌─[ CREATE SMART TUNNEL GROUP ]${NC}"
+    echo -e "\n  ${FR}╭─[ CREATE SMART TUNNEL GROUP ]${NC}"
     echo -e "  ${FR}├─${NC} Iran IPv4:    ${W}$l4${NC}"
     echo -e "  ${FR}├─${NC} Iran IPv6:    ${W}$l6${NC}"
     echo -e "  ${FR}├─${NC} Foreign IPv4: ${W}$SMART_F4${NC}"
@@ -2306,7 +2306,7 @@ smart_create_group() {
     echo -e "  ${FR}├─${NC} ${DIM}Fabric rule: max 1 mGRE + max 1 VXLAN; each one has 5 vIPs.${NC}"
     echo -e "  ${FR}│${NC}\n  ${FR}├─${NC} ${W}r${NC} ${DIM}❯${NC} ${G}Recommended set${NC} ${DIM}[$rec]${NC}"
     echo -e "  ${FR}├─${NC} ${W}a${NC} ${DIM}❯${NC} ${Y}Build all compatible${NC}"
-    echo -e "  ${FR}└─${NC} ${W}m${NC} ${DIM}❯${NC} Manual IDs ${DIM}(example: 1,4,7,12)${NC}\n"
+    echo -e "  ${FR}╰─${NC} ${W}m${NC} ${DIM}❯${NC} Manual IDs ${DIM}(example: 1,4,7,12)${NC}\n"
     echo -ne "  ${C}Select tunnel set [r]: ${NC}"; read -r choice; choice="${choice:-r}"
     case "$choice" in
         r|R) ids="$rec";; a|A) ids=$(smart_all_ids "$avail");;
@@ -2581,7 +2581,7 @@ smart_add_tunnels_to_group() { # groupdir interactive
         filtered+="${filtered:+$'\n'}$id|$label|$kind|$proto|$path"
     done <<< "$avail"
     [ -n "$filtered" ] || { echo -e "  ${Y}● No additional tunnel can be added (fabric limit or all candidates installed).${NC}"; return 0; }
-    echo -e "\n  ${FR}┌─[ ADD TUNNELS ]${NC}"; while IFS='|' read -r id label kind proto path; do echo -e "  ${FR}├─${NC} ${W}$id${NC} ${DIM}❯${NC} ${C}$label${NC} ${DIM}$path${NC}"; done <<< "$filtered"
+    echo -e "\n  ${FR}╭─[ ADD TUNNELS ]${NC}"; while IFS='|' read -r id label kind proto path; do echo -e "  ${FR}├─${NC} ${W}$id${NC} ${DIM}❯${NC} ${C}$label${NC} ${DIM}$path${NC}"; done <<< "$filtered"
     echo -ne "  ${C}IDs to add (comma-separated, Enter=cancel): ${NC}"; read -r choice; choice="${choice// /}"; [ -n "$choice" ] || return 0
     [[ "$choice" =~ ^[0-9]+(,[0-9]+)*$ ]] || { echo -e "  ${R}✖ Invalid IDs.${NC}"; return 2; }; ids=$(smart_unique_fabric_ids "$filtered" "$choice")
     [ -n "$ids" ] || return 1; [ "$ids" = "$choice" ] || echo -e "  ${Y}● Fabric rule applied; selected IDs: $ids${NC}"
@@ -2611,12 +2611,12 @@ smart_pin_maintenance_menu() { # groupdir
     local gd="$1" opt id label mins exp n sel idx; local -a ids=()
     while true; do
         smart_expire_controls "$gd" >/dev/null 2>&1 || true; smart_header
-        echo -e "\n  ${FR}┌─[ PIN / MAINTENANCE: $(smart_group_label "$gd") ]${NC}"
+        echo -e "\n  ${FR}╭─[ PIN / MAINTENANCE: $(smart_group_label "$gd") ]${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} Pin tunnel"
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} Clear pin"
         echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} Put tunnel in maintenance"
         echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} Remove tunnel from maintenance"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
         case "$opt" in
           1|3)
             ids=(); n=0; while IFS='|' read -r id label _; do n=$((n+1)); ids+=("$id"); echo -e "  ${W}$n${NC} ${DIM}❯${NC} ID $id • $(smart_short_label "$label")"; done < "$gd/candidates.tsv"
@@ -2634,7 +2634,7 @@ smart_group_settings_menu() { # groupdir
     local gd="$1" f="$1/group.conf" opt key min max cur val
     smart_ensure_group_defaults "$gd" || return 1
     while true; do
-      smart_header; echo -e "\n  ${FR}┌─[ SMART SETTINGS: $(smart_group_label "$gd") ]${NC}"
+      smart_header; echo -e "\n  ${FR}╭─[ SMART SETTINGS: $(smart_group_label "$gd") ]${NC}"
       echo -e "  ${FR}├─${NC} 1 ❯ Watch interval      : ${Y}$(smart_conf_get "$f" WATCH_INTERVAL)s${NC}"
       echo -e "  ${FR}├─${NC} 2 ❯ Periodic benchmark  : ${Y}$(smart_conf_get "$f" BENCH_INTERVAL)s${NC}"
       echo -e "  ${FR}├─${NC} 3 ❯ Light iperf duration : ${Y}$(smart_conf_get "$f" BENCH_IPERF_SECONDS)s${NC}"
@@ -2645,7 +2645,7 @@ smart_group_settings_menu() { # groupdir
       echo -e "  ${FR}├─${NC} 8 ❯ Recovery hold       : ${Y}$(smart_conf_get "$f" RECOVERY_STREAK) checks${NC}"
       echo -e "  ${FR}├─${NC} 9 ❯ Drain wait          : ${Y}$(smart_conf_get "$f" DRAIN_SECONDS)s${NC}"
       echo -e "  ${FR}├─${NC}10 ❯ GRE/VXLAN TCP probe : ${Y}$(smart_conf_get "$f" TCP_PROBE)${NC}"
-      echo -e "  ${FR}└─${NC} 0 ❯ Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
+      echo -e "  ${FR}╰─${NC} 0 ❯ Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
       case "$opt" in 1)key=WATCH_INTERVAL;min=10;max=300;;2)key=BENCH_INTERVAL;min=300;max=86400;;3)key=BENCH_IPERF_SECONDS;min=1;max=5;;4)key=SWITCH_MARGIN;min=0;max=100;;5)key=SWITCH_STREAK;min=1;max=20;;6)key=MIN_HOLD;min=0;max=86400;;7)key=DOWN_STREAK;min=1;max=20;;8)key=RECOVERY_STREAK;min=1;max=20;;9)key=DRAIN_SECONDS;min=0;max=30;;10)key=TCP_PROBE;min=0;max=1;;0|q|Q)return;;*)continue;;esac
       cur=$(smart_conf_get "$f" "$key"); echo -ne "  ${C}$key [$cur] ($min-$max): ${NC}"; read -r val; [ -n "$val" ] || continue
       [[ "$val" =~ ^[0-9]+$ ]] && [ "$val" -ge "$min" ] && [ "$val" -le "$max" ] || { echo -e "  ${R}✖ Invalid value.${NC}"; sleep 1; continue; }
@@ -2655,9 +2655,9 @@ smart_group_settings_menu() { # groupdir
 
 smart_event_menu() { # groupdir
     local gd="$1" n="${2:-30}" id cnt last tr label
-    smart_header; echo -e "\n  ${FR}┌─[ RECENT EVENTS: $(smart_group_label "$gd") ]${NC}"
+    smart_header; echo -e "\n  ${FR}╭─[ RECENT EVENTS: $(smart_group_label "$gd") ]${NC}"
     if [ -s "$gd/events.log" ]; then tail -n "$n" "$gd/events.log" | awk -F'|' '{printf "  %s | %-11s | %s -> %s | %s | %s\\n",$2,$3,$4,$5,$6,$7}'; else echo -e "  ${DIM}No events yet.${NC}"; fi
-    echo -e "\n  ${FR}┌─[ FLAP COUNTERS ]${NC}"
+    echo -e "\n  ${FR}╭─[ FLAP COUNTERS ]${NC}"
     if [ -s "$gd/flaps.tsv" ]; then while IFS='|' read -r id cnt last tr; do label=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$gd/candidates.tsv"); echo -e "  ${W}ID $id${NC} ${DIM}$(smart_short_label "$label")${NC} • ${Y}$cnt${NC} transitions • $tr"; done < "$gd/flaps.tsv"; else echo -e "  ${DIM}No flaps recorded.${NC}"; fi
     smart_pause
 }
@@ -2789,7 +2789,7 @@ smart_manage_group() {
     local gd="$SELECTED_GROUP_DIR" opt
     smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true
     while true; do
-      smart_header; echo -e "\n  ${FR}┌─[ EDIT SMART GROUP: ${W}$(smart_group_label "$gd")${FR} ]${NC}"
+      smart_header; echo -e "\n  ${FR}╭─[ EDIT SMART GROUP: ${W}$(smart_group_label "$gd")${FR} ]${NC}"
       echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} Rename Group"
       echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} Change Iran / Foreign Endpoint IPs"
       echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} Add Tunnels"
@@ -2799,7 +2799,7 @@ smart_manage_group() {
       echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} Smart Settings"
       echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} Events & Flaps"
       echo -e "  ${FR}├─${NC} ${W}9${NC} ${DIM}❯${NC} Change Foreign Agent Management IPv4"
-      echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
+      echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} Back"; echo -ne "  ${C}Select ❯❯ ${NC}"; read -r opt
       case "$opt" in
         1) smart_rename_group "$gd"; smart_pause;; 2) smart_change_group_endpoints "$gd"; smart_pause;; 3) smart_add_tunnels_to_group "$gd"; smart_pause;;
         4) smart_menu_delete_tunnels "$gd";; 5) smart_manage_ports "$gd";; 6) smart_pin_maintenance_menu "$gd";; 7) smart_group_settings_menu "$gd";; 8) smart_event_menu "$gd";;
@@ -2824,7 +2824,7 @@ smart_select_group_interactive() {
         return 0
     fi
 
-    echo -e "\n  ${FR}╔═══════════════════════════════ Select Smart Tunnel Group ══════════════════════════════════╗${NC}"
+    echo -e "\n  ${FR}╭═══════════════════════════════ Select Smart Tunnel Group ══════════════════════════════════╗${NC}"
     for i in "${!groups[@]}"; do
         gid=$(smart_group_label "${groups[$i]}")
         active_lbl=$(cut -d'|' -f2 "${groups[$i]}/active.state" 2>/dev/null || true)
@@ -2833,7 +2833,7 @@ smart_select_group_interactive() {
         tcnt=$(wc -l < "${groups[$i]}/candidates.tsv" 2>/dev/null || echo 0)
         printf "  ${FR}║${NC}  ${Y}%-3s${NC} ${C}❯${NC} ${W}%-18.18s${NC} ${DIM}| Active:${NC} ${G}%-20.20s${NC} ${DIM}| Tunnels:${NC} ${C}%-2s${NC} ${DIM}| Ports:${NC} ${Y}%-14.14s${NC} ${FR}║${NC}\n" "$((i+1))" "$gid" "${active_lbl:-OFF}" "$tcnt" "${svc:-None}"
     done
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Group [1-${#groups[@]}] or 'q': ${NC}"; read -r sel
     sel="${sel// /}"; sel="${sel//$'\r'/}"
     [[ "$sel" == "q" || "$sel" == "Q" || -z "$sel" ]] && return 1
@@ -2874,7 +2874,7 @@ smart_list_overview() {
         local pad=$(( 90 - 9 - ${#gid} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0
         local sp; sp=$(printf '%*s' "$pad" "")
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
         echo -e "  ${FR}╠════════════════════════════════════════════════════════════════════════════════════════════╣${NC}"
 
@@ -2918,7 +2918,7 @@ smart_list_overview() {
         else
             printf "  ${FR}║${NC} ${DIM}%-90s${NC} ${FR}║${NC}\n" "No tunnels remain in this group."
         fi
-        echo -e "  ${FR}╚════╩═══════════════════════════╩════════════════╩══════════════╩════════╩══════════╩═══════╝${NC}\n"
+        echo -e "  ${FR}╰════╩═══════════════════════════╩════════════════╩══════════════╩════════╩══════════╩═══════╝${NC}\n"
     done
     smart_pause
 }
@@ -3018,7 +3018,7 @@ smart_manage_ports() {
         active_lbl=$(cut -d'|' -f2 "$gd/active.state" 2>/dev/null || true)
         active_lbl="$(smart_short_label "$active_lbl")"
         smart_header
-        echo -e "\n  ${FR}┌─[ SMART PORT MANAGER: ${W}${gid}${DIM} ]${NC}"
+        echo -e "\n  ${FR}╭─[ SMART PORT MANAGER: ${W}${gid}${DIM} ]${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Current TCP Ports:${NC} ${Y}${cur_ports:-None}${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Active Tunnel    :${NC} ${G}${active_lbl:-OFF}${NC}"
         echo -e "  ${FR}│${NC}"
@@ -3026,7 +3026,7 @@ smart_manage_ports() {
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Delete / Remove Specific Ports${NC}"
         echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Replace All Ports (Overwrite)${NC}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
         pf_opt="${pf_opt// /}"; pf_opt="${pf_opt//$'\r'/}"
 
@@ -3177,7 +3177,7 @@ smart_menu_delete_tunnels() {
         local -a c_ids=() c_labels=() c_names=()
         local n=0 id label kind proto path name inner linkp benchp status sel confirm idx
 
-        echo -e "\n  ${R}┌─[ DELETE TUNNELS IN GROUP: ${W}${gid}${R} ]${NC}"
+        echo -e "\n  ${R}╭─[ DELETE TUNNELS IN GROUP: ${W}${gid}${R} ]${NC}"
         while IFS='|' read -r id label kind proto path name inner linkp benchp status; do
             n=$((n+1))
             c_ids+=("$id"); c_labels+=("$(smart_short_label "$label")"); c_names+=("$name")
@@ -3236,7 +3236,7 @@ smart_menu_delete_groups() {
             return
         fi
 
-        echo -e "\n  ${R}┌─[ DELETE SMART GROUPS ]${NC}"
+        echo -e "\n  ${R}╭─[ DELETE SMART GROUPS ]${NC}"
         for gd in "${groups[@]}"; do
             n=$((n+1))
             glabel=$(smart_group_label "$gd")
@@ -3299,7 +3299,7 @@ smart_benchmark_menu() {
 }
 smart_prerequisites_screen() {
     smart_header
-    echo -e "\n  ${FR}┌─[ INSTALL PREREQUISITES ]${NC}"
+    echo -e "\n  ${FR}╭─[ INSTALL PREREQUISITES ]${NC}"
     echo -e "  ${FR}│${NC} ${W}Run this option on BOTH Iran and Foreign before pairing.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Smart installs only what it needs:${NC}"
     echo -e "  ${FR}│${NC}   ${C}engines/${NC}  ${DIM}→ Backhaul + Rathole engine for this CPU${NC}"
@@ -3338,7 +3338,7 @@ smart_menu() {
     local opt
     while true; do
         smart_header
-        echo -e "\n  ${FR}┌─[ PROVISION & MANAGE ]${NC}"
+        echo -e "\n  ${FR}╭─[ PROVISION & MANAGE ]${NC}"
         echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${Y}Install Prerequisites${NC} ${DIM}(Iran + Foreign)${NC}"
         echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}Foreign: Create Pair Code${NC}"
         echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${C}Iran: Enter Pair Code & Create Group${NC}"
@@ -3349,7 +3349,7 @@ smart_menu() {
         echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}Peer & Agent Status${NC}"
         echo -e "  ${FR}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${G}Update & Local Install${NC}$(smart_update_badge)"
         echo -e "  ${FR}├─${NC} ${W}10${NC} ${DIM}❯${NC} ${R}Delete Smart Groups${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}"
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Main Core${NC}"
         echo -ne "\n  ${C}MSMART ❯❯ ${NC}"; read -r opt; opt="${opt// /}"; opt="${opt//$'\\r'/}"
         case "$opt" in
             1) smart_prereq_menu;; 2) smart_foreign_setup;; 3) smart_iran_pair_and_group;; 4) smart_create_group;; 5) smart_list_overview;;

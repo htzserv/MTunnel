@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.0.1).
-MODULE_VERSION="2.0.1"
+# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.1.0).
+MODULE_VERSION="2.1.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -54,8 +54,8 @@ if [ "$EUID" != 0 ]; then echo "Run MTunnel with sudo." >&2; exit 1; fi
 
 
 
-B='\033[1;34m'; G='\033[1;32m'; Y='\033[1;33m'; R='\033[1;31m'; C='\033[0;36m'; M='\033[1;35m'; W='\033[1;37m'; DIM='\033[2;37m'; NC='\033[0m'
-FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connectors)
+: "${FR:=[38;2;0;245;212m}"
+
 
 KERNEL_MODE="gre"
 case "${0##*/}" in
@@ -572,7 +572,7 @@ self_update_module() {
     else mirror_text+="    ${DIM}(version unavailable)${NC}"; fi
 
     if [ "$KERNEL_MODE" = "vxlan" ]; then draw_mxlan_header; else draw_mgre_header; fi
-    echo -e "\n  ${FR}┌─[ OTA Update (${MOD_UPPER} / MKernel Engine) ]${NC}"
+    echo -e "\n  ${FR}╭─[ OTA Update (${MOD_UPPER} / MKernel Engine) ]${NC}"
     echo -e "  ${FR}│${NC}"
     echo -e "  ${FR}├─[ AUTOMATIC MIRRORS ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${gh_text}"
@@ -582,7 +582,7 @@ self_update_module() {
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Personal Link${NC} ${DIM}(Direct .sh URL)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Manual Code Paste${NC} ${DIM}(Nano / Ctrl+X to Save)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}\n"
     echo -ne "  ${C}Select Source ❯❯ ${NC}"; read -r src_opt
 
     [[ "$src_opt" =~ ^[1-4]$ ]] || return 0
@@ -606,10 +606,10 @@ self_update_module() {
     if ! mt_validate_script "$tmp_file"; then rm -f "$tmp_file"; echo -e "  ${R}✖ Invalid Bash module. Installed module preserved.${NC}"; return 1; fi
     local new_ver; new_ver=$(sed -n 's/^MODULE_VERSION="\([0-9.]*\)"$/\1/p' "$tmp_file")
     if ! mt_module_downgrade_allowed "$MODULE_VERSION" "$new_ver"; then rm -f "$tmp_file"; return 1; fi
-    echo -e "\n  ${FR}┌─[ VERSION CHECK & CONFIRMATION ]${NC}"
+    echo -e "\n  ${FR}╭─[ VERSION CHECK & CONFIRMATION ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}Current Version :${NC} ${R}v${MODULE_VERSION}${NC}"
     echo -e "  ${FR}├─${NC} ${W}Target Version  :${NC} ${G}v${new_ver}${NC}"
-    echo -e "  ${FR}└─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
+    echo -e "  ${FR}╰─${NC} ${C}Proceed with overwrite? (y/n): ${NC}\c"; read -r confirm
 
     [[ "${confirm,,}" == y || "${confirm,,}" == yes ]] || { echo -e "  ${Y}● Update cancelled.${NC}"; rm -f "$tmp_file"; return 0; }
     if ! mt_install_script "$tmp_file" "$rel_path" "$INSTALL_PATH" "$0"; then
@@ -895,12 +895,12 @@ select_tunnel_interactive() {
         return 0
     fi
 
-    echo -e "\n  ${FR}╔═════════════════ Select Target Tunnel ════════════════════╗${NC}"
+    echo -e "\n  ${FR}╭═════════════════ Select Target Tunnel ════════════════════╗${NC}"
     local i
     for i in "${!configs[@]}"; do
         printf "  ${FR}║${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${FR}║${NC}\n" "$((i+1))" "$(basename "${configs[$i]}" .conf)"
     done
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Tunnel [1-${#configs[@]}] or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r ')
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return 1
@@ -921,7 +921,7 @@ mgre_quick_forward() {
     mt_source_conf "$conf" 2>/dev/null
     [ "$TYPE" == "1" ] && [ -n "$T_NAME" ] || return 0
     mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return 1; }
-    echo -e "\n  ${FR}┌─[ PORT FORWARDING: ${W}${T_NAME}${DIM} ]${NC}"
+    echo -e "\n  ${FR}╭─[ PORT FORWARDING: ${W}${T_NAME}${DIM} ]${NC}"
     while true; do
         echo -ne "  ${C}●${NC} ${W}TCP ports to forward (e.g. 443,8080 or 10000:10100) [Enter: none | q: skip]: ${NC}"; read -r tcp || return 0
         [[ "$tcp" == "q" ]] && return 0
@@ -966,7 +966,7 @@ manage_port_forwarding() {
         mgre_fill_legacy_core || { echo -e "  ${R}● Invalid legacy core subnet.${NC}"; return; }
         mt_fwd_conflict_refresh "$T_NAME" "$FWD_TCP" "$FWD_UDP" "MGRE_FWD_$T_NAME"
         draw_mgre_header
-        echo -e "\n  ${FR}┌─[ PORT FORWARDING MANAGER: ${W}${T_NAME}${DIM} ]${NC}"
+        echo -e "\n  ${FR}╭─[ PORT FORWARDING MANAGER: ${W}${T_NAME}${DIM} ]${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")"
@@ -981,7 +981,7 @@ manage_port_forwarding() {
         if mt_fwd_conflict_flag "$T_NAME"; then cf_note=" ${R}⚠ $(wc -w < "$(mt_fwd_conflict_file "$T_NAME")" 2>/dev/null) conflicting port(s)${NC}"; fi
         echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Fix conflicts (ports held by other services)${NC}${cf_note}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
 
         case $pf_opt in
@@ -1084,7 +1084,7 @@ show_mgre_monitor() {
         fi
         [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "  ${FR}║${NC}${eval_l1}${sp1}${FR}║${NC}"
         if [ "$EP_V6" -eq 1 ]; then
             pad_p=$(( 92 - 13 - ${#EP_L} - ${#EP_R} )); [ "$pad_p" -lt 0 ] && pad_p=0; sp_p=$(printf '%*s' "$pad_p" "")
@@ -1132,7 +1132,7 @@ show_mgre_monitor() {
             lip="${lip:0:18}"; tip="${tip:0:18}"
             printf "  ${FR}║${NC} ${DIM}%s %-12.12s${NC} ${FR}║${NC} ${DIM}%-18.18s${NC} ${FR}║${NC} ${DIM}%-18.18s${NC} ${FR}║${NC} %b%-12.12s%b ${FR}║${NC} %b%s %-10.10s%b ${FR}║${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         done
-        echo -e "  ${FR}╚════════════════════╩════════════════════╩════════════════════╩══════════════╩══════════════╝${NC}\n"
+        echo -e "  ${FR}╰════════════════════╩════════════════════╩════════════════════╩══════════════╩══════════════╝${NC}\n"
     done
 }
 
@@ -1159,7 +1159,7 @@ show_tunnel_details() {
         curr_mtu="${act_mtu:-${CUSTOM_MTU:-$def_mtu (Auto)}}"
         proto_lbl=$(mgre_proto_label "$TUN_PROTO")
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         # widths use ASCII-only measures (markers/arrows are 1 column but multi-byte): locale-safe
         tn_s="${T_NAME:0:25}"; left_p="▼ Tunnel: ${tn_s}"; right_p="Role: $t_role"
         pad=$(( 90 - (10 + ${#tn_s}) - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
@@ -1207,7 +1207,7 @@ show_tunnel_details() {
             echo -e "  ${FR}║${NC} ${Y}NAT FWD TCP  :${NC} ${W}${fwd_disp}${NC}${sp5}${C}Load Balancer:${NC} ${W}${lb_txt}${NC} ${FR}║${NC}"
         fi
 
-        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════╝\n"
+        echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════╝\n"
     done
     if [ "${1:-}" != --no-pause ]; then
         echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r dummy
@@ -1224,7 +1224,7 @@ menu_delete_tunnels() {
             return
         fi
 
-        echo -e "\n  ${R}┌─[ DELETE TUNNELS ]${NC}"
+        echo -e "\n  ${R}╭─[ DELETE TUNNELS ]${NC}"
         local conf n=0 TYPE TUN_PROTO T_NAME role sel confirm idx
         for conf in "${configs[@]}"; do
             [ -f "$conf" ] || continue
@@ -1269,14 +1269,14 @@ menu_delete_tunnels() {
 
 uninstall_mgre() {
     draw_mgre_header
-    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${R}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MGRE${NC}                      ${R}║${NC}"
     echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All active GRE/IP6GRE tunnel interfaces and IP aliases                  ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All configurations & metadata in /etc/mgre/tunnels                     ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All iptables NAT, FORWARD, MSS clamping and Load Balancer rules         ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● MGRE systemd service & executable wrapper                               ${R}║${NC}"
-    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${R}╰════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
     local confirm conf T_NAME
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
@@ -1519,11 +1519,11 @@ menu_encrypt() {
         echo -e "\n  ${Y}● IPsec encryption is not supported for $(mgre_proto_label "$TUN_PROTO") tunnels (IPv6-outer IPIP). Use GRE6 instead if you need encryption.${NC}"
         sleep 3; return
     fi
-    echo -e "\n  ${FR}┌─[ IPsec ESP ENCRYPTION: ${W}${T_NAME}${DIM} ]${NC}"
+    echo -e "\n  ${FR}╭─[ IPsec ESP ENCRYPTION: ${W}${T_NAME}${DIM} ]${NC}"
     echo -e "  ${FR}│${NC} Status : $([ "$ENCRYPT" == "1" ] && echo -e "${G}ENCRYPTED (AES-256-CBC + HMAC-SHA256)${NC}" || echo -e "${R}PLAINTEXT${NC}")"
     echo -e "  ${FR}│${NC} ${Y}Both peers MUST run the same mode with the same Master Token, or the link drops.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Auto MTU shrinks by 64 bytes for ESP overhead.${NC}"
-    echo -e "  ${FR}└─${NC}"
+    echo -e "  ${FR}╰─${NC}"
     echo -ne "  ${C}●${NC} ${W}Turn encryption $([ "$ENCRYPT" == "1" ] && echo OFF || echo ON)? (y/n): ${NC}"; read -r ans
     [[ "${ans,,}" == "y" ]] || return
     local nv="1"; [ "$ENCRYPT" == "1" ] && nv="0"
@@ -1539,11 +1539,11 @@ menu_encrypt() {
 menu_guard() {
     draw_mgre_header
     local on=0; [ -f "$GUARD_FLAG" ] && on=1
-    echo -e "\n  ${FR}┌─[ FIREWALL GUARD (Anti-Spoof / Anti-Injection) ]${NC}"
+    echo -e "\n  ${FR}╭─[ FIREWALL GUARD (Anti-Spoof / Anti-Injection) ]${NC}"
     echo -e "  ${FR}│${NC} Status : $([ "$on" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${R}OFF${NC}")"
     echo -e "  ${FR}│${NC} Accepts GRE / IPIP / proto-41 packets ONLY from configured peer IPs (IPv4 + IPv6), drops the rest."
     echo -e "  ${FR}│${NC} ${Y}Note: blocks any other GRE/6in4/IPIP tunnels on this host that are not managed by MGRE.${NC}"
-    echo -e "  ${FR}└─${NC}"
+    echo -e "  ${FR}╰─${NC}"
     echo -ne "  ${C}●${NC} ${W}Turn Guard $([ "$on" == "1" ] && echo OFF || echo ON)? (y/n): ${NC}"; read -r ans
     [[ "${ans,,}" == "y" ]] || return
     if [ "$on" == "1" ]; then rm -f "$GUARD_FLAG"; else mkdir -p "$MT_ROOT_CONF"; touch "$GUARD_FLAG"; fi
@@ -1617,10 +1617,10 @@ restore_validated_backup() {
 
 menu_backup_restore() {
     draw_mgre_header
-    echo -e "\n  ${FR}┌─[ BACKUP & RESTORE ]${NC}"
+    echo -e "\n  ${FR}╭─[ BACKUP & RESTORE ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Create Backup${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restore From Backup${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read -r ans
     if [ "$ans" == "1" ]; then
         local f; f=$(backup_configs)
@@ -1737,8 +1737,8 @@ show_live_monitor() {
 # mt_link_box supplied by core/common.sh
 mt_main_logs() {
     mt_workspace_screen
-    echo -e "\n  ${FR}┌─[ MGRE SERVICE LOGS ]${NC}\n  ${FR}│${NC}"
-    journalctl -u mgre.service -n 80 --no-pager 2>/dev/null || echo -e "  ${FR}└─${NC} ${W}No service log entries yet.${NC}"
+    echo -e "\n  ${FR}╭─[ MGRE SERVICE LOGS ]${NC}\n  ${FR}│${NC}"
+    journalctl -u mgre.service -n 80 --no-pager 2>/dev/null || echo -e "  ${FR}╰─${NC} ${W}No service log entries yet.${NC}"
     mt_workspace_pause
 }
 # mt_link_read supplied by core/common.sh
@@ -1799,7 +1799,7 @@ mt_link_import() {
     if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_link_read_input link "  ${C}●${NC} ${W}Paste Peer Setup Link (q: back): ${NC} " || return 1; fi
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
-    echo -e "\n  ${FR}┌─[ PEER SETUP PREVIEW ]${NC}"
+    echo -e "\n  ${FR}╭─[ PEER SETUP PREVIEW ]${NC}"
     echo -e "  ${FR}│${NC}"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
@@ -1820,7 +1820,7 @@ mt_link_import() {
     fi
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
+    echo -e "  ${FR}╰─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
     mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
@@ -2006,7 +2006,7 @@ while true; do
         1) 
            mt_workspace_screen
            draw_mgre_header
-           echo -e "\n  ${FR}┌─[ TUNNEL PROTOCOL ]${NC}"
+           echo -e "\n  ${FR}╭─[ TUNNEL PROTOCOL ]${NC}"
            echo -e "  ${FR}│${NC}"
            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Standard IPv4 GRE${NC}"
            echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${M}6to4 IP6GRE Encapsulation${NC} ${DIM}(IPv6 inside IPv4 sit)${NC}"
@@ -2015,7 +2015,7 @@ while true; do
            echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${G}IPIP4 → IPIP6 (IPv4 over IPv6)${NC}"
            echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${G}IPIP6 → IPIP6 (IPv6 over IPv6)${NC}"
            echo -e "  ${FR}│${NC}"
-           echo -e "  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}\n"
+           echo -e "  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel and Go Back${NC}\n"
            while true; do echo -ne "  ${C}Select Protocol ❯❯ ${NC}"; read -r proto_choice; [[ "$proto_choice" == "q" ]] && break; [[ "$proto_choice" =~ ^[1-6]$ ]] && break; done
            [[ "$proto_choice" == "q" ]] && continue
            tun_proto="ipv4"
@@ -2149,7 +2149,7 @@ while true; do
            select_tunnel_interactive || continue
            draw_mgre_header
            T_NAME=""; MAX_IPS="0"; TUN_SECRET=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
-           echo -e "\n  ${FR}┌─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+           echo -e "\n  ${FR}╭─[ vIP ACTIONS for ${T_NAME} ]${NC}\n  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
            while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read -r vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
            [[ "$vip_action" == "q" ]] && continue
            if [[ "$vip_action" == "1" ]]; then
@@ -2301,12 +2301,12 @@ while true; do
            [ -d "/sys/class/net/$T_NAME" ] && act_mtu=$(cat "/sys/class/net/$T_NAME/mtu" 2>/dev/null)
            cur_mtu="${act_mtu:-${CUSTOM_MTU:-$def_mtu (Auto)}}"
 
-           echo -e "\n  ${FR}┌─[ MTU & TCP MSS CONFIGURATION: ${W}${T_NAME}${DIM} ]${NC}"
+           echo -e "\n  ${FR}╭─[ MTU & TCP MSS CONFIGURATION: ${W}${T_NAME}${DIM} ]${NC}"
            echo -e "  ${FR}│${NC} Current Live MTU : ${Y}${cur_mtu}${NC}"
            echo -e "  ${FR}│${NC} Valid Range      : ${W}${min_mtu} - ${max_mtu}${NC}"
            [ "$esp_oh" -eq 0 ] || echo -e "  ${FR}│${NC} IPsec ESP        : ${Y}-${esp_oh} bytes already deducted from the range${NC}"
            echo -e "  ${FR}│${NC} Profiles         : ${W}1437${NC} (Default IR) | ${W}1361${NC} (Iran Broadband) | ${W}900-1200${NC} (Heavy Fragmentation)"
-           echo -e "  ${FR}└─${NC}"
+           echo -e "  ${FR}╰─${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter New MTU (${min_mtu}-${max_mtu}) [Enter for Default]: ${NC}"; read -r new_mtu
            new_mtu=$(echo "$new_mtu" | tr -dc '0-9')
 
@@ -2673,12 +2673,12 @@ select_fabric_interactive() {
     local configs=("$CONF_DIR"/*.conf)
     [ ! -e "${configs[0]}" ] && { echo -e "\n  ${R}● No fabrics configured yet!${NC}"; sleep 1.5; return 1; }
     if [ ${#configs[@]} -eq 1 ]; then SELECTED_CONF="${configs[0]}"; return 0; fi
-    echo -e "\n  ${FR}╔══════════════════ Select Target Fabric ═══════════════════╗${NC}"
+    echo -e "\n  ${FR}╭══════════════════ Select Target Fabric ═══════════════════╗${NC}"
     local i
     for i in "${!configs[@]}"; do
         printf "  ${FR}║${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${FR}║${NC}\n" "$((i+1))" "$(basename "${configs[$i]}" .conf)"
     done
-    echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
     echo -ne "  ${C}●${NC} ${W}Select Fabric [1-${#configs[@]}] or 'q': ${NC}"; read -r t_idx
     t_idx=$(echo "$t_idx" | tr -d '\r ')
     [[ "$t_idx" == "q" || -z "$t_idx" ]] && return 1
@@ -2704,7 +2704,7 @@ manage_port_forwarding() {
         FWD_TARGETS=''; LB_MODE=0; mt_source_conf "$target_conf" 2>/dev/null
         mt_fwd_conflict_refresh "$VX_NAME" "$FWD_TCP" "$FWD_UDP" "MXLAN_FWD_$VX_NAME"
         draw_mxlan_header
-        echo -e "\n  ${FR}┌─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
+        echo -e "\n  ${FR}╭─[ PORT FORWARDING MANAGER: ${W}${VX_NAME}${DIM} ]${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Current TCP:${NC} ${Y}${FWD_TCP:-None}${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Current UDP:${NC} ${C}${FWD_UDP:-None}${NC}"
         echo -e "  ${FR}│${NC} ${DIM}Load Balancer:${NC} $([ "$LB_MODE" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${DIM}OFF${NC}")"
@@ -2719,7 +2719,7 @@ manage_port_forwarding() {
         if mt_fwd_conflict_flag "$VX_NAME"; then cf_note=" ${R}⚠ $(wc -w < "$(mt_fwd_conflict_file "$VX_NAME")" 2>/dev/null) conflicting port(s)${NC}"; fi
         echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${Y}Fix conflicts (ports held by other services)${NC}${cf_note}"
         echo -e "  ${FR}│${NC}"
-        echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
+        echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Back${NC}\n"
         echo -ne "  ${C}Select ❯❯ ${NC}"; read -r pf_opt
 
         case $pf_opt in
@@ -2810,7 +2810,7 @@ show_fabric_details() {
         t_role=$([ "$TYPE" == "1" ] && echo "IRAN (Access)" || echo "KHAREJ (Gateway)")
         t_sec="${TUN_SECRET:-[ NOT SET ]}"
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         left_p="▼ Fabric: ${VX_NAME:0:20} (${BR_NAME:0:20})"; right_p="Role: $t_role"
         pad=$(( 90 - ${#left_p} - ${#right_p} )); [ "$pad" -lt 0 ] && pad=0; sp=$(printf '%*s' "$pad" "")
         echo -e "  ${FR}║${NC} ${C}${left_p}${NC}${sp}${DIM}${right_p}${NC} ${FR}║${NC}"
@@ -2836,7 +2836,7 @@ show_fabric_details() {
         pad4=$(( 90 - ${#l4} )); [ "$pad4" -lt 0 ] && pad4=0; sp4=$(printf '%*s' "$pad4" "")
         echo -e "  ${FR}║${NC} ${DIM}Core Subnet  :${NC} ${G}${c_sub}.x${NC} ${DIM}(${lip} -> ${tip})${NC}${sp4} ${FR}║${NC}"
 
-        echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════════════════════╝\n"
+        echo -e "  ${FR}╰════════════════════════════════════════════════════════════════════════════════════════════╝\n"
     done
     if [ "${1:-}" != --no-pause ]; then
         echo -ne "  ${DIM}Press Enter to return...${NC}"; read -r dummy
@@ -2860,7 +2860,7 @@ show_mxlan_monitor() {
         pad1=$(( 92 - ${#raw_l1} )); [ "$pad1" -lt 0 ] && pad1=0; sp1=$(printf '%*s' "$pad1" "")
         eval_l1=$(printf " %b▼ %s%b ${DIM}| PUB: ${W}%s ${DIM}→${W} %s${NC}" "${M}" "${title_txt}" "${NC}" "${EP_L}" "${EP_R}")
 
-        echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "  ${FR}╭════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         echo -e "  ${FR}║${NC}${eval_l1}${sp1}${FR}║${NC}"
 
         if [ "$TYPE" == "1" ] && { [ -n "$FWD_TCP" ] || [ -n "$FWD_UDP" ]; }; then
@@ -2906,20 +2906,20 @@ show_mxlan_monitor() {
             lip="${lip:0:18}"; tip="${tip:0:18}"
             printf "  ${FR}║${NC} ${DIM}%s %-12.12s${NC} ${FR}║${NC} ${DIM}%-18.18s${NC} ${FR}║${NC} ${DIM}%-18.18s${NC} ${FR}║${NC} %b%-12.12s%b ${FR}║${NC} %b%s %-10.10s%b ${FR}║${NC}\n" "${v_icon}" "vIP" "$lip" "$tip" "$lat_color" "$lat_raw" "$NC" "$stat_color" "$stat_icon" "$stat_text" "$NC"
         done
-        echo -e "  ${FR}╚════════════════════╩════════════════════╩════════════════════╩══════════════╩══════════════╝${NC}\n"
+        echo -e "  ${FR}╰════════════════════╩════════════════════╩════════════════════╩══════════════╩══════════════╝${NC}\n"
     done
 }
 
 uninstall_mxlan() {
     draw_mxlan_header
-    echo -e "\n  ${R}╔════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "\n  ${R}╭════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${R}║${NC}   ${R}⚠ WARNING: COMPLETE PURGE & UNINSTALLATION OF MXLAN${NC}                     ${R}║${NC}"
     echo -e "  ${R}║${NC}   This will permanently stop and delete:                                   ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All active VXLAN interfaces and Bridge attachments                    ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All configurations & metadata in /etc/mgre/vxlan                       ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● All iptables NAT, FORWARD, and Load Balancer rules                     ${R}║${NC}"
     echo -e "  ${R}║${NC}   ● MXLAN systemd service & executable wrapper                             ${R}║${NC}"
-    echo -e "  ${R}╚════════════════════════════════════════════════════════════════════════════╝${NC}\n"
+    echo -e "  ${R}╰════════════════════════════════════════════════════════════════════════════╝${NC}\n"
     
     local confirm conf VX_NAME BR_NAME
     echo -ne "  ${Y}Are you sure you want to proceed? Type '${R}yes${Y}' to confirm: ${NC}"; read -r confirm
@@ -3117,11 +3117,11 @@ menu_encrypt() {
     select_fabric_interactive || return
     local ENCRYPT="0" VX_NAME="" TYPE="" LOCAL_PUB="" REMOTE_PUB="" LOCAL_PUB6="" REMOTE_PUB6="" FAB_PROTO="ipv4" TUN_SECRET=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
     draw_mxlan_header
-    echo -e "\n  ${FR}┌─[ IPsec ESP ENCRYPTION: ${W}${VX_NAME}${DIM} ]${NC}"
+    echo -e "\n  ${FR}╭─[ IPsec ESP ENCRYPTION: ${W}${VX_NAME}${DIM} ]${NC}"
     echo -e "  ${FR}│${NC} Status : $([ "$ENCRYPT" == "1" ] && echo -e "${G}ENCRYPTED (AES-256-CBC + HMAC-SHA256)${NC}" || echo -e "${R}PLAINTEXT VXLAN${NC}")"
     echo -e "  ${FR}│${NC} ${Y}Both peers MUST run the same mode with the same Master Token, or the link drops.${NC}"
     echo -e "  ${FR}│${NC} ${DIM}Auto MTU shrinks by 64 bytes for ESP overhead.${NC}"
-    echo -e "  ${FR}└─${NC}"
+    echo -e "  ${FR}╰─${NC}"
     echo -ne "  ${C}●${NC} ${W}Turn encryption $([ "$ENCRYPT" == "1" ] && echo OFF || echo ON)? (y/n): ${NC}"; read -r ans
     [[ "${ans,,}" == "y" ]] || return
     local nv="1"; [ "$ENCRYPT" == "1" ] && nv="0"
@@ -3137,11 +3137,11 @@ menu_encrypt() {
 menu_guard() {
     draw_mxlan_header
     local on=0; [ -f "$GUARD_FLAG" ] && on=1
-    echo -e "\n  ${FR}┌─[ FIREWALL GUARD (Anti-Spoof / Anti-Injection) ]${NC}"
+    echo -e "\n  ${FR}╭─[ FIREWALL GUARD (Anti-Spoof / Anti-Injection) ]${NC}"
     echo -e "  ${FR}│${NC} Status : $([ "$on" == "1" ] && echo -e "${G}ON${NC}" || echo -e "${R}OFF${NC}")"
     echo -e "  ${FR}│${NC} Accepts VXLAN (UDP 4789, IPv4 + IPv6) ONLY from configured peer IPs: stops L2 frame injection."
     echo -e "  ${FR}│${NC} ${Y}Note: blocks any other VXLAN endpoints on this host not managed by MXLAN.${NC}"
-    echo -e "  ${FR}└─${NC}"
+    echo -e "  ${FR}╰─${NC}"
     echo -ne "  ${C}●${NC} ${W}Turn Guard $([ "$on" == "1" ] && echo OFF || echo ON)? (y/n): ${NC}"; read -r ans
     [[ "${ans,,}" == "y" ]] || return
     if [ "$on" == "1" ]; then rm -f "$GUARD_FLAG"; else mkdir -p "$MT_ROOT_CONF"; touch "$GUARD_FLAG"; fi
@@ -3161,7 +3161,7 @@ menu_manual_mtu() {
     [ "$ENCRYPT" != 1 ] || fab_max=$((fab_max - 64))
     draw_mxlan_header
     act=$(cat "/sys/class/net/$VX_NAME/mtu" 2>/dev/null)
-    echo -e "\n  ${FR}┌─[ MTU & MSS: ${W}${VX_NAME}${DIM} ]${NC}"
+    echo -e "\n  ${FR}╭─[ MTU & MSS: ${W}${VX_NAME}${DIM} ]${NC}"
     echo -e "  ${FR}├─${NC} Live MTU: ${Y}${act:-N/A}${NC}   Saved: ${W}${CUSTOM_MTU:-Default}${NC}"
     echo -ne "  ${C}●${NC} ${W}MTU (${MX_MTU_MIN}-${fab_max}) [Enter: default | q: cancel]: ${NC}"
     read -r best || return 0
@@ -3237,10 +3237,10 @@ restore_validated_backup() {
 
 menu_backup_restore() {
     draw_mxlan_header
-    echo -e "\n  ${FR}┌─[ BACKUP & RESTORE ]${NC}"
+    echo -e "\n  ${FR}╭─[ BACKUP & RESTORE ]${NC}"
     echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Create Backup${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${Y}Restore From Backup${NC}"
-    echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
+    echo -e "  ${FR}╰─${NC} ${W}0${NC} ${DIM}❯${NC} Back"
     echo -ne "  ${C}Select ❯❯ ${NC}"; read -r ans
     if [ "$ans" == "1" ]; then
         local f; f=$(backup_configs)
@@ -3357,8 +3357,8 @@ show_live_monitor() {
 # mt_link_box supplied by core/common.sh
 mt_main_logs() {
     mt_workspace_screen
-    echo -e "\n  ${FR}┌─[ MXLAN SERVICE LOGS ]${NC}\n  ${FR}│${NC}"
-    journalctl -u mxlan.service -n 80 --no-pager 2>/dev/null || echo -e "  ${FR}└─${NC} ${W}No service log entries yet.${NC}"
+    echo -e "\n  ${FR}╭─[ MXLAN SERVICE LOGS ]${NC}\n  ${FR}│${NC}"
+    journalctl -u mxlan.service -n 80 --no-pager 2>/dev/null || echo -e "  ${FR}╰─${NC} ${W}No service log entries yet.${NC}"
     mt_workspace_pause
 }
 # mt_link_read supplied by core/common.sh
@@ -3422,7 +3422,7 @@ mt_link_import() {
     if [ -n "${MT_PEER_LINK:-}" ]; then link="$MT_PEER_LINK"; MT_PEER_LINK=; else mt_link_read_input link "  ${C}●${NC} ${W}Paste Peer Setup Link (q: back): ${NC} " || return 1; fi
     [ "$link" != q ] || return 0
     mt_link_decode "$link" || { echo -e "  ${R}✖ Invalid / expired link. No changes made.${NC}"; mt_workspace_pause; return 1; }
-    echo -e "\n  ${FR}┌─[ PEER SETUP PREVIEW ]${NC}"
+    echo -e "\n  ${FR}╭─[ PEER SETUP PREVIEW ]${NC}"
     echo -e "  ${FR}│${NC}"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Module" "$NC" "$DIM" "$NC" "$W" "$MT_KIND" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "Role" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[ROLE]}" "$NC"
@@ -3433,7 +3433,7 @@ mt_link_import() {
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "UDP ports" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[UDP_PORTS]:--}" "$NC"
     printf '  %b├─%b %b%-11s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "vIPs" "$NC" "$DIM" "$NC" "$W" "${MT_LINK_DATA[MAX_IPS]:--}" "$NC"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}└─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
+    echo -e "  ${FR}╰─${NC} ${W}Secret is hidden. Existing tunnels will not be overwritten.${NC}"
     mt_ask name "Local tunnel name/suffix [${MT_LINK_DATA[NAME]}]: " || return 1
     name="${name:-${MT_LINK_DATA[NAME]}}"
     mt_link_field_valid NAME "$name" || { echo 'Invalid name.' >&2; return 1; }
@@ -3612,7 +3612,7 @@ while true; do
         1) 
            mt_workspace_screen
            draw_mxlan_header
-           echo -e "\n  ${FR}┌─[ VXLAN DEPLOYMENT ]${NC}"
+           echo -e "\n  ${FR}╭─[ VXLAN DEPLOYMENT ]${NC}"
            while true; do echo -ne "  ${C}●${NC} ${W}Server Mode [1:IR | 2:KH | q:Back]: ${NC}"; read -r s_type; [[ "$s_type" == "q" ]] && break; [[ "$s_type" == "1" || "$s_type" == "2" ]] && break; done
            [[ "$s_type" == "q" ]] && continue
 
@@ -3763,9 +3763,9 @@ while true; do
            draw_mxlan_header
            configs=("$CONF_DIR"/*.conf)
            [ ! -e "${configs[0]}" ] && echo -e "\n  ${R}● No active fabrics to remove!${NC}" && sleep 1.5 && continue
-           echo -e "\n  ${FR}╔══════════════════ Select Fabric to Erase ══════════════════╗${NC}"
+           echo -e "\n  ${FR}╭══════════════════ Select Fabric to Erase ══════════════════╗${NC}"
            for i in "${!configs[@]}"; do printf "  ${FR}║${NC}  ${Y}%-3.3s${NC} ${C}❯${NC} ${W}%-50.50s${NC}  ${FR}║${NC}\n" "$((i+1))" "$(basename "${configs[$i]}" .conf)"; done
-           echo -e "  ${FR}╚════════════════════════════════════════════════════════════╝${NC}"
+           echo -e "  ${FR}╰════════════════════════════════════════════════════════════╝${NC}"
            echo -ne "  ${C}●${NC} ${W}Enter Number [1-${#configs[@]}], 'all', or 'q': ${NC}"; read -r del_idx; del_idx=$(echo "$del_idx" | tr -d '\r ')
            [[ "$del_idx" == "q" || -z "$del_idx" ]] && continue
            if [[ "$del_idx" == "all" ]]; then
@@ -3792,7 +3792,7 @@ while true; do
            select_fabric_interactive || continue
            draw_mxlan_header
            VX_NAME=""; MAX_IPS="0"; TUN_SECRET=""; VNI_ID=""; mt_source_conf "$SELECTED_CONF" 2>/dev/null
-           echo -e "\n  ${FR}┌─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${FR}└─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
+           echo -e "\n  ${FR}╭─[ vIP ACTIONS for ${VX_NAME} ]${NC}\n  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}Setup / Update Virtual IPs${NC}\n  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${R}Purge All Virtual IPs${NC}\n  ${FR}╰─${NC} ${W}q${NC} ${DIM}❯${NC} ${DIM}Cancel${NC}"
            while true; do echo -ne "  ${C}Select Action ❯❯ ${NC}"; read -r vip_action; [[ "$vip_action" =~ ^[12q]$ ]] && break; done
            [[ "$vip_action" == "q" ]] && continue
            if [[ "$vip_action" == "1" ]]; then

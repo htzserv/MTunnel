@@ -650,23 +650,21 @@ install_core_from_source() {
     triplet=$(case "$(uname -m)" in x86_64) echo amd64;; aarch64|arm64) echo arm64;; *) exit 1;; esac) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
     asset="backhaul_linux_${triplet}.tar.gz"
     local -a urls=()
-    local gh_latest=""
-    if [[ "$src_choice" == "1" || "$src_choice" == "2" ]] && command -v curl >/dev/null 2>&1; then
-        gh_latest=$(curl -fsSL --connect-timeout 3 --max-time 6 "https://api.github.com/repos/Musixal/Backhaul/releases/latest" 2>/dev/null | grep -oE "https://github\.com/Musixal/Backhaul/releases/download/[^\"']+/${asset}" | head -n1)
-    fi
-    [ -n "$gh_latest" ] || gh_latest="https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset"
+    # Core comes from the project's own GitHub repo (engines/), never from the upstream Backhaul releases.
+    local gh_base="${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}"
+    local -a gh_urls=("${gh_base}/engines/$asset")
+    [ "$triplet" != amd64 ] || gh_urls+=("${gh_base}/engines/bh")
     case "$src_choice" in
-        1) urls=("$gh_latest"); need_zip=0;;
+        1) urls=("${gh_urls[@]}"); need_zip=0;;
         2)
             urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
             # The unqualified mirror binary is the bundled x86_64 build only.
             [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/bh")
-            urls+=("$gh_latest")
+            urls+=("${gh_urls[@]}")
             need_zip=0;;
         5)
             # Strict MTunnel GitHub source for Smart prerequisite installation.
-            urls=("${MTUNNEL_GITHUB_BASE}/engines/$asset")
-            [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_GITHUB_BASE}/engines/bh")
+            urls=("${gh_urls[@]}")
             need_zip=0;;
         6)
             # Strict MTunnel mirror source for Smart prerequisite installation.
@@ -799,7 +797,7 @@ unified_update_menu() {
 menu_install_core() {
     echo -e "\n  ${FR}┌─[ INSTALL / UPDATE BACKHAUL CORE ]${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}GitHub Repo${NC}"
     echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
     echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
     echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"
@@ -822,7 +820,7 @@ check_first_run_core() {
             printf '  %b║%b   %b● %-71.71s%b%b║%b\n' "$FR" "$NC" "$R" "$core_msg" "$NC" "$FR" "$NC"
             echo -e "  ${FR}║${NC}   ${W}Would you like to install the Core binary now?${NC}                           ${FR}║${NC}"
             echo -e "  ${FR}╚════════════════════════════════════════════════════════════════════════════╝${NC}"
-            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}Official GitHub Release${NC}"
+            echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${C}GitHub Repo${NC}"
             echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${G}Iranian Mirror${NC} ${DIM}(${MTUNNEL_MIRROR_BASE})${NC}"
             echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}Custom Direct Link${NC} ${DIM}(Binary or .tar.gz)${NC}"
             echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Local Directory (/root/mtunnel/engines)${NC}"

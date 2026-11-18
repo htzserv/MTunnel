@@ -200,7 +200,7 @@ bh_probe_version() { # path
     [ "$key" != "$_BH_PROBE_KEY" ] || return 0
     out=$(timeout 3 "$b" -v 2>&1 </dev/null | head -n 3) || true
     BH_PROBED_VERSION=""
-    [[ "$out" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]] && BH_PROBED_VERSION="${BASH_REMATCH[1]}"
+    [[ "$out" =~ ([0-9]+(\.[0-9]+)+) ]] && BH_PROBED_VERSION="${BASH_REMATCH[1]}"
     _BH_PROBE_KEY="$key"
     return 0
 }
@@ -1581,12 +1581,14 @@ draw_header() {
         done
     fi
 
-    local core_color="${R}"; local core_raw="Not Installed"
+    local core_color="${R}"; local core_raw="✖"
     if is_bh_core_valid; then
-        core_color="${G}"; core_raw="Installed"
+        bh_probe_version "$(bh_core_bin)"
+        core_color="${G}"; core_raw="✔"
+        [ -n "${BH_PROBED_VERSION:-}" ] && core_raw="✔ v${BH_PROBED_VERSION:0:10}"
     elif bh_core_bin >/dev/null; then
         bh_probe_version "$(bh_core_bin)"
-        core_color="${Y}"; core_raw="Wrong v${BH_PROBED_VERSION:0:10}"
+        core_color="${Y}"; core_raw="✖ v${BH_PROBED_VERSION:0:10}"
     fi
     
     local act_color="${DIM}"; local act_text="0/0"

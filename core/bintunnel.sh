@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel Shared Binary-Tunnel Library (MBackhaul / MPaqet / MRathole) — API 1
-MODULE_VERSION="2.0.2"
+MODULE_VERSION="2.1.0"
 MTUNNEL_BINTUNNEL_API=1
 
 bt_init_runtime() {
@@ -280,7 +280,7 @@ mt_link_field_valid() {
         TOKEN|TUN_SECRET|SYNC_KEY) [[ "$val" =~ ^[A-Za-z0-9_=-]{1,256}$ ]];;
         LINK_PORT) mt_valid_port "$val";;
         TCP_PORTS|UDP_PORTS) mt_link_ports "$val";;
-        TRANSPORT) [[ "$val" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ ]];;
+        TRANSPORT) [[ "$val" =~ ^(tcp|tcpmux|tls|tlsmux|ws|wss|wsmux|wssmux|udp|kcp|kcpmux|xhttp|xhttps|xhttpmux|xhttpsmux)$ ]];;
         PORTS) return 0;;
         ENABLE_UDP|ADV_AGGRESSIVE|ADV_NODELAY|ADV_PROXY|KCP_WDELAY|KCP_ACKNODELAY) [[ "$val" =~ ^(true|false)$ ]];;
         PROTO) [[ "$val" =~ ^(ipv4|ipv6|6to4|gre6|ipip4to4|ipip4to6|ipip6to6)$ ]];;
@@ -291,6 +291,12 @@ mt_link_field_valid() {
         CUSTOM_MTU) [ -z "$val" ] || mt_link_uint "$val" 512 9000;;
         ENCRYPT) [[ "$val" =~ ^[01]$ ]];;
         ADV_LOG) [[ "$val" =~ ^(trace|debug|info|warn|error)$ ]];;
+        ADV_SNI|ADV_XHTTP_HOST) [ -z "$val" ] || mt_valid_host "$val";;
+        ADV_KCP_MODE) [[ "$val" =~ ^(normal|fast|fast2|fast3|manual)$ ]];;
+        ADV_KCP_CRYPT) [[ "$val" =~ ^(aes|aes-128|aes-256|salsa20|xor|tea|xtea|sm4|blowfish|twofish|cast5|3des|none)$ ]];;
+        ADV_KCP_NOFEC) [[ "$val" =~ ^(true|false)$ ]];;
+        ADV_XHTTP_MODE) [[ "$val" =~ ^(auto|stream-up|packet-up)$ ]];;
+        ADV_XHTTP_PATH) [[ "$val" =~ ^/[A-Za-z0-9._/-]*$ ]];;
         ADV_KEEPALIVE|ADV_HEARTBEAT|ADV_TIMEOUT|ADV_CHANNEL|ADV_POOL|ADV_RETRY|ADV_DIAL|ADV_MUX_CON|ADV_MUX_VERSION|ADV_MUX_FRAME|ADV_MUX_RECEIVE|ADV_MUX_STREAM|ADV_MTU|ADV_MSS|ADV_RCVBUF|ADV_SNDBUF) mt_link_uint "$val" 0 1073741824;;
         PROFILE) [[ "$val" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME|NORMAL|FAST|FAST2|FAST3|MANUAL|CUSTOM)$ ]];;
         BLOCK) [[ "$val" =~ ^(aes-128-gcm|aes|aes-128|aes-192|aes-256|salsa20|blowfish|twofish|cast5|3des|tea|xtea|xor|sm4|none)$ ]];;

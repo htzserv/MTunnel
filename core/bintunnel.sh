@@ -267,6 +267,8 @@ mt_main_logs() { show_tunnel_logs; }
 
 mt_link_field_valid() {
     local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,=-]*$'
+    # An XHTTP path always contains "/"; its exact shape is enforced by the ADV_XHTTP_PATH rule below.
+    [ "$key" != ADV_XHTTP_PATH ] || safe='^[][A-Za-z0-9_:.,=/-]*$'
     [ "${#val}" -le 4096 ] && [[ "$val" =~ $safe ]] || return 1
     case "$key" in
         ROLE) [[ "$val" =~ ^[12]$ ]];;

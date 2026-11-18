@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.0.2).
-MODULE_VERSION="2.0.2"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.1.0).
+MODULE_VERSION="2.1.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -552,13 +552,13 @@ collect_active_tunnels_stats() {
             REMOTE_IP=$(mt_read_kv "$conf" REMOTE_IP 2>/dev/null || true)
             PORTS=$(mt_read_kv "$conf" PORTS 2>/dev/null || true)
             TRANSPORT=$(mt_read_kv "$conf" TRANSPORT 2>/dev/null || true); [ -n "$TRANSPORT" ] || TRANSPORT=tcp
-            [[ "$ROLE" =~ ^[12]$ && "$TRANSPORT" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ ]] && mt_valid_port "$TUN_PORT" || continue
+            [[ "$ROLE" =~ ^[12]$ && "$TRANSPORT" =~ ^(tcp|tcpmux|tls|tlsmux|ws|wss|wsmux|wssmux|udp|kcp|kcpmux|xhttp|xhttps|xhttpmux|xhttpsmux)$ ]] && mt_valid_port "$TUN_PORT" || continue
             [ -z "${picked[BH|$t_name]:-}" ] || continue
             [ -n "${MT_ACTIVE_UNITS[mbackhaul@${t_name}.service]:-}" ] || continue
             local pure="${t_name#bh_}"
             local peer_ip="$REMOTE_IP"
             if [ "$ROLE" == "1" ]; then
-                if [ "$TRANSPORT" = udp ]; then
+                if [[ "$TRANSPORT" =~ ^(udp|kcp|kcpmux)$ ]]; then
                     peer_ip="UDP Listening"
                 else
                     peer_ip=$(mt_unit_peer_ip "mbackhaul@${t_name}" "$TUN_PORT" 2>/dev/null || true)
@@ -1346,8 +1346,6 @@ mt_fetch_package_manifest() {
         [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
         if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]]; then
             hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
-        elif [[ "$line" =~ ^[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
-            hash='-'; name="${BASH_REMATCH[1]}"
         else continue; fi
         [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue   # plain file names only (no paths)
         if [ "$sub" == prereqs ]; then

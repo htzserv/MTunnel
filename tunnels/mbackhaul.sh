@@ -1523,7 +1523,9 @@ collect_header_rows() {
         st=0; systemctl is-active --quiet "mbackhaul@${name}" 2>/dev/null && st=1
         peer="$remote"
         if [ "$st" = 1 ] && [ "$role" = 1 ]; then
-            if [[ "$transport" =~ ^(udp|kcp|kcpmux)$ ]]; then peer="UDP Listening"
+            if [[ "$transport" =~ ^(udp|kcp|kcpmux)$ ]]; then
+                # UDP has no ESTABLISHED socket to look at: use the traffic counters instead of a fixed label.
+                if [ "$(check_bh_connection "$name" 1 2>/dev/null)" = ONLINE ]; then peer="UDP Connected"; else peer="UDP Listening"; fi
             else peer=$(hdr_ss_peer "$name" "$port"); [ -n "$peer" ] || peer="Listening"; fi
         fi
         [ -n "$peer" ] && [ "$peer" != "0.0.0.0" ] || peer="---"

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.0.2).
-MODULE_VERSION="2.0.2"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.1.0).
+MODULE_VERSION="2.1.0"
 MODULE_BUILD="2026102901"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
@@ -839,7 +839,7 @@ smart_repo_manifest() { # base sub out
         [[ "$line" =~ ^[[:space:]]*($|#) ]] && continue
         if [[ "$line" =~ ^([0-9a-fA-F]{64})[[:space:]]+\*?([^[:space:]]+)[[:space:]]*$ ]]; then
             hash="${BASH_REMATCH[1],,}"; name="${BASH_REMATCH[2]}"
-        elif [[ "$line" =~ ^[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
+        elif [ -d "$base" ] && [[ "$line" =~ ^[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
             hash='-'; name="${BASH_REMATCH[1]}"
         else
             continue
@@ -1681,10 +1681,20 @@ smart_candidate_lines() { # l4 l6 f4 f6 local_bh remote_bh local_rat remote_rat 
     fi
     if [ "$lbh" = 1 ] && [ "$rbh" = 1 ]; then
         if mt_valid_ipv4 "$l4" && [ "$f2i4" = 1 ]; then
-            printf '%s\n' '8|Backhaul TCPMUX IPv4|backhaul|tcpmux|Foreign→Iran v4' '9|Backhaul WSMUX IPv4|backhaul|wsmux|Foreign→Iran v4'
+            printf '%s\n' \
+                '8|Backhaul TCPMUX IPv4|backhaul|tcpmux|Foreign→Iran v4' \
+                '9|Backhaul WSMUX IPv4|backhaul|wsmux|Foreign→Iran v4' \
+                '14|Backhaul TLSMUX IPv4|backhaul|tlsmux|Foreign→Iran v4' \
+                '15|Backhaul KCPMUX IPv4|backhaul|kcpmux|Foreign→Iran v4' \
+                '16|Backhaul XHTTPSMUX IPv4|backhaul|xhttpsmux|Foreign→Iran v4'
         fi
         if mt_valid_ipv6 "$l6" && [ "$f2i6" = 1 ]; then
-            printf '%s\n' '10|Backhaul TCPMUX IPv6|backhaul|tcpmux|Foreign→Iran v6' '11|Backhaul WSMUX IPv6|backhaul|wsmux|Foreign→Iran v6'
+            printf '%s\n' \
+                '10|Backhaul TCPMUX IPv6|backhaul|tcpmux|Foreign→Iran v6' \
+                '11|Backhaul WSMUX IPv6|backhaul|wsmux|Foreign→Iran v6' \
+                '17|Backhaul TLSMUX IPv6|backhaul|tlsmux|Foreign→Iran v6' \
+                '18|Backhaul KCPMUX IPv6|backhaul|kcpmux|Foreign→Iran v6' \
+                '19|Backhaul XHTTPSMUX IPv6|backhaul|xhttpsmux|Foreign→Iran v6'
         fi
     fi
     if [ "$lrat" = 1 ] && [ "$rrat" = 1 ]; then
@@ -1712,7 +1722,7 @@ smart_all_ids() {
 }
 smart_recommended_ids() {
     local avail="$1" out='' pref kind seen_gre=0 seen_vxlan=0 count=0
-    for pref in 1 4 3 5 2 6 7 8 11 12 13 9 10; do
+    for pref in 1 4 3 5 2 6 7 14 15 16 17 18 19 8 11 12 13 9 10; do
         kind=$(awk -F'|' -v x="$pref" '$1==x{print $3;exit}' <<< "$avail")
         [ -n "$kind" ] || continue
         case "$kind" in

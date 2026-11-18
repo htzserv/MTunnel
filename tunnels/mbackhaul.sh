@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.0.2).
-MODULE_VERSION="2.0.2"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.1.0).
+MODULE_VERSION="2.1.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -231,22 +231,30 @@ apply_bbr_optimization() {
 
 bh_select_transport() {
     local choice
-    echo -e "\n  ${FR}┌─[ TRANSPORT PROTOCOL ]${NC}"
+    echo -e "\n  ${FR}┌─[ TRANSPORT PROTOCOL — v2.1.0 ]${NC}"
     echo -e "  ${FR}│${NC}"
-    local n label
-    for n in 1 2 3 4 5 6 7; do
-        case "$n" in
-            1) label=TCP;; 2) label=TCPMUX;; 3) label=WSMUX;; 4) label='WSSMUX (TLS)';;
-            5) label=WS;; 6) label='WSS (TLS)';; 7) label='UDP (UDP applications only)';;
-        esac
-        printf '  %b├─%b %b%-2s%b %b❯%b %b%s%b\n' "$FR" "$NC" "$W" "$n" "$NC" "$DIM" "$NC" "$W" "$label" "$NC"
-    done
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}TLSMUX${NC}    ${DIM}(TCP + TLS 1.3 + Mux — Best All-Rounder)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}KCPMUX${NC}    ${DIM}(UDP + KCP + AES + Mux — Best for Packet Loss / Low Ping)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${M}XHTTPSMUX${NC} ${DIM}(Split-HTTP/2 + TLS + Mux — Best vs DPI & CDN)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${W}TCPMUX${NC}    ${DIM}(Raw TCP + Mux — Max Speed without TLS overhead)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}TLS${NC}       ${DIM}(TCP + TLS 1.3 Single-Stream)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}WSSMUX${NC}    ${DIM}(WebSocket + TLS 1.3 + Mux)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${W}XHTTPMUX${NC}  ${DIM}(Split-HTTP + Mux, h2c)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}8${NC} ${DIM}❯${NC} ${W}TCP${NC}       ${DIM}(Raw TCP)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}9${NC} ${DIM}❯${NC} ${W}UDP${NC}       ${DIM}(UDP applications only)${NC}"
     echo -e "  ${FR}│${NC}"
-    echo -ne "  ${FR}└─${NC} ${C}Select [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
-    case "$choice" in
-        1) BH_TRANSPORT=tcp;; 2) BH_TRANSPORT=tcpmux;; 3) BH_TRANSPORT=wsmux;;
-        4) BH_TRANSPORT=wssmux;; 5) BH_TRANSPORT=ws;; 6) BH_TRANSPORT=wss;;
-        7) BH_TRANSPORT=udp;; *) return 1;;
+    echo -ne "  ${FR}└─${NC} ${C}Select [1-9 | q: cancel] ❯❯ ${NC}"; read -r choice || return 1
+    case "${choice//$'\r'/}" in
+        1) BH_TRANSPORT=tlsmux;;
+        2) BH_TRANSPORT=kcpmux;;
+        3) BH_TRANSPORT=xhttpsmux;;
+        4) BH_TRANSPORT=tcpmux;;
+        5) BH_TRANSPORT=tls;;
+        6) BH_TRANSPORT=wssmux;;
+        7) BH_TRANSPORT=xhttpmux;;
+        8) BH_TRANSPORT=tcp;;
+        9) BH_TRANSPORT=udp;;
+        *) return 1;;
     esac
 }
 
@@ -266,7 +274,7 @@ bh_load_options() {
         [RETRY]=3 [DIAL]=10 [AGGRESSIVE]=false [NODELAY]=true [LOG]=info
         [MUX_CON]=8 [MUX_VERSION]=1 [MUX_FRAME]=32768 [MUX_RECEIVE]=4194304 [MUX_STREAM]=65536
         [MTU]=0 [MSS]=1360 [RCVBUF]=4194304 [SNDBUF]=4194304 [PROXY]=false
-        [EDGE]="" [TLS_CERT]="" [TLS_KEY]="")
+        [EDGE]="" [TLS_CERT]="" [TLS_KEY]="" [SNI]="www.cloudflare.com" [KCP_MODE]="fast2" [KCP_CRYPT]="aes" [KCP_NOFEC]="false" [XHTTP_PATH]="/api/v1/stream" [XHTTP_MODE]="auto" [XHTTP_HOST]="")
     for file in "$meta" "$override"; do
         [ -n "$file" ] && [ -f "$file" ] || continue
         while IFS='=' read -r key value; do
@@ -287,7 +295,7 @@ bh_apply_profile_defaults() {
     local profile="${1^^}" cores
     cores=$(bh_cpu_cores)
     BH_PROFILE="$profile"
-    local edge="${BH_OPTS[EDGE]:-}" cert="${BH_OPTS[TLS_CERT]:-}" key="${BH_OPTS[TLS_KEY]:-}"
+    local edge="${BH_OPTS[EDGE]:-}" cert="${BH_OPTS[TLS_CERT]:-}" key="${BH_OPTS[TLS_KEY]:-}" sni="${BH_OPTS[SNI]:-www.cloudflare.com}" kmode="${BH_OPTS[KCP_MODE]:-fast2}" kcrypt="${BH_OPTS[KCP_CRYPT]:-aes}" knofec="${BH_OPTS[KCP_NOFEC]:-false}" xpath="${BH_OPTS[XHTTP_PATH]:-/api/v1/stream}" xmode="${BH_OPTS[XHTTP_MODE]:-auto}" xhost="${BH_OPTS[XHTTP_HOST]:-}"
     local mtu="${BH_OPTS[MTU]:-0}" mss="${BH_OPTS[MSS]:-1360}" proxy="${BH_OPTS[PROXY]:-false}" log="${BH_OPTS[LOG]:-info}"
 
     case "$profile" in
@@ -338,7 +346,7 @@ bh_apply_profile_defaults() {
             BH_PROFILE="MANUAL"
             ;;
     esac
-    BH_OPTS[EDGE]="$edge"; BH_OPTS[TLS_CERT]="$cert"; BH_OPTS[TLS_KEY]="$key"
+    BH_OPTS[EDGE]="$edge"; BH_OPTS[TLS_CERT]="$cert"; BH_OPTS[TLS_KEY]="$key"; BH_OPTS[SNI]="$sni"; BH_OPTS[KCP_MODE]="$kmode"; BH_OPTS[KCP_CRYPT]="$kcrypt"; BH_OPTS[KCP_NOFEC]="$knofec"; BH_OPTS[XHTTP_PATH]="$xpath"; BH_OPTS[XHTTP_MODE]="$xmode"; BH_OPTS[XHTTP_HOST]="$xhost"
     BH_OPTS[MTU]="$mtu"; BH_OPTS[MSS]="$mss"; BH_OPTS[PROXY]="$proxy"; BH_OPTS[LOG]="$log"
     return 0
 }
@@ -368,6 +376,13 @@ bh_validate_options() {
         [ -z "${BH_OPTS[$key]}" ] || [[ "${BH_OPTS[$key]}" =~ ^/[A-Za-z0-9._/-]+$ ]] || return 1
     done
     [[ -z "${BH_OPTS[TLS_CERT]}" && -z "${BH_OPTS[TLS_KEY]}" || -n "${BH_OPTS[TLS_CERT]}" && -n "${BH_OPTS[TLS_KEY]}" ]] || return 1
+    [[ "${BH_OPTS[KCP_NOFEC]}" =~ ^(true|false)$ ]] || return 1
+    [[ "${BH_OPTS[KCP_MODE]}" =~ ^(normal|fast|fast2|fast3|manual)$ ]] || return 1
+    [[ "${BH_OPTS[KCP_CRYPT]}" =~ ^(aes|aes-128|aes-256|salsa20|xor|tea|xtea|sm4|blowfish|twofish|cast5|3des|none)$ ]] || return 1
+    [[ "${BH_OPTS[XHTTP_MODE]}" =~ ^(auto|stream-up|packet-up)$ ]] || return 1
+    [[ "${BH_OPTS[XHTTP_PATH]}" =~ ^/[A-Za-z0-9._/-]*$ ]] || return 1
+    [ -z "${BH_OPTS[SNI]}" ] || mt_valid_host "${BH_OPTS[SNI]}" || return 1
+    [ -z "${BH_OPTS[XHTTP_HOST]}" ] || mt_valid_host "${BH_OPTS[XHTTP_HOST]}" || return 1
 }
 
 bh_ask_option() {
@@ -462,10 +477,25 @@ bh_advanced_wizard() {
         *) echo -e "  ${R}✖ Invalid profile selection.${NC}"; return 1 ;;
     esac
 
-    if [ "$role" = 2 ] && [[ "$transport" == ws* ]]; then bh_ask_option EDGE 'Optional WebSocket edge IP' || return 1; fi
-    if [ "$role" = 1 ] && [[ "$transport" == wss || "$transport" == wssmux ]]; then
-        echo -e "  ${FR}├─${NC} ${W}TLS paths: leave both empty for a generated certificate.${NC}"
-        echo -ne "  ${FR}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-generated}; -: generated]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
+    if [[ "$transport" == kcp || "$transport" == kcpmux ]]; then
+        bh_ask_option KCP_MODE 'KCP mode (fast3/fast2/fast/normal)' || return 1
+        bh_ask_option KCP_CRYPT 'KCP encryption (aes/salsa20/xor/none)' || return 1
+        bh_ask_option KCP_NOFEC 'Disable KCP FEC overhead (true/false)' || return 1
+    fi
+    if [[ "$transport" == xhttp* ]]; then
+        bh_ask_option XHTTP_PATH 'XHTTP stream path (e.g. /api/v1/stream)' || return 1
+        if [ "$role" = 2 ]; then
+            bh_ask_option XHTTP_MODE 'XHTTP upload mode (auto/stream-up/packet-up)' || return 1
+            bh_ask_option XHTTP_HOST 'Optional XHTTP Host header' || return 1
+        fi
+    fi
+    if [ "$role" = 2 ] && [[ "$transport" == tls || "$transport" == tlsmux || "$transport" == ws* || "$transport" == xhttp* ]]; then
+        bh_ask_option SNI 'TLS SNI hostname (e.g. www.cloudflare.com)' || return 1
+        bh_ask_option EDGE 'Optional Edge / CDN IP' || return 1
+    fi
+    if [ "$role" = 1 ] && [[ "$transport" == tls || "$transport" == tlsmux || "$transport" == wss || "$transport" == wssmux || "$transport" == xhttps || "$transport" == xhttpsmux ]]; then
+        echo -e "  ${FR}├─${NC} ${W}TLS paths: leave empty for built-in Auto-TLS (in-memory ECDSA P-256).${NC}"
+        echo -ne "  ${FR}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-Auto-TLS}; -: Auto-TLS]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
         if [ "$choice" = - ]; then BH_OPTS[TLS_CERT]=""; BH_OPTS[TLS_KEY]=""
         elif [ -n "$choice" ]; then
             BH_OPTS[TLS_CERT]="$choice"
@@ -489,21 +519,32 @@ bh_emit_options() {
     else
         printf 'connection_pool = %s\nretry_interval = %s\n' "${BH_OPTS[POOL]}" "${BH_OPTS[RETRY]}"
         [ "$transport" = udp ] || printf 'dial_timeout = %s\naggressive_pool = %s\n' "${BH_OPTS[DIAL]}" "${BH_OPTS[AGGRESSIVE]}"
-        if [[ "$transport" == ws* ]]; then
+        if [[ "$transport" == tls || "$transport" == tlsmux || "$transport" == ws* || "$transport" == xhttp* ]]; then
             local edge="${BH_OPTS[EDGE]}"; [[ "$edge" != *:* ]] || edge="[$edge]"
             printf 'edge_ip = "%s"\n' "$edge"
+            [ -z "${BH_OPTS[SNI]}" ] || printf 'sni = "%s"\n' "${BH_OPTS[SNI]}"
+        fi
+        if [[ "$transport" == xhttp* ]]; then
+            printf 'xhttp_mode = "%s"\n' "${BH_OPTS[XHTTP_MODE]}"
+            [ -z "${BH_OPTS[XHTTP_HOST]}" ] || printf 'xhttp_host = "%s"\n' "${BH_OPTS[XHTTP_HOST]}"
         fi
     fi
     [ "$transport" = udp ] || printf 'keepalive_period = %s\n' "${BH_OPTS[KEEPALIVE]}"
+    if [[ "$transport" == kcp || "$transport" == kcpmux ]]; then
+        printf 'kcp_mode = "%s"\nkcp_crypt = "%s"\nkcp_nofec = %s\n' "${BH_OPTS[KCP_MODE]}" "${BH_OPTS[KCP_CRYPT]}" "${BH_OPTS[KCP_NOFEC]}"
+    fi
+    if [[ "$transport" == xhttp* ]]; then
+        printf 'xhttp_path = "%s"\n' "${BH_OPTS[XHTTP_PATH]}"
+    fi
     if [[ "$transport" == *mux ]]; then
         [ "$role" != 1 ] || printf 'mux_con = %s\n' "${BH_OPTS[MUX_CON]}"
         printf 'mux_version = %s\nmux_framesize = %s\nmux_recievebuffer = %s\nmux_streambuffer = %s\n' "${BH_OPTS[MUX_VERSION]}" "${BH_OPTS[MUX_FRAME]}" "${BH_OPTS[MUX_RECEIVE]}" "${BH_OPTS[MUX_STREAM]}"
     fi
-    if [[ "$transport" == tcp || "$transport" == tcpmux ]]; then
+    if [[ "$transport" == tcp || "$transport" == tcpmux || "$transport" == tls || "$transport" == tlsmux ]]; then
         [ "${BH_OPTS[MTU]}" = 0 ] || mss=$((BH_OPTS[MTU]-60))
         printf 'nodelay = %s\nmss = %s\nso_rcvbuf = %s\nso_sndbuf = %s\n' "${BH_OPTS[NODELAY]}" "$mss" "${BH_OPTS[RCVBUF]}" "${BH_OPTS[SNDBUF]}"
     fi
-    if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == *mux ]]; then printf 'proxy_protocol = %s\n' "${BH_OPTS[PROXY]}"; fi
+    if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == tls || "$transport" == *mux ]]; then printf 'proxy_protocol = %s\n' "${BH_OPTS[PROXY]}"; fi
 }
 
 bh_validate_tls_pair() {
@@ -803,7 +844,7 @@ check_first_run_core() {
 setup_bh_counters() {
     local proto
     proto=$(bh_meta_value TRANSPORT "$CONF_DIR/$1.meta" 2>/dev/null)
-    [ "$proto" = udp ] || proto=tcp
+    [[ "$proto" =~ ^(udp|kcp|kcpmux)$ ]] && proto=udp || proto=tcp
     mt_setup_counter_pair MBH "$1" "$2" "$3" "$4" "${5:-0.0.0.0}" "$proto"
 }
 
@@ -1163,7 +1204,7 @@ check_bh_connection() {
     mt_source_conf "$meta" 2>/dev/null
     if [ "$known_active" != "1" ] && ! systemctl is-active --quiet "mbackhaul@${t_name}" 2>/dev/null; then echo "OFFLINE"; return; fi
 
-    if [ "$TRANSPORT" = udp ]; then
+    if [[ "$TRANSPORT" =~ ^(udp|kcp|kcpmux)$ ]]; then
         local rx tx tot f now last_tot=0 last_chg=0; rx=$(get_bh_rx "$t_name"); tx=$(get_bh_tx "$t_name")
         tot=$(( ${rx:-0} + ${tx:-0} )); f="$SECURE_TMP/.mbh_udp_${t_name}"; now=$(date +%s)
         [ -f "$f" ] && read -r last_tot last_chg < "$f"
@@ -1274,7 +1315,7 @@ bh_write_config_locked() {
     mt_valid_port "$port" && [[ "$role" =~ ^[12]$ ]] || return 1
     [ "$role" != 2 ] || mt_valid_host "$r_ip" || return 1
     validate_bh_ports "$ports_str" 0 || return 1
-    [[ "$name" =~ ^[A-Za-z0-9_-]+$ && "$transport" =~ ^(tcp|tcpmux|ws|wss|wsmux|wssmux|udp)$ && "$enable_udp" =~ ^(true|false)$ ]] || return 1
+    [[ "$name" =~ ^[A-Za-z0-9_-]+$ && "$transport" =~ ^(tcp|tcpmux|tls|tlsmux|ws|wss|wsmux|wssmux|udp|kcp|kcpmux|xhttp|xhttps|xhttpmux|xhttpsmux)$ && "$enable_udp" =~ ^(true|false)$ ]] || return 1
     [[ "$token" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
     if [ "${MT_LINK_CREATING:-0}" = 1 ] && { [ -e "$CONF_DIR/${name}.meta" ] || [ -e "$CONF_DIR/${name}.toml" ]; }; then
         echo 'Tunnel appeared during peer creation; nothing overwritten.' >&2; return 1
@@ -1344,14 +1385,15 @@ bh_write_config_locked() {
         echo "accept_udp = ${enable_udp}" >> "$toml"
         echo "token = \"${token}\"" >> "$toml"
         bh_emit_options "$role" "$transport" >> "$toml"
-        if [[ "$transport" == wss || "$transport" == wssmux ]]; then
+        if [[ "$transport" == tls || "$transport" == tlsmux || "$transport" == wss || "$transport" == wssmux || "$transport" == xhttps || "$transport" == xhttpsmux ]]; then
             local cert="${BH_OPTS[TLS_CERT]}" tls_key="${BH_OPTS[TLS_KEY]}"
-            if [ -z "$cert" ]; then
+            if [ -n "$cert" ]; then
+                bh_validate_tls_pair "$cert" "$tls_key" || { echo 'TLS certificate/key is expired, unreadable or mismatched.' >&2; rm -rf "$work"; return 1; }
+                printf 'tls_cert = "%s"\ntls_key = "%s"\n' "$cert" "$tls_key" >> "$toml"
+            elif [[ "$transport" == wss || "$transport" == wssmux ]]; then
                 generate_ssl_cert || { rm -rf "$work"; return 1; }
-                cert="$CERT_DIR/wssmux.crt"; tls_key="$CERT_DIR/wssmux.key"
+                printf 'tls_cert = "%s"\ntls_key = "%s"\n' "$CERT_DIR/wssmux.crt" "$CERT_DIR/wssmux.key" >> "$toml"
             fi
-            bh_validate_tls_pair "$cert" "$tls_key" || { echo 'TLS certificate/key is expired, unreadable or mismatched.' >&2; rm -rf "$work"; return 1; }
-            printf 'tls_cert = "%s"\ntls_key = "%s"\n' "$cert" "$tls_key" >> "$toml"
         fi
 
         local port_lines
@@ -1381,7 +1423,7 @@ bh_smart_ports() { # NAME PORTS
     [ -f "$meta" ] || return 1
     mt_source_conf "$meta" 2>/dev/null || return 1
     [ "$ROLE" = 1 ] || return 1
-    [[ "$TRANSPORT" =~ ^(tcpmux|wsmux)$ ]] || return 1
+    [[ "$TRANSPORT" =~ ^(tcpmux|tlsmux|kcpmux|wsmux|wssmux|xhttpmux|xhttpsmux)$ ]] || return 1
     validate_bh_ports "$ports" 0 || return 1
     write_bh_config "$name" "$ROLE" "$TRANSPORT" "$TUN_PORT" "$REMOTE_IP" "$TOKEN" "$ports" false "$BIND_HOST" backhaul "$meta" || return 1
     systemctl restart "mbackhaul@$name" >/dev/null 2>&1 || return 1
@@ -1461,7 +1503,7 @@ hdr_ping_probe() {
     if echo "$res" | grep -q 'min/avg/max'; then
         avg=$(echo "$res" | grep -oP 'min/avg/max(/mdev)? = \K[^/]+/[^/]+' | cut -d/ -f2 | head -n1)
         [ -n "$avg" ] && avg="$(awk -v v="$avg" 'BEGIN {printf "%.0fms", v}')" || avg="---"
-    elif [ "$transport" != udp ] && [ -n "$name" ]; then
+    elif [[ ! "$transport" =~ ^(udp|kcp|kcpmux)$ ]] && [ -n "$name" ]; then
         tcp_rtt=$(bh_unit_tcp_rtt "$name" "$ip" 2>/dev/null || true)
         if [ -n "$tcp_rtt" ]; then avg="$tcp_rtt"; loss="---"
         elif [ -n "$(bh_unit_peer_ip "$name" 2>/dev/null || true)" ]; then loss="---"; fi
@@ -1483,7 +1525,7 @@ collect_header_rows() {
         st=0; systemctl is-active --quiet "mbackhaul@${name}" 2>/dev/null && st=1
         peer="$remote"
         if [ "$st" = 1 ] && [ "$role" = 1 ]; then
-            if [ "$transport" = udp ]; then peer="UDP Listening"
+            if [[ "$transport" =~ ^(udp|kcp|kcpmux)$ ]]; then peer="UDP Listening"
             else peer=$(hdr_ss_peer "$name" "$port"); [ -n "$peer" ] || peer="Listening"; fi
         fi
         [ -n "$peer" ] && [ "$peer" != "0.0.0.0" ] || peer="---"
@@ -2155,7 +2197,7 @@ while true; do
                echo -e "  ${R}● This tunnel name already exists.${NC}"; sleep 2; continue
            fi
            
-           def_p=8443; [ "$tr_val" == "tcpmux" ] && def_p=9443; [ "$tr_val" == "wssmux" ] && def_p=9743
+           def_p=8443; [[ "$tr_val" == tcpmux || "$tr_val" == tlsmux || "$tr_val" == kcpmux ]] && def_p=9443; [[ "$tr_val" == wssmux || "$tr_val" == xhttpsmux ]] && def_p=2053; [[ "$tr_val" == xhttpmux ]] && def_p=8080
            while true; do
                echo -ne "  ${C}● Tunnel Link Port [Default ${def_p}]: ${NC}"; read -r t_port
                t_port=${t_port//$'\r'/}

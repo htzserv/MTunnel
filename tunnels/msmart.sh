@@ -1053,10 +1053,8 @@ smart_install_official_prereqs() {
     assets=$(smart_engine_assets) || return 1; IFS='|' read -r bh_asset rh_asset <<< "$assets"
     if ! smart_core_installed_backhaul; then
         tmp=$(mktemp "$SECURE_TMP/backhaul.XXXXXX") || return 1
-        local bh_url=""
-        command -v curl >/dev/null 2>&1 && bh_url=$(curl -fsSL --connect-timeout 3 --max-time 6 "https://api.github.com/repos/Musixal/Backhaul/releases/latest" 2>/dev/null | grep -oE "https://github\.com/Musixal/Backhaul/releases/download/[^\"']+/${bh_asset}" | head -n1)
-        [ -n "$bh_url" ] || bh_url="https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$bh_asset"
-        echo -e "  ${C}⟳${NC} ${W}Backhaul:${NC} official GitHub release"
+        local bh_url="${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}/engines/$bh_asset"
+        echo -e "  ${C}⟳${NC} ${W}Backhaul:${NC} MTunnel GitHub repo"
         if mt_download "$bh_url" "$tmp" && mt_update_core bh mbackhaul "$tmp" local; then :; else rc=1; fi
         rm -f "$tmp"
     fi

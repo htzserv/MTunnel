@@ -1543,12 +1543,40 @@ collect_header_rows() {
     mv -f "$tmp" "$HDR_ROWS_FILE" 2>/dev/null
 }
 
+# Header rows: show the transport next to the BH tag, e.g. "test [BH:tcp]". The name column is 17 characters wide
+# (name + " [" + tag + "]"), so long transports get a short code and a long name is shortened to fit.
+bh_short_transport() {
+    case "$1" in
+        tcpmux) printf tcpmx;; tlsmux) printf tlsmx;; wsmux) printf wsmx;; wssmux) printf wssmx;;
+        kcpmux) printf kcpmx;; xhttpmux) printf xhmux;; xhttpsmux) printf xhsmux;;
+        *) printf '%s' "$1";;
+    esac
+}
+bh_rows_add_transport() {
+    local line st name tag peer vip ping loss up fwd tr newtag room out='' conf
+    [ -n "${MT_HDR_ROWS:-}" ] || return 0
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        IFS='|' read -r st name tag peer vip ping loss up fwd <<< "$line"
+        conf="$CONF_DIR/bh_${name}.meta"; [ -f "$conf" ] || conf="$CONF_DIR/${name}.meta"
+        tr=$(mt_read_kv "$conf" TRANSPORT 2>/dev/null) || tr=""
+        newtag="$tag"
+        if [ -n "$tr" ]; then
+            newtag="${tag}:$(bh_short_transport "$tr")"
+            room=$(( 17 - ${#newtag} - 3 )); (( room < 3 )) && room=3; (( room > 8 )) && room=8
+            name="${name// /}"; name="${name:0:$room}"
+        fi
+        out+="${st}|${name}|${newtag}|${peer}|${vip}|${ping}|${loss}|${up}|${fwd}"$'\n'
+    done <<< "$MT_HDR_ROWS"
+    MT_HDR_ROWS="$out"
+}
+
 draw_header() {
     local _meta_cache="$SECURE_TMP/.mbackhaul_header_meta"
     if [ -n "${HEADER_LIVE:-}" ] && [ -s "$_meta_cache" ]; then
         local act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_t
         IFS='|' read -r act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_t < "$_meta_cache"
-        mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "BH" "bh_"
+        mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "BH" "bh_"; bh_rows_add_transport
         HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
         mt_hdr_draw "MBackhaul Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \
             "Core|${core_raw}|${core_color}" "Status|${stat_icon} ${stat_text}|${stat_color}" \
@@ -1681,7 +1709,7 @@ draw_header() {
     local _now _mtime
     _now=$(date +%s); _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
     if [ ! -f "$HDR_ROWS_FILE" ]; then : > "$HDR_ROWS_FILE"; ( collect_header_rows fast >/dev/null 2>&1 & ); fi
-    mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "BH" "bh_"
+    mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "BH" "bh_"; bh_rows_add_transport
     HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$act_text" "$act_color" "$core_raw" "$core_color" "$stat_icon" "$stat_text" "$stat_color" "$g_text" "$g_color" "${total_t}" > "$_meta_cache"
     mt_hdr_draw "MBackhaul Core v${MODULE_VERSION}" "Active|${act_text}|${act_color}" \

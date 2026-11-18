@@ -1678,8 +1678,8 @@ mt_link_validate() {
     case "$MT_KIND" in
         gre) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET CORE_V6 TUN_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
         vxlan) allowed+=' PROTO TUN_SECRET SYNC_KEY CORE_SUBNET VNI_ID MAX_IPS CUSTOM_MTU ENCRYPT LOCAL_PUB REMOTE_PUB LOCAL_PUB6 REMOTE_PUB6 LOCAL_IP6 REMOTE_IP6 REMOTE_V4 ';;
-        backhaul) allowed+=' TOKEN LINK_PORT TRANSPORT PORTS ENABLE_UDP BIND_HOST ADV_KEEPALIVE ADV_HEARTBEAT ADV_CHANNEL ADV_POOL ADV_RETRY ADV_DIAL ADV_AGGRESSIVE ADV_NODELAY ADV_LOG ADV_MUX_CON ADV_MUX_VERSION ADV_MUX_FRAME ADV_MUX_RECEIVE ADV_MUX_STREAM ADV_MTU ADV_MSS ADV_RCVBUF ADV_SNDBUF ADV_PROXY ';;
-        rathole) allowed+=' TOKEN LINK_PORT TCP_PORTS UDP_PORTS BIND_HOST ';;
+        backhaul) allowed+=' TOKEN LINK_PORT TRANSPORT PORTS ENABLE_UDP BIND_HOST PROFILE ADV_KEEPALIVE ADV_HEARTBEAT ADV_CHANNEL ADV_POOL ADV_RETRY ADV_DIAL ADV_AGGRESSIVE ADV_NODELAY ADV_LOG ADV_MUX_CON ADV_MUX_VERSION ADV_MUX_FRAME ADV_MUX_RECEIVE ADV_MUX_STREAM ADV_MTU ADV_MSS ADV_RCVBUF ADV_SNDBUF ADV_PROXY ';;
+        rathole) allowed+=' TOKEN LINK_PORT TCP_PORTS UDP_PORTS BIND_HOST PROFILE ADV_HEARTBEAT ADV_TIMEOUT ADV_RETRY ADV_NODELAY ADV_LOG ';;
         paqet) allowed+=' TOKEN LINK_PORT TCP_PORTS PROFILE BLOCK KCP_MODE KCP_CONN KCP_MTU KCP_RCVWND KCP_SNDWND KCP_SMUXBUF KCP_STREAMBUF KCP_PCAP_SOCKBUF KCP_TCPBUF KCP_UDPBUF KCP_NODELAY KCP_WDELAY KCP_ACKNODELAY KCP_INTERVAL KCP_RESEND KCP_NOCONGESTION KCP_DSHARD KCP_PSHARD KCP_SMUXKALIVE ';;
     esac
     for key in "${!MT_LINK_DATA[@]}"; do
@@ -1743,13 +1743,21 @@ mt_link_export() {
         backhaul)
             for key in TOKEN TRANSPORT PORTS ENABLE_UDP; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done
             MT_LINK_DATA[LINK_PORT]=$(mt_link_read "$conf" TUN_PORT)
+            MT_LINK_DATA[PROFILE]=$(mt_link_read "$conf" PROFILE)
+            [ -n "${MT_LINK_DATA[PROFILE]}" ] || MT_LINK_DATA[PROFILE]="BALANCED"
             # Machine-local TLS paths and client CDN overrides are deliberately not exported.
             while IFS='=' read -r key host; do
                 case "$key" in ADV_TLS_CERT|ADV_TLS_KEY|ADV_EDGE) continue;; ADV_*) MT_LINK_DATA[$key]="$host";; esac
             done < "$conf"
             ;;
         rathole)
-            for key in TOKEN LINK_PORT TCP_PORTS UDP_PORTS; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done;;
+            for key in TOKEN LINK_PORT TCP_PORTS UDP_PORTS; do MT_LINK_DATA[$key]=$(mt_link_read "$conf" "$key"); done
+            MT_LINK_DATA[PROFILE]=$(mt_link_read "$conf" PROFILE)
+            [ -n "${MT_LINK_DATA[PROFILE]}" ] || MT_LINK_DATA[PROFILE]="BALANCED"
+            while IFS='=' read -r key host; do
+                case "$key" in ADV_*) MT_LINK_DATA[$key]="$host";; esac
+            done < "$conf"
+            ;;
         paqet)
             MT_LINK_DATA[LINK_PORT]=$(mt_link_read "$conf" TUN_PORT)
             MT_LINK_DATA[TCP_PORTS]=$(mt_link_read "$conf" TCP_PORTS)

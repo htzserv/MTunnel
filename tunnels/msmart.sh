@@ -728,9 +728,8 @@ smart_dependency_source_menu() {
     export SMART_DEP_SOURCE
 }
 
-# The MTunnel Backhaul modules write configs for Backhaul v0.7.2. A different major version (for example
-# v2.x) starts but rejects those configs ("neither server nor client configuration is properly set").
-SMART_BH_EXPECT="0.7.2"
+# Any valid Backhaul or Rathole binary is accepted without version lock.
+SMART_BH_EXPECT="any"
 smart_bh_bin() { local b; for b in /usr/local/bin/bh /usr/bin/bh; do [ -x "$b" ] && { printf '%s' "$b"; return 0; }; done; return 1; }
 smart_bh_version() { # prints x.y.z reported by "bh -v"; empty when it cannot be determined
     local b out
@@ -739,9 +738,14 @@ smart_bh_version() { # prints x.y.z reported by "bh -v"; empty when it cannot be
     [[ "$out" =~ ([0-9]+\.[0-9]+\.[0-9]+) ]] && printf '%s' "${BASH_REMATCH[1]}"
     return 0
 }
-# Installed AND not a known-wrong version (an undeterminable version is not blocked).
-smart_core_installed_backhaul() { local v; smart_bh_bin >/dev/null || return 1; v=$(smart_bh_version); [ -z "$v" ] || [ "$v" = "$SMART_BH_EXPECT" ]; }
-smart_core_installed_rathole() { [ -x /usr/local/bin/rathole ] || [ -x /usr/bin/rathole ]; }
+smart_core_installed_backhaul() { local b; b=$(smart_bh_bin) || return 1; mt_valid_elf "$b"; }
+smart_core_installed_rathole() {
+    local c
+    for c in /usr/local/bin/rathole /usr/bin/rathole; do
+        [ -x "$c" ] && mt_valid_elf "$c" && return 0
+    done
+    return 1
+}
 
 smart_modules_missing() {
     local n
@@ -1049,16 +1053,20 @@ smart_install_official_prereqs() {
     assets=$(smart_engine_assets) || return 1; IFS='|' read -r bh_asset rh_asset <<< "$assets"
     if ! smart_core_installed_backhaul; then
         tmp=$(mktemp "$SECURE_TMP/backhaul.XXXXXX") || return 1
+        local bh_url=""
+        command -v curl >/dev/null 2>&1 && bh_url=$(curl -fsSL --connect-timeout 3 --max-time 6 "https://api.github.com/repos/Musixal/Backhaul/releases/latest" 2>/dev/null | grep -oE "https://github\.com/Musixal/Backhaul/releases/download/[^\"']+/${bh_asset}" | head -n1)
+        [ -n "$bh_url" ] || bh_url="https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$bh_asset"
         echo -e "  ${C}⟳${NC} ${W}Backhaul:${NC} official GitHub release"
-        if mt_download "https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$bh_asset" "$tmp" && mt_update_core bh mbackhaul "$tmp" local; then
-            smart_core_installed_backhaul || { echo -e "  ${R}✖ Installed bh is v$(smart_bh_version), expected v${SMART_BH_EXPECT}.${NC}"; rc=1; }
-        else rc=1; fi
+        if mt_download "$bh_url" "$tmp" && mt_update_core bh mbackhaul "$tmp" local; then :; else rc=1; fi
         rm -f "$tmp"
     fi
     if ! smart_core_installed_rathole; then
         tmp=$(mktemp "$SECURE_TMP/rathole.XXXXXX") || return 1
+        local rh_url=""
+        command -v curl >/dev/null 2>&1 && rh_url=$(curl -fsSL --connect-timeout 3 --max-time 6 "https://api.github.com/repos/rathole-org/rathole/releases/latest" 2>/dev/null | grep -oE "https://github\.com/rathole-org/rathole/releases/download/[^\"']+/${rh_asset}" | head -n1)
+        [ -n "$rh_url" ] || rh_url="https://github.com/rathole-org/rathole/releases/download/v0.5.0/$rh_asset"
         echo -e "  ${C}⟳${NC} ${W}Rathole:${NC} official GitHub release"
-        if mt_download "https://github.com/rathole-org/rathole/releases/download/v0.5.0/$rh_asset" "$tmp" && mt_update_core rathole mrathole "$tmp" local; then :; else rc=1; fi
+        if mt_download "$rh_url" "$tmp" && mt_update_core rathole mrathole "$tmp" local; then :; else rc=1; fi
         rm -f "$tmp"
     fi
     return "$rc"
@@ -1200,11 +1208,9 @@ def info():
                 bv=m.group(1) if m else ''
             except Exception: bv=''
             break
-    # Backhaul v0.7.2 is required; a different known version rejects the generated configs.
-    bh=bp is not None and bv in ('','0.7.2')
+    bh=bp is not None
     rat=os.path.isfile('/usr/local/bin/rathole') or os.path.isfile('/usr/bin/rathole')
-    if bp is None: missing.append('backhaul-core')
-    elif not bh: missing.append('backhaul-core(need-0.7.2,found-%s)'%bv)
+    if not bh: missing.append('backhaul-core')
     if not rat: missing.append('rathole-core')
     return {'version':module_version,'api_rev':api_rev,'ipv4':local4(),'ipv6':local6(),
             'backhaul_core':bh,'backhaul_version':bv,'rathole_core':rat,'iperf3':shutil.which('iperf3') is not None,
@@ -2136,8 +2142,10 @@ smart_drain_forwarder() { # groupdir candidate-id
     ports=$(smart_conf_get "$conf" SERVICE_PORTS); [ -n "$ports" ] || return 0
     end=$(( $(date +%s) + seconds ))
     while [ "$(date +%s)" -lt "$end" ]; do
-        n=0
-        for p in ${ports//,/ }; do n=$((n + $(ss -tnH state established 2>/dev/null | awk -v want=":$p" '$4 ~ want"$" || $5 ~ want"$"{c++} END{print c+0}'))); done
+        n=$(ss -tnH state established 2>/dev/null | awk -v plist=",$ports," '
+            BEGIN { split(plist, a, ","); for (i in a) if (a[i] != "") want[":" a[i]] = 1 }
+            { for (w in want) if ($4 ~ w"$" || $5 ~ w"$") { c++; break } }
+            END { print c+0 }')
         [ "$n" -gt 0 ] || return 0; sleep 1
     done
     smart_event_log "$gd" DRAIN "$id" "$id" timeout "waited=${seconds}s"

@@ -190,14 +190,10 @@ bt_init_runtime "$@"
 
 # mt_choose_peer_host supplied by core/common.sh
 
-# These modules write Backhaul v0.7.2 configuration. A different major version (for example v2.x) starts but
-# rejects that configuration ("neither server nor client configuration is properly set").
-# Set MTUNNEL_ALLOW_ANY_BH=1 to skip this check.
-BH_EXPECT_VERSION="2.0.0"
+# Any valid Backhaul binary version is accepted without version lock.
+BH_EXPECT_VERSION="any"
 BH_PROBED_VERSION=""; _BH_PROBE_KEY=""
 bh_core_bin() { local c; for c in /usr/local/bin/bh /usr/bin/bh; do [ -x "$c" ] && { printf '%s' "$c"; return 0; }; done; return 1; }
-# Sets BH_PROBED_VERSION from "bh -v" (empty when it cannot be determined). Cached per file size/mtime;
-# call it directly, not inside $(...), so the cache survives.
 bh_probe_version() { # path
     local b="$1" key out
     key="$b:$(stat -c '%Y:%s' "$b" 2>/dev/null)"
@@ -208,17 +204,13 @@ bh_probe_version() { # path
     _BH_PROBE_KEY="$key"
     return 0
 }
-# True unless the binary positively reports a version other than the expected one.
-bh_core_version_ok() {
-    return 0 # path
-    [ "${MTUNNEL_ALLOW_ANY_BH:-0}" = 1 ] && return 0
-    bh_probe_version "$1"
-    [ -z "$BH_PROBED_VERSION" ] || [ "$BH_PROBED_VERSION" = "$BH_EXPECT_VERSION" ]
+bh_core_version_ok() { # path
+    [ -x "${1:-}" ] && mt_valid_elf "$1"
 }
 is_bh_core_valid() {
     local candidate
     for candidate in /usr/local/bin/bh /usr/bin/bh; do
-        if [ -x "$candidate" ] && mt_valid_elf "$candidate"; then bh_core_version_ok "$candidate"; return; fi
+        if [ -x "$candidate" ] && mt_valid_elf "$candidate"; then return 0; fi
     done
     return 1
 }
@@ -258,8 +250,18 @@ bh_select_transport() {
     esac
 }
 
+bh_cpu_cores() { local n; n=$(nproc 2>/dev/null); [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] || n=1; echo "$n"; }
+bh_cap_at() { local v="$1" m="$2"; [ "$v" -gt "$m" ] && v="$m"; echo "$v"; }
+
+bh_get_tunnel_profile() {
+    local meta="$CONF_DIR/${1}.meta" p=""
+    [ -f "$meta" ] && p=$(sed -n 's/^PROFILE=//p' "$meta" | head -n1 | tr -d '\r" ')
+    echo "${p:-BALANCED}"
+}
+
 bh_load_options() {
     local meta="$1" override="${2:-}" key value file
+    BH_PROFILE="BALANCED"
     declare -gA BH_OPTS=([KEEPALIVE]=75 [HEARTBEAT]=40 [CHANNEL]=4096 [POOL]=8
         [RETRY]=3 [DIAL]=10 [AGGRESSIVE]=false [NODELAY]=true [LOG]=info
         [MUX_CON]=8 [MUX_VERSION]=1 [MUX_FRAME]=32768 [MUX_RECEIVE]=4194304 [MUX_STREAM]=65536
@@ -268,12 +270,77 @@ bh_load_options() {
     for file in "$meta" "$override"; do
         [ -n "$file" ] && [ -f "$file" ] || continue
         while IFS='=' read -r key value; do
+            value="${value//$'\r'/}"
+            if [ "$key" = "PROFILE" ] && [[ "$value" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME|MANUAL|CUSTOM)$ ]]; then
+                BH_PROFILE="$value"
+                continue
+            fi
             [[ "$key" == ADV_* ]] || continue; key="${key#ADV_}"
             [[ "$key" =~ ^[A-Z_]+$ ]] && [[ -v BH_OPTS[$key] ]] || return 1
             BH_OPTS[$key]="$value"
         done < "$file"
     done
     bh_validate_options
+}
+
+bh_apply_profile_defaults() {
+    local profile="${1^^}" cores
+    cores=$(bh_cpu_cores)
+    BH_PROFILE="$profile"
+    local edge="${BH_OPTS[EDGE]:-}" cert="${BH_OPTS[TLS_CERT]:-}" key="${BH_OPTS[TLS_KEY]:-}"
+    local mtu="${BH_OPTS[MTU]:-0}" mss="${BH_OPTS[MSS]:-1360}" proxy="${BH_OPTS[PROXY]:-false}" log="${BH_OPTS[LOG]:-info}"
+
+    case "$profile" in
+        ECO)
+            BH_OPTS[KEEPALIVE]=90; BH_OPTS[HEARTBEAT]=60; BH_OPTS[CHANNEL]=1024
+            BH_OPTS[POOL]=$(bh_cap_at "$cores" 2); BH_OPTS[RETRY]=5; BH_OPTS[DIAL]=10
+            BH_OPTS[AGGRESSIVE]=false; BH_OPTS[NODELAY]=false
+            BH_OPTS[MUX_CON]=2; BH_OPTS[MUX_VERSION]=1; BH_OPTS[MUX_FRAME]=16384
+            BH_OPTS[MUX_RECEIVE]=2097152; BH_OPTS[MUX_STREAM]=32768
+            BH_OPTS[RCVBUF]=2097152; BH_OPTS[SNDBUF]=2097152
+            ;;
+        BALANCED)
+            BH_OPTS[KEEPALIVE]=75; BH_OPTS[HEARTBEAT]=40; BH_OPTS[CHANNEL]=4096
+            BH_OPTS[POOL]=$(bh_cap_at $((cores * 2)) 8); BH_OPTS[RETRY]=3; BH_OPTS[DIAL]=10
+            BH_OPTS[AGGRESSIVE]=false; BH_OPTS[NODELAY]=true
+            BH_OPTS[MUX_CON]=8; BH_OPTS[MUX_VERSION]=1; BH_OPTS[MUX_FRAME]=32768
+            BH_OPTS[MUX_RECEIVE]=4194304; BH_OPTS[MUX_STREAM]=65536
+            BH_OPTS[RCVBUF]=4194304; BH_OPTS[SNDBUF]=4194304
+            ;;
+        SPEED)
+            BH_OPTS[KEEPALIVE]=45; BH_OPTS[HEARTBEAT]=25; BH_OPTS[CHANNEL]=8192
+            BH_OPTS[POOL]=$(bh_cap_at $((cores * 4)) 16); [ "${BH_OPTS[POOL]}" -lt 4 ] && BH_OPTS[POOL]=4
+            BH_OPTS[RETRY]=2; BH_OPTS[DIAL]=8
+            BH_OPTS[AGGRESSIVE]=false; BH_OPTS[NODELAY]=true
+            BH_OPTS[MUX_CON]=16; BH_OPTS[MUX_VERSION]=2; BH_OPTS[MUX_FRAME]=65535
+            BH_OPTS[MUX_RECEIVE]=16777216; BH_OPTS[MUX_STREAM]=262144
+            BH_OPTS[RCVBUF]=16777216; BH_OPTS[SNDBUF]=16777216
+            ;;
+        LATENCY)
+            BH_OPTS[KEEPALIVE]=25; BH_OPTS[HEARTBEAT]=15; BH_OPTS[CHANNEL]=4096
+            BH_OPTS[POOL]=$(bh_cap_at $((cores * 2)) 8); [ "${BH_OPTS[POOL]}" -lt 2 ] && BH_OPTS[POOL]=2
+            BH_OPTS[RETRY]=1; BH_OPTS[DIAL]=5
+            BH_OPTS[AGGRESSIVE]=true; BH_OPTS[NODELAY]=true
+            BH_OPTS[MUX_CON]=4; BH_OPTS[MUX_VERSION]=2; BH_OPTS[MUX_FRAME]=16384
+            BH_OPTS[MUX_RECEIVE]=4194304; BH_OPTS[MUX_STREAM]=65536
+            BH_OPTS[RCVBUF]=4194304; BH_OPTS[SNDBUF]=4194304
+            ;;
+        EXTREME)
+            BH_OPTS[KEEPALIVE]=30; BH_OPTS[HEARTBEAT]=15; BH_OPTS[CHANNEL]=16384
+            BH_OPTS[POOL]=$(bh_cap_at $((cores * 6)) 32); [ "${BH_OPTS[POOL]}" -lt 8 ] && BH_OPTS[POOL]=8
+            BH_OPTS[RETRY]=1; BH_OPTS[DIAL]=5
+            BH_OPTS[AGGRESSIVE]=true; BH_OPTS[NODELAY]=true
+            BH_OPTS[MUX_CON]=32; BH_OPTS[MUX_VERSION]=2; BH_OPTS[MUX_FRAME]=65535
+            BH_OPTS[MUX_RECEIVE]=33554432; BH_OPTS[MUX_STREAM]=524288
+            BH_OPTS[RCVBUF]=33554432; BH_OPTS[SNDBUF]=33554432
+            ;;
+        *)
+            BH_PROFILE="MANUAL"
+            ;;
+    esac
+    BH_OPTS[EDGE]="$edge"; BH_OPTS[TLS_CERT]="$cert"; BH_OPTS[TLS_KEY]="$key"
+    BH_OPTS[MTU]="$mtu"; BH_OPTS[MSS]="$mss"; BH_OPTS[PROXY]="$proxy"; BH_OPTS[LOG]="$log"
+    return 0
 }
 
 bh_validate_options() {
@@ -317,60 +384,101 @@ bh_ask_option() {
 }
 
 bh_advanced_wizard() {
-    local name="$1" role="$2" transport="$3" choice key
+    local name="$1" role="$2" transport="$3" choice key cores current_prof
     bh_load_options "$CONF_DIR/$name.meta" || return 1
+    current_prof="${BH_PROFILE:-BALANCED}"
+    cores=$(bh_cpu_cores)
     BH_SETTINGS_FILE=""
-    echo -e "\n  ${FR}┌─[ ADVANCED TUNNEL SETTINGS ]${NC}"
-    echo -ne "  ${FR}├─${NC} ${W}Customize settings? [y/N]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
-    if [[ "${choice,,}" == y || "${choice,,}" == yes ]]; then
-        bh_ask_option LOG 'Log level (trace/debug/info/warn/error)' || return 1
-        if [ "$role" = 1 ]; then
-            bh_ask_option CHANNEL 'Pending channel capacity (1-65536)' || return 1
-            bh_ask_option HEARTBEAT 'Heartbeat interval (seconds)' || return 1
-        else
-            bh_ask_option POOL 'Connection pool (1-1024)' || return 1
-            bh_ask_option RETRY 'Retry interval (seconds)' || return 1
-            if [ "$transport" != udp ]; then
-                bh_ask_option DIAL 'Dial timeout (seconds)' || return 1
-                bh_ask_option AGGRESSIVE 'Aggressive pool (true/false)' || return 1
+
+    echo -e "\n  ${FR}╔══════════════════════ BACKHAUL PROFILE ═════════════════════╗${NC}"
+    echo -e "  ${FR}║${NC} ${W}CPU-aware presets for Pool, MUX, Buffers, and Timers.${NC}       ${FR}║${NC}"
+    echo -e "  ${FR}╠═════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "  ${FR}║${NC} ${G}1${NC}) ECO         lowest CPU/RAM: small pool, 2MB buffers      ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${C}2${NC}) BALANCED    default: up to 8 pool/mux, 4MB buffers       ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${Y}3${NC}) SPEED       high throughput: 16MB buffers, 64KB frames   ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${M}4${NC}) LOW-LATENCY aggressive pool, fast heartbeat & keepalive  ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${R}5${NC}) EXTREME     max capacity: up to 32 pool/mux, 32MB bufs   ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${W}6${NC}) MANUAL      customize every Backhaul parameter by hand   ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${DIM}Current: ${current_prof}   |   CPU cores on this server: ${cores}${NC}"
+    echo -e "  ${FR}╚═════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${DIM}Tip: Use the same profile on BOTH servers so MUX settings match.${NC}"
+    echo -ne "  ${C}Select Profile [1-6 | Enter: ${current_prof} | q: cancel] ❯❯ ${NC}"
+    read -r choice || return 1
+    choice="${choice//$'\r'/}"
+
+    case "$choice" in
+        1) bh_apply_profile_defaults ECO ;;
+        2) bh_apply_profile_defaults BALANCED ;;
+        3) bh_apply_profile_defaults SPEED ;;
+        4) bh_apply_profile_defaults LATENCY ;;
+        5)
+            if [ "$cores" -lt 4 ]; then
+                echo -e "  ${Y}⚠ This server has only ${cores} core(s). EXTREME is meant for 4+ cores; SPEED is safer here.${NC}"
+                local go; echo -ne "  ${C}Use EXTREME anyway? [y/N]: ${NC}"; read -r go || return 1
+                [[ "${go,,}" == "y" || "${go,,}" == "yes" ]] || return 1
             fi
-        fi
-        [ "$transport" = udp ] || bh_ask_option KEEPALIVE 'TCP keepalive (seconds)' || return 1
-        if [[ "$transport" == *mux ]]; then
-            echo -e "  ${FR}├─${NC} ${Y}Use matching MUX version/frame/buffer settings on both peers.${NC}"
-            [ "$role" != 1 ] || bh_ask_option MUX_CON 'Streams per MUX connection (1-1024)' || return 1
-            bh_ask_option MUX_VERSION 'MUX version (1/2)' || return 1
-            bh_ask_option MUX_FRAME 'Maximum MUX frame (bytes, 512-65535)' || return 1
-            bh_ask_option MUX_RECEIVE 'MUX receive buffer (bytes)' || return 1
-            bh_ask_option MUX_STREAM 'MUX stream buffer (bytes <= receive buffer)' || return 1
-        fi
-        if [[ "$transport" == tcp || "$transport" == tcpmux ]]; then
-            bh_ask_option NODELAY 'TCP_NODELAY (true/false)' || return 1
-            echo -e "  ${FR}├─${NC} ${W}Link MTU derives TCP MSS = MTU - 60 (IPv6-safe); interface MTU is unchanged.${NC}"
-            bh_ask_option MTU 'Link MTU (0: use MSS below; 1280-9000)' || return 1
-            [ "${BH_OPTS[MTU]}" != 0 ] || bh_ask_option MSS 'TCP MSS (0: kernel default)' || return 1
-            bh_ask_option RCVBUF 'Socket receive buffer (bytes; 0: kernel default)' || return 1
-            bh_ask_option SNDBUF 'Socket send buffer (bytes; 0: kernel default)' || return 1
-        fi
-        if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == *mux ]]; then
-            echo -e "  ${FR}├─${NC} ${Y}PROXY protocol requires a compatible service at the destination.${NC}"
-            bh_ask_option PROXY 'Send PROXY protocol header (true/false)' || return 1
-        fi
-        if [ "$role" = 2 ] && [[ "$transport" == ws* ]]; then bh_ask_option EDGE 'Optional WebSocket edge IP' || return 1; fi
-        if [ "$role" = 1 ] && [[ "$transport" == wss || "$transport" == wssmux ]]; then
-            echo -e "  ${FR}├─${NC} ${W}TLS paths: leave both empty for a generated certificate.${NC}"
-            # Both paths are collected together; validate the pair after collection.
-            echo -ne "  ${FR}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-generated}; -: generated]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
-            if [ "$choice" = - ]; then BH_OPTS[TLS_CERT]=""; BH_OPTS[TLS_KEY]=""
-            elif [ -n "$choice" ]; then
-                BH_OPTS[TLS_CERT]="$choice"
-                echo -ne "  ${FR}├─${NC} ${W}Private key path${NC} ${C}❯❯ ${NC}"; read -r choice || return 1; BH_OPTS[TLS_KEY]="$choice"
+            bh_apply_profile_defaults EXTREME ;;
+        6)
+            BH_PROFILE="MANUAL"
+            echo -e "\n  ${FR}┌─[ MANUAL TUNNEL SETTINGS ]${NC}"
+            bh_ask_option LOG 'Log level (trace/debug/info/warn/error)' || return 1
+            if [ "$role" = 1 ]; then
+                bh_ask_option CHANNEL 'Pending channel capacity (1-65536)' || return 1
+                bh_ask_option HEARTBEAT 'Heartbeat interval (seconds)' || return 1
+            else
+                bh_ask_option POOL 'Connection pool (1-1024)' || return 1
+                bh_ask_option RETRY 'Retry interval (seconds)' || return 1
+                if [ "$transport" != udp ]; then
+                    bh_ask_option DIAL 'Dial timeout (seconds)' || return 1
+                    bh_ask_option AGGRESSIVE 'Aggressive pool (true/false)' || return 1
+                fi
             fi
+            [ "$transport" = udp ] || bh_ask_option KEEPALIVE 'TCP keepalive (seconds)' || return 1
+            if [[ "$transport" == *mux ]]; then
+                echo -e "  ${FR}├─${NC} ${Y}Use matching MUX version/frame/buffer settings on both peers.${NC}"
+                [ "$role" != 1 ] || bh_ask_option MUX_CON 'Streams per MUX connection (1-1024)' || return 1
+                bh_ask_option MUX_VERSION 'MUX version (1/2)' || return 1
+                bh_ask_option MUX_FRAME 'Maximum MUX frame (bytes, 512-65535)' || return 1
+                bh_ask_option MUX_RECEIVE 'MUX receive buffer (bytes)' || return 1
+                bh_ask_option MUX_STREAM 'MUX stream buffer (bytes <= receive buffer)' || return 1
+            fi
+            if [[ "$transport" == tcp || "$transport" == tcpmux ]]; then
+                bh_ask_option NODELAY 'TCP_NODELAY (true/false)' || return 1
+                echo -e "  ${FR}├─${NC} ${W}Link MTU derives TCP MSS = MTU - 60 (IPv6-safe); interface MTU is unchanged.${NC}"
+                bh_ask_option MTU 'Link MTU (0: use MSS below; 1280-9000)' || return 1
+                [ "${BH_OPTS[MTU]}" != 0 ] || bh_ask_option MSS 'TCP MSS (0: kernel default)' || return 1
+                bh_ask_option RCVBUF 'Socket receive buffer (bytes; 0: kernel default)' || return 1
+                bh_ask_option SNDBUF 'Socket send buffer (bytes; 0: kernel default)' || return 1
+            fi
+            if [ "$role" = 1 ] && [[ "$transport" == tcp || "$transport" == *mux ]]; then
+                echo -e "  ${FR}├─${NC} ${Y}PROXY protocol requires a compatible service at the destination.${NC}"
+                bh_ask_option PROXY 'Send PROXY protocol header (true/false)' || return 1
+            fi
+            ;;
+        "")
+            [[ "$current_prof" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME)$ ]] && bh_apply_profile_defaults "$current_prof"
+            ;;
+        q|Q) return 1 ;;
+        *) echo -e "  ${R}✖ Invalid profile selection.${NC}"; return 1 ;;
+    esac
+
+    if [ "$role" = 2 ] && [[ "$transport" == ws* ]]; then bh_ask_option EDGE 'Optional WebSocket edge IP' || return 1; fi
+    if [ "$role" = 1 ] && [[ "$transport" == wss || "$transport" == wssmux ]]; then
+        echo -e "  ${FR}├─${NC} ${W}TLS paths: leave both empty for a generated certificate.${NC}"
+        echo -ne "  ${FR}├─${NC} ${W}Certificate path [${BH_OPTS[TLS_CERT]:-generated}; -: generated]${NC} ${C}❯❯ ${NC}"; read -r choice || return 1
+        if [ "$choice" = - ]; then BH_OPTS[TLS_CERT]=""; BH_OPTS[TLS_KEY]=""
+        elif [ -n "$choice" ]; then
+            BH_OPTS[TLS_CERT]="$choice"
+            echo -ne "  ${FR}├─${NC} ${W}Private key path${NC} ${C}❯❯ ${NC}"; read -r choice || return 1; BH_OPTS[TLS_KEY]="$choice"
         fi
     fi
+
     bh_validate_options || return 1
     BH_SETTINGS_FILE=$(mktemp "$SECURE_TMP/bh-settings.XXXXXX") || return 1
-    for key in "${!BH_OPTS[@]}"; do printf 'ADV_%s=%s\n' "$key" "${BH_OPTS[$key]}"; done > "$BH_SETTINGS_FILE"
+    printf 'PROFILE=%s
+' "${BH_PROFILE:-BALANCED}" > "$BH_SETTINGS_FILE"
+    for key in "${!BH_OPTS[@]}"; do printf 'ADV_%s=%s
+' "$key" "${BH_OPTS[$key]}"; done >> "$BH_SETTINGS_FILE"
 }
 
 bh_emit_options() {
@@ -501,13 +609,18 @@ install_core_from_source() {
     triplet=$(case "$(uname -m)" in x86_64) echo amd64;; aarch64|arm64) echo arm64;; *) exit 1;; esac) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
     asset="backhaul_linux_${triplet}.tar.gz"
     local -a urls=()
+    local gh_latest=""
+    if [[ "$src_choice" == "1" || "$src_choice" == "2" ]] && command -v curl >/dev/null 2>&1; then
+        gh_latest=$(curl -fsSL --connect-timeout 3 --max-time 6 "https://api.github.com/repos/Musixal/Backhaul/releases/latest" 2>/dev/null | grep -oE "https://github\.com/Musixal/Backhaul/releases/download/[^\"']+/${asset}" | head -n1)
+    fi
+    [ -n "$gh_latest" ] || gh_latest="https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset"
     case "$src_choice" in
-        1) urls=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset"); need_zip=0;;
+        1) urls=("$gh_latest"); need_zip=0;;
         2)
             urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
             # The unqualified mirror binary is the bundled x86_64 build only.
             [ "$triplet" != amd64 ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/bh")
-            urls+=("https://github.com/Musixal/Backhaul/releases/download/v0.7.2/$asset")
+            urls+=("$gh_latest")
             need_zip=0;;
         5)
             # Strict MTunnel GitHub source for Smart prerequisite installation.
@@ -1219,6 +1332,7 @@ bh_write_config_locked() {
     echo "BACKEND_IP=$BH_BACKEND_IP" >> "$meta"
     echo "BACKEND_PORTS=$BH_BACKEND_PORTS" >> "$meta"
     echo "BACKEND_BIND=$BH_BACKEND_BIND" >> "$meta"
+    echo "PROFILE=${BH_PROFILE:-BALANCED}" >> "$meta"
     local key; for key in "${!BH_OPTS[@]}"; do printf 'ADV_%s=%s\n' "$key" "${BH_OPTS[$key]}"; done >> "$meta"
 
     > "$toml"
@@ -1538,7 +1652,7 @@ show_tunnel_registry() {
     for conf in "$CONF_DIR"/*.meta; do
         [ ! -f "$conf" ] && continue
         local t_name=$(basename "$conf" .meta)
-        ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul
+        ROLE=""; TRANSPORT=""; TUN_PORT=""; REMOTE_IP=""; TOKEN=""; PORTS=""; ENABLE_UDP=""; BIND_HOST="0.0.0.0"; FORWARDER=backhaul; PROFILE="BALANCED"
         mt_source_conf "$conf" 2>/dev/null
         
         local role_text=$([ "$ROLE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
@@ -1571,11 +1685,13 @@ show_tunnel_registry() {
 
         local rx=$(get_bh_rx "$t_name"); local tx=$(get_bh_tx "$t_name")
 
+        local prof_tag="${PROFILE:-BALANCED}"
         local proto_display="${C}${TRANSPORT^^}${NC}"
         if [ "$ROLE" == "1" ]; then
             local udp_status="Enabled"; [ "$ENABLE_UDP" == "false" ] && udp_status="Disabled"
             proto_display="${C}${TRANSPORT^^}${NC} ${DIM}(UDP: ${G}${udp_status}${DIM})${NC}"
         fi
+        proto_display="${proto_display} ${DIM}| Profile:${NC} ${M}${prof_tag}${NC}"
 
         echo -e "  ${FR}╔════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗${NC}"
         local left_p="▼ Tunnel: $t_name"; local right_p="Role: $role_text"
@@ -1596,8 +1712,8 @@ show_tunnel_registry() {
         fi
 
         local l3="Auth Token   : ${TOKEN}"
-        local raw_r3="Protocol: ${TRANSPORT^^}"
-        [ "$ROLE" == "1" ] && raw_r3="Protocol: ${TRANSPORT^^} (UDP: ${udp_status})"
+        local raw_r3="Protocol: ${TRANSPORT^^} | Profile: ${prof_tag}"
+        [ "$ROLE" == "1" ] && raw_r3="Protocol: ${TRANSPORT^^} (UDP: ${udp_status}) | Profile: ${prof_tag}"
         local pad3=$(( 122 - ${#l3} - ${#raw_r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
         echo -e "  ${FR}║${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${proto_display} ${FR}║${NC}"
 
@@ -1895,7 +2011,9 @@ mt_link_deploy_locked() {
     if [ "$MT_KIND" = backhaul ]; then
         validate_bh_ports "${MT_LINK_DATA[PORTS]}" "$role" || return 1
         settings=$(mktemp "$SECURE_TMP/peer-backhaul.XXXXXX") || return 1
-        for key in "${!MT_LINK_DATA[@]}"; do [[ "$key" != ADV_* ]] || printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"; done > "$settings"
+        for key in "${!MT_LINK_DATA[@]}"; do
+            [[ "$key" == ADV_* || "$key" == PROFILE ]] && printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
+        done > "$settings"
         bh_load_options '' "$settings" || { rm -f "$settings"; return 1; }
         # Forwarder is a choice local to the access server; peer configuration uses the native default.
         bh_activate_config "$name" "$role" "${MT_LINK_DATA[TRANSPORT]}" "$port" "$host" "$token" "${MT_LINK_DATA[PORTS]}" "${MT_LINK_DATA[ENABLE_UDP]}" "$bind" backhaul "$settings"
@@ -1949,7 +2067,7 @@ mt_workspace_route() {
     local section="$1"
     case "$section" in
         1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Backhaul Setup|1|${G}" "2|Create From Peer Link|97|${G}" "3|Generate Peer Setup Link|98|${M}" || { MT_SECTION=""; return 1; };;
-        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Transport & Advanced Settings|5|${M}" "3|Auth Token|6|${G}" "4|Link Port|7|${C}" "5|Tunnel Name|9|${W}" "6|Listen Address|10|${C}" "7|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Transport & Profile Settings|5|${M}" "3|Auth Token|6|${G}" "4|Link Port|7|${C}" "5|Tunnel Name|9|${W}" "6|Listen Address|10|${C}" "7|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|Port Mappings & Forwarder (Native / iptables / MPorter)|4|${Y}" "2|UDP Acceptance|8|${C}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|13|${G}" "2|BBR Settings|14|${G}" "3|Scheduled Restart|15|${Y}" "4|Restart & Zero Counters|16|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=11;;
@@ -2103,7 +2221,7 @@ while true; do
            [ "$deploy_rc" = 0 ] || { echo -e "  ${R}● Tunnel was not deployed; check the error above.${NC}"; sleep 2; continue; }
            if systemctl is-active --quiet "mbackhaul@${t_name}"; then mt_ask_bbr_on_create; fi
            if systemctl is-active --quiet "mbackhaul@${t_name}"; then
-               echo -e "  ${G}● Backhaul Tunnel Deployed Successfully!${NC}"
+               echo -e "  ${G}● Backhaul Tunnel Deployed Successfully! (Profile: ${BH_PROFILE:-BALANCED})${NC}"
                bh_show_forwarder "$t_name"
                mt_link_offer "$CONF_DIR/$t_name.meta"
                echo -ne "  ${DIM}Press Enter to continue...${NC}"; read -r _

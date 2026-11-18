@@ -203,13 +203,18 @@ install_core_from_source() {
     triplet=$(rh_release_triplet) || { echo -e "  ${R}✖ Unsupported CPU architecture.${NC}"; return 1; }
     asset="rathole-${triplet}.zip"
     local -a urls=()
+    local gh_latest=""
+    if [[ "$src_choice" == "1" || "$src_choice" == "2" ]] && command -v curl >/dev/null 2>&1; then
+        gh_latest=$(curl -fsSL --connect-timeout 3 --max-time 6 "https://api.github.com/repos/rathole-org/rathole/releases/latest" 2>/dev/null | grep -oE "https://github\.com/rathole-org/rathole/releases/download/[^\"']+/${asset}" | head -n1)
+    fi
+    [ -n "$gh_latest" ] || gh_latest="https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset"
     case "$src_choice" in
-        1) urls=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset"); need_zip=1;;
+        1) urls=("$gh_latest"); need_zip=1;;
         2)
             urls=("${MTUNNEL_MIRROR_BASE}/engines/$asset")
             # The unqualified mirror binary is the bundled x86_64 build only.
             [ "$triplet" != x86_64-unknown-linux-gnu ] || urls+=("${MTUNNEL_MIRROR_BASE}/engines/rathole")
-            urls+=("https://github.com/rathole-org/rathole/releases/download/v0.5.0/$asset")
+            urls+=("$gh_latest")
             need_zip=1;;
         5)
             # Strict MTunnel GitHub source for Smart prerequisite installation.
@@ -419,14 +424,164 @@ zero_rat_counters() {
     done
 }
 
+rat_cpu_cores() { local n; n=$(nproc 2>/dev/null); [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] || n=1; echo "$n"; }
+
+rat_get_tunnel_profile() {
+    local meta="$CONF_DIR/${1}/meta.conf" p=""
+    [ -f "$meta" ] && p=$(sed -n 's/^PROFILE=//p' "$meta" | head -n1 | tr -d '\r" ')
+    echo "${p:-BALANCED}"
+}
+
+rat_validate_options() {
+    local key val min max
+    for key in HEARTBEAT TIMEOUT RETRY; do
+        val="${RAT_OPTS[$key]}"
+        [[ "$val" =~ ^[0-9]{1,5}$ ]] || { echo "Invalid $key." >&2; return 1; }
+        val=$((10#$val)); RAT_OPTS[$key]="$val"
+        min=1; max=3600
+        ((val >= min && val <= max)) || { echo "$key must be $min-$max." >&2; return 1; }
+    done
+    [[ "${RAT_OPTS[NODELAY]}" =~ ^(true|false)$ ]] || return 1
+    [[ "${RAT_OPTS[LOG]}" =~ ^(trace|debug|info|warn|error)$ ]] || return 1
+}
+
+rat_load_options() {
+    local meta="$1" override="${2:-}" key value file
+    RAT_PROFILE="BALANCED"
+    declare -gA RAT_OPTS=([HEARTBEAT]=30 [TIMEOUT]=40 [RETRY]=1 [NODELAY]=true [LOG]=info)
+    for file in "$meta" "$override"; do
+        [ -n "$file" ] && [ -f "$file" ] || continue
+        while IFS='=' read -r key value; do
+            value="${value//$'\r'/}"
+            if [ "$key" = "PROFILE" ] && [[ "$value" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME|MANUAL|CUSTOM)$ ]]; then
+                RAT_PROFILE="$value"
+                continue
+            fi
+            [[ "$key" == ADV_* ]] || continue; key="${key#ADV_}"
+            [[ "$key" =~ ^[A-Z_]+$ ]] && [[ -v RAT_OPTS[$key] ]] || return 1
+            RAT_OPTS[$key]="$value"
+        done < "$file"
+    done
+    rat_validate_options
+}
+
+rat_apply_profile_defaults() {
+    local profile="${1^^}"
+    RAT_PROFILE="$profile"
+    case "$profile" in
+        ECO)
+            RAT_OPTS[HEARTBEAT]=60; RAT_OPTS[TIMEOUT]=90; RAT_OPTS[RETRY]=5; RAT_OPTS[NODELAY]=false; RAT_OPTS[LOG]=info
+            ;;
+        BALANCED)
+            RAT_OPTS[HEARTBEAT]=30; RAT_OPTS[TIMEOUT]=40; RAT_OPTS[RETRY]=1; RAT_OPTS[NODELAY]=true; RAT_OPTS[LOG]=info
+            ;;
+        SPEED)
+            RAT_OPTS[HEARTBEAT]=20; RAT_OPTS[TIMEOUT]=30; RAT_OPTS[RETRY]=1; RAT_OPTS[NODELAY]=true; RAT_OPTS[LOG]=info
+            ;;
+        LATENCY)
+            RAT_OPTS[HEARTBEAT]=10; RAT_OPTS[TIMEOUT]=15; RAT_OPTS[RETRY]=1; RAT_OPTS[NODELAY]=true; RAT_OPTS[LOG]=info
+            ;;
+        EXTREME)
+            RAT_OPTS[HEARTBEAT]=5; RAT_OPTS[TIMEOUT]=10; RAT_OPTS[RETRY]=1; RAT_OPTS[NODELAY]=true; RAT_OPTS[LOG]=warn
+            ;;
+        *)
+            RAT_PROFILE="MANUAL"
+            ;;
+    esac
+    return 0
+}
+
+rat_ask_option() {
+    local key="$1" label="$2" value old="${RAT_OPTS[$1]}"
+    while true; do
+        echo -ne "  ${FR}├─${NC} ${W}$label [${old}; Enter: keep]${NC} ${C}❯❯ ${NC}"
+        read -r value || return 1; value="${value//$'\r'/}"
+        [ -n "$value" ] || return 0
+        RAT_OPTS[$key]="$value"
+        if rat_validate_options; then return 0; fi
+        RAT_OPTS[$key]="$old"; echo -e "  ${R}✖ Invalid value; try again.${NC}"
+    done
+}
+
+rat_profile_wizard() {
+    local name="$1" role="$2" choice cores current_prof
+    rat_load_options "$CONF_DIR/$name/meta.conf" || return 1
+    current_prof="${RAT_PROFILE:-BALANCED}"
+    cores=$(rat_cpu_cores)
+
+    echo -e "\n  ${FR}╔══════════════════════ RATHOLE PROFILE ══════════════════════╗${NC}"
+    echo -e "  ${FR}║${NC} ${W}Presets for Heartbeat, Timeout, Retry, and TCP Nodelay.${NC}     ${FR}║${NC}"
+    echo -e "  ${FR}╠═════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "  ${FR}║${NC} ${G}1${NC}) ECO         lowest overhead: 60s heartbeat, nodelay=false ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${C}2${NC}) BALANCED    default: 30s heartbeat / 40s timeout, nodelay ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${Y}3${NC}) SPEED       high throughput: 20s heartbeat / 30s timeout  ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${M}4${NC}) LOW-LATENCY fast detection: 10s heartbeat / 15s timeout   ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${R}5${NC}) EXTREME     instant failover: 5s heartbeat / 10s timeout  ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${W}6${NC}) MANUAL      customize every Rathole parameter by hand    ${FR}║${NC}"
+    echo -e "  ${FR}║${NC} ${DIM}Current: ${current_prof}   |   CPU cores on this server: ${cores}${NC}"
+    echo -e "  ${FR}╚═════════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${DIM}Tip: Use the same profile on BOTH servers so heartbeat & timeout match.${NC}"
+    echo -ne "  ${C}Select Profile [1-6 | Enter: ${current_prof} | q: cancel] ❯❯ ${NC}"
+    read -r choice || return 1
+    choice="${choice//$'\r'/}"
+
+    case "$choice" in
+        1) rat_apply_profile_defaults ECO ;;
+        2) rat_apply_profile_defaults BALANCED ;;
+        3) rat_apply_profile_defaults SPEED ;;
+        4) rat_apply_profile_defaults LATENCY ;;
+        5) rat_apply_profile_defaults EXTREME ;;
+        6)
+            RAT_PROFILE="MANUAL"
+            echo -e "\n  ${FR}┌─[ MANUAL RATHOLE SETTINGS ]${NC}"
+            if [ "$role" = 1 ]; then
+                rat_ask_option HEARTBEAT 'Heartbeat interval (seconds)' || return 1
+            else
+                rat_ask_option TIMEOUT 'Heartbeat timeout (seconds)' || return 1
+                rat_ask_option RETRY 'Retry interval (seconds)' || return 1
+            fi
+            rat_ask_option NODELAY 'TCP_NODELAY (true/false)' || return 1
+            ;;
+        "")
+            [[ "$current_prof" =~ ^(ECO|BALANCED|SPEED|LATENCY|EXTREME)$ ]] && rat_apply_profile_defaults "$current_prof"
+            ;;
+        q|Q) return 1 ;;
+        *) echo -e "  ${R}✖ Invalid profile selection.${NC}"; return 1 ;;
+    esac
+    rat_validate_options || return 1
+    return 0
+}
+
+rat_write_meta() {
+    local file="$1" role="$2" bind="$3" port="$4" rip="$5" tok="$6" tcp="$7" udp="$8"
+    cat <<EOF > "$file"
+TYPE=$role
+BIND_HOST=$bind
+LINK_PORT=$port
+REMOTE_IP=$rip
+TOKEN=$tok
+TCP_PORTS=$tcp
+UDP_PORTS=$udp
+PROFILE=${RAT_PROFILE:-BALANCED}
+ADV_HEARTBEAT=${RAT_OPTS[HEARTBEAT]:-30}
+ADV_TIMEOUT=${RAT_OPTS[TIMEOUT]:-40}
+ADV_RETRY=${RAT_OPTS[RETRY]:-1}
+ADV_NODELAY=${RAT_OPTS[NODELAY]:-true}
+ADV_LOG=${RAT_OPTS[LOG]:-info}
+EOF
+    chmod 600 "$file"
+}
+
 generate_toml() {
     local name="$1"
     local dir="$CONF_DIR/$name"
     local meta="$dir/meta.conf"
     local toml="$dir/config.toml"
     
-    local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
+    local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0" PROFILE="BALANCED"
+    local ADV_HEARTBEAT="" ADV_TIMEOUT="" ADV_RETRY="" ADV_NODELAY="" ADV_LOG=""
     mt_source_conf "$meta" 2>/dev/null
+    rat_load_options "$meta" || return 1
     
     mt_valid_port "$LINK_PORT" && [[ "$TYPE" =~ ^[12]$ ]] || return 1
     BIND_HOST=$(mt_normalize_host "$BIND_HOST")
@@ -441,12 +596,12 @@ generate_toml() {
         echo "[server]" >> "$toml"
         echo "bind_addr = \"$(mt_hostport "$BIND_HOST" "$LINK_PORT")\"" >> "$toml"
         echo "default_token = \"${TOKEN}\"" >> "$toml"
-        echo "heartbeat_interval = 30" >> "$toml"
+        echo "heartbeat_interval = ${RAT_OPTS[HEARTBEAT]}" >> "$toml"
         echo "" >> "$toml"
         echo "[server.transport]" >> "$toml"
         echo "type = \"tcp\"" >> "$toml"
         echo "[server.transport.tcp]" >> "$toml"
-        echo "nodelay = true" >> "$toml"
+        echo "nodelay = ${RAT_OPTS[NODELAY]}" >> "$toml"
 
         if [ -n "$TCP_PORTS" ]; then
             IFS=',' read -ra TCP_ARR <<< "$TCP_PORTS"
@@ -473,13 +628,13 @@ generate_toml() {
         echo "[client]" >> "$toml"
         echo "remote_addr = \"$(mt_hostport "$REMOTE_IP" "$LINK_PORT")\"" >> "$toml"
         echo "default_token = \"${TOKEN}\"" >> "$toml"
-        echo "heartbeat_timeout = 40" >> "$toml"
-        echo "retry_interval = 1" >> "$toml"
+        echo "heartbeat_timeout = ${RAT_OPTS[TIMEOUT]}" >> "$toml"
+        echo "retry_interval = ${RAT_OPTS[RETRY]}" >> "$toml"
         echo "" >> "$toml"
         echo "[client.transport]" >> "$toml"
         echo "type = \"tcp\"" >> "$toml"
         echo "[client.transport.tcp]" >> "$toml"
-        echo "nodelay = true" >> "$toml"
+        echo "nodelay = ${RAT_OPTS[NODELAY]}" >> "$toml"
 
         if [ -n "$TCP_PORTS" ]; then
             IFS=',' read -ra TCP_ARR <<< "$TCP_PORTS"
@@ -769,7 +924,8 @@ show_tunnel_registry() {
     for d in "$CONF_DIR"/*; do
         [ ! -d "$d" ] && continue
         local t_name=$(basename "$d")
-        local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0"
+        local TYPE="" LINK_PORT="" REMOTE_IP="" TOKEN="" TCP_PORTS="" UDP_PORTS="" BIND_HOST="0.0.0.0" PROFILE="BALANCED"
+        local ADV_HEARTBEAT="" ADV_TIMEOUT="" ADV_RETRY="" ADV_NODELAY="" ADV_LOG=""
         mt_source_conf "$d/meta.conf" 2>/dev/null
         
         local role_text=$([ "$TYPE" == "1" ] && echo "IRAN (Server)" || echo "KHAREJ (Client)")
@@ -818,9 +974,10 @@ show_tunnel_registry() {
             mt_reason_row "$(mt_link_why "mrathole@${t_name}" "$([ "$TYPE" == "1" ] && echo 1 || echo 0)" "$([ "$TYPE" == "1" ] && echo "$LINK_PORT")" "$([ "$TYPE" != "1" ] && echo "$REMOTE_IP")")"
         fi
 
-        local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: TCP (Rathole Native)"
+        local prof_tag="${PROFILE:-BALANCED}"
+        local l3="Auth Token   : ${TOKEN}"; local r3="Protocol: TCP | Profile: ${prof_tag}"
         local pad3=$(( 122 - ${#l3} - ${#r3} )); [ "$pad3" -lt 0 ] && pad3=0; local sp3=$(printf '%*s' "$pad3" "")
-        echo -e "  ${FR}║${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}TCP (Rathole Native)${NC} ${FR}║${NC}"
+        echo -e "  ${FR}║${NC} ${Y}Auth Token   :${NC} ${W}${TOKEN}${NC}${sp3}${DIM}Protocol:${NC} ${C}TCP${NC} ${DIM}| Profile:${NC} ${M}${prof_tag}${NC} ${FR}║${NC}"
 
         local tcp_str="${TCP_PORTS:0:100}"; [ ${#TCP_PORTS} -gt 100 ] && tcp_str="${tcp_str}..."
         local udp_str="${UDP_PORTS:0:100}"; [ ${#UDP_PORTS} -gt 100 ] && udp_str="${udp_str}..."
@@ -1146,11 +1303,15 @@ mt_link_deploy_locked() {
         unit="mbackhaul@$name"
     else
         validate_forward_ports "${MT_LINK_DATA[TCP_PORTS]}" "$role" tcp && validate_forward_ports "${MT_LINK_DATA[UDP_PORTS]}" "$role" udp || return 1
+        settings=$(mktemp "$SECURE_TMP/peer-rathole.XXXXXX") || return 1
+        for key in "${!MT_LINK_DATA[@]}"; do
+            [[ "$key" == ADV_* || "$key" == PROFILE ]] && printf '%s=%s\n' "$key" "${MT_LINK_DATA[$key]}"
+        done > "$settings"
+        if ! rat_load_options '' "$settings"; then rm -f "$settings"; return 1; fi
+        rm -f "$settings"
         mkdir "$CONF_DIR/$name" || return 1
         chmod 700 "$CONF_DIR/$name"
-        {
-            printf 'TYPE=%s\nBIND_HOST=%s\nLINK_PORT=%s\nREMOTE_IP=%s\nTOKEN=%s\nTCP_PORTS=%s\nUDP_PORTS=%s\n' "$role" "$bind" "$port" "$host" "$token" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[UDP_PORTS]}"
-        } > "$conf"; chmod 600 "$conf"
+        rat_write_meta "$conf" "$role" "$bind" "$port" "$host" "$token" "${MT_LINK_DATA[TCP_PORTS]}" "${MT_LINK_DATA[UDP_PORTS]}"
         unit="mrathole@$name"
         if ! generate_toml "$name" || ! systemctl restart "$unit" || ! mt_workspace_service_ready "$unit"; then
             journalctl -u "$unit" -n 8 --no-pager >&2; systemctl stop "$unit"; clean_rat_counters "$name"; rm -rf "$CONF_DIR/$name"; return 1
@@ -1184,7 +1345,7 @@ mt_workspace_route() {
     local section="$1"
     case "$section" in
         1) MT_SECTION=1; mt_workspace_menu "CREATE TUNNEL" "1|Manual Rathole Setup|1|${G}" "2|Create From Peer Link|97|${G}" "3|Generate Peer Setup Link|98|${M}" || { MT_SECTION=""; return 1; };;
-        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Auth Token|6|${G}" "3|Link Port|7|${C}" "4|Tunnel Name|8|${W}" "5|Listen Address|9|${C}" "6|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
+        2) MT_SECTION=2; mt_workspace_menu "EDIT & MANAGE" "1|Remote Host / IP|3|${C}" "2|Profile & Advanced Settings|19|${M}" "3|Auth Token|6|${G}" "4|Link Port|7|${C}" "5|Tunnel Name|8|${W}" "6|Listen Address|9|${C}" "7|Delete Tunnels|2|${R}" || { MT_SECTION=""; return 1; };;
         3) MT_SECTION=3; mt_workspace_menu "FORWARDING" "1|TCP Port Mappings|4|${Y}" "2|UDP Port Mappings|5|${M}" || { MT_SECTION=""; return 1; };;
         4) MT_SECTION=4; mt_workspace_menu "SYSTEM & SECURITY" "1|Auto Recovery|12|${G}" "2|BBR Settings|13|${G}" "3|Scheduled Restart|14|${Y}" "4|Restart Service|15|${G}" "5|Check Selected Tunnel|99|${C}" || { MT_SECTION=""; return 1; };;
         5) MT_ACTION=10;;
@@ -1311,23 +1472,14 @@ while true; do
                validate_forward_ports "$udp_p" "$s_type" "udp" && break
            done
            
+           rat_profile_wizard "$t_name" "$s_type" || continue
            mkdir -p "$CONF_DIR/$t_name"
-           cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
-TYPE=$s_type
-BIND_HOST=$bind_host
-LINK_PORT=$t_port
-REMOTE_IP=$r_ip
-TOKEN=$t_token
-TCP_PORTS=$tcp_p
-UDP_PORTS=$udp_p
-EOF
-           
-           chmod 600 "$CONF_DIR/$t_name/meta.conf"
+           rat_write_meta "$CONF_DIR/$t_name/meta.conf" "$s_type" "$bind_host" "$t_port" "$r_ip" "$t_token" "$tcp_p" "$udp_p"
            generate_toml "$t_name" || continue
            systemctl enable mrathole@$t_name >/dev/null 2>&1
            if systemctl restart "mrathole@$t_name" && mt_workspace_service_ready "mrathole@$t_name"; then
                mt_ask_bbr_on_create
-               echo -e "  ${G}● Rathole service started successfully.${NC}"
+               echo -e "  ${G}● Rathole service started successfully. (Profile: ${RAT_PROFILE:-BALANCED})${NC}"
                mt_link_offer "$CONF_DIR/$t_name/meta.conf"
            else
                echo -e "  ${R}✖ Rathole failed to start. Configuration retained for inspection.${NC}"
@@ -1371,11 +1523,13 @@ EOF
                echo -e "  ${G}Tunnel Purged!${NC}"; sleep 1.5
            fi ;;
 
-        3|4|5|6|7|8|14|15|9)
+        3|4|5|6|7|8|14|15|9|19)
            select_tunnel || continue
            t_name=$(basename "$SELECTED_TUN")
-           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; BIND_HOST="0.0.0.0"
+           TYPE=""; LINK_PORT=""; REMOTE_IP=""; TOKEN=""; TCP_PORTS=""; UDP_PORTS=""; BIND_HOST="0.0.0.0"; PROFILE="BALANCED"
+           ADV_HEARTBEAT=""; ADV_TIMEOUT=""; ADV_RETRY=""; ADV_NODELAY=""; ADV_LOG=""
            mt_source_conf "$SELECTED_TUN/meta.conf" 2>/dev/null
+           rat_load_options "$SELECTED_TUN/meta.conf" || continue
            
            if [[ "$opt" == "3" ]]; then
                echo -ne "  ${C}●${NC} ${W}New Remote Host/IP (Current: ${REMOTE_IP}): ${NC}"; read -r n_ip
@@ -1478,19 +1632,13 @@ EOF
 
            elif [[ "$opt" == "15" ]]; then
                zero_rat_counters "$t_name"
+
+           elif [[ "$opt" == "19" ]]; then
+               rat_profile_wizard "$t_name" "$TYPE" || continue
+               echo -e "  ${Y}⚠ Update the peer to use matching profile settings.${NC}"
            fi
            
-           cat <<EOF > "$CONF_DIR/$t_name/meta.conf"
-TYPE=$TYPE
-BIND_HOST=$BIND_HOST
-LINK_PORT=$LINK_PORT
-REMOTE_IP=$REMOTE_IP
-TOKEN=$TOKEN
-TCP_PORTS=$TCP_PORTS
-UDP_PORTS=$UDP_PORTS
-EOF
-
-           chmod 600 "$CONF_DIR/$t_name/meta.conf"
+           rat_write_meta "$CONF_DIR/$t_name/meta.conf" "$TYPE" "$BIND_HOST" "$LINK_PORT" "$REMOTE_IP" "$TOKEN" "$TCP_PORTS" "$UDP_PORTS"
            generate_toml "$t_name" || continue
            systemctl restart mrathole@$t_name
            if systemctl is-active --quiet mrathole@$t_name; then

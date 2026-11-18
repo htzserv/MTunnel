@@ -389,19 +389,11 @@ mx_endpoints() {
     else EP_V6=0; EP_L="$LOCAL_PUB"; EP_R="$REMOTE_PUB"; fi
 }
 
-# Stable global IPv6 of this host (skips privacy/temporary addresses)
-get_local_ipv6() {
-    local ip
-    ip=$(ip -6 -o addr show scope global 2>/dev/null | grep -v -E 'temporary|deprecated|tentative' | awk '{print $4}' | cut -d/ -f1 | head -n 1)
-    [ -z "$ip" ] && ip=$(ip -6 route get 2606:4700:4700::1111 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -n 1 | tr -d ' \n')
-    echo "${ip,,}"
-}
 # Valid core subnet even for legacy confs without CORE_SUBNET (old fallback broke for VNI > 255)
 mx_core_sub() {
     if [ -n "${CORE_SUBNET:-}" ]; then echo "$CORE_SUBNET"
     else mt_legacy_core_subnet "${VNI_ID:-}" vxlan; fi
 }
-
 
 # Stable global IPv6 of this host (skips privacy/temporary addresses)
 get_local_ipv6() {
@@ -416,6 +408,8 @@ if [ -f "$0" ] && [ "$(readlink -f "$0" 2>/dev/null)" != "$INSTALL_PATH" ]; then
 fi
 
 MAIN_PID=$$
+WATCHER_PID=""
+PING_WATCHER_PID=""
 NEED_REFRESH=false
 trap '' SIGUSR1   # ignored: a signal must never interrupt typing in any prompt
 
@@ -670,7 +664,7 @@ if [[ "$1" != --* ]]; then
     PING_WATCHER_PID=$!
 fi
 
-trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null' EXIT
+trap '[ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null; [ -z "${PING_WATCHER_PID:-}" ] || kill "$PING_WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mgre_in_menu" 2>/dev/null' EXIT
 
 get_local_ip() {
     local ip
@@ -2391,7 +2385,7 @@ if [[ "$1" != --* ]]; then
     PING_WATCHER_PID=$!
 fi
 
-trap 'kill "$WATCHER_PID" "$PING_WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mxlan_in_menu" 2>/dev/null' EXIT
+trap '[ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null; [ -z "${PING_WATCHER_PID:-}" ] || kill "$PING_WATCHER_PID" 2>/dev/null; rm -f "$SECURE_TMP/.mxlan_in_menu" 2>/dev/null' EXIT
 
 get_local_ip() {
     local ip

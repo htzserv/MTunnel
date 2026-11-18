@@ -699,7 +699,7 @@ FR='\033[1;33m'   # frame colour: gold (double-line frames and menu tree connect
 INSTALL_PATH="/usr/bin/linktest"
 LOCAL_DIR="/root/mtunnel"
 SECURE_TMP="$LOCAL_DIR/tmp"
-TMP_DIR="$(mktemp -d /tmp/linktest.XXXXXX)"
+mkdir -p "$SECURE_TMP" 2>/dev/null; TMP_DIR="$(mktemp -d "$SECURE_TMP/linktest.XXXXXX")"
 LISTENER_PIDS=()
 SYNC_PORT=49999
 SPEED_PORT=49998
@@ -714,6 +714,8 @@ fi
 cleanup() {
     local pid
     for pid in "${LISTENER_PIDS[@]}" "${ENGINE_PIDS[@]:-}"; do [ -n "$pid" ] && kill "$pid" 2>/dev/null || true; done
+    [ -z "${WATCHER_PID:-}" ] || kill "$WATCHER_PID" 2>/dev/null || true
+    rm -f "$SECURE_TMP/.mdoctor_in_menu" 2>/dev/null || true
     rm -rf "$TMP_DIR" 2>/dev/null || true
     ip link del mtest_gre 2>/dev/null || true
     ip tunnel del mtest_gre 2>/dev/null || true

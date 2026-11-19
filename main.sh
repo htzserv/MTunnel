@@ -1194,6 +1194,7 @@ install_bundle_scripts() {
 }
 sync_script_bundle() {
     local base="$1" stage mod rel rc=0
+    local -A dl_seen=()
     stage=$(mktemp -d "$SECURE_TMP/sync.XXXXXX") || return 1
     # Stage the shared core and all scripts before committing any module.
     mkdir -p "$stage/core"
@@ -1217,6 +1218,8 @@ sync_script_bundle() {
     for mod in "${ALL_MODULES[@]}"; do
         [ "${MT_SCRIPTS_ONLY:-0}" == 1 ] && [[ "${MOD_MAP[$mod]}" == tunnels/* ]] && continue
         rel="${MOD_MAP[$mod]}"
+        [ -z "${dl_seen[$rel]:-}" ] || continue
+        dl_seen[$rel]=1
         mkdir -p "$(dirname "$stage/$rel")" || { rc=1; break; }
         if ! mt_download "$(mt_cb_url "$base/$rel")" "$stage/$rel"; then
             echo "Could not download $rel from $base; existing scripts preserved." >&2
@@ -1250,7 +1253,7 @@ mt_local_source_has_packages() {
 mt_bundle_root_is_complete() {
     local d="$1" mod rel
     [ -d "$d" ] || return 1
-[ -f "$d/main.sh" ] && [ -f "$d/install.sh" ] && [ -f "$d/core/common.sh" ] && [ -f "$d/core/bintunnel.sh" ] || return 1
+    [ -f "$d/main.sh" ] && [ -f "$d/install.sh" ] && [ -f "$d/core/common.sh" ] && [ -f "$d/core/bintunnel.sh" ] || return 1
     for mod in "${ALL_MODULES[@]}"; do rel="${MOD_MAP[$mod]}"; [ -f "$d/$rel" ] || return 1; done
     return 0
 }
@@ -1475,146 +1478,29 @@ fetch_package_group() {
     rm -rf "$stage"
     return "$rc"
 }
-# GitHub: the branch archive of the same repo that MTUNNEL_GITHUB_BASE points to. Mirror: <base>/MTunnel.zip
-# (upload a zip of the whole repo folder there).
-mt_repo_archive_url() {
-    local base="$1"
-    if [[ "$base" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(.+)$ ]]; then
-        printf 'https://github.com/%s/%s/archive/refs/heads/%s.zip' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
-    else
-        printf '%s/MTunnel.zip' "${base%/}"
-    fi
-}
-# ONE mechanism for GitHub and the mirror: fetch the whole repo as a single archive (HTTP hosts cannot list a
-# folder, an archive is the only thing both can serve), unpack it on the server, build engines/ and prereqs/ manifest.txt from the
-# files that are really there, and install item by item. Anything that cannot be installed is reported with its
-# reason and skipped; the next item is still processed.
-#
-# Writes <dir>/manifest.txt ("<sha256>  <name>") for every engine / .deb found in <dir>.
-mt_build_local_manifest() {
-    local dir="$1" f name n=0 tmp
-    tmp=$(mktemp "$SECURE_TMP/localmanifest.XXXXXX") || return 1
-    for f in "$dir"/*; do
-        [ -f "$f" ] || continue; name="${f##*/}"
-        [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._+~-]*$ ]] || continue
-        case "$name" in *.deb|*.tar.gz|*.zip|*.gz|bh|backhaul|rathole|paqet|gost|haproxy|realm) ;; *) continue;; esac
-        printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$name" >> "$tmp"; n=$((n+1))
-    done
-    if [ "$n" -eq 0 ]; then rm -f "$tmp"; return 1; fi
-    cat "$tmp" > "$dir/manifest.txt"; rm -f "$tmp"
-}
-# Install what the source folder <dir> contains (kind: cores | deps | all). Valid engines/archives are cached in
-# /root/mtunnel/engines and .deb files in /root/mtunnel/prereqs; invalid ones are listed and skipped.
-mt_install_packages_dir() {
-    local dir="$1" kind="$2" show="${3:-0}" hash item i rc=0 reason n_ok=0 stage current=0 label version
-    local -a names=() status=() reasons=() files=()
-    if ! mt_build_local_manifest "$dir"; then
-        echo -e "  ${R}✖ No engines or .deb packages found in the source folder.${NC}" >&2; return 1
-    fi
-    stage=$(mktemp -d "$SECURE_TMP/pkginst.XXXXXX") || return 1
-    while read -r hash item; do
-        case "$kind" in cores) [[ "$item" != *.deb ]] || continue;; deps) [[ "$item" == *.deb ]] || continue;; esac
-        names+=("$item")
-        reason=$(mt_package_problem "$dir/$item" "$item" "$hash")
-        if [ -n "$reason" ]; then status+=(failed); reasons+=("$item — $reason"); rc=1
-        else status+=(ok); cp -f "$dir/$item" "$stage/$item"; files+=("$dir/$item" "$(mt_cache_dir_for "$item")/$item"); n_ok=$((n_ok+1)); fi
-    done < "$dir/manifest.txt"
-    if [ "${#names[@]}" -eq 0 ]; then echo -e "  ${R}✖ Nothing of this kind in the source folder.${NC}" >&2; rm -rf "$stage"; return 1; fi
-    if [ "$n_ok" -gt 0 ]; then
-        mt_install_files 755 "${files[@]}" || rc=1
-        MT_DEB_FAILED=(); MT_DEPLOY_FAILED=()
-        deploy_binaries_from_dir "$stage" || rc=1
-        for i in "${!names[@]}"; do
-            for item in "${MT_DEB_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || { status[$i]=failed; reasons+=("${names[$i]} — dpkg: ${MT_DEB_REASON[$item]:-failed}"); }; done
-            for item in "${MT_DEPLOY_FAILED[@]}"; do [ "$item" != "${names[$i]}" ] || { status[$i]=failed; reasons+=("${names[$i]} — could not be installed into its service location"); }; done
-        done
-    fi
-    if [ "$show" == 1 ]; then
-        for i in "${!names[@]}"; do
-            item="${names[$i]}"; current=$((current+1)); label="$item"; version="${BIN_VERSIONS[$item]:-Core}"
-            if [[ "$item" == *.deb ]]; then
-                label="${item%%_*}"; version="${item#*_}"; version="${version%%_*}"; [[ "$item" == *_* ]] || version='?'
-            fi
-            draw_item_progress "$current" "${#names[@]}" "$label" "$version" "${status[$i]}"
-        done
-    fi
-    if [ "$show" == 1 ]; then
-        mt_group_report names status reasons
-    else
-        for reason in "${reasons[@]}"; do echo -e "  ${R}✖ ${reason}${NC}" >&2; done
-    fi
-    rm -rf "$stage"
-    return "$rc"
-}
-# Download + unpack the repo archive. Sets MT_ARCHIVE_WORK (caller deletes), MT_ARCHIVE_ROOT (complete script
-# bundle, or empty), MT_ARCHIVE_ENGINES and MT_ARCHIVE_PREREQS (its engines/ and prereqs/ folders, or empty).
-mt_fetch_repo_archive() {
-    local url="$1" f err sub dir
-    MT_ARCHIVE_ROOT=''; MT_ARCHIVE_ENGINES=''; MT_ARCHIVE_PREREQS=''
-    MT_ARCHIVE_WORK=$(mktemp -d "$SECURE_TMP/archive.XXXXXX") || return 1
-    mkdir "$MT_ARCHIVE_WORK/extracted"; f="$MT_ARCHIVE_WORK/repo.archive"; err="$MT_ARCHIVE_WORK/.err"
-    echo -e "  ${DIM}● Downloading the whole repository as one archive...${NC}"
-    if ! mt_download "$url" "$f" 2>"$err"; then
-        echo -e "  ${R}✖ Archive download failed: $(grep -v '^[[:space:]]*$' "$err" | tail -n1)${NC}" >&2; return 1
-    fi
-    if ! mt_is_archive_file "$f"; then echo -e "  ${R}✖ The link did not return an archive: ${url}${NC}" >&2; return 1; fi
-    mt_ensure_unzip || true
-    if ! mt_extract_archive "$f" "$MT_ARCHIVE_WORK/extracted"; then
-        echo -e "  ${R}✖ Archive could not be extracted (unsupported, unsafe, or unzip missing).${NC}" >&2; return 1
-    fi
-    MT_ARCHIVE_ROOT=$(mt_find_bundle_root "$MT_ARCHIVE_WORK/extracted" 2>/dev/null) || MT_ARCHIVE_ROOT=''
-    for sub in engines prereqs; do
-        if [ -n "$MT_ARCHIVE_ROOT" ] && [ -d "$MT_ARCHIVE_ROOT/$sub" ]; then dir="$MT_ARCHIVE_ROOT/$sub"
-        else dir=$(find "$MT_ARCHIVE_WORK/extracted" -maxdepth 4 -type d -name "$sub" -print -quit 2>/dev/null); fi
-        if [ "$sub" == engines ]; then MT_ARCHIVE_ENGINES="$dir"; else MT_ARCHIVE_PREREQS="$dir"; fi
-    done
-    return 0
-}
-# what = scripts | engines | deps | all. Returns 9 when the archive is unavailable (caller falls back).
-# For "all" the result is the script bundle's result; package failures are printed and flagged in OTA_PKG_FAILED.
-ota_sync_from_archive() {
-    local what="$1" url="$2" kind pkg_rc=0 script_rc=0 did_pkg=0
-    OTA_PKG_FAILED=0
-    if ! mt_fetch_repo_archive "$url"; then rm -rf "$MT_ARCHIVE_WORK"; return 9; fi
-    if [ "$what" != scripts ]; then
-        case "$what" in engines) kind=cores;; deps) kind=deps;; *) kind=all;; esac
-        echo -e "\n  ${W}Prerequisites & engines${NC} ${DIM}(${what})${NC}"
-        if [ "$kind" != deps ]; then
-            if [ -z "$MT_ARCHIVE_ENGINES" ]; then echo -e "  ${R}✖ The archive has no engines folder.${NC}" >&2; pkg_rc=1
-            else mt_install_packages_dir "$MT_ARCHIVE_ENGINES" cores 1 || pkg_rc=$?; fi
-        fi
-        if [ "$kind" != cores ]; then
-            if [ -z "$MT_ARCHIVE_PREREQS" ]; then echo -e "  ${R}✖ The archive has no prereqs folder.${NC}" >&2; pkg_rc=1
-            else mt_install_packages_dir "$MT_ARCHIVE_PREREQS" deps 1 || pkg_rc=$?; fi
-        fi
-        did_pkg=1
-    fi
-    if [ "$what" == scripts ] || [ "$what" == all ]; then
-        echo -e "\n  ${W}Scripts${NC} ${DIM}(shared core + all modules)${NC}"
-        if [ -z "$MT_ARCHIVE_ROOT" ]; then echo -e "  ${R}✖ No complete script bundle found in the archive.${NC}" >&2; script_rc=1
-        else install_bundle_scripts "$MT_ARCHIVE_ROOT" 1 || script_rc=$?; fi
-    fi
-    rm -rf "$MT_ARCHIVE_WORK"
-    if [ "$what" == all ]; then [ "$pkg_rc" == 0 ] || OTA_PKG_FAILED=1; return "$script_rc"; fi
-    [ "$did_pkg" == 1 ] && return "$pkg_rc"
-    return "$script_rc"
-}
-# Archive first; if it cannot be obtained, the old file-by-file download takes over.
+# File-by-file download for scripts, engines, prerequisites, or full package (no zip/unzip required).
 ota_group_install() {
     local what="$1" scripts_base="$2" pkg_base="$3" rc=0
-    ota_sync_from_archive "$what" "$(mt_repo_archive_url "$scripts_base")" || rc=$?
-    if [ "$rc" == 9 ]; then
-        echo -e "\n  ${Y}● Single-archive download unavailable; falling back to file-by-file download.${NC}\n"
-        rc=0; OTA_PKG_FAILED=0
-        case "$what" in
-            scripts) sync_script_bundle "$scripts_base" 1 || rc=$?;;
-            engines) fetch_package_group "$pkg_base" cores 1 || rc=$?;;
-            deps)    fetch_package_group "$pkg_base" deps 1 || rc=$?;;
-            all)     fetch_package_group "$pkg_base" cores 1 || OTA_PKG_FAILED=1
-                     fetch_package_group "$pkg_base" deps 1 || OTA_PKG_FAILED=1
-                     sync_script_bundle "$scripts_base" 1 || rc=$?;;
-        esac
-    fi
+    OTA_PKG_FAILED=0
+    case "$what" in
+        scripts)
+            sync_script_bundle "$scripts_base" 1 || rc=$?
+            ;;
+        engines)
+            fetch_package_group "$pkg_base" cores 1 || rc=$?
+            ;;
+        deps)
+            fetch_package_group "$pkg_base" deps 1 || rc=$?
+            ;;
+        all)
+            echo -e "\n  ${W}Engines${NC}"
+            fetch_package_group "$pkg_base" cores 1 || OTA_PKG_FAILED=1
+            echo -e "\n  ${W}Prerequisites${NC}"
+            fetch_package_group "$pkg_base" deps 1 || OTA_PKG_FAILED=1
+            echo -e "\n  ${W}Scripts${NC} ${DIM}(shared core + all modules)${NC}"
+            sync_script_bundle "$scripts_base" 1 || rc=$?
+            ;;
+    esac
     return "$rc"
 }
 render_ota_menu() {

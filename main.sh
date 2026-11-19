@@ -573,7 +573,16 @@ collect_active_tunnels_stats() {
             local fwd_str="OFF"
             [ -n "$PORTS" ] && fwd_str="ACT"
             [ "$ROLE" == "2" ] && fwd_str="CLI"
-            echo "BH|${pure:-$t_name}|${peer_ip}|OFF|${avg}|${loss}|bh_${t_name}|${fwd_str}" >> "$tmp_target"
+            # Header tag carries the transport ("BH:tcp"). The name column is 17 chars (name + " [" + tag + "]"),
+            # so long transports get a short code and a long name is shortened to fit.
+            local bh_tag="BH:${TRANSPORT}" bh_name="${pure:-$t_name}" bh_room
+            case "$TRANSPORT" in
+                tcpmux) bh_tag="BH:tcpmx";; tlsmux) bh_tag="BH:tlsmx";; wsmux) bh_tag="BH:wsmx";; wssmux) bh_tag="BH:wssmx";;
+                kcpmux) bh_tag="BH:kcpmx";; xhttpmux) bh_tag="BH:xhmux";; xhttpsmux) bh_tag="BH:xhsmux";;
+            esac
+            bh_room=$(( 17 - ${#bh_tag} - 3 )); (( bh_room < 3 )) && bh_room=3; (( bh_room > 8 )) && bh_room=8
+            bh_name="${bh_name// /}"; bh_name="${bh_name:0:$bh_room}"
+            echo "${bh_tag}|${bh_name}|${peer_ip}|OFF|${avg}|${loss}|bh_${t_name}|${fwd_str}" >> "$tmp_target"
             ((count++))
             picked["BH|$t_name"]=1; ((sec_n++)); [ "$count" -ge 3 ] && break 2; [ "$sec_n" -ge "$cap" ] && break
         done

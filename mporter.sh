@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v2.2.1).
-MODULE_VERSION="2.2.1"
+# MTunnel MPorter — port forwarding, mapping management, load balancing, and health checks (v2.2.4).
+MODULE_VERSION="2.2.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1490,12 +1490,20 @@ all_mapping_rows() {
 }
 
 get_stats() {
+    local _up _now
+    read -r _up _ < /proc/uptime 2>/dev/null || _up=0; _now="${_up%%.*}"
+    if [ -n "${MT_HEADER_USE_CACHE:-}" ] && [ -n "${MP_STATS_TS:-}" ] && [ $((_now - MP_STATS_TS)) -lt 5 ]; then
+        return 0
+    fi
+    MP_STATS_TS="$_now"
     local server_ip server_ip6; server_ip=$(get_local_ip); server_ip6=$(get_local_ipv6)
-    local hap_stat raw_hap gst_stat raw_gst rlm_stat raw_rlm ipt_stat raw_ipt
-    if systemctl is-active --quiet haproxy; then hap_stat="${C}●${NC}"; raw_hap="●"; else hap_stat="${DIM}○${NC}"; raw_hap="○"; fi
-    if systemctl is-active --quiet gost; then gst_stat="${M}●${NC}"; raw_gst="●"; else gst_stat="${DIM}○${NC}"; raw_gst="○"; fi
-    if systemctl is-active --quiet realm; then rlm_stat="${G}●${NC}"; raw_rlm="●"; else rlm_stat="${DIM}○${NC}"; raw_rlm="○"; fi
-    if systemctl is-active --quiet mporter-iptables; then ipt_stat="${Y}●${NC}"; raw_ipt="●"; else ipt_stat="${DIM}○${NC}"; raw_ipt="○"; fi
+    local hap_stat="${DIM}○${NC}" raw_hap="○" gst_stat="${DIM}○${NC}" raw_gst="○" rlm_stat="${DIM}○${NC}" raw_rlm="○" ipt_stat="${DIM}○${NC}" raw_ipt="○"
+    local _st_arr=()
+    mapfile -t _st_arr < <(systemctl is-active haproxy gost realm mporter-iptables 2>/dev/null || true)
+    [ "${_st_arr[0]:-}" = "active" ] && { hap_stat="${C}●${NC}"; raw_hap="●"; }
+    [ "${_st_arr[1]:-}" = "active" ] && { gst_stat="${M}●${NC}"; raw_gst="●"; }
+    [ "${_st_arr[2]:-}" = "active" ] && { rlm_stat="${G}●${NC}"; raw_rlm="●"; }
+    [ "${_st_arr[3]:-}" = "active" ] && { ipt_stat="${Y}●${NC}"; raw_ipt="●"; }
 
     MP_ROWS=$(all_mapping_rows)
     local total_ports=0 mapped_ips=0

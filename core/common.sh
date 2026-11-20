@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 2.2.1, API 1, layout revision 2.
+# MTunnel shared core — release 2.2.4, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="2.2.1"
+MTUNNEL_RELEASE_VERSION="2.2.4"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -3235,4 +3235,145 @@ mt_reason_row() {
     pad=$(( 122 - ${#l} )); [ "$pad" -lt 0 ] && pad=0
     printf -v sp '%*s' "$pad" ''
     echo -e "  ${FR}║${NC} ${R}Reason       :${NC} ${Y}${why}${NC}${sp} ${FR}║${NC}"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ONE-CLICK SERVER MIGRATION PACK (Encrypted Export & Auto IP Swap Import)
+# ═══════════════════════════════════════════════════════════════════════════
+mt_migration_export() {
+    local out_file pass tmp_stage rc=1 d
+    local cur4 cur6
+    cur4=$(mt_local_ipv4); cur6=$(mt_local_ipv6)
+    printf '\n  %b┌─[ EXPORT SERVER MIGRATION PACK ]%b\n' "$FR" "$NC"
+    printf '  %b│%b %bSource IPv4:%b %b%s%b   %bSource IPv6:%b %b%s%b\n' "$FR" "$NC" "$DIM" "$NC" "$W" "${cur4:-none}" "$NC" "$DIM" "$NC" "$W" "${cur6:-none}" "$NC"
+    printf '  %b●%b %bOutput file [/root/mtunnel/mtunnel-migration-%s.mtmig]: %b' "$C" "$NC" "$W" "$(date +%Y%m%d-%H%M%S)" "$NC"
+    read -r out_file || return 1
+    out_file=$(mt_clean_path "${out_file:-/root/mtunnel/mtunnel-migration-$(date +%Y%m%d-%H%M%S).mtmig}")
+    [ -n "$out_file" ] || return 1
+    printf '  %b●%b %bEncryption passphrase: %b' "$C" "$NC" "$W" "$NC"
+    read -rs pass || return 1
+    echo
+    [ -n "$pass" ] || { printf '  %b✖ Passphrase cannot be empty.%b\n' "$R" "$NC"; return 1; }
+    command -v openssl >/dev/null 2>&1 || { printf '  %b✖ openssl is required.%b\n' "$R" "$NC"; return 1; }
+
+    tmp_stage=$(mktemp -d "${SECURE_TMP:-/tmp}/mt-mig-exp.XXXXXX") || return 1
+    mkdir -p "$(dirname "$out_file")" "$tmp_stage/bundle" || { rm -rf "$tmp_stage"; return 1; }
+    printf 'SRC_IPV4=%s\nSRC_IPV6=%s\nEXPORTED_AT=%s\n' "$cur4" "$cur6" "$(date +%s)" > "$tmp_stage/bundle/manifest.env"
+    for d in /etc/mbackhaul /etc/mrathole /etc/mgre /etc/mxlan /etc/paqet /etc/mtunnel/smart; do
+        [ -d "$d" ] || continue
+        local rel_d="${d#/}"
+        mkdir -p "$tmp_stage/bundle/$rel_d"
+        cp -a "$d/." "$tmp_stage/bundle/$rel_d/" 2>/dev/null || true
+    done
+
+    if tar -czf "$tmp_stage/payload.tgz" -C "$tmp_stage/bundle" . 2>/dev/null && \
+       printf '%s' "$pass" | openssl enc -aes-256-cbc -pbkdf2 -salt -in "$tmp_stage/payload.tgz" -out "$out_file" -pass stdin 2>/dev/null; then
+        chmod 600 "$out_file"
+        printf '  %b✔ Encrypted Migration Pack saved: %b%s%b\n' "$G" "$NC" "$W" "$out_file" "$NC"
+        rc=0
+    else
+        rm -f "$out_file"
+        printf '  %b✖ Failed to create Migration Pack.%b\n' "$R" "$NC"
+    fi
+    unset pass
+    rm -rf "$tmp_stage"
+    return "$rc"
+}
+
+mt_migration_import() {
+    local in_file pass new4 new6 old4 old6 tmp_stage rc=1
+    printf '\n  %b┌─[ IMPORT MIGRATION PACK & AUTO IP SWAP ]%b\n' "$FR" "$NC"
+    printf '  %b●%b %bMigration pack path (.mtmig): %b' "$C" "$NC" "$W" "$NC"
+    read -r in_file || return 1
+    in_file=$(mt_clean_path "$in_file")
+    [ -f "$in_file" ] || { printf '  %b✖ File not found: %s%b\n' "$R" "$in_file" "$NC"; return 1; }
+    printf '  %b●%b %bDecryption passphrase: %b' "$C" "$NC" "$W" "$NC"
+    read -rs pass || return 1
+    echo
+    [ -n "$pass" ] || { printf '  %b✖ Passphrase cannot be empty.%b\n' "$R" "$NC"; return 1; }
+
+    tmp_stage=$(mktemp -d "${SECURE_TMP:-/tmp}/mt-mig-imp.XXXXXX") || return 1
+    if ! printf '%s' "$pass" | openssl enc -d -aes-256-cbc -pbkdf2 -in "$in_file" -out "$tmp_stage/payload.tgz" -pass stdin 2>/dev/null || \
+       ! tar -xzf "$tmp_stage/payload.tgz" -C "$tmp_stage" 2>/dev/null || \
+       [ ! -f "$tmp_stage/manifest.env" ]; then
+        unset pass
+        rm -rf "$tmp_stage"
+        printf '  %b✖ Decryption or archive extraction failed (check passphrase/file).%b\n' "$R" "$NC"
+        return 1
+    fi
+    unset pass
+
+    old4=$(awk -F= '$1=="SRC_IPV4"{print $2;exit}' "$tmp_stage/manifest.env")
+    old6=$(awk -F= '$1=="SRC_IPV6"{print $2;exit}' "$tmp_stage/manifest.env")
+    new4=$(mt_local_ipv4); new6=$(mt_local_ipv6)
+
+    local in_ip4 in_ip6
+    printf '  %b●%b %bNew server IPv4 [%s]: %b' "$C" "$NC" "$W" "${new4:-none}" "$NC"
+    read -r in_ip4 || in_ip4=""
+    [ -z "$in_ip4" ] || new4="$in_ip4"
+    printf '  %b●%b %bNew server IPv6 [%s]: %b' "$C" "$NC" "$W" "${new6:-none}" "$NC"
+    read -r in_ip6 || in_ip6=""
+    [ -z "$in_ip6" ] || new6="$in_ip6"
+
+    # Swap old IPs for new IPs inside restored configs (safe literal string replace via python3)
+    MIG_DIR="$tmp_stage" OLD4="$old4" NEW4="$new4" OLD6="$old6" NEW6="$new6" python3 - <<'PY_SWAP'
+import os
+root = os.environ['MIG_DIR']
+o4, n4 = os.environ.get('OLD4',''), os.environ.get('NEW4','')
+o6, n6 = os.environ.get('OLD6',''), os.environ.get('NEW6','')
+for base, _, fnames in os.walk(root):
+    for fn in fnames:
+        if fn in ('manifest.env', 'payload.tgz'):
+            continue
+        p = os.path.join(base, fn)
+        try:
+            with open(p, 'r', encoding='utf-8') as f:
+                txt = f.read()
+        except Exception:
+            continue
+        orig = txt
+        if o4 and n4 and o4 != 'Unknown' and n4 != 'Unknown' and o4 != n4:
+            txt = txt.replace(o4, n4)
+        if o6 and n6 and o6 != 'Unknown' and n6 != 'Unknown' and o6.lower() != n6.lower():
+            txt = txt.replace(o6, n6).replace(o6.lower(), n6.lower())
+        if txt != orig:
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write(txt)
+PY_SWAP
+
+    local d rel_d
+    for d in /etc/mbackhaul /etc/mrathole /etc/mgre /etc/mxlan /etc/paqet /etc/mtunnel/smart; do
+        rel_d="${d#/}"
+        if [ -d "$tmp_stage/$rel_d" ]; then
+            mkdir -p "$d"
+            cp -a "$tmp_stage/$rel_d/." "$d/" 2>/dev/null || true
+        fi
+    done
+
+    # Regenerate configs & restart services cleanly
+    local u
+    if [ -d /etc/mbackhaul/tunnels ]; then
+        for f in /etc/mbackhaul/tunnels/*.meta; do
+            [ -f "$f" ] || continue
+            u="mbackhaul@$(basename "$f" .meta)"
+            systemctl enable "$u" >/dev/null 2>&1 || true
+            systemctl restart "$u" >/dev/null 2>&1 || true
+        done
+    fi
+    if [ -d /etc/mrathole/tunnels ]; then
+        for d in /etc/mrathole/tunnels/*; do
+            [ -d "$d" ] || continue
+            u="mrathole@$(basename "$d")"
+            [ ! -x /usr/bin/mrathole ] || /usr/bin/mrathole --smart-ports "$(basename "$d")" "$(awk -F= '$1=="TCP_PORTS"{print $2;exit}' "$d/meta.conf" 2>/dev/null || true)" >/dev/null 2>&1 || true
+            systemctl enable "$u" >/dev/null 2>&1 || true
+            systemctl restart "$u" >/dev/null 2>&1 || true
+        done
+    fi
+    [ ! -x /usr/bin/mgre ] || /usr/bin/mgre --apply >/dev/null 2>&1 || true
+    [ ! -x /usr/bin/mxlan ] || /usr/bin/mxlan --apply >/dev/null 2>&1 || true
+
+    rm -rf "$tmp_stage"
+    printf '  %b✔ Migration Pack imported with IP swap and services restarted.%b\n' "$G" "$NC"
+    rc=0
+    return "$rc"
 }

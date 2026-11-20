@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.2.1).
-MODULE_VERSION="2.2.1"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.2.4).
+MODULE_VERSION="2.2.4"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -121,7 +121,7 @@ ALL_PACKAGES=(
     "wget_1.21.4-1ubuntu4.1_amd64.deb"
 )
 declare -A BIN_VERSIONS=(
-    ["bh"]="0.9.1"
+    ["bh"]="0.9.2"
     ["rathole"]="0.5.0"
     ["paqet"]="1.0.0"
     ["gost"]="2.11.5"
@@ -849,12 +849,12 @@ read_with_refresh() {
             NEED_LIVE_HEADER_REFRESH=false
             refresh_header_live
         fi
-        IFS= read -rsn1 -t 0.25 char
+        IFS= read -rsn1 -t 0.5 char
         rc=$?
         if [ $rc -ne 0 ]; then
             if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
                 read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
-                if [ "$now" != "$last_live" ]; then last_live="$now"; refresh_header_live; fi
+                if [ $((now - last_live)) -ge 2 ]; then last_live="$now"; refresh_header_live; fi
                 continue
             fi
             return "$rc"
@@ -2145,10 +2145,46 @@ render_main_menu() {
     printf '  %b├─[ SYSTEM UPDATE & MAINTENANCE ]%b\n' "$FR" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b├─%b %b11%b %b❯%b %bUpdate & Local Install%b%s\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC" "$(updates_summary_badge)"
-    printf '  %b├─%b %b12%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
-    printf '  %b├─%b %b13%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
+    printf '  %b├─%b %b12%b %b❯%b %bMigration Pack (Export / IP Swap Import)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+    printf '  %b├─%b %b13%b %b❯%b %bDelete All Tunnels & Forwardings%b %b(files stay)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$Y" "$NC" "$DIM" "$NC"
+    printf '  %b├─%b %b14%b %b❯%b %bNuclear Wipe (Uninstall)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$R" "$NC"
     printf '  %b│%b\n' "$FR" "$NC"
     printf '  %b└─%b %b0%b %b❯%b %bExit Terminal%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+}
+show_migration_pack_menu() {
+    local m_opt
+    while true; do
+        draw_main_header
+        printf '\n  %b┌─[ MIGRATION PACK — ENCRYPTED EXPORT & IP SWAP ]%b\n' "$FR" "$NC"
+        printf '  %b│%b\n' "$FR" "$NC"
+        printf '  %b├─%b %b1%b %b❯%b %bExport Encrypted Migration Pack (.mtmig)%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$G" "$NC"
+        printf '  %b├─%b %b2%b %b❯%b %bImport Migration Pack & Auto IP Swap%b\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$C" "$NC"
+        printf '  %b│%b\n' "$FR" "$NC"
+        printf '  %b└─%b %b0%b %b❯%b %bReturn to Main Menu%b\n\n' "$FR" "$NC" "$W" "$NC" "$DIM" "$NC" "$DIM" "$NC"
+        printf '  %bMIGRATION ❯❯ %b' "$C" "$NC"
+        read -r m_opt || return 0
+        m_opt="${m_opt//[$' \r\n']/}"
+        case "$m_opt" in
+            1)
+                if declare -F mt_migration_export >/dev/null 2>&1; then
+                    mt_migration_export || true
+                else
+                    printf '  %b✖ Migration export helper is unavailable in shared core.%b\n' "$R" "$NC"
+                fi
+                ota_pause
+                ;;
+            2)
+                if declare -F mt_migration_import >/dev/null 2>&1; then
+                    mt_migration_import || true
+                else
+                    printf '  %b✖ Migration import helper is unavailable in shared core.%b\n' "$R" "$NC"
+                fi
+                ota_pause
+                ;;
+            0|q|Q) return 0 ;;
+            *) printf '  %b✖ Invalid selection.%b\n' "$R" "$NC"; sleep 1 ;;
+        esac
+    done
 }
 # Delete every tunnel and forwarding of every type, but keep all scripts, cores and packages.
 delete_all_tunnels_keep_files() {
@@ -2350,8 +2386,9 @@ while true; do
         10) run_mod "mmirror" ;;
         0) kill "$WATCHER_PID" "$STATS_PID" 2>/dev/null; clear; exit 0 ;;
         11) show_ota_update_hub ;;
-        12) delete_all_tunnels_keep_files ;;
-        13)
+        12) show_migration_pack_menu ;;
+        13) delete_all_tunnels_keep_files ;;
+        14)
             draw_main_header
             echo -e "\n  ${R}╔════════════════════════════════════════════════════════════╗${NC}"
             echo -e "  ${R}║${NC} ${W}MTunnel Nuclear Wipe (Complete Uninstaller)${NC}                  ${R}║${NC}"

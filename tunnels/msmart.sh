@@ -1,7 +1,7 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.2.1).
-MODULE_VERSION="2.2.1"
-MODULE_BUILD="2026112002"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.2.4).
+MODULE_VERSION="2.2.4"
+MODULE_BUILD="2026112003"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 SMART_API_REV=1
@@ -401,6 +401,7 @@ smart_update_menu() {
         echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}Paste MSmart Code Manually${NC}"
         echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}Install Local msmart.sh${NC}"
         echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${C}Refresh Update Status${NC}"
+        echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${M}Update Foreign Peer Remotely${NC} ${DIM}(GitHub / Mirror)${NC}"
         echo -e "  ${FR}│${NC}"
         echo -e "  ${FR}└─${NC} ${W}0${NC} ${DIM}❯${NC} ${DIM}Return to Smart Menu${NC}"
         echo -ne "\n  ${C}MSMART UPDATE ❯❯ ${NC}"; read -r opt
@@ -412,6 +413,22 @@ smart_update_menu() {
             4) smart_self_update 4; smart_pause;;
             5) smart_local_install; smart_pause;;
             6) smart_check_update_bg; smart_pause;;
+            7)
+                if ! smart_peer_load; then
+                    echo -e "  ${R}✖ Not paired with a Foreign server.${NC}"
+                else
+                    local _rsrc _rresp
+                    echo -ne "  ${C}Foreign source [1: GitHub | 2: Mirror | q: cancel]: ${NC}"; read -r _rsrc
+                    case "$_rsrc" in
+                        1) echo -e "  ${C}⟳ Updating Foreign peer from GitHub...${NC}"
+                           _rresp=$(smart_agent_call '{"action":"update_peer","source":"github"}' 200 || true)
+                           [ "$(smart_json_field "$_rresp" ok)" = 1 ] && echo -e "  ${G}✔ Foreign peer updated successfully.${NC}" || echo -e "  ${R}✖ Foreign update failed: $(smart_json_field "$_rresp" error)${NC}";;
+                        2) echo -e "  ${C}⟳ Updating Foreign peer from Mirror...${NC}"
+                           _rresp=$(smart_agent_call '{"action":"update_peer","source":"mirror"}' 200 || true)
+                           [ "$(smart_json_field "$_rresp" ok)" = 1 ] && echo -e "  ${G}✔ Foreign peer updated successfully.${NC}" || echo -e "  ${R}✖ Foreign update failed: $(smart_json_field "$_rresp" error)${NC}";;
+                    esac
+                fi
+                smart_pause;;
             0|q|Q) return 0;;
             *) echo -e "  ${R}✖ Invalid selection.${NC}"; sleep 1;;
         esac
@@ -1457,6 +1474,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except Exception: fail+=1
                 time.sleep(.12)
             return self.sendj(200,{'ok':True,'avg_ms':round(statistics.mean(vals),2) if vals else 9999,'jitter_ms':round(statistics.pstdev(vals),2) if len(vals)>1 else 0,'loss':fail*20})
+        if action=='update_peer':
+            src=str(data.get('source','github'))
+            if src=='mirror':
+                url='https://c107328.parspack.net/c107328/MTunnel'
+                cmd=['bash','-c','curl -fsSL "'+url+'/install.sh" | bash -s -- --remote "'+url+'" --no-launch']
+            else:
+                url='https://raw.githubusercontent.com/htzserv/MTunnel/main'
+                cmd=['bash','-c','curl -fsSL "'+url+'/install.sh" | bash -s -- --online --no-launch']
+            try:
+                p=subprocess.run(cmd,capture_output=True,text=True,timeout=180)
+                msg=(p.stdout+'\n'+p.stderr).strip()[-4000:]
+                return self.sendj(200 if p.returncode==0 else 500,{'ok':p.returncode==0,'rc':p.returncode,'output':msg})
+            except Exception as e: return self.sendj(500,{'ok':False,'error':str(e)})
         return self.sendj(400,{'ok':False,'error':'unsupported action'})
 ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(certfile=cert,keyfile=key)
 class Server(http.server.ThreadingHTTPServer):
@@ -2008,7 +2038,7 @@ smart_iperf_speed() { # target direction [seconds] -> Mbps
     IPERF_JSON="$out" python3 - <<'PY_IPERF'
 import json,os
 try:
- d=json.loads(os.environ.get('IPERF_JSON','{}')); e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; print(round(float(x.get('bits_per_second',0))/1e6,1))
+ d=json.loads(os.environ.get('IPERF_JSON','{}')); iv=d.get('intervals') or []; bps=[float((i.get('sum') or {}).get('bits_per_second',0)) for i in iv if isinstance(i,dict)]; e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; avg=float(x.get('bits_per_second',0)); mid=len(bps)//2; tail=(sum(bps[mid:])/len(bps[mid:])) if mid>=1 and bps[mid:] else avg; val=tail if (avg>0 and tail < avg*0.65) else avg; print(round(val/1e6,1))
 except Exception: print(0)
 PY_IPERF
 }
@@ -2024,7 +2054,7 @@ smart_iperf_speed_rathole() { # local mapped port direction [seconds]
     IPERF_JSON="$out" python3 - <<'PY_RAT'
 import json,os
 try:
- d=json.loads(os.environ.get('IPERF_JSON','{}')); e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; print(round(float(x.get('bits_per_second',0))/1e6,1))
+ d=json.loads(os.environ.get('IPERF_JSON','{}')); iv=d.get('intervals') or []; bps=[float((i.get('sum') or {}).get('bits_per_second',0)) for i in iv if isinstance(i,dict)]; e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; avg=float(x.get('bits_per_second',0)); mid=len(bps)//2; tail=(sum(bps[mid:])/len(bps[mid:])) if mid>=1 and bps[mid:] else avg; val=tail if (avg>0 and tail < avg*0.65) else avg; print(round(val/1e6,1))
 except Exception: print(0)
 PY_RAT
 }
@@ -2293,7 +2323,7 @@ smart_iperf_speed_backhaul() { # local mapped port direction [seconds]
     IPERF_JSON="$out" python3 - <<'PY_BH'
 import json,os
 try:
- d=json.loads(os.environ.get('IPERF_JSON','{}')); e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; print(round(float(x.get('bits_per_second',0))/1e6,1))
+ d=json.loads(os.environ.get('IPERF_JSON','{}')); iv=d.get('intervals') or []; bps=[float((i.get('sum') or {}).get('bits_per_second',0)) for i in iv if isinstance(i,dict)]; e=d.get('end',{}); x=e.get('sum_received') or e.get('sum') or {}; avg=float(x.get('bits_per_second',0)); mid=len(bps)//2; tail=(sum(bps[mid:])/len(bps[mid:])) if mid>=1 and bps[mid:] else avg; val=tail if (avg>0 and tail < avg*0.65) else avg; print(round(val/1e6,1))
 except Exception: print(0)
 PY_BH
 }

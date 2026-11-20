@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel Shared Binary-Tunnel Library (MBackhaul / MPaqet / MRathole) — API 1
-MODULE_VERSION="2.2.1"
+MODULE_VERSION="2.2.4"
 MTUNNEL_BINTUNNEL_API=1
 
 bt_init_runtime() {

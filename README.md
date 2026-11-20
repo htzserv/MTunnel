@@ -4,7 +4,7 @@
 
 **Unified Linux Server Tunneling, Anti-DPI Transports, Multi-Tunnel Failover & Diagnostics**
 
-[![Version](https://img.shields.io/badge/Version-v2.2.0-f5c542?style=for-the-badge)](https://github.com/htzserv/MTunnel)
+[![Version](https://img.shields.io/badge/Version-v2.2.1-f5c542?style=for-the-badge)](https://github.com/htzserv/MTunnel)
 [![Backhaul Core](https://img.shields.io/badge/Backhaul%20Core-v0.9.1-00d2ff?style=for-the-badge)](https://github.com/htzserv/MTunnel)
 [![Platform](https://img.shields.io/badge/Linux-Ubuntu%20%2F%20Debian-3fb950?style=for-the-badge)](#requirements)
 [![Core API](https://img.shields.io/badge/Core%20API-v1%20(Layout%202)-a371f7?style=for-the-badge)](#repository-architecture)
@@ -49,7 +49,7 @@ curl -fsSL https://c107328.parspack.net/c107328/MTunnel/install.sh | sudo bash -
 ### 3. Local / Offline Bundle Install
 Upload and extract the release archive to `/root/mtunnel`, then run:
 ```bash
-unzip -o MTunnel-v2.2.0-final.zip -d /root/mtunnel
+unzip -o MTunnel-v2.2.1.zip -d /root/mtunnel
 sudo bash /root/mtunnel/install.sh --local /root/mtunnel
 ```
 

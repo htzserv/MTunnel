@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 2.2.0, API 1, layout revision 2.
+# MTunnel shared core — release 2.2.1, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="2.2.0"
+MTUNNEL_RELEASE_VERSION="2.2.1"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -1334,7 +1334,7 @@ mt_header_refresh_now() {
 }
 
 mt_live_readline() {
-    local __var="$1" prompt="$2" buffer="" char rc up now last_refresh=-1
+    local __var="$1" prompt="$2" buffer="" rc=0
     printf '%b' "$prompt"
     # A multiline paste may contain a user's next answer after the Peer Code
     # frame. Preserve that line if the Peer Code reader had to look ahead.
@@ -1345,34 +1345,9 @@ mt_live_readline() {
         printf -v "$__var" '%s' "$buffer"
         return 0
     fi
-    while true; do
-        IFS= read -rsn1 -t 0.25 char
-        rc=$?
-        if [ $rc -ne 0 ]; then
-            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
-                read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
-                if [ "$now" != "$last_refresh" ]; then
-                    last_refresh="$now"
-                    mt_header_refresh_now
-                fi
-                continue
-            fi
-            return "$rc"
-        fi
-        if [[ -z "$char" || "$char" == $'\n' || "$char" == $'\r' ]]; then
-            echo
-            break
-        fi
-        if [[ "$char" == $'\x7f' || "$char" == $'\b' ]]; then
-            if [ -n "$buffer" ]; then
-                buffer="${buffer%?}"
-                printf '\b \b'
-            fi
-            continue
-        fi
-        buffer+="$char"
-        printf '%s' "$char"
-    done
+    IFS= read -r buffer || rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    buffer="${buffer%$'\r'}"
     printf -v "$__var" '%s' "$buffer"
 }
 mt_ask() { # styled prompt + live header refresh while waiting for peer input
@@ -1426,7 +1401,7 @@ mt_workspace_footer() {
 mt_workspace_menu() { # title, id|label|action|color ...; sets MT_ACTION
     local title="$1" entry id label action color choice; shift
     while true; do
-        mt_workspace_screen
+        MT_HEADER_USE_CACHE=1 mt_workspace_screen
         mt_workspace_group "$title" first
         for entry in "$@"; do
             IFS='|' read -r id label action color <<< "$entry"
@@ -1617,18 +1592,8 @@ mt_peer_copy_prompt() {
     fi
     while true; do
         printf '  %bC%b = Copy again   %bEnter%b = Continue ❯❯ ' "$C" "$NC" "$C" "$NC"
-        while true; do
-            key=''
-            IFS= read -rsn1 -t 0.25 key
-            rc=$?
-            if [ $rc -eq 0 ]; then break; fi
-            if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
-                local _up; read -r _up _ < /proc/uptime 2>/dev/null || _up=0; now="${_up%%.*}"
-                if [ "$now" != "$last_refresh" ]; then last_refresh="$now"; mt_header_refresh_now; fi
-                continue
-            fi
-            return 0
-        done
+        key=''
+        IFS= read -rsn1 key || return 0
         case "$key" in
             c|C)
                 if mt_clipboard_copy "$link" >/dev/null 2>&1; then
@@ -2106,14 +2071,6 @@ mt_hdr_draw() {
     mt_header_static_read
     s_ip="${MT_STATIC_IP4:0:16}"; s_v6="$MT_STATIC_IP6"; bbr_cc="$MT_STATIC_BBR"
     [ "$bbr_cc" = bbr ] && { bbr_col="$G"; bbr_icon="●"; bbr_text="ON"; }
-    mt_sys_stats_read
-    local cpu_col="$G" ram_col="$G" rx_col="$DIM" tx_col="$DIM" core_label="${MT_CPU_CORES} Cores"
-    [ "$MT_CPU_PCT" -gt 60 ] 2>/dev/null && cpu_col="$Y"; [ "$MT_CPU_PCT" -gt 85 ] 2>/dev/null && cpu_col="$R"
-    [ "$MT_RAM_PCT" -gt 70 ] 2>/dev/null && ram_col="$Y"; [ "$MT_RAM_PCT" -gt 88 ] 2>/dev/null && ram_col="$R"
-    [ "$MT_CPU_CORES" = 1 ] && core_label="1 Core"
-    [[ "$MT_RX" != "0 B/s" && -n "$MT_RX" ]] && rx_col="$G"
-    [[ "$MT_TX" != "0 B/s" && -n "$MT_TX" ]] && tx_col="$Y"
-    local cpu_str="${MT_CPU_PCT}%" ram_str="${MT_RAM_USED}/${MT_RAM_TOTAL} [${MT_RAM_PCT}%]"
 
     local -a rows=(); local line
     while IFS= read -r line; do [ -n "$line" ] && rows+=("$line"); done <<< "$MT_HDR_ROWS"
@@ -2144,8 +2101,11 @@ mt_hdr_draw() {
         local v6_c="$DIM"; [ -z "$s_v6" ] || v6_c="$M"
         _mt_hdr_line "${title} | ${s_ip}" "${W}${title}${NC} ${DIM}|${NC} ${M}${s_ip}${NC}"
         _mt_hdr_line "IPv6 ${v6_txt}" "${DIM}IPv6${NC} ${v6_c}${v6_txt}${NC}"
-        _mt_hdr_line "CPU ${cpu_str} | RAM ${ram_str} | BBR ${bbr_text}" "${DIM}CPU${NC} ${cpu_col}${cpu_str}${NC} ${DIM}| RAM${NC} ${ram_col}${ram_str}${NC} ${DIM}| BBR${NC} ${bbr_col}${bbr_text}${NC}"
-        [ -z "$x_label" ] || _mt_hdr_line "${x_label} ${x_val} | RX ${MT_RX} | TX ${MT_TX}" "${DIM}${x_label}${NC} ${x_col}${x_val}${NC} ${DIM}| RX${NC} ${rx_col}${MT_RX}${NC} ${DIM}| TX${NC} ${tx_col}${MT_TX}${NC}"
+        if [ -n "$x_label" ]; then
+            _mt_hdr_line "BBR ${bbr_text} | ${x_label} ${x_val}" "${DIM}BBR${NC} ${bbr_col}${bbr_text}${NC} ${DIM}| ${x_label}${NC} ${x_col}${x_val}${NC}"
+        else
+            _mt_hdr_line "BBR ${bbr_text}" "${DIM}BBR${NC} ${bbr_col}${bbr_text}${NC}"
+        fi
         local c
         for c in "${info[@]}"; do
             local il iv ic; IFS='|' read -r il iv ic <<< "$c"
@@ -2208,13 +2168,7 @@ mt_hdr_draw() {
         "$v6_col" "$v6_field" "$v6_field" "$v6_text" "$NC" \
         "$bbr_col" "$bbr_icon" "$NC" "$bbr_text" \
         "$x_lbl" "$x_col" "$x_w" "$x_w" "$x_val" "$NC"
-    printf "  ${FR}╠${border}╣${NC}\033[K\n"
-    # Row 2: CPU/cores | RAM | Net down | Net up
-    printf "  ${FR}║${NC} ${DIM}CPU:${NC} %b%-4.4s%b   ${DIM}Cores:${NC} ${W}%-10.10s${NC} ${FR}║${NC} ${DIM}RAM:${NC} %b%-18.18s%b ${FR}║${NC} ${DIM}Net ▼:${NC} %b%-*.*s%b ${FR}║${NC} ${DIM}Net ▲:${NC} %b%-*.*s%b ${FR}║${NC}\033[K\n" \
-        "$cpu_col" "$cpu_str" "$NC" "$core_label" \
-        "$ram_col" "$ram_str" "$NC" \
-        "$rx_col" "$((w6-9))" "$((w6-9))" "$MT_RX" "$NC" \
-        "$tx_col" "$((w4-9))" "$((w4-9))" "$MT_TX" "$NC"
+    # Row 2 (CPU/RAM/Net) is kept on the main dashboard only; sub-modules stay clean & fast.
 
     # Optional row 3: engine specific facts (Core / Status / Peer Ping ...)
     if [ "${#info[@]}" -gt 0 ]; then
@@ -3081,8 +3035,11 @@ mt_ss_snapshot_end() {
     MT_SS_SNAPSHOT=""
 }
 _mt_ss_established() {
+    local lport="${1:-}"
     if [ -n "$MT_SS_SNAPSHOT" ] && [ -r "$MT_SS_SNAPSHOT" ]; then
         cat "$MT_SS_SNAPSHOT"
+    elif [[ "$lport" =~ ^[0-9]+$ ]]; then
+        ss -Htinp state established "sport = :${lport}" 2>/dev/null
     else
         ss -Htinp state established 2>/dev/null
     fi
@@ -3090,29 +3047,48 @@ _mt_ss_established() {
 
 # _mt_unit_sockets <unit> [local_port] [expected_peer_ip]
 # One line "peer_host|lastrcv_ms" per ESTABLISHED socket owned by the unit (any PID of its cgroup).
-# lastrcv_ms is empty when the kernel does not report it.
+# Filtering is done in kernel (when lport is set) and inside awk to avoid slow Bash loops on busy servers.
 _mt_unit_sockets() {
-    local unit="$1" lport="${2:-}" expected="${3:-}" pids lep pep spids lr host p pid mine
-    pids=" $(mt_unit_pids "$unit" 2>/dev/null) "
-    [ "$pids" != "  " ] || return 1
-    while IFS='|' read -r lep pep spids lr; do
-        [ -n "$pep" ] || continue
-        mine=0
-        for pid in ${spids//,/ }; do [[ "$pids" == *" $pid "* ]] && { mine=1; break; }; done
-        [ "$mine" = 1 ] || continue
-        if [[ "$lport" =~ ^[0-9]+$ ]]; then p="${lep##*:}"; [ "$p" = "$lport" ] || continue; fi
-        host="${pep%:*}"; host="${host#[}"; host="${host%]}"; host="${host#::ffff:}"
-        if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
-            [ "$host" = "$expected" ] || continue
-        fi
-        printf '%s|%s\n' "$host" "$lr"
-    done < <(_mt_ss_established | awk '
-        function flush() { if (have) print loc "|" peer "|" pids "|" lr; have=0 }
-        /^[^ \t]/ { flush(); have=1; loc=$3; peer=$4; lr=""; pids=""; s=$0
-            while (match(s,/pid=[0-9]+/)) { pids=pids (pids==""?"":",") substr(s,RSTART+4,RLENGTH-4); s=substr(s,RSTART+RLENGTH) }
-            next }
-        { if (match($0,/lastrcv:[0-9]+/)) lr=substr($0,RSTART+8,RLENGTH-8) }
-        END { flush() }')
+    local unit="$1" lport="${2:-}" expected="${3:-}" pids lp="" exp_ip=""
+    pids=$(mt_unit_pids "$unit" 2>/dev/null)
+    [ -n "${pids// /}" ] || return 1
+    [[ "$lport" =~ ^[0-9]+$ ]] && lp="$lport"
+    if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
+        exp_ip=$(mt_normalize_host "$expected")
+    fi
+    _mt_ss_established "$lp" | awk -v pidlist="$pids" -v lport="$lp" -v exp="$exp_ip" '
+        BEGIN {
+            n = split(pidlist, pa, /[ \t]+/)
+            for (i = 1; i <= n; i++) if (pa[i] != "") want[pa[i]] = 1
+            exp_lc = tolower(exp)
+        }
+        function emit() {
+            if (!have) return
+            have = 0
+            if (lport != "") {
+                p = loc; sub(/^.*:/, "", p)
+                if (p != lport) return
+            }
+            host = peer
+            sub(/:[^:]*$/, "", host)
+            gsub(/^\[|\]$/, "", host)
+            sub(/^::ffff:/, "", host)
+            if (exp_lc != "" && tolower(host) != exp_lc) return
+            print host "|" lr
+        }
+        /^[^ \t]/ {
+            emit()
+            s = $0; matched = 0
+            while (match(s, /pid=[0-9]+/)) {
+                if (substr(s, RSTART + 4, RLENGTH - 4) in want) { matched = 1; break }
+                s = substr(s, RSTART + RLENGTH)
+            }
+            if (matched) { have = 1; loc = $3; peer = $4; lr = "" }
+            next
+        }
+        have { if (match($0, /lastrcv:[0-9]+/)) lr = substr($0, RSTART + 8, RLENGTH - 8) }
+        END { emit() }
+    '
 }
 
 # mt_hb_max_idle_ms <toml> [default_heartbeat_s]
@@ -3154,23 +3130,37 @@ mt_unit_live_peer() {
 # Exact-instance TCP RTT fallback for hosts that block ICMP. Loss is left
 # unknown in that case rather than incorrectly showing 100%.
 mt_unit_tcp_rtt() {
-    local unit="$1" target="$2" pid line rtt hit=0
-    pid=$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -dc '0-9')
-    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
-    while IFS= read -r line; do
-        if [[ "$line" == *"pid=$pid,"* || "$line" == *"pid=$pid)"* ]]; then
-            if [[ "$line" == *"$target"* ]]; then
-                if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-                hit=1; continue
-            fi
-            hit=0
-        elif [ "$hit" = 1 ]; then
-            if [[ "$line" =~ rtt:([0-9.]+) ]]; then rtt="${BASH_REMATCH[1]}"; break; fi
-            [[ "$line" =~ ^[[:space:]] ]] || hit=0
-        fi
-    done < <(_mt_ss_established)
-    [ -n "$rtt" ] || return 1
-    awk -v v="$rtt" 'BEGIN {printf "%.0fms*", v}'
+    local unit="$1" target="$2" pids
+    pids=$(mt_unit_pids "$unit" 2>/dev/null)
+    [ -n "${pids// /}" ] && [ -n "$target" ] || return 1
+    _mt_ss_established | awk -v pidlist="$pids" -v tgt="$target" '
+        BEGIN {
+            n = split(pidlist, pa, /[ \t]+/)
+            for (i = 1; i <= n; i++) if (pa[i] != "") want[pa[i]] = 1
+        }
+        /^[^ \t]/ {
+            hit = 0
+            if (index($0, tgt) > 0) {
+                s = $0
+                while (match(s, /pid=[0-9]+/)) {
+                    if (substr(s, RSTART + 4, RLENGTH - 4) in want) { hit = 1; break }
+                    s = substr(s, RSTART + RLENGTH)
+                }
+            }
+            if (hit && match($0, /rtt:[0-9.]+/)) {
+                printf "%.0fms*", substr($0, RSTART + 4, RLENGTH - 4) + 0
+                found = 1; exit 0
+            }
+            next
+        }
+        hit {
+            if (match($0, /rtt:[0-9.]+/)) {
+                printf "%.0fms*", substr($0, RSTART + 4, RLENGTH - 4) + 0
+                found = 1; exit 0
+            }
+        }
+        END { if (!found) exit 1 }
+    '
 }
 
 mt_fmt_age_ms() {  # 183000 -> 3m

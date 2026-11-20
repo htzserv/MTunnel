@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.2.0).
-MODULE_VERSION="2.2.0"
+# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.2.1).
+MODULE_VERSION="2.2.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -420,7 +420,7 @@ PING_CHECK_INTERVAL=15
 # LIVE_HEADER_FUNC = header function, LIVE_ROWS = number of lines printed above the prompt line.
 LIVE_HEADER_FUNC=""
 LIVE_ROWS=0
-LIVE_HEADER_INTERVAL=1
+LIVE_HEADER_INTERVAL=15
 LIVE_MENU_FUNC=""        # menu renderer: redrawn (typed text kept) when the watcher finds a new remote version
 LIVE_FRAME_FILE=""
 LIVE_VER_FILE="$SECURE_TMP/.${MOD_TAG}_remote_ver"
@@ -430,7 +430,6 @@ live_header_tick() {
     local rows="${LINES:-24}"
     [[ "$rows" =~ ^[0-9]+$ ]] || rows=24
     [ "$LIVE_ROWS" -ge "$rows" ] && return 0
-    mt_live_vitals_update 2>/dev/null || true
     printf '\e7\e[%dA\r' "$LIVE_ROWS"
     HEADER_LIVE=1 "$LIVE_HEADER_FUNC"
     printf '\e8'
@@ -463,7 +462,7 @@ read_with_refresh() {
             fi
         fi
 
-        IFS= read -rsn1 -t 0.2 char
+        IFS= read -rsn1 -t 1 char
         rc=$?
 
         if [ $rc -ne 0 ]; then
@@ -749,7 +748,7 @@ draw_mgre_header() {
     local act_col="$DIM" cache="$SECURE_TMP/.mgre_header_state" up now ts=0 line
     local cached=0 rows=''
     read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
-    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$cache" ]; then
+    if [ -n "${HEADER_LIVE:-}${MT_HEADER_USE_CACHE:-}" ] && [ -s "$cache" ]; then
         local first=1
         while IFS= read -r line; do
             if [ "$first" -eq 1 ]; then IFS='|' read -r ts HDR_TOTAL HDR_ACTIVE <<< "$line"; first=0
@@ -2468,7 +2467,7 @@ draw_mxlan_header() {
     local act_col="$DIM" cache="$SECURE_TMP/.mxlan_header_state" up now ts=0 line
     local cached=0 rows=''
     read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"; [[ "$now" =~ ^[0-9]+$ ]] || now=0
-    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$cache" ]; then
+    if [ -n "${HEADER_LIVE:-}${MT_HEADER_USE_CACHE:-}" ] && [ -s "$cache" ]; then
         local first=1
         while IFS= read -r line; do
             if [ "$first" -eq 1 ]; then IFS='|' read -r ts HDR_TOTAL HDR_ACTIVE <<< "$line"; first=0

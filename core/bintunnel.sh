@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel Shared Binary-Tunnel Library (MBackhaul / MPaqet / MRathole) — API 1
-MODULE_VERSION="2.2.0"
+MODULE_VERSION="2.2.1"
 MTUNNEL_BINTUNNEL_API=1
 
 bt_init_runtime() {
@@ -10,7 +10,7 @@ bt_init_runtime() {
     trap 'NEED_REFRESH=true' SIGUSR1
     trap 'NEED_HDR=true' SIGUSR2
     UPDATE_CHECK_INTERVAL=120
-    HDR_CHECK_INTERVAL=10
+    HDR_CHECK_INTERVAL=25
     HDR_ROWS_FILE="$SECURE_TMP/.${BT_MOD}_hdr_rows"
     HDR_DRAWN_ROWS=0
     WATCHER_PID=""
@@ -23,7 +23,7 @@ bt_init_runtime() {
 }
 
 read_with_refresh() {
-    local prompt="$1" __resultvar="$2" redraw_func="$3" buffer="" char rc up now last_live=-1
+    local prompt="$1" __resultvar="$2" redraw_func="$3" buffer="" char rc
     touch "$SECURE_TMP/.${BT_MOD}_in_menu"
     echo -ne "$prompt"
     while true; do
@@ -36,12 +36,10 @@ read_with_refresh() {
             NEED_HDR=false
             [ -n "$redraw_func" ] && refresh_header_live
         fi
-        IFS= read -rsn1 -t 0.3 char
+        IFS= read -rsn1 -t 1 char
         rc=$?
         if [ $rc -ne 0 ]; then
             if [ "$rc" -eq 142 ] || [ "$rc" -gt 128 ]; then
-                read -r up _ < /proc/uptime 2>/dev/null || up=0; now="${up%%.*}"
-                if [ "$now" != "$last_live" ]; then last_live="$now"; refresh_header_live; fi
                 continue
             fi
             rm -f "$SECURE_TMP/.${BT_MOD}_in_menu" 2>/dev/null
@@ -247,18 +245,21 @@ hdr_rows_count() {
 refresh_header_live() {
     hdr_rows_count
     if [ "$HDR_ROWS_COUNT" != "$HDR_DRAWN_ROWS" ]; then NEED_REFRESH=true; return; fi
-    mt_live_vitals_update 2>/dev/null || true
     printf '\033[?25l\0337\033[1;1H'
     HEADER_LIVE=1 draw_header
     printf '\0338\033[?25h'
 }
 
 hdr_stats_loop() {
+    local _first=1
     while true; do
         if declare -F collect_header_rows >/dev/null 2>&1; then
-            collect_header_rows
+            if [ "$_first" = 1 ] || [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ]; then
+                _first=0
+                collect_header_rows
+                [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ] && kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+            fi
         fi
-        [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ] && kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
         sleep "$HDR_CHECK_INTERVAL"
     done
 }

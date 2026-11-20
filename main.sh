@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.2.0).
-MODULE_VERSION="2.2.0"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.2.1).
+MODULE_VERSION="2.2.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -578,7 +578,7 @@ collect_active_tunnels_stats() {
             local bh_tag="BH:${TRANSPORT}" bh_name="${pure:-$t_name}" bh_room
             case "$TRANSPORT" in
                 tcpmux) bh_tag="BH:tcpmx";; tlsmux) bh_tag="BH:tlsmx";; wsmux) bh_tag="BH:wsmx";; wssmux) bh_tag="BH:wssmx";;
-                kcpmux) bh_tag="BH:kcpmx";; xhttpmux) bh_tag="BH:xhmux";; xhttpsmux) bh_tag="BH:xhsmux";;
+                kcpmux) bh_tag="BH:kcpmx";; xhttpmux) bh_tag="BH:xhmux";; xhttpsmux) bh_tag="BH:xhsmx";; xhttps) bh_tag="BH:xhtps";;
             esac
             bh_room=$(( 17 - ${#bh_tag} - 3 )); (( bh_room < 3 )) && bh_room=3; (( bh_room > 8 )) && bh_room=8
             bh_name="${bh_name// /}"; bh_name="${bh_name:0:$bh_room}"

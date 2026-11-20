@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.2.0, Backhaul Core v0.9.1).
-MODULE_VERSION="2.2.0"
+# MTunnel MBackhaul — Backhaul tunnel setup, configuration, and connection management (v2.2.1, Backhaul Core v0.9.1).
+MODULE_VERSION="2.2.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1577,7 +1577,16 @@ bh_rows_add_transport() {
         [ -n "$line" ] || continue
         IFS='|' read -r st name tag peer vip ping loss up fwd <<< "$line"
         conf="$CONF_DIR/bh_${name}.meta"; [ -f "$conf" ] || conf="$CONF_DIR/${name}.meta"
-        tr=$(mt_read_kv "$conf" TRANSPORT 2>/dev/null) || tr=""
+        tr=""
+        if [ -r "$conf" ]; then
+            local _k _v
+            while IFS='=' read -r _k _v; do
+                if [ "$_k" = TRANSPORT ]; then
+                    tr="${_v//$'\r'/}"; tr="${tr//\"/}"; tr="${tr//\'/}"
+                    break
+                fi
+            done < "$conf"
+        fi
         newtag="$tag"
         if [ -n "$tr" ]; then
             newtag="${tag}:$(bh_short_transport "$tr")"
@@ -1591,7 +1600,7 @@ bh_rows_add_transport() {
 
 draw_header() {
     local _meta_cache="$SECURE_TMP/.mbackhaul_header_meta"
-    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$_meta_cache" ]; then
+    if [ -n "${HEADER_LIVE:-}${MT_HEADER_USE_CACHE:-}" ] && [ -s "$_meta_cache" ]; then
         local act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_t
         IFS='|' read -r act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_t < "$_meta_cache"
         mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "BH" "bh_"; bh_rows_add_transport
@@ -1602,7 +1611,7 @@ draw_header() {
         return 0
     fi
     local _deep=1
-    if [ "${MT_FAST_FIRST_DRAW:-1}" = 1 ]; then _deep=0; MT_FAST_FIRST_DRAW=0; fi
+    mt_ss_snapshot_begin 2>/dev/null || true
     local total_t=0; local active_t=0; local online_t=0; local waiting_t=0; local connecting_t=0
     local t_names=() units=()
     for conf in "$CONF_DIR"/*.meta; do
@@ -1703,7 +1712,7 @@ draw_header() {
                 g_color="${R}"; g_text="Timeout"
             fi
         else
-            g_color="${DIM}"; g_text="Calculating..."
+            g_color="${DIM}"; g_text="..."
         fi
 
         local lock_ts=0; [ -f "$ping_lock" ] && lock_ts=$(stat -c %Y "$ping_lock" 2>/dev/null || echo 0)
@@ -1722,6 +1731,7 @@ draw_header() {
     else
         g_color="${DIM}"; g_text="Waiting"
     fi
+    mt_ss_snapshot_end 2>/dev/null || true
 
     # Unified dashboard header (same look as the main screen) -- THIS module's tunnels only.
     local _now _mtime
@@ -2241,14 +2251,16 @@ if [ "${1:-}" = "--deploy-peer-link" ] || [ "${1:-}" = "--deploy-peer-stdin" ]; 
     exit $?
 fi
 if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
+_MT_SKIP_HDR_SCAN=0
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
     else
-        render_mbackhaul_menu
+        if [ "$_MT_SKIP_HDR_SCAN" = 1 ]; then _MT_SKIP_HDR_SCAN=0; MT_HEADER_USE_CACHE=1 render_mbackhaul_menu
+        else render_mbackhaul_menu; fi
         read_with_refresh "  ${C}MBACKHAUL ❯❯ ${NC}" opt render_mbackhaul_menu || break
         opt="${opt//$'\r'/}"
     fi
-    mt_workspace_route "$opt" || continue
+    mt_workspace_route "$opt" || { _MT_SKIP_HDR_SCAN=1; continue; }
     case "$MT_ACTION" in
         97) mt_link_import; continue;;
         98) mt_link_export; continue;;

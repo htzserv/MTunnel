@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v2.2.0).
-MODULE_VERSION="2.2.0"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v2.2.1).
+MODULE_VERSION="2.2.1"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -888,7 +888,7 @@ collect_header_rows() {
 
 draw_header() {
     local _meta_cache="$SECURE_TMP/.mpaqet_header_meta"
-    if [ -n "${HEADER_LIVE:-}" ] && [ -s "$_meta_cache" ]; then
+    if [ -n "${HEADER_LIVE:-}${MT_HEADER_USE_CACHE:-}" ] && [ -s "$_meta_cache" ]; then
         local act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_tunnels
         IFS='|' read -r act_text act_color core_raw core_color stat_icon stat_text stat_color g_text g_color total_tunnels < "$_meta_cache"
         mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "PAQET" "pq_"
@@ -1008,7 +1008,7 @@ draw_header() {
                 g_color="${R}"; g_text="Timeout"
             fi
         else
-            g_color="${DIM}"; g_text="Calculating..."
+            g_color="${DIM}"; g_text="..."
         fi
 
         local lock_ts=0; [ -f "$ping_lock" ] && lock_ts=$(stat -c %Y "$ping_lock" 2>/dev/null || echo 0)
@@ -1505,14 +1505,16 @@ render_mpaqet_menu() {
 }
 
 if [ -n "${MT_PEER_LINK:-}" ]; then mt_link_import; exit $?; fi
+_MT_SKIP_HDR_SCAN=0
 while true; do
     if [ -n "$MT_SECTION" ]; then opt="$MT_SECTION"
     else
-        render_mpaqet_menu
+        if [ "$_MT_SKIP_HDR_SCAN" = 1 ]; then _MT_SKIP_HDR_SCAN=0; MT_HEADER_USE_CACHE=1 render_mpaqet_menu
+        else render_mpaqet_menu; fi
         read_with_refresh "  ${C}MPAQET ❯❯ ${NC}" opt render_mpaqet_menu || break
         opt="${opt//$'\r'/}"
     fi
-    mt_workspace_route "$opt" || continue
+    mt_workspace_route "$opt" || { _MT_SKIP_HDR_SCAN=1; continue; }
     case "$MT_ACTION" in
         97) mt_link_import; continue;;
         98) mt_link_export; continue;;

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MRathole — Rathole reverse-tunnel setup, service management, and updates (v2.2.0).
+MODULE_VERSION="2.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -98,11 +98,19 @@ validate_forward_ports() {
     if ! mt_validate_port_list "$1" "$2" "$3" "${4:-}"; then
         echo 'Invalid, duplicate, or busy forwarded port.' >&2; return 1
     fi
-    local item; local -a parts=(); IFS=, read -ra parts <<< "$1"
+    local lp="${5:-${LINK_PORT:-${t_port:-}}}" item a b
+    local -a parts=(); IFS=, read -ra parts <<< "$1"
     for item in "${parts[@]}"; do
         [ -z "$item" ] && continue
-        if mt_valid_port "${LINK_PORT:-}" && ((10#$item == 10#$LINK_PORT)); then
-            echo 'Forwarded port conflicts with the tunnel link port.' >&2; return 1
+        if mt_valid_port "$lp"; then
+            if [[ "$item" =~ ^([0-9]+):([0-9]+)$ ]]; then
+                a=$((10#${BASH_REMATCH[1]})); b=$((10#${BASH_REMATCH[2]}))
+                if (( 10#$lp >= a && 10#$lp <= b )); then
+                    echo 'Forwarded port range conflicts with the tunnel link port.' >&2; return 1
+                fi
+            elif (( 10#$item == 10#$lp )); then
+                echo 'Forwarded port conflicts with the tunnel link port.' >&2; return 1
+            fi
         fi
     done
 }
@@ -509,19 +517,16 @@ rat_profile_wizard() {
     current_prof="${RAT_PROFILE:-BALANCED}"
     cores=$(rat_cpu_cores)
 
-    echo -e "\n  ${FR}╔══════════════════════ RATHOLE PROFILE ══════════════════════╗${NC}"
-    echo -e "  ${FR}║${NC} ${W}Presets for Heartbeat, Timeout, Retry, and TCP Nodelay.${NC}     ${FR}║${NC}"
-    echo -e "  ${FR}╠═════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${FR}║${NC} ${G}1${NC}) ECO         lowest overhead: 60s heartbeat, nodelay=false ${FR}║${NC}"
-    echo -e "  ${FR}║${NC} ${C}2${NC}) BALANCED    default: 30s heartbeat / 40s timeout, nodelay ${FR}║${NC}"
-    echo -e "  ${FR}║${NC} ${Y}3${NC}) SPEED       high throughput: 20s heartbeat / 30s timeout  ${FR}║${NC}"
-    echo -e "  ${FR}║${NC} ${M}4${NC}) LOW-LATENCY fast detection: 10s heartbeat / 15s timeout   ${FR}║${NC}"
-    echo -e "  ${FR}║${NC} ${R}5${NC}) EXTREME     instant failover: 5s heartbeat / 10s timeout  ${FR}║${NC}"
-    echo -e "  ${FR}║${NC} ${W}6${NC}) MANUAL      customize every Rathole parameter by hand    ${FR}║${NC}"
-    echo -e "  ${FR}║${NC} ${DIM}Current: ${current_prof}   |   CPU cores on this server: ${cores}${NC}"
-    echo -e "  ${FR}╚═════════════════════════════════════════════════════════════╝${NC}"
-    echo -e "  ${DIM}Tip: Use the same profile on BOTH servers so heartbeat & timeout match.${NC}"
-    echo -ne "  ${C}Select Profile [1-6 | Enter: ${current_prof} | q: cancel] ❯❯ ${NC}"
+    echo -e "\n  ${FR}┌─[ PERFORMANCE PROFILE — ${cores} CPU Core(s) | Current: ${current_prof} ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}ECO${NC}          ${DIM}(Lowest Overhead — 60s Heartbeat, Nodelay Off)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}BALANCED${NC}     ${DIM}(Recommended Default — 30s Heartbeat / 40s Timeout)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}SPEED${NC}        ${DIM}(High Throughput — 20s Heartbeat / 30s Timeout)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}LOW-LATENCY${NC}  ${DIM}(Fast Detection — 10s Heartbeat / 15s Timeout)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${R}EXTREME${NC}      ${DIM}(Instant Failover — 5s Heartbeat / 10s Timeout)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}MANUAL${NC}       ${DIM}(Customize Heartbeat, Timeout, Retry & Nodelay)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -ne "  ${FR}└─${NC} ${C}Select Profile [1-6 | Enter: ${current_prof} | q: cancel] ❯❯ ${NC}"
     read -r choice || return 1
     choice="${choice//$'\r'/}"
 
@@ -670,7 +675,7 @@ rat_smart_ports() { # NAME TCP_PORTS
     [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
     [ -f "$meta" ] || return 1
     mt_source_conf "$meta" 2>/dev/null || return 1
-    [ "$TYPE" = 1 ] || return 1
+    [[ "$TYPE" =~ ^[12]$ ]] || return 1
     validate_forward_ports "$ports" 0 tcp || return 1
     mt_set_conf_var "$meta" TCP_PORTS "$ports" || return 1
     generate_toml "$name" || return 1
@@ -1290,7 +1295,7 @@ mt_link_deploy_locked() {
     if [ "$MT_KIND" = backhaul ]; then name="bh_${name#bh_}"; conf="$CONF_DIR/$name.meta"
     else conf="$CONF_DIR/$name/meta.conf"; fi
     [ ! -e "$conf" ] && { [ "$MT_KIND" != rathole ] || [ ! -e "$CONF_DIR/$name" ]; } || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
-    if [ "$role" = 1 ] && mt_port_busy "$port"; then echo 'Link port is already in use.' >&2; return 1; fi
+    if [ "$role" = 1 ] && mt_port_busy "$port" tcp; then echo 'Link port is already in use.' >&2; return 1; fi
     if [ "$MT_KIND" = backhaul ]; then
         validate_bh_ports "${MT_LINK_DATA[PORTS]}" "$role" || return 1
         settings=$(mktemp "$SECURE_TMP/peer-backhaul.XXXXXX") || return 1
@@ -1446,7 +1451,7 @@ while true; do
                    continue
                fi
 
-               if ss -tuln 2>/dev/null | grep -qE ":${t_port}\s"; then
+               if [ "$s_type" == "1" ] && ss -tln 2>/dev/null | grep -qE ":${t_port}\s"; then
                    echo -e "  ${R}Error: Port ${t_port} is already in use by another service!${NC}"
                    continue
                fi
@@ -1457,7 +1462,7 @@ while true; do
            t_token=$(echo "$t_token" | tr -dc 'a-zA-Z0-9_-')
            [ -z "$t_token" ] && t_token=$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')
            
-           # رفع باگ ۲: بررسی و اعتبارسنجی دقیق پورت‌های فوروارد
+           # Validate forwarded TCP/UDP ports
            while true; do
                echo -ne "  ${C}●${NC} ${W}TCP Ports to Forward (e.g. 80,443) [Blank if none]: ${NC}"; read -r tcp_p
                tcp_p=$(echo "$tcp_p" | tr -d '\r ')
@@ -1587,7 +1592,7 @@ while true; do
                    if ! mt_valid_port "$n_port"; then
                        echo -e "  ${R}Error: Port must be between 1 and 65535!${NC}"; continue
                    fi
-                   if [ "$n_port" != "$LINK_PORT" ] && ss -tuln 2>/dev/null | grep -qE ":${n_port}\s"; then
+                   if [ "$TYPE" == "1" ] && [ "$n_port" != "$LINK_PORT" ] && ss -tln 2>/dev/null | grep -qE ":${n_port}\s"; then
                        echo -e "  ${R}Error: Port ${n_port} is already in use!${NC}"; continue
                    fi
                    LINK_PORT="$n_port"

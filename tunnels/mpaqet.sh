@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MPaqet — Paqet tunnel setup, monitoring, and configuration management (v2.2.0).
+MODULE_VERSION="2.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -537,20 +537,17 @@ choose_kcp_profile() {
     local role="$1" current="${2:-BALANCED}" choice sub cores
     cores=$(cpu_cores)
     mt_workspace_screen
-    echo -e "\n  ${FR}╔════════════════════════ KCP PROFILE ════════════════════════╗${NC}"
-    echo -e "  ${FR}║${NC} ${W}CPU-aware presets. MTU is never changed by a profile.${NC}"
-    echo -e "  ${FR}╠═════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "  ${FR}║${NC} ${G}1${NC}) ECO         lowest CPU: 1 conn, slow timers, batched"
-    echo -e "  ${FR}║${NC} ${C}2${NC}) BALANCED    default: up to 2 conn, batched writes/acks"
-    echo -e "  ${FR}║${NC} ${Y}3${NC}) SPEED       up to 4 conn, window 2048, fast timers"
-    echo -e "  ${FR}║${NC} ${M}4${NC}) LOW-LATENCY fastest timers, immediate flush (more CPU)"
-    echo -e "  ${FR}║${NC} ${W}5${NC}) MANUAL      every KCP value by hand (validated)"
-    echo -e "  ${FR}║${NC} ${W}6${NC}) CLASSIC     paqet built-in normal / fast / fast2 / fast3"
-    echo -e "  ${FR}║${NC} ${R}7${NC}) EXTREME     300+ Mbit: needs 4+ cores and 2GB+ RAM, window 4096"
-    echo -e "  ${FR}║${NC} ${DIM}Current: ${current}   |   CPU cores on this server: ${cores}${NC}"
-    echo -e "  ${FR}╚═════════════════════════════════════════════════════════════╝${NC}"
-    echo -e "  ${DIM}Apply the profile on BOTH servers. conn is capped by this server's cores.${NC}"
-    echo -ne "  ${C}Profile ❯❯ ${NC}"; read -r choice
+    echo -e "\n  ${FR}┌─[ KCP PERFORMANCE PROFILE — ${cores} CPU Core(s) | Current: ${current} ]${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -e "  ${FR}├─${NC} ${W}1${NC} ${DIM}❯${NC} ${G}ECO${NC}          ${DIM}(Lowest CPU — 1 Conn, Slow Timers, Batched)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}2${NC} ${DIM}❯${NC} ${C}BALANCED${NC}     ${DIM}(Recommended Default — Up to 2 Conn, Batched)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}3${NC} ${DIM}❯${NC} ${Y}SPEED${NC}        ${DIM}(High Throughput — Up to 4 Conn, Window 2048)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}4${NC} ${DIM}❯${NC} ${M}LOW-LATENCY${NC}  ${DIM}(Fastest Timers, Immediate Flush — Higher CPU)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}5${NC} ${DIM}❯${NC} ${W}MANUAL${NC}       ${DIM}(Customize Every KCP Parameter by Hand)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}6${NC} ${DIM}❯${NC} ${W}CLASSIC${NC}      ${DIM}(Paqet Built-in normal / fast / fast2 / fast3)${NC}"
+    echo -e "  ${FR}├─${NC} ${W}7${NC} ${DIM}❯${NC} ${R}EXTREME${NC}      ${DIM}(300+ Mbit — Needs 4+ Cores, 2GB+ RAM, Window 4096)${NC}"
+    echo -e "  ${FR}│${NC}"
+    echo -ne "  ${FR}└─${NC} ${C}Select Profile [1-7 | q: cancel] ❯❯ ${NC}"; read -r choice
     case "$choice" in
         1) profile_defaults ECO "$role";;
         2) profile_defaults BALANCED "$role";;

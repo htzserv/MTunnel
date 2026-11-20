@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MDiag — Unified Doctor & LinkTest diagnostics engine (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MDiag — Unified Doctor & LinkTest diagnostics engine (v2.2.0).
+MODULE_VERSION="2.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077

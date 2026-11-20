@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel standalone installer: local source tree or HTTPS bootstrap (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel standalone installer: local source tree or HTTPS bootstrap (v2.2.0).
+MODULE_VERSION="2.2.0"
 [ -n "${BASH_VERSION:-}" ] || { echo 'Run this installer with bash: sudo bash install.sh' >&2; exit 1; }
 umask 077
 DEFAULT_REMOTE="${MTUNNEL_REPO_URL:-${MTUNNEL_GITHUB_BASE:-https://raw.githubusercontent.com/htzserv/MTunnel/main}}"

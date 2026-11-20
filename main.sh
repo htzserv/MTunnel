@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel — main dashboard for tunnel management, status, and synchronization (v2.2.0).
+MODULE_VERSION="2.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -121,7 +121,7 @@ ALL_PACKAGES=(
     "wget_1.21.4-1ubuntu4.1_amd64.deb"
 )
 declare -A BIN_VERSIONS=(
-    ["bh"]="0.7.2"
+    ["bh"]="0.9.1"
     ["rathole"]="0.5.0"
     ["paqet"]="1.0.0"
     ["gost"]="2.11.5"

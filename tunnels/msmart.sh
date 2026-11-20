@@ -1,7 +1,7 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.1.0).
-MODULE_VERSION="2.1.0"
-MODULE_BUILD="2026102901"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.2.0).
+MODULE_VERSION="2.2.0"
+MODULE_BUILD="2026112001"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 SMART_API_REV=1
@@ -1680,19 +1680,33 @@ smart_candidate_lines() { # l4 l6 f4 f6 local_bh remote_bh local_rat remote_rat 
     if [ "$lbh" = 1 ] && [ "$rbh" = 1 ]; then
         if mt_valid_ipv4 "$l4" && [ "$f2i4" = 1 ]; then
             printf '%s\n' \
+                '14|Backhaul TLSMUX IPv4|backhaul|tlsmux|Foreign→Iran v4' \
+                '16|Backhaul XHTTPSMUX IPv4|backhaul|xhttpsmux|Foreign→Iran v4' \
+                '20|Backhaul WSSMUX IPv4|backhaul|wssmux|Foreign→Iran v4' \
+                '15|Backhaul KCPMUX IPv4|backhaul|kcpmux|Foreign→Iran v4' \
+                '21|Backhaul TLS IPv4|backhaul|tls|Foreign→Iran v4' \
+                '22|Backhaul XHTTPS IPv4|backhaul|xhttps|Foreign→Iran v4' \
+                '24|Backhaul WSS IPv4|backhaul|wss|Foreign→Iran v4' \
+                '23|Backhaul KCP IPv4|backhaul|kcp|Foreign→Iran v4' \
                 '8|Backhaul TCPMUX IPv4|backhaul|tcpmux|Foreign→Iran v4' \
                 '9|Backhaul WSMUX IPv4|backhaul|wsmux|Foreign→Iran v4' \
-                '14|Backhaul TLSMUX IPv4|backhaul|tlsmux|Foreign→Iran v4' \
-                '15|Backhaul KCPMUX IPv4|backhaul|kcpmux|Foreign→Iran v4' \
-                '16|Backhaul XHTTPSMUX IPv4|backhaul|xhttpsmux|Foreign→Iran v4'
+                '25|Backhaul XHTTPMUX IPv4|backhaul|xhttpmux|Foreign→Iran v4' \
+                '26|Backhaul TCP IPv4|backhaul|tcp|Foreign→Iran v4'
         fi
         if mt_valid_ipv6 "$l6" && [ "$f2i6" = 1 ]; then
             printf '%s\n' \
+                '17|Backhaul TLSMUX IPv6|backhaul|tlsmux|Foreign→Iran v6' \
+                '19|Backhaul XHTTPSMUX IPv6|backhaul|xhttpsmux|Foreign→Iran v6' \
+                '27|Backhaul WSSMUX IPv6|backhaul|wssmux|Foreign→Iran v6' \
+                '18|Backhaul KCPMUX IPv6|backhaul|kcpmux|Foreign→Iran v6' \
+                '28|Backhaul TLS IPv6|backhaul|tls|Foreign→Iran v6' \
+                '29|Backhaul XHTTPS IPv6|backhaul|xhttps|Foreign→Iran v6' \
+                '31|Backhaul WSS IPv6|backhaul|wss|Foreign→Iran v6' \
+                '30|Backhaul KCP IPv6|backhaul|kcp|Foreign→Iran v6' \
                 '10|Backhaul TCPMUX IPv6|backhaul|tcpmux|Foreign→Iran v6' \
                 '11|Backhaul WSMUX IPv6|backhaul|wsmux|Foreign→Iran v6' \
-                '17|Backhaul TLSMUX IPv6|backhaul|tlsmux|Foreign→Iran v6' \
-                '18|Backhaul KCPMUX IPv6|backhaul|kcpmux|Foreign→Iran v6' \
-                '19|Backhaul XHTTPSMUX IPv6|backhaul|xhttpsmux|Foreign→Iran v6'
+                '32|Backhaul XHTTPMUX IPv6|backhaul|xhttpmux|Foreign→Iran v6' \
+                '33|Backhaul TCP IPv6|backhaul|tcp|Foreign→Iran v6'
         fi
     fi
     if [ "$lrat" = 1 ] && [ "$rrat" = 1 ]; then
@@ -1720,7 +1734,7 @@ smart_all_ids() {
 }
 smart_recommended_ids() {
     local avail="$1" out='' pref kind seen_gre=0 seen_vxlan=0 count=0
-    for pref in 1 4 3 5 2 6 7 14 15 16 17 18 19 8 11 12 13 9 10; do
+    for pref in 1 4 3 5 2 6 7 14 16 20 15 17 19 27 18 21 22 28 29 8 12 13 10 24 23 31 30 9 11 25 32 26 33; do
         kind=$(awk -F'|' -v x="$pref" '$1==x{print $3;exit}' <<< "$avail")
         [ -n "$kind" ] || continue
         case "$kind" in
@@ -1776,12 +1790,12 @@ smart_remove_csv_ports() { # existing_csv rem_csv
     done
     printf '%s' "$out"
 }
-smart_pick_port() { # base [excluded-comma-list]; prints free tcp port
+smart_pick_port() { # base [excluded-comma-list]; prints free tcp+udp port
     local base="$1" excluded="${2:-}" p i
     for ((i=0;i<500;i++)); do
         p=$((base+i)); [ "$p" -le 65000 ] || p=$((20000+i))
         [[ ",${excluded}," == *",${p},"* ]] && continue
-        if ! ss -lnt 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$p$"; then printf '%s' "$p"; return 0; fi
+        if ! ss -lntu 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$p$"; then printf '%s' "$p"; return 0; fi
     done
     return 1
 }
@@ -1869,6 +1883,8 @@ TRANSPORT=$tr
 PORTS=$ports
 ENABLE_UDP=false
 BIND_HOST=$bind
+PROFILE=BALANCED
+ADV_UTLS=chrome
 EOF
     cat > "$b" <<EOF
 ROLE=2
@@ -1881,6 +1897,8 @@ TRANSPORT=$tr
 PORTS=$ports
 ENABLE_UDP=false
 BIND_HOST=$bind
+PROFILE=BALANCED
+ADV_UTLS=chrome
 EOF
     L=$(smart_encode_peer_link backhaul "$a"); R=$(smart_encode_peer_link backhaul "$b"); rm -f "$a" "$b"
     printf '%s|%s|%s|%s\n' "$L" "$R" "bh_$base" "bh_$base"
@@ -2216,7 +2234,20 @@ smart_benchmark_group_locked() { # groupdir [full|light] [reason]
                 continue
             fi
         fi
-        if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
+        if [ "$kind" = backhaul ] && [[ "$proto" =~ ^(udp|kcp|kcpmux)$ ]]; then
+            if [[ "$path" == *v6* ]]; then target=$(smart_conf_get "$conf" IRAN_IPV6); else target=$(smart_conf_get "$conf" IRAN_IPV4); fi
+            up=$(smart_iperf_speed_backhaul "$benchp" normal "$seconds")
+            down=$(smart_iperf_speed_backhaul "$benchp" reverse "$seconds")
+            if awk -v u="${up:-0}" -v d="${down:-0}" 'BEGIN{exit !((u+0)>0 || (d+0)>0)}'; then
+                IFS='|' read -r _ lat loss <<< "$(smart_remote_ping_probe "$target")"
+                jit=5
+                if awk -v l="${lat:-9999}" -v s="${loss:-100}" 'BEGIN{exit !((l>=9999)||(s>=100))}'; then
+                    lat=60; loss=0; jit=5
+                fi
+            else
+                lat=9999; loss=100; jit=9999
+            fi
+        elif [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
             if [[ "$path" == *v6* ]]; then target=$(smart_conf_get "$conf" IRAN_IPV6); else target=$(smart_conf_get "$conf" IRAN_IPV4); fi
             body=$(printf '{"action":"tcp_probe","host":"%s","port":%s}' "$target" "$linkp")
             resp=$(smart_agent_call "$body" || true); lat=$(smart_json_field "$resp" avg_ms); loss=$(smart_json_field "$resp" loss); jit=$(smart_json_field "$resp" jitter_ms)
@@ -2378,12 +2409,12 @@ EOF
         if [ "$kind" = vxlan ]; then core=$(mt_legacy_core_subnet "$num" vxlan); else core=$(mt_legacy_core_subnet "$num" gre); fi
         echo -e "  ${DIM}[$id]${NC} ${W}$label${NC}"
         if [ "$kind" = rathole ]; then
-            linkport=$(smart_pick_port $((30000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((38000 + id*17)) "$services") || true
+            linkport=$(smart_pick_port $((30000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((38000 + id*17)) "${services}${linkport:+,$linkport}") || true
             [ -n "$linkport" ] && [ -n "$benchport" ] || { echo -e "      ${R}✖ No free port${NC}"; printf '%s|%s|%s|%s|%s|%s|||%s|DOWN\n' "$id" "$label" "$kind" "$proto" "$path" "$base" "$benchport" >> "$gd/candidates.tsv"; continue; }
             links=$(smart_rathole_links "$path" "$base" "$secret" "$linkport" "$benchport" "$services" "$l4" "$l6" "$SMART_F4" "$f6") || true
             IFS='|' read -r local_link remote_link lname rname <<< "$links"
         elif [ "$kind" = backhaul ]; then
-            linkport=$(smart_pick_port $((28000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((36000 + id*17)) "$services") || true
+            linkport=$(smart_pick_port $((28000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((36000 + id*17)) "${services}${linkport:+,$linkport}") || true
             [ -n "$linkport" ] && [ -n "$benchport" ] || { echo -e "      ${R}✖ No free port${NC}"; printf '%s|%s|%s|%s|%s|%s|||%s|DOWN\n' "$id" "$label" "$kind" "$proto" "$path" "bh_$base" "$benchport" >> "$gd/candidates.tsv"; continue; }
             ports="${benchport}=127.0.0.1:${IPERF_PORT}"
             links=$(smart_backhaul_links "$proto" "$path" "$base" "$secret" "$linkport" "$ports" "$l4" "$l6" "$SMART_F4" "$f6") || true
@@ -2468,7 +2499,7 @@ smart_maybe_periodic_benchmark() { # groupdir
 
 smart_watchdog_group_locked() { # gid; caller owns group lock
     local gid="$1" gd="$GROUP_DIR/$1" conf f baseline tmp htmp id label kind proto path name inner linkp benchp prev_status blat loss jit up down current_score base_score live_score unit loss_now jit_now lat base_lat needs_rebench=0
-    local now last_watch interval down_need recovery_need raw_status tcp_ok tcp_loss d u effective
+    local now last_watch interval down_need recovery_need raw_status tcp_ok tcp_loss d u effective _bh_data _bh_rx _bh_tx _bh_tot _bh_f _bh_lt _bh_lc
     local -A HD=() HU=()
     [[ "$gid" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || return 1; [ -d "$gd" ] || return 0
     conf="$gd/group.conf"; smart_ensure_group_defaults "$gd" >/dev/null 2>&1 || true; [ "$(smart_conf_get "$conf" WATCHDOG)" = 1 ] || return 0
@@ -2487,7 +2518,23 @@ smart_watchdog_group_locked() { # gid; caller owns group lock
             base_lat=$(awk -F'|' -v i="$id" '$1==i{print $2;exit}' "$baseline" 2>/dev/null || true); base_score=$(awk -F'|' -v i="$id" '$1==i{print $3;exit}' "$baseline" 2>/dev/null || true)
             [[ "$base_lat" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_lat="$blat"; [[ "$base_score" =~ ^[0-9]+([.][0-9]+)?$ ]] || base_score="$current_score"
             raw_status=DOWN; live_score=0; lat="$blat"; loss_now="$loss"; jit_now="$jit"
-            if [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
+            if [ "$kind" = backhaul ] && [[ "$proto" =~ ^(udp|kcp|kcpmux)$ ]]; then
+                unit="mbackhaul@$name"
+                if systemctl is-active --quiet "$unit" 2>/dev/null && ss -unH 2>/dev/null | grep -Eq ":${linkp}([[:space:]]|$)"; then
+                    _bh_data=$({ iptables -w 5 -t mangle -L INPUT -v -n -x; iptables -w 5 -t mangle -L OUTPUT -v -n -x; ip6tables -w 5 -t mangle -L INPUT -v -n -x; ip6tables -w 5 -t mangle -L OUTPUT -v -n -x; } 2>/dev/null)
+                    _bh_rx=$(mt_counter_sum "$_bh_data" "MBH_RX_${name}")
+                    _bh_tx=$(mt_counter_sum "$_bh_data" "MBH_TX_${name}")
+                    _bh_tot=$(( ${_bh_rx:-0} + ${_bh_tx:-0} ))
+                    _bh_f="$SECURE_TMP/.mbh_udp_${name}"; _bh_lt=0; _bh_lc=0
+                    [ -f "$_bh_f" ] && read -r _bh_lt _bh_lc < "$_bh_f"
+                    if [ "$_bh_tot" != "$_bh_lt" ]; then _bh_lc="$now"; fi
+                    [[ "$_bh_lc" =~ ^[0-9]+$ ]] || _bh_lc=0
+                    printf '%s %s\n' "$_bh_tot" "$_bh_lc" > "$_bh_f" 2>/dev/null || true
+                    if (( _bh_tot > 0 && now - _bh_lc <= 120 )); then
+                        raw_status=UP; live_score="${base_score:-40}"
+                    fi
+                fi
+            elif [ "$kind" = backhaul ] || [ "$kind" = rathole ]; then
                 unit="mbackhaul@$name"; [ "$kind" = rathole ] && unit="mrathole@$name"
                 if systemctl is-active --quiet "$unit" 2>/dev/null && ss -tn state established 2>/dev/null | grep -Eq ":${linkp}([[:space:]]|$)"; then raw_status=UP; live_score="${base_score:-40}"; fi
             else
@@ -2539,11 +2586,11 @@ smart_build_candidate() { # groupdir candidate-line l4 l6 f4 f6 services
     corev6="fd${hash:0:2}:${hash:2:4}:${hash:6:4}:${hash:10:4}"; if [ "$kind" = vxlan ]; then core=$(mt_legacy_core_subnet "$num" vxlan); else core=$(mt_legacy_core_subnet "$num" gre); fi
     echo -e "  ${DIM}[$id]${NC} ${W}$label${NC}"
     if [ "$kind" = rathole ]; then
-        linkport=$(smart_pick_port $((30000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((38000 + id*17)) "$services") || true
+        linkport=$(smart_pick_port $((30000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((38000 + id*17)) "${services}${linkport:+,$linkport}") || true
         [ -n "$linkport" ] && [ -n "$benchport" ] || { echo 'No free Rathole port.' >&2; return 1; }
         links=$(smart_rathole_links "$path" "$base" "$secret" "$linkport" "$benchport" "$services" "$l4" "$l6" "$f4" "$f6") || true; IFS='|' read -r local_link remote_link lname rname <<< "$links"
     elif [ "$kind" = backhaul ]; then
-        linkport=$(smart_pick_port $((28000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((36000 + id*17)) "$services") || true
+        linkport=$(smart_pick_port $((28000 + id*17)) "$services") || true; benchport=$(smart_pick_port $((36000 + id*17)) "${services}${linkport:+,$linkport}") || true
         [ -n "$linkport" ] && [ -n "$benchport" ] || { echo 'No free Backhaul port.' >&2; return 1; }; ports="${benchport}=127.0.0.1:${IPERF_PORT}"
         links=$(smart_backhaul_links "$proto" "$path" "$base" "$secret" "$linkport" "$ports" "$l4" "$l6" "$f4" "$f6") || true; IFS='|' read -r local_link remote_link lname rname <<< "$links"
     else
@@ -2924,7 +2971,7 @@ smart_list_overview() {
                 [ "$status" = UP ] || st_col="$R"
                 local lbl_disp="$(smart_short_label "$label")"
                 if [ "$id" = "$act_id" ]; then
-                    lbl_disp="★ $label"
+                    lbl_disp="★ $lbl_disp"
                     st_txt="ACTV"
                     st_col="$G"
                 fi

@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.1.0).
-MODULE_VERSION="2.1.0"
+# MTunnel MKernel — Unified GRE/GRE6/IPIP & VXLAN/VXLAN6 kernel tunnel management (v2.2.0).
+MODULE_VERSION="2.2.0"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
 umask 077
@@ -1739,14 +1739,14 @@ mt_main_logs() {
 # mt_link_uint supplied by core/common.sh
 # mt_link_ports supplied by core/common.sh
 mt_link_field_valid() {
-    local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,=-]*$'
+    local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,/=-]*$'
     # Reject whitespace, control bytes, shell syntax, quotes, paths and unknown keys.
     [ "${#val}" -le 4096 ] && [[ "$val" =~ $safe ]] || return 1
     case "$key" in
         ROLE) [[ "$val" =~ ^[12]$ ]];;
         BBR) [[ "$val" =~ ^[01]$ ]];;
         NAME) [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]];;
-        BIND_HOST) [[ "$val" = 0.0.0.0 || "$val" = :: ]];;
+        BIND_HOST) mt_valid_ipv4 "$val" || mt_valid_ipv6 "$val";;
         EXPIRES) mt_link_uint "$val" 1 9999999999;;
         CORE_V6) [ -z "$val" ] || mt_valid_ipv6 "$val::1";;
         HOST|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|LOCAL_IP6|REMOTE_IP6|REMOTE_V4)
@@ -1766,6 +1766,7 @@ mt_link_field_valid() {
         ENCRYPT) [[ "$val" =~ ^[01]$ ]];;
         ADV_LOG) [[ "$val" =~ ^(trace|debug|info|warn|error)$ ]];;
         ADV_SNI|ADV_XHTTP_HOST) [ -z "$val" ] || mt_valid_host "$val";;
+        ADV_UTLS) [[ "$val" =~ ^(chrome|firefox|safari|edge|ios|random|none)$ ]];;
         ADV_KCP_MODE) [[ "$val" =~ ^(normal|fast|fast2|fast3|manual)$ ]];;
         ADV_KCP_CRYPT) [[ "$val" =~ ^(aes|aes-128|aes-256|salsa20|xor|tea|xtea|sm4|blowfish|twofish|cast5|3des|none)$ ]];;
         ADV_KCP_NOFEC) [[ "$val" =~ ^(true|false)$ ]];;
@@ -3365,14 +3366,14 @@ mt_main_logs() {
 # mt_link_uint supplied by core/common.sh
 # mt_link_ports supplied by core/common.sh
 mt_link_field_valid() {
-    local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,=-]*$'
+    local key="$1" val="$2" safe='^[][A-Za-z0-9_:.,/=-]*$'
     # Reject whitespace, control bytes, shell syntax, quotes, paths and unknown keys.
     [ "${#val}" -le 4096 ] && [[ "$val" =~ $safe ]] || return 1
     case "$key" in
         ROLE) [[ "$val" =~ ^[12]$ ]];;
         BBR) [[ "$val" =~ ^[01]$ ]];;
         NAME) [[ "$val" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$ ]];;
-        BIND_HOST) [[ "$val" = 0.0.0.0 || "$val" = :: ]];;
+        BIND_HOST) mt_valid_ipv4 "$val" || mt_valid_ipv6 "$val";;
         EXPIRES) mt_link_uint "$val" 1 9999999999;;
         CORE_V6) [ -z "$val" ] || mt_valid_ipv6 "$val::1";;
         HOST|LOCAL_PUB|REMOTE_PUB|LOCAL_PUB6|REMOTE_PUB6|LOCAL_IP6|REMOTE_IP6|REMOTE_V4)
@@ -3392,6 +3393,7 @@ mt_link_field_valid() {
         ENCRYPT) [[ "$val" =~ ^[01]$ ]];;
         ADV_LOG) [[ "$val" =~ ^(trace|debug|info|warn|error)$ ]];;
         ADV_SNI|ADV_XHTTP_HOST) [ -z "$val" ] || mt_valid_host "$val";;
+        ADV_UTLS) [[ "$val" =~ ^(chrome|firefox|safari|edge|ios|random|none)$ ]];;
         ADV_KCP_MODE) [[ "$val" =~ ^(normal|fast|fast2|fast3|manual)$ ]];;
         ADV_KCP_CRYPT) [[ "$val" =~ ^(aes|aes-128|aes-256|salsa20|xor|tea|xtea|sm4|blowfish|twofish|cast5|3des|none)$ ]];;
         ADV_KCP_NOFEC) [[ "$val" =~ ^(true|false)$ ]];;

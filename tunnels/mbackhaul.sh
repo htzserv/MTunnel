@@ -2134,7 +2134,8 @@ mt_link_deploy_locked() {
     if [ "$MT_KIND" = backhaul ]; then name="bh_${name#bh_}"; conf="$CONF_DIR/$name.meta"
     else conf="$CONF_DIR/$name/meta.conf"; fi
     [ ! -e "$conf" ] && { [ "$MT_KIND" != rathole ] || [ ! -e "$CONF_DIR/$name" ]; } || { echo 'Tunnel already exists; nothing overwritten.' >&2; return 1; }
-    if [ "$role" = 1 ] && mt_port_busy "$port"; then echo 'Link port is already in use.' >&2; return 1; fi
+    local _bp_proto=tcp; [[ "${MT_LINK_DATA[TRANSPORT]:-}" =~ ^(udp|kcp|kcpmux)$ ]] && _bp_proto=udp
+    if [ "$role" = 1 ] && mt_port_busy "$port" "$_bp_proto"; then echo 'Link port is already in use.' >&2; return 1; fi
     if [ "$MT_KIND" = backhaul ]; then
         validate_bh_ports "${MT_LINK_DATA[PORTS]}" "$role" || return 1
         settings=$(mktemp "$SECURE_TMP/peer-backhaul.XXXXXX") || return 1

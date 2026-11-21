@@ -751,6 +751,7 @@ hdr_ping_probe() {
 hdr_ss_peer() { rat_unit_peer_ip "$1" "$2" 2>/dev/null || true; }
 collect_header_rows() {
     local mode="${1:-}" tmp d meta name role port remote peer fwd up avg loss st act="" ina="" line
+    local _prev_rows; _prev_rows=$(cat "$HDR_ROWS_FILE" 2>/dev/null || true)
     tmp=$(mktemp "$SECURE_TMP/.mrathole_hdr_rows.XXXXXX") || return 1
     mt_ss_snapshot_begin 2>/dev/null || true
     for d in "$CONF_DIR"/*; do
@@ -767,7 +768,12 @@ collect_header_rows() {
         [ -n "$peer" ] && [ "$peer" != "0.0.0.0" ] || peer="---"
         avg="---"; loss="---"
         if [ "$st" = 1 ] && hdr_is_ip "$peer"; then
-            if [ "$mode" = fast ]; then avg="..."; else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer" "$name")"; fi
+            if [ "$mode" = fast ]; then
+                avg="..."
+                while IFS='|' read -r _ _pn _ _pa _pq _; do
+                    if [ "$_pn" = "$name" ] && [ -n "$_pa" ] && [ "$_pa" != "..." ]; then avg="$_pa"; loss="$_pq"; break; fi
+                done <<< "$_prev_rows"
+            else IFS='|' read -r avg loss <<< "$(hdr_ping_probe "$peer" "$name")"; fi
         fi
         fwd="OFF"
         { hdr_conf_has "$meta" TCP_PORTS || hdr_conf_has "$meta" UDP_PORTS; } && fwd="ACT"
@@ -900,6 +906,15 @@ draw_header() {
             (
                 bg_val=$(get_peer_ping "$peer_ip" "$tmp_port" "$peer_name")
                 echo "$bg_val" > "$ping_cache"
+                if [ -s "$_meta_cache" ]; then
+                    IFS='|' read -r _m1 _m2 _m3 _m4 _m5 _m6 _m7 _m8 _m9 _m10 < "$_meta_cache"
+                    _mt="$bg_val"; _mc="$R"
+                    if [ "$bg_val" != Timeout ] && [ "$bg_val" != "N/A" ]; then
+                        _mi=$(echo "$bg_val" | tr -dc '0-9'); [ -n "$_mi" ] || _mi=0
+                        if [ "$_mi" -lt 90 ]; then _mc="$G"; elif [ "$_mi" -lt 160 ]; then _mc="$Y"; fi
+                    else _mt=Timeout; fi
+                    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$_m1" "$_m2" "$_m3" "$_m4" "$_m5" "$_m6" "$_m7" "$_mt" "$_mc" "$_m10" > "$_meta_cache.tmp" 2>/dev/null && mv -f "$_meta_cache.tmp" "$_meta_cache" 2>/dev/null
+                fi
                 rm -f "$ping_lock"
                 if [ -f "$SECURE_TMP/.mrathole_in_menu" ]; then
                     kill -SIGUSR2 "$MAIN_PID" 2>/dev/null

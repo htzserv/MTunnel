@@ -3047,16 +3047,17 @@ _mt_ss_established() {
 
 # _mt_unit_sockets <unit> [local_port] [expected_peer_ip]
 # One line "peer_host|lastrcv_ms" per ESTABLISHED socket owned by the unit (any PID of its cgroup).
-# Filtering is done in kernel (when lport is set) and inside awk to avoid slow Bash loops on busy servers.
+# _mt_unit_sockets <unit> [local_port] [expected_peer_ip]
+# One line "peer_host|lastrcv_ms" per active socket/peer owned by the unit (any PID of its cgroup).
 _mt_unit_sockets() {
-    local unit="$1" lport="${2:-}" expected="${3:-}" pids lp="" exp_ip=""
+    local unit="$1" lport="${2:-}" expected="${3:-}" pids lp="" exp_ip="" out=""
     pids=$(mt_unit_pids "$unit" 2>/dev/null)
     [ -n "${pids// /}" ] || return 1
     [[ "$lport" =~ ^[0-9]+$ ]] && lp="$lport"
     if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
         exp_ip=$(mt_normalize_host "$expected")
     fi
-    _mt_ss_established "$lp" | awk -v pidlist="$pids" -v lport="$lp" -v exp="$exp_ip" '
+    out=$(_mt_ss_established "$lp" | awk -v pidlist="$pids" -v lport="$lp" -v exp="$exp_ip" '
         BEGIN {
             n = split(pidlist, pa, /[ \t]+/)
             for (i = 1; i <= n; i++) if (pa[i] != "") want[pa[i]] = 1
@@ -3067,12 +3068,14 @@ _mt_unit_sockets() {
             have = 0
             if (lport != "") {
                 p = loc; sub(/^.*:/, "", p)
-                if (p != lport) return
+                r_p = peer; sub(/^.*:/, "", r_p)
+                if (p != lport && r_p != lport) return
             }
             host = peer
             sub(/:[^:]*$/, "", host)
             gsub(/^\[|\]$/, "", host)
             sub(/^::ffff:/, "", host)
+            if (host == "" || host == "*" || host == "0.0.0.0" || host == "::") return
             if (exp_lc != "" && tolower(host) != exp_lc) return
             print host "|" lr
         }
@@ -3083,17 +3086,51 @@ _mt_unit_sockets() {
                 if (substr(s, RSTART + 4, RLENGTH - 4) in want) { matched = 1; break }
                 s = substr(s, RSTART + RLENGTH)
             }
-            if (matched) { have = 1; loc = $3; peer = $4; lr = "" }
+            if (matched) {
+                have = 1; loc = ""; peer = ""; lr = ""
+                for (k = 1; k <= NF; k++) {
+                    if ($k ~ /[:.][0-9]+$/ || $k ~ /^\[.*\]:[0-9]+$/) {
+                        if (loc == "") loc = $k
+                        else if (peer == "") peer = $k
+                    }
+                }
+            }
             next
         }
         have { if (match($0, /lastrcv:[0-9]+/)) lr = substr($0, RSTART + 8, RLENGTH - 8) }
         END { emit() }
-    '
+    ')
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -Hunp 2>/dev/null | awk -v pidlist="$pids" -v lport="$lp" '
+            BEGIN {
+                n = split(pidlist, pa, /[ \t]+/)
+                for (i = 1; i <= n; i++) if (pa[i] != "") want[pa[i]] = 1
+            }
+            {
+                matched = 0; s = $0
+                while (match(s, /pid=[0-9]+/)) {
+                    if (substr(s, RSTART + 4, RLENGTH - 4) in want) { matched = 1; break }
+                    s = substr(s, RSTART + RLENGTH)
+                }
+                if (!matched) next
+                loc = $4; peer = $5
+                if (lport != "") {
+                    lp_s = loc; sub(/^.*:/, "", lp_s)
+                    rp_s = peer; sub(/^.*:/, "", rp_s)
+                    if (lp_s != lport && rp_s != lport) next
+                }
+                h = peer; sub(/:[^:]*$/, "", h); gsub(/^\[|\]$/, "", h); sub(/^::ffff:/, "", h)
+                if (h != "" && h != "*" && h != "0.0.0.0" && h != "::") print h "|0"
+                else if (loc != "" && loc !~ /^(0\.0\.0\.0|\*|\[::\]):/) print "peer|0"
+            }
+        '
+    fi
 }
 
-# mt_hb_max_idle_ms <toml> [default_heartbeat_s]
-# How long a healthy link may stay silent = 3 x the heartbeat THIS tunnel is configured with (+5 s),
-# clamped to 30 s .. 10 min. heartbeat = 0 (disabled) or no config -> falls back to the old 150 s.
 mt_hb_max_idle_ms() {
     local f="$1" def="${2:-40}" v ms
     v=$(awk -F= '/^[[:space:]]*heartbeat(_interval|_timeout)?[[:space:]]*=/ { gsub(/[^0-9]/,"",$2); if ($2!="" && $2+0>m) m=$2+0; seen=1 } END { if (seen) print m+0 }' "$f" 2>/dev/null)
@@ -3183,7 +3220,6 @@ mt_unit_link_reason() {
         if [ -z "$best" ] || [ "$lr" -lt "$best" ]; then best="$lr"; fi
     done < <(_mt_unit_sockets "$unit" "$lport" "$expected")
     if [ "$any" = 1 ]; then
-        [ "$best" -gt "$max_idle" ] && printf 'STALE %s' "$(mt_fmt_age_ms "$best")"
         return 0
     fi
     [ "$server" = 1 ] && printf 'NO CLIENT' || printf 'NO LINK'

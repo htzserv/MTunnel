@@ -1032,7 +1032,12 @@ draw_header() {
     # Unified dashboard header (same look as the main screen) -- THIS module's tunnels only.
     local _now _mtime
     _now=$(date +%s); _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo 0)
-    if [ ! -f "$HDR_ROWS_FILE" ]; then : > "$HDR_ROWS_FILE"; ( collect_header_rows fast >/dev/null 2>&1 & ); fi
+    if [ ! -s "$HDR_ROWS_FILE" ]; then
+        collect_header_rows fast >/dev/null 2>&1 || true
+        _mtime=$(stat -c %Y "$HDR_ROWS_FILE" 2>/dev/null || echo "$_now")
+    elif [ $((_now - _mtime)) -ge 15 ]; then
+        ( collect_header_rows fast >/dev/null 2>&1 & )
+    fi
     mt_hdr_rows_from_cache "$HDR_ROWS_FILE" "PAQET" "pq_"
     HDR_DRAWN_ROWS=$MT_HDR_ROW_COUNT
     printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$act_text" "$act_color" "$core_raw" "$core_color" "$stat_icon" "$stat_text" "$stat_color" "$g_text" "$g_color" "${total_tunnels}" > "$_meta_cache"

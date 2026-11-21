@@ -1,6 +1,6 @@
 #!/bin/bash
 # MTunnel Shared Binary-Tunnel Library (MBackhaul / MPaqet / MRathole) — API 1
-MODULE_VERSION="2.2.5"
+MODULE_VERSION="2.2.6"
 MTUNNEL_BINTUNNEL_API=1
 
 bt_init_runtime() {
@@ -251,16 +251,18 @@ refresh_header_live() {
 }
 
 hdr_stats_loop() {
-    local _first=1
+    local _round=0
     while true; do
         if declare -F collect_header_rows >/dev/null 2>&1; then
-            if [ "$_first" = 1 ] || [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ]; then
-                _first=0
+            if [ "$_round" -lt 2 ] || [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ]; then
                 collect_header_rows
-                [ -f "$SECURE_TMP/.${BT_MOD}_in_menu" ] && kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
+                # Always tell the menu to repaint: the first (slow, real) probe often finishes before the
+                # menu prompt exists, and the header would otherwise keep the fast "..." placeholders.
+                kill -SIGUSR2 "$MAIN_PID" 2>/dev/null
             fi
         fi
-        sleep "$HDR_CHECK_INTERVAL"
+        _round=$((_round + 1))
+        if [ "$_round" -lt 3 ]; then sleep 4; else sleep "$HDR_CHECK_INTERVAL"; fi
     done
 }
 

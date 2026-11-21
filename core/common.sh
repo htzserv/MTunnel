@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# MTunnel shared core — release 2.2.4, API 1, layout revision 2.
+# MTunnel shared core — release 2.2.5, API 1, layout revision 2.
 # Shared functions used by the installer, dashboard, and tunnel modules.
 # Keep API and layout changes compatible with every consuming module.
 MTUNNEL_CORE_API=1
 MTUNNEL_LAYOUT_REV=2
-MTUNNEL_RELEASE_VERSION="2.2.4"
+MTUNNEL_RELEASE_VERSION="2.2.5"
 # Gold frame colour used by every double-line frame and menu tree connector.
 # Each module defines it with its palette; this default covers any caller that does not.
 : "${FR:=\033[1;33m}"
@@ -3057,11 +3057,11 @@ _mt_unit_sockets() {
     if [ -n "$expected" ] && { mt_valid_ipv4 "$expected" 2>/dev/null || mt_valid_ipv6 "$expected" 2>/dev/null; }; then
         exp_ip=$(mt_normalize_host "$expected")
     fi
-    out=$(_mt_ss_established "$lp" | awk -v pidlist="$pids" -v lport="$lp" -v exp="$exp_ip" '
+    out=$(_mt_ss_established "$lp" | awk -v pidlist="$pids" -v lport="$lp" -v expip="$exp_ip" '
         BEGIN {
             n = split(pidlist, pa, /[ \t]+/)
             for (i = 1; i <= n; i++) if (pa[i] != "") want[pa[i]] = 1
-            exp_lc = tolower(exp)
+            exp_lc = tolower(expip)
         }
         function emit() {
             if (!have) return

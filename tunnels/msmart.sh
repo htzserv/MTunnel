@@ -1,6 +1,6 @@
 #!/bin/bash
-# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.2.4).
-MODULE_VERSION="2.2.4"
+# MTunnel Smart — paired Iran controller / Foreign agent, multi-tunnel benchmark and failover (v2.2.5).
+MODULE_VERSION="2.2.5"
 MODULE_BUILD="2026112003"
 MTUNNEL_REQUIRED_CORE_API=1
 MTUNNEL_REQUIRED_LAYOUT_REV=2
